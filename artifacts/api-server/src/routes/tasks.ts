@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { tasksTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
 
@@ -22,12 +22,22 @@ async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[]) {
 }
 
 router.get("/", requireAuth, async (req, res) => {
+  const user = req.user!;
   const { projectId, status, assignedToMe } = req.query;
+
   let tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt));
+
+  if (!isSysAdmin(user) && user.organizationId) {
+    const orgProjects = await db.select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, user.organizationId));
+    const orgProjectIds = new Set(orgProjects.map(p => p.id));
+    tasks = tasks.filter(t => !t.projectId || orgProjectIds.has(t.projectId));
+  }
 
   if (projectId) tasks = tasks.filter(t => t.projectId === parseInt(projectId as string));
   if (status) tasks = tasks.filter(t => t.status === status);
-  if (assignedToMe === "true") tasks = tasks.filter(t => t.assignedToId === req.user!.id);
+  if (assignedToMe === "true") tasks = tasks.filter(t => t.assignedToId === user.id);
 
   const enriched = await enrichTasks(tasks);
   res.json({ tasks: enriched, total: enriched.length });

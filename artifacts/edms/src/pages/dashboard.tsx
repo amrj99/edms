@@ -14,6 +14,10 @@ import {
   Activity,
   Send,
   FolderOpen,
+  Upload,
+  CheckCircle2,
+  BrainCircuit,
+  Zap,
 } from "lucide-react";
 import { format, isAfter, parseISO } from "date-fns";
 import {
@@ -48,6 +52,83 @@ const CORR_COLORS: Record<string, string> = {
   internal: "#84cc16",
   notice: "#ec4899",
 };
+
+const ACTIVITY_ICONS: Record<string, { icon: any; color: string; bg: string }> = {
+  create_document: { icon: Upload, color: "text-blue-600", bg: "bg-blue-50 dark:bg-blue-500/10" },
+  approve: { icon: CheckCircle2, color: "text-green-600", bg: "bg-green-50 dark:bg-green-500/10" },
+  reject: { icon: AlertCircle, color: "text-red-600", bg: "bg-red-50 dark:bg-red-500/10" },
+  send_transmittal: { icon: Send, color: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-500/10" },
+  share: { icon: Zap, color: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-500/10" },
+  ai_check: { icon: BrainCircuit, color: "text-indigo-600", bg: "bg-indigo-50 dark:bg-indigo-500/10" },
+  create: { icon: FileText, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-500/10" },
+  update: { icon: Activity, color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-500/10" },
+  delete: { icon: AlertCircle, color: "text-red-500", bg: "bg-red-50 dark:bg-red-500/10" },
+};
+
+function getActivityIcon(action: string, entityType: string) {
+  const key = action === "create" && entityType === "document" ? "create_document"
+    : action === "send" && entityType === "transmittal" ? "send_transmittal"
+    : action;
+  return ACTIVITY_ICONS[key] ?? { icon: Activity, color: "text-muted-foreground", bg: "bg-muted" };
+}
+
+function SystemActivityFeed() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["activity-feed"],
+    queryFn: async () => {
+      const r = await fetch("/api/audit-logs?limit=20");
+      return r.json();
+    },
+    refetchInterval: 30000,
+  });
+  const logs: any[] = data?.logs ?? data?.items ?? [];
+
+  return (
+    <Card className="border-border/50 shadow-sm">
+      <CardHeader className="pb-3 flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base flex items-center gap-2"><Activity className="h-4 w-4" />System Activity</CardTitle>
+          <CardDescription>Recent actions across all projects</CardDescription>
+        </div>
+        <Link href="/admin" className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
+          View audit log <ArrowRight className="h-3 w-3" />
+        </Link>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm py-4 justify-center"><Loader2 className="h-4 w-4 animate-spin" />Loading…</div>
+        ) : logs.length === 0 ? (
+          <div className="text-center py-6 text-sm text-muted-foreground">No activity recorded yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {logs.slice(0, 12).map((log: any, i: number) => {
+              const { icon: Icon, color, bg } = getActivityIcon(log.action, log.entityType);
+              const label = `${log.action} ${log.entityType}`.replace(/_/g, " ");
+              return (
+                <div key={log.id ?? i} className="flex items-start gap-3 group">
+                  <div className={`h-7 w-7 rounded-lg ${bg} flex items-center justify-center shrink-0 mt-0.5`}>
+                    <Icon className={`h-3.5 w-3.5 ${color}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="text-xs font-medium capitalize truncate">{log.entityTitle || label}</p>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {log.createdAt ? format(new Date(log.createdAt), "MMM d, HH:mm") : ""}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground capitalize">
+                      {label}{log.userName ? ` · ${log.userName}` : ""}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function MiniStatCard({ title, value, icon: Icon, color, bg, sub }: {
   title: string; value: number | string; icon: any; color: string; bg: string; sub?: string;
@@ -235,6 +316,9 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Activity Feed */}
+      <SystemActivityFeed />
 
       {/* Bottom row */}
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">

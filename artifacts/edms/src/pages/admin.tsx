@@ -987,33 +987,7 @@ export default function Admin() {
         </TabsContent>
 
         {/* Storage */}
-        <TabsContent value="storage" className="mt-4 space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><HardDrive className="h-4 w-4" />Document Storage</CardTitle>
-              <CardDescription>Configure storage backend for document files</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label>Storage Provider</Label>
-                <Select defaultValue="local">
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="local">Local Filesystem</SelectItem>
-                    <SelectItem value="s3">Amazon S3</SelectItem>
-                    <SelectItem value="azure">Azure Blob Storage</SelectItem>
-                    <SelectItem value="gcs">Google Cloud Storage</SelectItem>
-                    <SelectItem value="replit">Replit Object Storage</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label>Max File Size (MB)</Label><Input type="number" defaultValue={50} className="mt-1" /></div>
-              <div><Label>Allowed File Types</Label><Input defaultValue="pdf,docx,dwg,xlsx,png,jpg,zip" className="mt-1 font-mono text-sm" /></div>
-              <div className="flex items-center justify-between"><Label>Enable Version Control</Label><Switch defaultChecked={true} /></div>
-              <div className="flex items-center justify-between"><Label>Auto-backup Enabled</Label><Switch defaultChecked={false} /></div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        <StorageTab />
 
         {/* Security */}
         <TabsContent value="security" className="mt-4 space-y-4">
@@ -1315,6 +1289,108 @@ function AuditLogTab() {
   );
 }
 
+// ─── Storage Tab ──────────────────────────────────────────────────────────────
+function StorageTab() {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const isOwner = user?.role === "system_owner" || user?.role === "admin";
+
+  const { data: storageData, isLoading, refetch } = useQuery({
+    queryKey: ["admin-storage-usage"],
+    queryFn: async () => { const r = await fetch("/api/admin/storage-usage"); return r.json(); },
+  });
+  const usage = storageData?.usage ?? [];
+
+  const [editQuota, setEditQuota] = useState<{ orgId: number; quotaMb: number; storagePath: string } | null>(null);
+
+  const saveQuota = async () => {
+    if (!editQuota) return;
+    await fetch(`/api/admin/storage-config/${editQuota.orgId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storageQuotaMb: editQuota.quotaMb, storagePath: editQuota.storagePath }),
+    });
+    toast({ title: "Storage config saved" });
+    setEditQuota(null);
+    refetch();
+  };
+
+  const fmtMb = (mb: number) => mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+
+  return (
+    <TabsContent value="storage" className="mt-4 space-y-4">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2"><HardDrive className="h-4 w-4" />Storage Usage by Organisation</CardTitle>
+            <CardDescription>Per-organisation document storage consumption and quotas</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => refetch()} className="h-7 gap-1 text-xs"><RefreshCw className="h-3 w-3" /> Refresh</Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+          ) : usage.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No storage data available.</p>
+          ) : usage.map((org: any) => (
+            <div key={org.orgId} className="border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm">{org.orgName}</p>
+                  <p className="text-xs text-muted-foreground">{org.docCount} documents · {fmtMb(org.usedMb)} used of {fmtMb(org.quotaMb)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={org.percentUsed >= 90 ? "destructive" : org.percentUsed >= 70 ? "secondary" : "outline"} className="text-xs">
+                    {org.percentUsed}%
+                  </Badge>
+                  {isOwner && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEditQuota({ orgId: org.orgId, quotaMb: org.quotaMb, storagePath: org.storagePath ?? "" })}>
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="w-full bg-muted rounded-full h-2">
+                <div
+                  className={`h-2 rounded-full transition-all ${org.percentUsed >= 90 ? "bg-red-500" : org.percentUsed >= 70 ? "bg-amber-500" : "bg-green-500"}`}
+                  style={{ width: `${org.percentUsed}%` }}
+                />
+              </div>
+              {org.storagePath && (
+                <p className="text-xs text-muted-foreground font-mono">Path: {org.storagePath}</p>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!editQuota} onOpenChange={v => { if (!v) setEditQuota(null); }}>
+        <DialogContent className="sm:max-w-[380px]">
+          <DialogHeader><DialogTitle>Edit Storage Config</DialogTitle></DialogHeader>
+          {editQuota && (
+            <div className="space-y-4 py-2">
+              <div>
+                <Label>Storage Quota (MB)</Label>
+                <Input type="number" value={editQuota.quotaMb} onChange={e => setEditQuota(q => q ? { ...q, quotaMb: parseInt(e.target.value) || 0 } : null)} className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1">1024 MB = 1 GB. Default is 10240 MB (10 GB).</p>
+              </div>
+              <div>
+                <Label>Storage Path Prefix (optional)</Label>
+                <Input value={editQuota.storagePath} onChange={e => setEditQuota(q => q ? { ...q, storagePath: e.target.value } : null)} placeholder="org-name/documents" className="mt-1 font-mono text-sm" />
+                <p className="text-xs text-muted-foreground mt-1">Prefix used for this org's files in object storage.</p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditQuota(null)}>Cancel</Button>
+            <Button onClick={saveQuota}><Save className="h-4 w-4 mr-2" />Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </TabsContent>
+  );
+}
+
 // ─── System & Backup Tab ──────────────────────────────────────────────────────
 function SystemTab() {
   const { toast } = useToast();
@@ -1323,6 +1399,9 @@ function SystemTab() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreResult, setRestoreResult] = useState<any>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [restoreParsed, setRestoreParsed] = useState<any>(null);
+  const [confirmRestoreOpen, setConfirmRestoreOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   const { data: sysInfo, isLoading: sysLoading, refetch: refetchSys } = useQuery({
     queryKey: ["admin-system-info"],
@@ -1351,9 +1430,11 @@ function SystemTab() {
     if (!restoreFile) return;
     setRestoreLoading(true);
     setRestoreResult(null);
+    setRestoreParsed(null);
     try {
       const text = await restoreFile.text();
       const backup = JSON.parse(text);
+      setRestoreParsed(backup);
       const r = await fetch("/api/admin/restore/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1365,6 +1446,29 @@ function SystemTab() {
       setRestoreResult({ valid: false, error: e.message });
     } finally {
       setRestoreLoading(false);
+    }
+  };
+
+  const handleRestoreConfirmed = async () => {
+    if (!restoreParsed) return;
+    setRestoring(true);
+    try {
+      const r = await fetch("/api/admin/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backup: restoreParsed, confirmed: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message ?? "Restore failed");
+      toast({ title: "Restore completed", description: Object.entries(d.restored ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ") });
+      setConfirmRestoreOpen(false);
+      setRestoreFile(null);
+      setRestoreResult(null);
+      setRestoreParsed(null);
+    } catch (e: any) {
+      toast({ title: "Restore failed", description: e.message, variant: "destructive" });
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -1478,14 +1582,14 @@ function SystemTab() {
             </div>
             {/* Restore */}
             <div className="space-y-3">
-              <h4 className="text-sm font-semibold flex items-center gap-2"><Upload className="h-4 w-4" /> Validate Backup</h4>
+              <h4 className="text-sm font-semibold flex items-center gap-2"><Upload className="h-4 w-4" /> Restore from Backup</h4>
               <p className="text-sm text-muted-foreground">
-                Upload a backup JSON file to verify its integrity before contacting your system administrator to perform a restore.
+                Upload a backup JSON file to validate it, then restore. Existing records are updated using upsert — no data is deleted.
               </p>
               <Input
                 type="file"
                 accept=".json"
-                onChange={e => { setRestoreFile(e.target.files?.[0] ?? null); setRestoreResult(null); }}
+                onChange={e => { setRestoreFile(e.target.files?.[0] ?? null); setRestoreResult(null); setRestoreParsed(null); }}
                 className="text-sm"
               />
               <Button onClick={handleRestoreValidate} disabled={!restoreFile || restoreLoading} className="gap-2 w-full" variant="outline">
@@ -1495,7 +1599,7 @@ function SystemTab() {
                 <div className={`p-3 rounded-lg text-sm border space-y-2 ${restoreResult.valid ? "bg-green-50 border-green-200 text-green-900" : "bg-red-50 border-red-200 text-red-900"}`}>
                   <div className="flex items-center gap-2 font-semibold">
                     {restoreResult.valid ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-                    {restoreResult.valid ? "Valid backup file" : "Invalid backup file"}
+                    {restoreResult.valid ? "Valid backup — ready to restore" : "Invalid backup file"}
                   </div>
                   {restoreResult.valid && (
                     <>
@@ -1505,7 +1609,9 @@ function SystemTab() {
                           <div key={t} className="flex justify-between"><span className="capitalize">{t}:</span><span className="font-mono">{String(c)}</span></div>
                         ))}
                       </div>
-                      <p className="text-xs opacity-75">{restoreResult.message}</p>
+                      <Button size="sm" className="w-full gap-1.5 mt-1 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => setConfirmRestoreOpen(true)}>
+                        <Upload className="h-3.5 w-3.5" /> Restore Now
+                      </Button>
                     </>
                   )}
                   {restoreResult.error && <p className="text-xs">{restoreResult.error}</p>}
@@ -1515,6 +1621,31 @@ function SystemTab() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={confirmRestoreOpen} onOpenChange={setConfirmRestoreOpen}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700"><AlertCircle className="h-5 w-5" /> Confirm Restore</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-3 text-sm text-muted-foreground">
+            <p>This will restore all records from the backup file using upsert. Existing records will be updated; new records will be inserted.</p>
+            <p className="font-medium text-foreground">This action cannot be undone. Are you sure you want to proceed?</p>
+            {restoreResult?.counts && (
+              <div className="bg-muted rounded p-3 text-xs space-y-1">
+                {Object.entries(restoreResult.counts).map(([t, c]) => (
+                  <div key={t} className="flex justify-between"><span className="capitalize">{t}</span><span className="font-mono">{String(c)} records</span></div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmRestoreOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleRestoreConfirmed} disabled={restoring}>
+              {restoring ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Restoring…</> : "Yes, Restore"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TabsContent>
   );
 }

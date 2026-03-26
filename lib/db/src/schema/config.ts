@@ -43,6 +43,8 @@ export const orgConfigTable = pgTable("org_config", {
   systemName: text("system_name").default("ArcScale EDMS"),
   logoUrl: text("logo_url"),
   primaryColor: text("primary_color").default("#2563eb"),
+  storageQuotaMb: integer("storage_quota_mb").default(10240),
+  storagePath: text("storage_path"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
