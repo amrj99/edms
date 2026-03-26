@@ -40,6 +40,9 @@ export const orgConfigTable = pgTable("org_config", {
     transmittal: 5,
     ncr: 14
   }),
+  systemName: text("system_name").default("ArcScale EDMS"),
+  logoUrl: text("logo_url"),
+  primaryColor: text("primary_color").default("#2563eb"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

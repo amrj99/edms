@@ -77,38 +77,50 @@ export default function Reports() {
     },
   });
 
-  // Document Register
-  const { data: documents = [], isLoading: docsLoading } = useQuery({
+  // Document Register — API returns {documents:[...], total, ...}
+  const { data: docsData, isLoading: docsLoading } = useQuery({
     queryKey: ["reports-documents", projectFilter],
     queryFn: async () => {
-      if (projectFilter === "all") return [];
-      const r = await fetch(`/api/projects/${projectFilter}/documents`);
+      if (projectFilter === "all") return null;
+      const r = await fetch(`/api/projects/${projectFilter}/documents?limit=500`);
+      if (!r.ok) throw new Error("Failed to load documents");
       return r.json();
     },
     enabled: projectFilter !== "all",
   });
+  const documents: any[] = Array.isArray(docsData)
+    ? docsData
+    : (docsData?.documents ?? []);
 
-  // Correspondence log (RFI, Submittals, etc.) from selected project
-  const { data: correspondence = [], isLoading: corrLoading } = useQuery({
+  // Correspondence — API returns {items:[...], total}
+  const { data: corrData, isLoading: corrLoading } = useQuery({
     queryKey: ["reports-correspondence", projectFilter],
     queryFn: async () => {
-      if (projectFilter === "all") return [];
+      if (projectFilter === "all") return null;
       const r = await fetch(`/api/projects/${projectFilter}/correspondence`);
+      if (!r.ok) throw new Error("Failed to load correspondence");
       return r.json();
     },
     enabled: projectFilter !== "all",
   });
+  const correspondence: any[] = Array.isArray(corrData)
+    ? corrData
+    : (corrData?.items ?? corrData?.correspondence ?? []);
 
-  // Transmittals from selected project
-  const { data: transmittals = [], isLoading: transLoading } = useQuery({
+  // Transmittals — API returns plain array
+  const { data: transData, isLoading: transLoading } = useQuery({
     queryKey: ["reports-transmittals", projectFilter],
     queryFn: async () => {
-      if (projectFilter === "all") return [];
+      if (projectFilter === "all") return null;
       const r = await fetch(`/api/projects/${projectFilter}/transmittals`);
+      if (!r.ok) throw new Error("Failed to load transmittals");
       return r.json();
     },
     enabled: projectFilter !== "all",
   });
+  const transmittals: any[] = Array.isArray(transData)
+    ? transData
+    : (transData?.transmittals ?? []);
 
   const filterText = (items: any[], keys: string[]) =>
     !searchFilter

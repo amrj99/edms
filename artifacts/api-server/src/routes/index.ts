@@ -20,6 +20,7 @@ import notificationsRouter from "./notifications.js";
 import configRouter from "./config.js";
 import storageRouter from "./storage.js";
 import adminRouter from "./admin.js";
+import publicShareRouter from "./public-share.js";
 
 const router: IRouter = Router();
 
@@ -44,5 +45,6 @@ router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
 router.use("/storage", storageRouter);
 router.use("/admin", adminRouter);
+router.use("/public/share", publicShareRouter);
 
 export default router;

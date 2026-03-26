@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -26,6 +26,9 @@ export const transmittalsTable = pgTable("transmittals", {
   acknowledgedAt: timestamp("acknowledged_at"),
   dueDate: timestamp("due_date"),
   purpose: text("purpose").notNull().default("for_information"),
+  shareToken: text("share_token"),
+  shareExpiresAt: timestamp("share_expires_at"),
+  sharePasswordHash: text("share_password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

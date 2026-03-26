@@ -29,7 +29,8 @@ router.put("/", async (req, res) => {
   const {
     documentNumberingFormat, disciplines, documentTypes,
     revisionFormat, workflowTemplates, transmittalPrefix,
-    rfiPrefix, submittalPrefix, ncrPrefix, slaDefaults
+    rfiPrefix, submittalPrefix, ncrPrefix, slaDefaults,
+    systemName, logoUrl, primaryColor,
   } = req.body;
 
   const existing = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
@@ -38,7 +39,11 @@ router.put("/", async (req, res) => {
       .set({
         documentNumberingFormat, disciplines, documentTypes, revisionFormat,
         workflowTemplates, transmittalPrefix, rfiPrefix, submittalPrefix,
-        ncrPrefix, slaDefaults, updatedAt: new Date(),
+        ncrPrefix, slaDefaults,
+        ...(systemName !== undefined && { systemName }),
+        ...(logoUrl !== undefined && { logoUrl }),
+        ...(primaryColor !== undefined && { primaryColor }),
+        updatedAt: new Date(),
       })
       .where(eq(orgConfigTable.organizationId, orgId))
       .returning();
@@ -49,8 +54,24 @@ router.put("/", async (req, res) => {
       documentNumberingFormat, disciplines, documentTypes, revisionFormat,
       workflowTemplates, transmittalPrefix, rfiPrefix, submittalPrefix,
       ncrPrefix, slaDefaults,
+      systemName: systemName ?? "ArcScale EDMS",
+      logoUrl: logoUrl ?? null,
+      primaryColor: primaryColor ?? "#2563eb",
     }).returning();
     res.status(201).json(config);
+  }
+});
+
+router.get("/public", async (_req, res) => {
+  const configs = await db.select({
+    systemName: orgConfigTable.systemName,
+    logoUrl: orgConfigTable.logoUrl,
+    primaryColor: orgConfigTable.primaryColor,
+  }).from(orgConfigTable).limit(1);
+  if (configs.length > 0) {
+    res.json(configs[0]);
+  } else {
+    res.json({ systemName: "ArcScale EDMS", logoUrl: null, primaryColor: "#2563eb" });
   }
 });
 

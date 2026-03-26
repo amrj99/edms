@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -21,7 +21,7 @@ import {
   Pencil, Lock, UserX, UserCheck, UserPlus, FolderKanban,
   CheckCircle2, AlertCircle, Loader2, Activity, Database,
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
-  Server, Wifi, WifiOff,
+  Server, Wifi, WifiOff, Palette, Image as ImageIcon,
 } from "lucide-react";
 
 const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
@@ -274,6 +274,7 @@ export default function Admin() {
             { value: "security", label: "Security", icon: Key },
             { value: "audit", label: "Audit Log", icon: Activity },
             { value: "system", label: "System", icon: Server },
+            { value: "branding", label: "Branding", icon: Globe },
           ].map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="gap-1.5 text-xs px-3">
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -1052,6 +1053,9 @@ export default function Admin() {
 
         {/* System & Backup */}
         <SystemTab />
+
+        {/* Branding */}
+        <BrandingTab />
       </Tabs>
     </div>
   );
@@ -1511,6 +1515,156 @@ function SystemTab() {
           </div>
         </CardContent>
       </Card>
+    </TabsContent>
+  );
+}
+
+// ─── Branding Tab ─────────────────────────────────────────────────────────────
+function BrandingTab() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: async () => { const r = await fetch("/api/config"); return r.json(); },
+  });
+
+  const [systemName, setSystemName] = useState("");
+  const [primaryColor, setPrimaryColor] = useState("#2563eb");
+  const [logoUrl, setLogoUrl] = useState("");
+
+  // Sync from config when loaded
+  useEffect(() => {
+    if (config) {
+      setSystemName(config.systemName ?? "ArcScale EDMS");
+      setPrimaryColor(config.primaryColor ?? "#2563eb");
+      setLogoUrl(config.logoUrl ?? "");
+    }
+  }, [config]);
+
+  const saveBranding = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ systemName, primaryColor, logoUrl: logoUrl || null }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.message ?? "Failed to save");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["config"] });
+      toast({ title: "Branding saved" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to save branding", variant: "destructive" }),
+  });
+
+  return (
+    <TabsContent value="branding" className="mt-4 space-y-4">
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* System Identity */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Globe className="h-4 w-4" />System Identity</CardTitle>
+            <CardDescription>Customize the name and colors that appear throughout the platform</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label>System Name</Label>
+              <Input
+                value={systemName}
+                onChange={e => setSystemName(e.target.value)}
+                placeholder="ArcScale EDMS"
+                className="mt-1"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Displayed on the login page, header, and browser tab</p>
+            </div>
+            <div>
+              <Label>Primary Color</Label>
+              <div className="mt-1 flex items-center gap-3">
+                <input
+                  type="color"
+                  value={primaryColor}
+                  onChange={e => setPrimaryColor(e.target.value)}
+                  className="h-9 w-14 rounded border cursor-pointer"
+                />
+                <Input
+                  value={primaryColor}
+                  onChange={e => setPrimaryColor(e.target.value)}
+                  placeholder="#2563eb"
+                  className="font-mono text-sm max-w-[140px]"
+                />
+                <div
+                  className="h-9 w-9 rounded-md border shadow-sm"
+                  style={{ backgroundColor: primaryColor }}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>Logo URL</Label>
+              <Input
+                value={logoUrl}
+                onChange={e => setLogoUrl(e.target.value)}
+                placeholder="https://example.com/logo.png"
+                className="mt-1"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Direct URL to your company logo (PNG or SVG recommended)</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Preview */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Palette className="h-4 w-4" />Live Preview</CardTitle>
+            <CardDescription>How your branding will appear to users</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Login preview */}
+            <div className="border rounded-lg p-4 bg-muted/30 space-y-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Login Page</p>
+              <div className="flex flex-col items-center gap-2 py-2">
+                {logoUrl ? (
+                  <img src={logoUrl} alt="Logo" className="h-10 object-contain" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                ) : (
+                  <div className="h-10 w-10 rounded-lg flex items-center justify-center text-white text-lg font-bold" style={{ backgroundColor: primaryColor }}>
+                    {systemName?.[0] ?? "A"}
+                  </div>
+                )}
+                <p className="font-bold text-sm">{systemName || "ArcScale EDMS"}</p>
+                <p className="text-xs text-muted-foreground">Engineering Document Management</p>
+                <div className="w-full max-w-[180px] h-8 rounded-md flex items-center justify-center text-white text-xs font-medium" style={{ backgroundColor: primaryColor }}>
+                  Sign In
+                </div>
+              </div>
+            </div>
+
+            {/* Color swatch */}
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Color Variants</p>
+              <div className="flex gap-2">
+                {[100, 50, 20, 10].map(opacity => (
+                  <div
+                    key={opacity}
+                    className="h-8 flex-1 rounded"
+                    style={{ backgroundColor: primaryColor, opacity: opacity / 100 }}
+                    title={`${opacity}%`}
+                  />
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="flex justify-end">
+        <Button onClick={() => saveBranding.mutate()} disabled={saveBranding.isPending} className="gap-2">
+          <Save className="h-4 w-4" />
+          {saveBranding.isPending ? "Saving..." : "Save Branding"}
+        </Button>
+      </div>
     </TabsContent>
   );
 }

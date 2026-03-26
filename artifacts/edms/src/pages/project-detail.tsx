@@ -729,6 +729,9 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selected, setSelected] = useState<any>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareForm, setShareForm] = useState({ expiresInDays: "30", password: "" });
+  const [shareResult, setShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
   const [form, setForm] = useState({
     subject: "", description: "", purpose: "for_information",
     toExternal: "", externalEmails: "", dueDate: "",
@@ -784,6 +787,37 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       toast({ title: "Transmittal acknowledged" });
+    },
+  });
+
+  const createShareLink = useMutation({
+    mutationFn: async ({ id, expiresInDays, password }: { id: number; expiresInDays: string; password: string }) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${id}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expiresInDays: expiresInDays ? parseInt(expiresInDays) : null,
+          password: password || undefined,
+        }),
+      });
+      if (!r.ok) throw new Error("Failed to create share link");
+      return r.json();
+    },
+    onSuccess: (data) => {
+      setShareResult(data);
+      toast({ title: "Secure share link created" });
+    },
+    onError: () => toast({ title: "Failed to create share link", variant: "destructive" }),
+  });
+
+  const revokeShareLink = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${id}/share`, { method: "DELETE" });
+      return r.json();
+    },
+    onSuccess: () => {
+      setShareResult(null);
+      toast({ title: "Share link revoked" });
     },
   });
 
@@ -943,20 +977,72 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                 )}
               </div>
 
-              {/* Access Link */}
-              <div className="border rounded-lg p-3 space-y-2">
+              {/* Secure Share Link */}
+              <div className="border rounded-lg p-3 space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                  <FileDown className="h-3.5 w-3.5" /> External Access Link
+                  <FileDown className="h-3.5 w-3.5" /> Secure External Share Link
                 </p>
-                <div className="bg-muted rounded-md p-2 text-xs font-mono break-all text-muted-foreground">
-                  {window.location.origin}/transmittals/ext/{selected.transmittalNumber?.toLowerCase().replace(/\//g, "-")}
-                </div>
-                <Button variant="outline" size="sm" className="gap-1.5 w-full text-xs" onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/transmittals/ext/${selected.transmittalNumber?.toLowerCase().replace(/\//g, "-")}`);
-                  toast({ title: "Link copied to clipboard" });
-                }}>
-                  Copy Access Link
-                </Button>
+
+                {shareResult ? (
+                  <>
+                    <div className="bg-muted rounded-md p-2 text-xs font-mono break-all text-muted-foreground">
+                      {shareResult.shareUrl}
+                    </div>
+                    {shareResult.expiresAt && (
+                      <p className="text-xs text-amber-600">Expires: {format(new Date(shareResult.expiresAt), "dd MMM yyyy HH:mm")}</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" className="gap-1.5 flex-1 text-xs" onClick={() => {
+                        navigator.clipboard.writeText(shareResult.shareUrl);
+                        toast({ title: "Share link copied" });
+                      }}>
+                        Copy Link
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm" className="text-xs text-destructive hover:bg-destructive/10"
+                        onClick={() => { setShareResult(null); revokeShareLink.mutate(selected.id); }}
+                      >
+                        Revoke
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">Generate a secure, time-limited link for external access. Optionally protect it with a password.</p>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <p className="text-xs font-medium mb-1">Expires in (days)</p>
+                          <input
+                            type="number"
+                            min="1" max="365"
+                            value={shareForm.expiresInDays}
+                            onChange={e => setShareForm(f => ({ ...f, expiresInDays: e.target.value }))}
+                            placeholder="30 (leave blank = never)"
+                            className="w-full h-8 px-2 rounded border bg-background text-xs"
+                          />
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium mb-1">Password (optional)</p>
+                          <input
+                            type="password"
+                            value={shareForm.password}
+                            onChange={e => setShareForm(f => ({ ...f, password: e.target.value }))}
+                            placeholder="Leave blank = no password"
+                            className="w-full h-8 px-2 rounded border bg-background text-xs"
+                          />
+                        </div>
+                      </div>
+                      <Button
+                        size="sm" className="gap-1.5 w-full text-xs"
+                        onClick={() => createShareLink.mutate({ id: selected.id, ...shareForm })}
+                        disabled={createShareLink.isPending}
+                      >
+                        {createShareLink.isPending ? <><RefreshCw className="h-3 w-3 animate-spin" /> Generating...</> : <><FileDown className="h-3 w-3" /> Generate Secure Link</>}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Audit / Status Timeline */}
@@ -1408,6 +1494,11 @@ function MembersTab({ projectId }: { projectId: number }) {
   const [addOpen, setAddOpen] = useState(false);
   const [addUserId, setAddUserId] = useState("");
   const [addRole, setAddRole] = useState("reviewer");
+  const [resetPwOpen, setResetPwOpen] = useState(false);
+  const [resetPwUserId, setResetPwUserId] = useState<number | null>(null);
+  const [resetPwUser, setResetPwUser] = useState<any>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
 
   const { data: membersData, isLoading } = useQuery({
     queryKey: ["project-members", projectId],
@@ -1468,22 +1559,96 @@ function MembersTab({ projectId }: { projectId: number }) {
     },
   });
 
-  const ROLE_COLORS: Record<string, string> = {
-    project_admin: "bg-red-100 text-red-700",
-    project_manager: "bg-blue-100 text-blue-700",
-    document_controller: "bg-purple-100 text-purple-700",
-    reviewer: "bg-cyan-100 text-cyan-700",
-    viewer: "bg-gray-100 text-gray-700",
-  };
+  const blockUser = useMutation({
+    mutationFn: async ({ userId, isActive }: { userId: number; isActive: boolean }) => {
+      const r = await fetch(`/api/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ["project-members", projectId] });
+      qc.invalidateQueries({ queryKey: ["users"] });
+      toast({ title: vars.isActive ? "User unblocked" : "User blocked" });
+    },
+    onError: () => toast({ title: "Action failed", variant: "destructive" }),
+  });
+
+  const resetPassword = useMutation({
+    mutationFn: async ({ userId, password }: { userId: number; password: string }) => {
+      const r = await fetch(`/api/users/${userId}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPassword: password }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      setResetPwOpen(false);
+      setNewPassword("");
+      toast({ title: "Password reset successfully" });
+    },
+    onError: () => toast({ title: "Failed to reset password", variant: "destructive" }),
+  });
+
+  const filteredMembers = memberSearch
+    ? members.filter((m: any) =>
+        `${m.user?.firstName} ${m.user?.lastName} ${m.user?.email}`.toLowerCase().includes(memberSearch.toLowerCase())
+      )
+    : members;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="font-semibold text-lg">Project Team</h3>
-        <Button className="gap-2" onClick={() => setAddOpen(true)}>
-          <UserPlus className="h-4 w-4" /> Add Member
-        </Button>
+        <div className="flex items-center gap-2 ml-auto">
+          <input
+            type="text"
+            placeholder="Search members..."
+            value={memberSearch}
+            onChange={e => setMemberSearch(e.target.value)}
+            className="h-8 px-3 rounded-md border bg-background text-sm w-48"
+          />
+          <Button className="gap-2" onClick={() => setAddOpen(true)}>
+            <UserPlus className="h-4 w-4" /> Add Member
+          </Button>
+        </div>
       </div>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={resetPwOpen} onOpenChange={open => { setResetPwOpen(open); if (!open) setNewPassword(""); }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader><DialogTitle>Reset Password</DialogTitle></DialogHeader>
+          <div className="py-2 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Setting new password for: <strong>{resetPwUser?.firstName} {resetPwUser?.lastName}</strong>
+            </p>
+            <div>
+              <Label>New Password</Label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="Min. 6 characters"
+                className="mt-1 w-full h-9 px-3 rounded-md border bg-background text-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setResetPwOpen(false); setNewPassword(""); }}>Cancel</Button>
+            <Button
+              onClick={() => resetPwUserId && resetPassword.mutate({ userId: resetPwUserId, password: newPassword })}
+              disabled={resetPassword.isPending || newPassword.length < 6}
+            >
+              {resetPassword.isPending ? "Resetting..." : "Reset Password"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[400px]">
@@ -1538,44 +1703,87 @@ function MembersTab({ projectId }: { projectId: number }) {
               <TableRow>
                 <TableHead>Member</TableHead>
                 <TableHead>Email</TableHead>
+                <TableHead>Organization</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Project Role</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {members.map((m: any) => (
-                <TableRow key={m.id}>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold">
-                        {m.user?.firstName?.[0]}{m.user?.lastName?.[0]}
+              {filteredMembers.map((m: any) => {
+                const fullUser = allUsers.find((u: any) => u.id === m.userId);
+                const orgName = fullUser?.organizationName;
+                const isActive = m.user?.isActive ?? true;
+                return (
+                  <TableRow key={m.id} className={!isActive ? "opacity-60" : ""}>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                          {m.user?.firstName?.[0]}{m.user?.lastName?.[0]}
+                        </div>
+                        <span className="font-medium text-sm">{m.user?.firstName} {m.user?.lastName}</span>
                       </div>
-                      <span className="font-medium text-sm">{m.user?.firstName} {m.user?.lastName}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{m.user?.email}</TableCell>
-                  <TableCell>
-                    <Select value={m.role} onValueChange={role => updateRole.mutate({ userId: m.userId, role })}>
-                      <SelectTrigger className="w-40 h-7 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="project_admin" className="text-xs">Project Admin</SelectItem>
-                        <SelectItem value="project_manager" className="text-xs">Project Manager</SelectItem>
-                        <SelectItem value="document_controller" className="text-xs">Document Controller</SelectItem>
-                        <SelectItem value="reviewer" className="text-xs">Reviewer</SelectItem>
-                        <SelectItem value="viewer" className="text-xs">Viewer</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10"
-                      onClick={() => removeMember.mutate(m.userId)}>
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{m.user?.email}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{orgName || "—"}</TableCell>
+                    <TableCell>
+                      {isActive ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                          <Check className="h-3 w-3" /> Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs text-red-500 font-medium">
+                          <X className="h-3 w-3" /> Blocked
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Select value={m.role} onValueChange={role => updateRole.mutate({ userId: m.userId, role })}>
+                        <SelectTrigger className="w-38 h-7 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="project_admin" className="text-xs">Project Admin</SelectItem>
+                          <SelectItem value="project_manager" className="text-xs">Project Manager</SelectItem>
+                          <SelectItem value="document_controller" className="text-xs">Document Controller</SelectItem>
+                          <SelectItem value="reviewer" className="text-xs">Reviewer</SelectItem>
+                          <SelectItem value="viewer" className="text-xs">Viewer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost" size="icon" className="h-7 w-7"
+                          title="Reset password"
+                          onClick={() => {
+                            setResetPwUserId(m.userId);
+                            setResetPwUser(m.user);
+                            setResetPwOpen(true);
+                          }}
+                        >
+                          <Square className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost" size="icon"
+                          className={`h-7 w-7 ${isActive ? "text-amber-500 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50"}`}
+                          title={isActive ? "Block user" : "Unblock user"}
+                          onClick={() => blockUser.mutate({ userId: m.userId, isActive: !isActive })}
+                        >
+                          {isActive ? <UserCheck className="h-3.5 w-3.5" /> : <UserPlus className="h-3.5 w-3.5" />}
+                        </Button>
+                        <Button
+                          variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                          title="Remove from project"
+                          onClick={() => removeMember.mutate(m.userId)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>

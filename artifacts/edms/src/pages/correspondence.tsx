@@ -61,7 +61,11 @@ export default function CorrespondencePage() {
   const [starred, setStarred] = useState<Set<number>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
-  const [compose, setCompose] = useState({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "" });
+  const [compose, setCompose] = useState<{
+    subject: string; type: string; body: string; priority: string; dueDate: string;
+    projectId: string; toUserIds: number[]; cc: string; taskToId: string;
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
+  const [toPickUser, setToPickUser] = useState("");
 
   // Fetch projects
   const { data: projectsData } = useQuery({
@@ -144,19 +148,36 @@ export default function CorrespondencePage() {
     else { setSortKey(key); setSortDir("desc"); }
   };
 
+  const { data: usersData } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
+  });
+  const allUsers: any[] = usersData?.users ?? [];
+
   const createCorr = useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async ({ data, sendNow }: { data: typeof compose; sendNow: boolean }) => {
       const projectId = data.projectId && data.projectId !== "_none" ? parseInt(data.projectId) : null;
       const url = projectId ? `/api/projects/${projectId}/correspondence` : "/api/general/correspondence";
-      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, folder: "inbox", status: "draft" }) });
+      const payload = {
+        subject: data.subject,
+        type: data.type,
+        body: data.body,
+        priority: data.priority,
+        dueDate: data.dueDate || undefined,
+        toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
+        sendNow,
+        folder: "inbox",
+      };
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "" });
-      toast({ title: "Correspondence created" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
+      setToPickUser("");
+      toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
     },
     onError: () => toast({ title: "Failed to create", variant: "destructive" }),
   });
@@ -437,9 +458,10 @@ export default function CorrespondencePage() {
 
       {/* Compose Dialog */}
       <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
-        <DialogContent className="sm:max-w-[580px]">
+        <DialogContent className="sm:max-w-[620px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>New Correspondence</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-3 py-2">
+            {/* Type + Priority */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Type *</Label>
@@ -460,6 +482,7 @@ export default function CorrespondencePage() {
                 </Select>
               </div>
             </div>
+            {/* Project */}
             <div>
               <Label>Project (optional)</Label>
               <Select value={compose.projectId} onValueChange={v => setCompose(f => ({ ...f, projectId: v }))}>
@@ -470,23 +493,101 @@ export default function CorrespondencePage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* To Recipients */}
+            <div>
+              <Label>To (Recipients)</Label>
+              <div className="mt-1 space-y-2">
+                {compose.toUserIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {compose.toUserIds.map(uid => {
+                      const u = allUsers.find(u => u.id === uid);
+                      return (
+                        <span key={uid} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
+                          {u ? `${u.firstName} ${u.lastName}` : `User #${uid}`}
+                          <button type="button" onClick={() => setCompose(f => ({ ...f, toUserIds: f.toUserIds.filter(id => id !== uid) }))} className="hover:text-destructive">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Select value={toPickUser} onValueChange={v => {
+                    if (v && v !== "_none") {
+                      const uid = parseInt(v);
+                      if (!compose.toUserIds.includes(uid)) {
+                        setCompose(f => ({ ...f, toUserIds: [...f.toUserIds, uid] }));
+                      }
+                      setToPickUser("");
+                    }
+                  }}>
+                    <SelectTrigger className="flex-1 h-8 text-sm">
+                      <SelectValue placeholder="Add recipient..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">— Select user —</SelectItem>
+                      {allUsers.filter(u => !compose.toUserIds.includes(u.id)).map(u => (
+                        <SelectItem key={u.id} value={String(u.id)}>{u.firstName} {u.lastName} — {u.email}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            {/* CC */}
+            <div>
+              <Label>CC (email addresses, comma-separated)</Label>
+              <Input value={compose.cc} onChange={e => setCompose(f => ({ ...f, cc: e.target.value }))} placeholder="cc@example.com, another@example.com" className="mt-1 text-sm" />
+            </div>
+            {/* Subject */}
             <div>
               <Label>Subject *</Label>
               <Input value={compose.subject} onChange={e => setCompose(f => ({ ...f, subject: e.target.value }))} placeholder="Enter subject..." className="mt-1" />
             </div>
-            <div>
-              <Label>Due Date</Label>
-              <Input type="date" value={compose.dueDate} onChange={e => setCompose(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
+            {/* Due Date + Task To */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Due Date</Label>
+                <Input type="date" value={compose.dueDate} onChange={e => setCompose(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
+              </div>
+              <div>
+                <Label>Task To (assign responsible)</Label>
+                <Select value={compose.taskToId || "_none"} onValueChange={v => setCompose(f => ({ ...f, taskToId: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">None</SelectItem>
+                    {allUsers.map(u => (
+                      <SelectItem key={u.id} value={String(u.id)}>{u.firstName} {u.lastName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+            {/* Body */}
             <div>
               <Label>Body</Label>
               <Textarea value={compose.body} onChange={e => setCompose(f => ({ ...f, body: e.target.value }))} rows={5} className="mt-1" placeholder="Write message..." />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setComposeOpen(false)}>Cancel</Button>
-            <Button onClick={() => createCorr.mutate(compose)} disabled={createCorr.isPending || !compose.subject}>
-              {createCorr.isPending ? "Creating..." : "Create"}
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setComposeOpen(false)} className="sm:mr-auto">Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => createCorr.mutate({ data: compose, sendNow: false })}
+              disabled={createCorr.isPending || !compose.subject}
+              className="gap-1.5"
+            >
+              {createCorr.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+              Save Draft
+            </Button>
+            <Button
+              onClick={() => createCorr.mutate({ data: compose, sendNow: true })}
+              disabled={createCorr.isPending || !compose.subject}
+              className="gap-1.5"
+            >
+              {createCorr.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Send
             </Button>
           </DialogFooter>
         </DialogContent>

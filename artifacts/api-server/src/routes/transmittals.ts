@@ -4,8 +4,9 @@ import {
   transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import crypto from "crypto";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -160,6 +161,51 @@ router.post("/:id/items", async (req, res) => {
 router.delete("/:id/items/:itemId", async (req, res) => {
   const itemId = parseInt(req.params.itemId);
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
+  res.json({ success: true });
+});
+
+// Create / update share link
+router.post("/:id/share", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { expiresInDays, password } = req.body;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = expiresInDays
+    ? new Date(Date.now() + expiresInDays * 86400000)
+    : null;
+  const passwordHash = password ? await hashPassword(password) : null;
+
+  const [transmittal] = await db.update(transmittalsTable)
+    .set({
+      shareToken: token,
+      shareExpiresAt: expiresAt ?? undefined,
+      sharePasswordHash: passwordHash ?? undefined,
+      updatedAt: new Date(),
+    })
+    .where(eq(transmittalsTable.id, id))
+    .returning({ id: transmittalsTable.id, shareToken: transmittalsTable.shareToken, shareExpiresAt: transmittalsTable.shareExpiresAt });
+
+  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+
+  await createAuditLog({
+    userId: req.user!.id, action: "share", entityType: "transmittal",
+    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+  });
+
+  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+  res.json({
+    shareUrl: `${baseUrl}/shared/transmittal/${token}`,
+    shareToken: token,
+    expiresAt: expiresAt,
+  });
+});
+
+// Revoke share link
+router.delete("/:id/share", async (req, res) => {
+  const id = parseInt(req.params.id);
+  await db.update(transmittalsTable)
+    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id));
   res.json({ success: true });
 });
 
