@@ -1,30 +1,61 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, organizationsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
-import { signToken, hashPassword, verifyPassword, requireAuth } from "../lib/auth.js";
+import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable } from "@workspace/db";
+import { eq, and, gt } from "drizzle-orm";
+import {
+  signToken,
+  hashPassword,
+  verifyPassword,
+  generateSecureToken,
+  getRefreshTokenExpiryDate,
+  getRememberMeExpiry,
+  verifyToken,
+  requireAuth,
+} from "../lib/auth.js";
 
 const router = Router();
 
+function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: string) {
+  return {
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    role: user.role,
+    organizationId: user.organizationId,
+    organizationName: orgName,
+    isActive: user.isActive,
+    createdAt: user.createdAt,
+  };
+}
+
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, rememberMe } = req.body;
   if (!email || !password) {
-    res.status(400).json({ error: "Bad Request", message: "Email and password required" });
+    res.status(400).json({ error: "Bad Request", message: "Email and password are required" });
     return;
   }
+
   const users = await db
     .select()
     .from(usersTable)
-    .where(eq(usersTable.email, email.toLowerCase()))
+    .where(eq(usersTable.email, email.toLowerCase().trim()))
     .limit(1);
 
   const user = users[0];
-  if (!user || !verifyPassword(password, user.passwordHash)) {
-    res.status(401).json({ error: "Unauthorized", message: "Invalid credentials" });
+  if (!user) {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
     return;
   }
+
+  const passwordValid = await verifyPassword(password, user.passwordHash);
+  if (!passwordValid) {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+    return;
+  }
+
   if (!user.isActive) {
-    res.status(403).json({ error: "Forbidden", message: "Account is disabled" });
+    res.status(403).json({ error: "Forbidden", message: "Your account has been disabled. Please contact your administrator." });
     return;
   }
 
@@ -34,61 +65,71 @@ router.post("/login", async (req, res) => {
     orgName = orgs[0]?.name;
   }
 
-  const token = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+  const tokenExpiry = rememberMe ? getRememberMeExpiry() : undefined;
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId }, tokenExpiry);
+
+  // Generate refresh token
+  const refreshToken = generateSecureToken();
+  await db.insert(refreshTokensTable).values({
+    userId: user.id,
+    token: refreshToken,
+    expiresAt: getRefreshTokenExpiryDate(),
+  });
+
   res.json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
-      organizationId: user.organizationId,
-      organizationName: orgName,
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-    },
+    token: accessToken,
+    refreshToken,
+    user: buildUserResponse(user, orgName),
   });
 });
 
 router.post("/register", async (req, res) => {
   const { email, password, firstName, lastName, organizationId } = req.body;
+
   if (!email || !password || !firstName || !lastName) {
-    res.status(400).json({ error: "Bad Request", message: "All fields required" });
+    res.status(400).json({ error: "Bad Request", message: "All fields are required" });
     return;
   }
 
-  const existing = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase())).limit(1);
+  if (password.length < 8) {
+    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+    return;
+  }
+
+  const existing = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase().trim())).limit(1);
   if (existing.length > 0) {
-    res.status(400).json({ error: "Bad Request", message: "Email already registered" });
+    res.status(400).json({ error: "Bad Request", message: "An account with this email already exists" });
     return;
   }
 
-  const isFirstUser = (await db.select().from(usersTable).limit(1)).length === 0;
+  const allUsers = await db.select().from(usersTable).limit(1);
+  const isFirstUser = allUsers.length === 0;
+
+  const passwordHash = await hashPassword(password);
 
   const [user] = await db.insert(usersTable).values({
-    email: email.toLowerCase(),
-    passwordHash: hashPassword(password),
-    firstName,
-    lastName,
+    email: email.toLowerCase().trim(),
+    passwordHash,
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
     role: isFirstUser ? "admin" : "viewer",
     organizationId: organizationId || null,
     isActive: true,
   }).returning();
 
-  const token = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+
+  const refreshToken = generateSecureToken();
+  await db.insert(refreshTokensTable).values({
+    userId: user.id,
+    token: refreshToken,
+    expiresAt: getRefreshTokenExpiryDate(),
+  });
+
   res.status(201).json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
-      organizationId: user.organizationId,
-      isActive: user.isActive,
-      createdAt: user.createdAt,
-    },
+    token: accessToken,
+    refreshToken,
+    user: buildUserResponse(user),
   });
 });
 
@@ -106,17 +147,130 @@ router.get("/me", requireAuth, async (req, res) => {
     orgName = orgs[0]?.name;
   }
 
-  res.json({
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    role: user.role,
-    organizationId: user.organizationId,
-    organizationName: orgName,
-    isActive: user.isActive,
-    createdAt: user.createdAt,
+  res.json(buildUserResponse(user, orgName));
+});
+
+router.post("/refresh-token", async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    res.status(400).json({ error: "Bad Request", message: "Refresh token is required" });
+    return;
+  }
+
+  const tokens = await db.select().from(refreshTokensTable)
+    .where(and(
+      eq(refreshTokensTable.token, refreshToken),
+      gt(refreshTokensTable.expiresAt, new Date())
+    ))
+    .limit(1);
+
+  const tokenRecord = tokens[0];
+  if (!tokenRecord || tokenRecord.revokedAt) {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired refresh token" });
+    return;
+  }
+
+  const users = await db.select().from(usersTable).where(eq(usersTable.id, tokenRecord.userId)).limit(1);
+  const user = users[0];
+  if (!user || !user.isActive) {
+    res.status(401).json({ error: "Unauthorized", message: "User account not found or disabled" });
+    return;
+  }
+
+  // Revoke old token and issue new ones
+  await db.update(refreshTokensTable)
+    .set({ revokedAt: new Date() })
+    .where(eq(refreshTokensTable.id, tokenRecord.id));
+
+  const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+  const newRefreshToken = generateSecureToken();
+
+  await db.insert(refreshTokensTable).values({
+    userId: user.id,
+    token: newRefreshToken,
+    expiresAt: getRefreshTokenExpiryDate(),
   });
+
+  res.json({ token: newAccessToken, refreshToken: newRefreshToken });
+});
+
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ error: "Bad Request", message: "Email is required" });
+    return;
+  }
+
+  // Always respond with success to prevent email enumeration
+  const users = await db.select().from(usersTable).where(eq(usersTable.email, email.toLowerCase().trim())).limit(1);
+
+  if (users[0]) {
+    const user = users[0];
+    const resetToken = generateSecureToken();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await db.insert(passwordResetTokensTable).values({
+      userId: user.id,
+      token: resetToken,
+      expiresAt,
+    });
+
+    // In production, send an email. For now, include token in response for testing.
+    res.json({
+      message: "If an account with that email exists, a password reset link has been sent.",
+      // Development only - remove in production:
+      resetToken,
+      resetUrl: `/reset-password?token=${resetToken}`,
+    });
+    return;
+  }
+
+  res.json({
+    message: "If an account with that email exists, a password reset link has been sent.",
+  });
+});
+
+router.post("/reset-password", async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) {
+    res.status(400).json({ error: "Bad Request", message: "Token and new password are required" });
+    return;
+  }
+
+  if (password.length < 8) {
+    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+    return;
+  }
+
+  const tokens = await db.select().from(passwordResetTokensTable)
+    .where(and(
+      eq(passwordResetTokensTable.token, token),
+      gt(passwordResetTokensTable.expiresAt, new Date())
+    ))
+    .limit(1);
+
+  const tokenRecord = tokens[0];
+  if (!tokenRecord || tokenRecord.usedAt) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid or expired reset token. Please request a new one." });
+    return;
+  }
+
+  const passwordHash = await hashPassword(password);
+
+  await db.update(usersTable)
+    .set({ passwordHash, updatedAt: new Date() })
+    .where(eq(usersTable.id, tokenRecord.userId));
+
+  await db.update(passwordResetTokensTable)
+    .set({ usedAt: new Date() })
+    .where(eq(passwordResetTokensTable.id, tokenRecord.id));
+
+  // Revoke all refresh tokens for this user
+  await db.update(refreshTokensTable)
+    .set({ revokedAt: new Date() })
+    .where(eq(refreshTokensTable.userId, tokenRecord.userId));
+
+  res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
 });
 
 export default router;

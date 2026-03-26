@@ -50,9 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [error, setLocation]);
 
-  // Redirect to login if no token and not already on login page
+  // Redirect to login if no token and not already on a public page
+  const publicPaths = ["/login", "/register", "/forgot-password", "/reset-password"];
   useEffect(() => {
-    if (!token && location !== "/login") {
+    if (!token && !publicPaths.some(p => location === p || location.startsWith(p + "?"))) {
       setLocation("/login");
     }
   }, [token, location, setLocation]);

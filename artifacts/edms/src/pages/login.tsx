@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useLogin } from "@workspace/api-client-react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Building2, Loader2 } from "lucide-react";
-
+import { Building2, Loader2, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -16,48 +16,55 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/hooks/use-toast";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const loginSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z.string().email("Please enter a valid email address"),
   password: z.string().min(1, "Password is required"),
+  rememberMe: z.boolean().optional(),
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function Login() {
   const { login: setAuthToken } = useAuth();
-  const { toast } = useToast();
   const loginMutation = useLogin();
+  const [showPassword, setShowPassword] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
       email: "",
       password: "",
+      rememberMe: false,
     },
   });
 
   const onSubmit = async (data: LoginFormValues) => {
+    setServerError(null);
     try {
-      const response = await loginMutation.mutateAsync({ data });
+      const response = await loginMutation.mutateAsync({
+        data: { email: data.email, password: data.password },
+      });
+      // Store refresh token
+      if ((response as any).refreshToken) {
+        localStorage.setItem("edms_refresh_token", (response as any).refreshToken);
+      }
+      if (data.rememberMe) {
+        localStorage.setItem("edms_remember_me", "true");
+      }
       setAuthToken(response.token);
-      toast({
-        title: "Welcome back",
-        description: `Logged in as ${response.user.firstName}`,
-      });
     } catch (error: any) {
-      toast({
-        variant: "destructive",
-        title: "Login failed",
-        description: error.message || "Invalid credentials. Please try again.",
-      });
+      const msg = error?.body?.message || error?.message || "Invalid email or password. Please try again.";
+      setServerError(msg);
     }
   };
 
   return (
     <div className="min-h-screen w-full flex bg-background">
-      {/* Left panel - Form */}
+      {/* Left panel */}
       <div className="flex-1 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8">
         <div className="w-full max-w-md space-y-8">
           <div className="text-center">
@@ -66,7 +73,7 @@ export default function Login() {
                 <Building2 className="h-8 w-8" />
               </div>
             </div>
-            <h2 className="mt-6 text-3xl font-display font-bold tracking-tight text-foreground">
+            <h2 className="text-3xl font-bold tracking-tight text-foreground">
               Sign in to your account
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -74,9 +81,16 @@ export default function Login() {
             </p>
           </div>
 
-          <div className="mt-8 bg-card px-4 py-8 shadow-xl shadow-black/5 sm:rounded-2xl sm:px-10 border border-border/50">
+          <div className="bg-card px-6 py-8 shadow-xl shadow-black/5 rounded-2xl border border-border/50">
+            {serverError && (
+              <Alert variant="destructive" className="mb-6">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{serverError}</AlertDescription>
+              </Alert>
+            )}
+
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
                 <FormField
                   control={form.control}
                   name="email"
@@ -87,8 +101,9 @@ export default function Login() {
                         <Input
                           placeholder="you@company.com"
                           type="email"
+                          autoComplete="email"
                           disabled={loginMutation.isPending}
-                          className="h-12 focus-visible:ring-primary/20"
+                          className="h-11"
                           {...field}
                         />
                       </FormControl>
@@ -102,29 +117,64 @@ export default function Login() {
                   name="password"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Password</FormLabel>
+                      <div className="flex items-center justify-between">
+                        <FormLabel>Password</FormLabel>
+                        <Link href="/forgot-password" className="text-sm text-primary hover:underline font-medium">
+                          Forgot password?
+                        </Link>
+                      </div>
                       <FormControl>
-                        <Input
-                          placeholder="••••••••"
-                          type="password"
-                          disabled={loginMutation.isPending}
-                          className="h-12 focus-visible:ring-primary/20"
-                          {...field}
-                        />
+                        <div className="relative">
+                          <Input
+                            placeholder="••••••••"
+                            type={showPassword ? "text" : "password"}
+                            autoComplete="current-password"
+                            disabled={loginMutation.isPending}
+                            className="h-11 pr-10"
+                            {...field}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            tabIndex={-1}
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
+                <FormField
+                  control={form.control}
+                  name="rememberMe"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center space-x-2 space-y-0">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                          disabled={loginMutation.isPending}
+                        />
+                      </FormControl>
+                      <FormLabel className="text-sm font-normal cursor-pointer">
+                        Remember me for 7 days
+                      </FormLabel>
+                    </FormItem>
+                  )}
+                />
+
                 <Button
                   type="submit"
-                  className="w-full h-12 text-base font-semibold shadow-md"
+                  className="w-full h-11 text-base font-semibold"
                   disabled={loginMutation.isPending}
                 >
                   {loginMutation.isPending ? (
                     <>
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Signing in...
                     </>
                   ) : (
@@ -133,11 +183,27 @@ export default function Login() {
                 </Button>
               </form>
             </Form>
+
+            <div className="mt-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                Don't have an account?{" "}
+                <Link href="/register" className="text-primary font-medium hover:underline">
+                  Create account
+                </Link>
+              </p>
+            </div>
           </div>
+
+          <p className="text-center text-xs text-muted-foreground">
+            Default admin:{" "}
+            <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">admin@admin.com</span>
+            {" / "}
+            <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">Admin123!</span>
+          </p>
         </div>
       </div>
 
-      {/* Right panel - Image */}
+      {/* Right panel - image */}
       <div className="hidden lg:block relative w-0 flex-1 bg-slate-900">
         <img
           className="absolute inset-0 h-full w-full object-cover opacity-80 mix-blend-overlay"
@@ -146,11 +212,11 @@ export default function Login() {
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
         <div className="absolute bottom-12 left-12 right-12 text-white">
-          <h1 className="text-4xl font-display font-bold tracking-tight mb-4">
+          <h1 className="text-4xl font-bold tracking-tight mb-4">
             Build with confidence.
           </h1>
           <p className="text-lg text-slate-300 max-w-xl leading-relaxed">
-            The single source of truth for engineering documents, correspondence, 
+            The single source of truth for engineering documents, correspondence,
             and workflows. Connect your teams across the entire project lifecycle.
           </p>
         </div>

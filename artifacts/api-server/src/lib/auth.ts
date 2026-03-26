@@ -1,16 +1,25 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 
 const JWT_SECRET = process.env.JWT_SECRET || "edms-secret-key-change-in-production";
+const ACCESS_TOKEN_EXPIRY = 60 * 60; // 1 hour in seconds
+const REMEMBER_ME_EXPIRY = 60 * 60 * 24 * 7; // 7 days in seconds
+const REFRESH_TOKEN_EXPIRY = 60 * 60 * 24 * 30; // 30 days
 
 function base64url(data: Buffer | string): string {
   const buf = typeof data === "string" ? Buffer.from(data) : data;
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-export function signToken(payload: object): string {
+export function signToken(payload: object, expiresInSeconds: number = ACCESS_TOKEN_EXPIRY): string {
+  const now = Math.floor(Date.now() / 1000);
   const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = base64url(JSON.stringify({ ...payload, iat: Math.floor(Date.now() / 1000) }));
+  const body = base64url(JSON.stringify({
+    ...payload,
+    iat: now,
+    exp: now + expiresInSeconds,
+  }));
   const sig = base64url(
     crypto.createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest()
   );
@@ -26,18 +35,41 @@ export function verifyToken(token: string): Record<string, unknown> | null {
       crypto.createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest()
     );
     if (sig !== expectedSig) return null;
-    return JSON.parse(Buffer.from(body, "base64").toString());
+    const payload = JSON.parse(Buffer.from(body, "base64").toString());
+    // Check expiry
+    if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) {
+      return null;
+    }
+    return payload;
   } catch {
     return null;
   }
 }
 
-export function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password + JWT_SECRET).digest("hex");
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
 }
 
-export function verifyPassword(password: string, hash: string): boolean {
-  return hashPassword(password) === hash;
+export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  // Support legacy SHA256 hashes for backward compat during migration
+  if (hash.length === 64 && !hash.startsWith("$2")) {
+    const legacySecret = process.env.JWT_SECRET || "edms-secret-key-change-in-production";
+    const legacyHash = crypto.createHash("sha256").update(password + legacySecret).digest("hex");
+    return legacyHash === hash;
+  }
+  return bcrypt.compare(password, hash);
+}
+
+export function generateSecureToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+export function getRefreshTokenExpiryDate(): Date {
+  return new Date(Date.now() + REFRESH_TOKEN_EXPIRY * 1000);
+}
+
+export function getRememberMeExpiry(): number {
+  return REMEMBER_ME_EXPIRY;
 }
 
 export interface AuthUser {
@@ -64,7 +96,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   const token = authHeader.slice(7);
   const payload = verifyToken(token);
   if (!payload) {
-    res.status(401).json({ error: "Unauthorized", message: "Invalid token" });
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired token" });
     return;
   }
   req.user = payload as unknown as AuthUser;

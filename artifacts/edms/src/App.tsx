@@ -10,6 +10,9 @@ import { AppLayout } from "@/components/layout/AppLayout";
 
 // Pages
 import Login from "@/pages/login";
+import Register from "@/pages/register";
+import ForgotPassword from "@/pages/forgot-password";
+import ResetPassword from "@/pages/reset-password";
 import Dashboard from "@/pages/dashboard";
 import Organizations from "@/pages/organizations";
 import Projects from "@/pages/projects";
@@ -40,7 +43,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      
+      <Route path="/register" component={Register} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
+
       {/* Protected Routes wrapped in AppLayout */}
       <Route path="/">
         <ProtectedRoute component={Dashboard} />
