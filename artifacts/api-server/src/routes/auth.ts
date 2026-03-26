@@ -30,7 +30,8 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
 }
 
 router.post("/login", async (req, res) => {
-  const { email, password, rememberMe } = req.body;
+  const body = req.body ?? {};
+  const { email, password, rememberMe } = body;
   if (!email || !password) {
     res.status(400).json({ error: "Bad Request", message: "Email and password are required" });
     return;
@@ -84,7 +85,7 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/register", async (req, res) => {
-  const { email, password, firstName, lastName, organizationId } = req.body;
+  const { email, password, firstName, lastName, organizationId } = req.body ?? {};
 
   if (!email || !password || !firstName || !lastName) {
     res.status(400).json({ error: "Bad Request", message: "All fields are required" });
@@ -151,7 +152,7 @@ router.get("/me", requireAuth, async (req, res) => {
 });
 
 router.post("/refresh-token", async (req, res) => {
-  const { refreshToken } = req.body;
+  const { refreshToken } = req.body ?? {};
   if (!refreshToken) {
     res.status(400).json({ error: "Bad Request", message: "Refresh token is required" });
     return;
@@ -195,7 +196,7 @@ router.post("/refresh-token", async (req, res) => {
 });
 
 router.post("/forgot-password", async (req, res) => {
-  const { email } = req.body;
+  const { email } = req.body ?? {};
   if (!email) {
     res.status(400).json({ error: "Bad Request", message: "Email is required" });
     return;
@@ -231,7 +232,7 @@ router.post("/forgot-password", async (req, res) => {
 });
 
 router.post("/reset-password", async (req, res) => {
-  const { token, password } = req.body;
+  const { token, password } = req.body ?? {};
   if (!token || !password) {
     res.status(400).json({ error: "Bad Request", message: "Token and new password are required" });
     return;

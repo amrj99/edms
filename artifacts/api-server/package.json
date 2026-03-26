@@ -1,12 +1,21 @@
 {
   "name": "@workspace/api-server",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "start:prod": "NODE_ENV=production node --enable-source-maps ./dist/index.mjs",
+    "seed": "node ./build.mjs && node --enable-source-maps ./dist/seed.mjs",
+    "db:push": "pnpm --filter @workspace/db run push",
+    "db:migrate": "pnpm --filter @workspace/db run push",
+    "db:seed": "pnpm run seed",
+    "docker:build": "docker build -t edms-api .",
+    "docker:start": "docker compose up -d",
+    "docker:stop": "docker compose down",
+    "docker:logs": "docker compose logs -f",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
