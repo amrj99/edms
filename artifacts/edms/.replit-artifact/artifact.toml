@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "EDMS - Engineering Document Management"
+version = "1.0.0"
+id = "artifacts/edms"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22204
+
+[services.development]
+run = "pnpm --filter @workspace/edms run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/edms", "run", "build" ]
+publicDir = "artifacts/edms/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22204"
+BASE_PATH = "/"

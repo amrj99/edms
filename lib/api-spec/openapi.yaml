@@ -1,22 +1,45 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Engineering Document Management System API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: organizations
+    description: Organization management
+  - name: projects
+    description: Project management
+  - name: users
+    description: User management
+  - name: documents
+    description: Document management
+  - name: document-revisions
+    description: Document revision history
+  - name: metadata
+    description: Dynamic metadata configuration
+  - name: correspondence
+    description: Internal correspondence system
+  - name: workflows
+    description: Workflow engine
+  - name: tasks
+    description: Task management
+  - name: dashboard
+    description: Dashboard data
+  - name: search
+    description: Search across documents and correspondence
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,7 +47,1162 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # Auth
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user info
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # Organizations
+  /organizations:
+    get:
+      operationId: listOrganizations
+      tags: [organizations]
+      summary: List all organizations
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of organizations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationList"
+    post:
+      operationId: createOrganization
+      tags: [organizations]
+      summary: Create a new organization
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+
+  /organizations/{id}:
+    get:
+      operationId: getOrganization
+      tags: [organizations]
+      summary: Get organization by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+    put:
+      operationId: updateOrganization
+      tags: [organizations]
+      summary: Update an organization
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganizationRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+    delete:
+      operationId: deleteOrganization
+      tags: [organizations]
+      summary: Delete an organization
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  # Projects
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: organizationId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get project by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    put:
+      operationId: updateProject
+      tags: [projects]
+      summary: Update a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Delete a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{id}/members:
+    get:
+      operationId: listProjectMembers
+      tags: [projects]
+      summary: List project members
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMemberList"
+    post:
+      operationId: addProjectMember
+      tags: [projects]
+      summary: Add a member to a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddProjectMemberRequest"
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMember"
+
+  /projects/{id}/members/{userId}:
+    delete:
+      operationId: removeProjectMember
+      tags: [projects]
+      summary: Remove a member from a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Removed
+
+  # Users
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all users
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: organizationId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create a new user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    put:
+      operationId: updateUser
+      tags: [users]
+      summary: Update a user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Delete a user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  # Documents
+  /projects/{projectId}/documents:
+    get:
+      operationId: listDocuments
+      tags: [documents]
+      summary: List documents in a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: folderId
+          in: query
+          schema:
+            type: integer
+        - name: discipline
+          in: query
+          schema:
+            type: string
+        - name: documentType
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Documents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentList"
+    post:
+      operationId: createDocument
+      tags: [documents]
+      summary: Create a new document
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+
+  /projects/{projectId}/documents/{id}:
+    get:
+      operationId: getDocument
+      tags: [documents]
+      summary: Get document by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+    put:
+      operationId: updateDocument
+      tags: [documents]
+      summary: Update a document
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDocumentRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+    delete:
+      operationId: deleteDocument
+      tags: [documents]
+      summary: Delete a document
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{projectId}/documents/{id}/revisions:
+    get:
+      operationId: listDocumentRevisions
+      tags: [document-revisions]
+      summary: List all revisions of a document
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Revisions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentRevisionList"
+
+  /projects/{projectId}/documents/{id}/submit-review:
+    post:
+      operationId: submitDocumentForReview
+      tags: [documents]
+      summary: Submit a document for review
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitReviewRequest"
+      responses:
+        "200":
+          description: Submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+
+  # Document Folders
+  /projects/{projectId}/folders:
+    get:
+      operationId: listFolders
+      tags: [documents]
+      summary: List document folders in a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Folders
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderList"
+    post:
+      operationId: createFolder
+      tags: [documents]
+      summary: Create a folder
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFolderRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Folder"
+
+  # Metadata Templates
+  /metadata-fields:
+    get:
+      operationId: listMetadataFields
+      tags: [metadata]
+      summary: List all metadata field definitions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Metadata fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataFieldList"
+    post:
+      operationId: createMetadataField
+      tags: [metadata]
+      summary: Create a metadata field definition
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMetadataFieldRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataField"
+
+  /metadata-fields/{id}:
+    delete:
+      operationId: deleteMetadataField
+      tags: [metadata]
+      summary: Delete a metadata field definition
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  # Correspondence
+  /projects/{projectId}/correspondence:
+    get:
+      operationId: listCorrespondence
+      tags: [correspondence]
+      summary: List correspondence in a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: folder
+          in: query
+          schema:
+            type: string
+            enum: [inbox, sent, draft, archive]
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [transmittal, letter, memo, rfi]
+      responses:
+        "200":
+          description: Correspondence list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CorrespondenceList"
+    post:
+      operationId: createCorrespondence
+      tags: [correspondence]
+      summary: Create a new correspondence item
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCorrespondenceRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Correspondence"
+
+  /projects/{projectId}/correspondence/{id}:
+    get:
+      operationId: getCorrespondence
+      tags: [correspondence]
+      summary: Get a correspondence item
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Correspondence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Correspondence"
+    put:
+      operationId: updateCorrespondence
+      tags: [correspondence]
+      summary: Update a correspondence item
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCorrespondenceRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Correspondence"
+
+  /projects/{projectId}/correspondence/{id}/reply:
+    post:
+      operationId: replyToCorrespondence
+      tags: [correspondence]
+      summary: Reply to a correspondence item
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCorrespondenceRequest"
+      responses:
+        "201":
+          description: Reply created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Correspondence"
+
+  # Workflows
+  /projects/{projectId}/workflows:
+    get:
+      operationId: listWorkflows
+      tags: [workflows]
+      summary: List workflow instances in a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowList"
+
+  /projects/{projectId}/workflows/{id}:
+    get:
+      operationId: getWorkflow
+      tags: [workflows]
+      summary: Get a workflow instance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+
+  /projects/{projectId}/workflows/{id}/action:
+    post:
+      operationId: workflowAction
+      tags: [workflows]
+      summary: Perform an action on a workflow (approve/reject/comment)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkflowActionRequest"
+      responses:
+        "200":
+          description: Action performed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workflow"
+
+  # Tasks
+  /tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      summary: List tasks for the current user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, cancelled]
+        - name: assignedToMe
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskList"
+    post:
+      operationId: createTask
+      tags: [tasks]
+      summary: Create a task
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      tags: [tasks]
+      summary: Get a task
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+    put:
+      operationId: updateTask
+      tags: [tasks]
+      summary: Update a task
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  # Dashboard
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [dashboard]
+      summary: Get dashboard data for the current user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardData"
+
+  # Search
+  /search:
+    get:
+      operationId: search
+      tags: [search]
+      summary: Search across documents and correspondence
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: projectId
+          in: query
+          schema:
+            type: integer
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [document, correspondence, all]
+        - name: discipline
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResults"
+
+  # Audit Logs
+  /audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [dashboard]
+      summary: List audit logs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: integer
+        - name: entityType
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogList"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
@@ -34,3 +1212,1078 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+
+    # Auth
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        organizationId:
+          type: integer
+      required:
+        - email
+        - password
+        - firstName
+        - lastName
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - token
+        - user
+
+    # User
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [admin, project_manager, document_controller, reviewer, viewer]
+        organizationId:
+          type: integer
+        organizationName:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - firstName
+        - lastName
+        - role
+        - isActive
+        - createdAt
+
+    UserList:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        total:
+          type: integer
+      required:
+        - users
+        - total
+
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [admin, project_manager, document_controller, reviewer, viewer]
+        organizationId:
+          type: integer
+      required:
+        - email
+        - password
+        - firstName
+        - lastName
+        - role
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        role:
+          type: string
+          enum: [admin, project_manager, document_controller, reviewer, viewer]
+        isActive:
+          type: boolean
+
+    # Organization
+    Organization:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum: [client, consultant, contractor, subcontractor]
+        contactEmail:
+          type: string
+        contactPhone:
+          type: string
+        address:
+          type: string
+        userCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - type
+        - createdAt
+
+    OrganizationList:
+      type: object
+      properties:
+        organizations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organization"
+        total:
+          type: integer
+      required:
+        - organizations
+        - total
+
+    CreateOrganizationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [client, consultant, contractor, subcontractor]
+        contactEmail:
+          type: string
+        contactPhone:
+          type: string
+        address:
+          type: string
+      required:
+        - name
+        - type
+
+    # Project
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, on_hold, completed, cancelled]
+        startDate:
+          type: string
+          format: date-time
+        endDate:
+          type: string
+          format: date-time
+        organizationId:
+          type: integer
+        organizationName:
+          type: string
+        memberCount:
+          type: integer
+        documentCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - code
+        - status
+        - organizationId
+        - createdAt
+
+    ProjectList:
+      type: object
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        total:
+          type: integer
+      required:
+        - projects
+        - total
+
+    CreateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [active, on_hold, completed, cancelled]
+        startDate:
+          type: string
+          format: date-time
+        endDate:
+          type: string
+          format: date-time
+        organizationId:
+          type: integer
+      required:
+        - name
+        - code
+        - organizationId
+
+    ProjectMember:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        projectId:
+          type: integer
+        role:
+          type: string
+          enum: [admin, project_manager, document_controller, reviewer, viewer]
+        user:
+          $ref: "#/components/schemas/User"
+        joinedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - projectId
+        - role
+        - joinedAt
+
+    ProjectMemberList:
+      type: object
+      properties:
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectMember"
+        total:
+          type: integer
+      required:
+        - members
+        - total
+
+    AddProjectMemberRequest:
+      type: object
+      properties:
+        userId:
+          type: integer
+        role:
+          type: string
+          enum: [admin, project_manager, document_controller, reviewer, viewer]
+      required:
+        - userId
+        - role
+
+    # Document
+    Document:
+      type: object
+      properties:
+        id:
+          type: integer
+        documentNumber:
+          type: string
+        title:
+          type: string
+        documentType:
+          type: string
+        discipline:
+          type: string
+        revision:
+          type: string
+        status:
+          type: string
+          enum: [draft, under_review, approved, issued, superseded, void]
+        description:
+          type: string
+        folderId:
+          type: integer
+        folderName:
+          type: string
+        projectId:
+          type: integer
+        createdById:
+          type: integer
+        createdByName:
+          type: string
+        fileUrl:
+          type: string
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+        workflowStatus:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - documentNumber
+        - title
+        - revision
+        - status
+        - projectId
+        - createdAt
+        - updatedAt
+
+    DocumentList:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        total:
+          type: integer
+      required:
+        - documents
+        - total
+
+    CreateDocumentRequest:
+      type: object
+      properties:
+        documentNumber:
+          type: string
+        title:
+          type: string
+        documentType:
+          type: string
+        discipline:
+          type: string
+        revision:
+          type: string
+        status:
+          type: string
+          enum: [draft, under_review, approved, issued, superseded, void]
+        description:
+          type: string
+        folderId:
+          type: integer
+        fileUrl:
+          type: string
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+      required:
+        - documentNumber
+        - title
+        - revision
+
+    UpdateDocumentRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        documentType:
+          type: string
+        discipline:
+          type: string
+        revision:
+          type: string
+        status:
+          type: string
+          enum: [draft, under_review, approved, issued, superseded, void]
+        description:
+          type: string
+        folderId:
+          type: integer
+        fileUrl:
+          type: string
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+
+    SubmitReviewRequest:
+      type: object
+      properties:
+        reviewerIds:
+          type: array
+          items:
+            type: integer
+        comment:
+          type: string
+      required:
+        - reviewerIds
+
+    DocumentRevision:
+      type: object
+      properties:
+        id:
+          type: integer
+        documentId:
+          type: integer
+        revision:
+          type: string
+        status:
+          type: string
+        fileUrl:
+          type: string
+        fileName:
+          type: string
+        comment:
+          type: string
+        createdById:
+          type: integer
+        createdByName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - documentId
+        - revision
+        - status
+        - createdAt
+
+    DocumentRevisionList:
+      type: object
+      properties:
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentRevision"
+        total:
+          type: integer
+      required:
+        - revisions
+        - total
+
+    # Folder
+    Folder:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        projectId:
+          type: integer
+        parentId:
+          type: integer
+        documentCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - projectId
+        - createdAt
+
+    FolderList:
+      type: object
+      properties:
+        folders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Folder"
+      required:
+        - folders
+
+    CreateFolderRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        parentId:
+          type: integer
+      required:
+        - name
+
+    # Metadata
+    MetadataField:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        label:
+          type: string
+        fieldType:
+          type: string
+          enum: [text, number, date, select, multiselect, boolean]
+        options:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
+        appliesTo:
+          type: string
+          enum: [document, correspondence, all]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - label
+        - fieldType
+        - required
+        - appliesTo
+        - createdAt
+
+    MetadataFieldList:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetadataField"
+      required:
+        - fields
+
+    CreateMetadataFieldRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        fieldType:
+          type: string
+          enum: [text, number, date, select, multiselect, boolean]
+        options:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
+        appliesTo:
+          type: string
+          enum: [document, correspondence, all]
+      required:
+        - name
+        - label
+        - fieldType
+        - required
+        - appliesTo
+
+    # Correspondence
+    Correspondence:
+      type: object
+      properties:
+        id:
+          type: integer
+        subject:
+          type: string
+        type:
+          type: string
+          enum: [transmittal, letter, memo, rfi]
+        folder:
+          type: string
+          enum: [inbox, sent, draft, archive]
+        body:
+          type: string
+        fromUserId:
+          type: integer
+        fromUserName:
+          type: string
+        toUserIds:
+          type: array
+          items:
+            type: integer
+        toUserNames:
+          type: array
+          items:
+            type: string
+        projectId:
+          type: integer
+        parentId:
+          type: integer
+        referenceNumber:
+          type: string
+        status:
+          type: string
+          enum: [draft, sent, read, responded, closed]
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Attachment"
+        sentAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - subject
+        - type
+        - folder
+        - fromUserId
+        - projectId
+        - status
+        - createdAt
+        - updatedAt
+
+    CorrespondenceList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Correspondence"
+        total:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateCorrespondenceRequest:
+      type: object
+      properties:
+        subject:
+          type: string
+        type:
+          type: string
+          enum: [transmittal, letter, memo, rfi]
+        body:
+          type: string
+        toUserIds:
+          type: array
+          items:
+            type: integer
+        attachments:
+          type: array
+          items:
+            type: string
+        sendNow:
+          type: boolean
+      required:
+        - subject
+        - type
+        - toUserIds
+
+    UpdateCorrespondenceRequest:
+      type: object
+      properties:
+        subject:
+          type: string
+        body:
+          type: string
+        folder:
+          type: string
+          enum: [inbox, sent, draft, archive]
+        status:
+          type: string
+          enum: [draft, sent, read, responded, closed]
+
+    Attachment:
+      type: object
+      properties:
+        id:
+          type: integer
+        fileName:
+          type: string
+        fileUrl:
+          type: string
+        fileSize:
+          type: integer
+        uploadedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - fileName
+        - fileUrl
+        - uploadedAt
+
+    # Workflow
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: integer
+        documentId:
+          type: integer
+        documentTitle:
+          type: string
+        documentNumber:
+          type: string
+        projectId:
+          type: integer
+        currentStep:
+          type: string
+          enum: [uploaded, under_review, approved, issued, rejected]
+        status:
+          type: string
+          enum: [active, completed, rejected, cancelled]
+        initiatedById:
+          type: integer
+        initiatedByName:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - documentId
+        - projectId
+        - currentStep
+        - status
+        - createdAt
+        - updatedAt
+
+    WorkflowList:
+      type: object
+      properties:
+        workflows:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workflow"
+        total:
+          type: integer
+      required:
+        - workflows
+        - total
+
+    WorkflowStep:
+      type: object
+      properties:
+        id:
+          type: integer
+        step:
+          type: string
+        action:
+          type: string
+          enum: [approved, rejected, commented, submitted]
+        comment:
+          type: string
+        userId:
+          type: integer
+        userName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - step
+        - action
+        - createdAt
+
+    WorkflowActionRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [approve, reject, comment]
+        comment:
+          type: string
+      required:
+        - action
+
+    # Tasks
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        assignedToId:
+          type: integer
+        assignedToName:
+          type: string
+        createdById:
+          type: integer
+        createdByName:
+          type: string
+        projectId:
+          type: integer
+        projectName:
+          type: string
+        sourceType:
+          type: string
+          enum: [manual, workflow, correspondence]
+        sourceId:
+          type: integer
+        dueDate:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - status
+        - priority
+        - createdAt
+        - updatedAt
+
+    TaskList:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        total:
+          type: integer
+      required:
+        - tasks
+        - total
+
+    CreateTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        assignedToId:
+          type: integer
+        projectId:
+          type: integer
+        dueDate:
+          type: string
+          format: date-time
+      required:
+        - title
+        - priority
+
+    UpdateTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, cancelled]
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        assignedToId:
+          type: integer
+        dueDate:
+          type: string
+          format: date-time
+
+    # Dashboard
+    DashboardData:
+      type: object
+      properties:
+        stats:
+          $ref: "#/components/schemas/DashboardStats"
+        recentDocuments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        pendingApprovals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workflow"
+        myTasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        unreadCorrespondence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Correspondence"
+      required:
+        - stats
+        - recentDocuments
+        - pendingApprovals
+        - myTasks
+        - unreadCorrespondence
+
+    DashboardStats:
+      type: object
+      properties:
+        totalDocuments:
+          type: integer
+        pendingApprovals:
+          type: integer
+        openTasks:
+          type: integer
+        unreadCorrespondence:
+          type: integer
+        documentsThisMonth:
+          type: integer
+        activeWorkflows:
+          type: integer
+      required:
+        - totalDocuments
+        - pendingApprovals
+        - openTasks
+        - unreadCorrespondence
+        - documentsThisMonth
+        - activeWorkflows
+
+    # Search
+    SearchResults:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        correspondence:
+          type: array
+          items:
+            $ref: "#/components/schemas/Correspondence"
+        total:
+          type: integer
+        query:
+          type: string
+      required:
+        - documents
+        - correspondence
+        - total
+        - query
+
+    # Audit Log
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        userName:
+          type: string
+        action:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: integer
+        entityTitle:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        projectId:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - action
+        - entityType
+        - entityId
+        - createdAt
+
+    AuditLogList:
+      type: object
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+        total:
+          type: integer
+      required:
+        - logs
+        - total

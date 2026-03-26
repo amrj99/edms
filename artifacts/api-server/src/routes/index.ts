@@ -1,8 +1,32 @@
 import { Router, type IRouter } from "express";
-import healthRouter from "./health";
+import healthRouter from "./health.js";
+import authRouter from "./auth.js";
+import organizationsRouter from "./organizations.js";
+import usersRouter from "./users.js";
+import projectsRouter from "./projects.js";
+import documentsRouter from "./documents.js";
+import correspondenceRouter from "./correspondence.js";
+import workflowsRouter from "./workflows.js";
+import tasksRouter from "./tasks.js";
+import metadataRouter from "./metadata.js";
+import dashboardRouter from "./dashboard.js";
+import searchRouter from "./search.js";
+import auditLogsRouter from "./audit-logs.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use("/auth", authRouter);
+router.use("/organizations", organizationsRouter);
+router.use("/users", usersRouter);
+router.use("/projects", projectsRouter);
+router.use("/projects/:projectId/documents", documentsRouter);
+router.use("/projects/:projectId/correspondence", correspondenceRouter);
+router.use("/projects/:projectId/workflows", workflowsRouter);
+router.use("/tasks", tasksRouter);
+router.use("/metadata-fields", metadataRouter);
+router.use("/dashboard", dashboardRouter);
+router.use("/search", searchRouter);
+router.use("/audit-logs", auditLogsRouter);
 
 export default router;

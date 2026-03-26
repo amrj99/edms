@@ -1,0 +1,24 @@
+packages:
+  "lucide-react": "Standard icons for the UI"
+  "date-fns": "For formatting dates in tables and correspondence"
+  "recharts": "For the dashboard charts and visualizations"
+  "react-hook-form": "For robust form handling"
+  "@hookform/resolvers": "For Zod validation with forms"
+  "zod": "For schema validation"
+  "framer-motion": "For page transitions and interactive animations"
+  "clsx": "Utility for constructing className strings"
+  "tailwind-merge": "Utility for merging tailwind classes safely"
+  "@tanstack/react-table": "For complex data tables with sorting and filtering"
+
+images:
+  - path: "artifacts/edms/public/images/auth-bg.png"
+    description: "Abstract architectural blueprint with modern sleek gradient overlay in navy blue and teal, high tech enterprise feeling"
+    aspect_ratio: "16:9"
+  - path: "artifacts/edms/public/images/empty-state.png"
+    description: "Clean minimal 3D illustration of a file folder floating in an empty white room, soft lighting, professional"
+    aspect_ratio: "1:1"
+
+notes:
+  - "Using wouter for routing"
+  - "TanStack Query v5 is used with the generated @workspace/api-client-react hooks"
+  - "Auth interceptor applied to window.fetch to automatically attach the edms_token from localStorage"
