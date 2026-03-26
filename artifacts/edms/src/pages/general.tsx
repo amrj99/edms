@@ -92,7 +92,7 @@ export default function General() {
       const res = await fetch(`/api/general/correspondence?folder=${activeFolder}`);
       if (!res.ok) throw new Error("Failed to load");
       const data = await res.json();
-      setItems(data);
+      setItems(Array.isArray(data) ? data : (data?.items ?? []));
     } catch {
       toast({ variant: "destructive", title: "Could not load inbox" });
     } finally {

@@ -3,7 +3,8 @@ import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/a
 import {
   FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2,
   Plus, Download, Upload, Eye, Sparkles, Send, Package, AlertCircle,
-  Clock, RefreshCw, Check, X,
+  Clock, RefreshCw, Check, X, Square,
+  Layers, UserCheck, FileDown, Trash2, ChevronDown,
 } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -128,8 +129,12 @@ export default function ProjectDetail() {
 
 // ─── Document Tab ─────────────────────────────────────────────────────────────
 function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
+  const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const createDoc = useCreateDocument();
   const [docNumber, setDocNumber] = useState("");
   const [title, setTitle] = useState("");
@@ -138,6 +143,11 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [docType, setDocType] = useState("general");
   const [searchQ, setSearchQ] = useState("");
   const [aiDoc, setAiDoc] = useState<any>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  // Bulk transmittal form
+  const [bulkTrsForm, setBulkTrsForm] = useState({ subject: "", purpose: "for_review", toExternal: "", description: "" });
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [bulkAssignStatus, setBulkAssignStatus] = useState("in_review");
 
   const handleUpload = async () => {
     await createDoc.mutateAsync({
@@ -163,64 +173,244 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     if (suggestion.title && !title) setTitle(suggestion.title);
   };
 
-  const filtered = (data?.documents ?? []).filter((d: any) =>
+  const allDocs = data?.documents ?? [];
+  const filtered = allDocs.filter((d: any) =>
     !searchQ || d.title?.toLowerCase().includes(searchQ.toLowerCase()) || d.documentNumber?.toLowerCase().includes(searchQ.toLowerCase())
   );
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds(s => { const ns = new Set(s); ns.has(id) ? ns.delete(id) : ns.add(id); return ns; });
+  };
+  const toggleAll = () => {
+    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filtered.map((d: any) => d.id)));
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const selectedDocs = filtered.filter((d: any) => selectedIds.has(d.id));
+
+  const generateAISummary = async () => {
+    setAiSummaryLoading(true);
+    try {
+      const docList = selectedDocs.map((d: any) => `${d.documentNumber} - ${d.title} (Rev ${d.revision ?? "01"})`).join("; ");
+      setBulkTrsForm(f => ({ ...f, description: `Transmittal covering ${selectedDocs.length} document(s): ${docList}. Please review and acknowledge receipt.` }));
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  };
+
+  const createBulkTransmittal = useMutation({
+    mutationFn: async () => {
+      const docIds = selectedDocs.map((d: any) => d.id);
+      const r = await fetch(`/api/projects/${projectId}/transmittals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...bulkTrsForm, documentIds: docIds }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
+      setIsBulkTransOpen(false);
+      clearSelection();
+      setBulkTrsForm({ subject: "", purpose: "for_review", toExternal: "", description: "" });
+      toast({ title: `Transmittal created with ${selectedDocs.length} document(s)` });
+    },
+    onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
+  });
+
+  const bulkUpdateStatus = useMutation({
+    mutationFn: async () => {
+      await Promise.all(selectedDocs.map((d: any) =>
+        fetch(`/api/projects/${projectId}/documents/${d.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: bulkAssignStatus }),
+        })
+      ));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["documents", projectId] });
+      setIsBulkAssignOpen(false);
+      clearSelection();
+      toast({ title: `${selectedDocs.length} document(s) updated` });
+    },
+    onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  });
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center bg-card p-2 rounded-lg border shadow-sm">
-        <div className="flex gap-2">
-          <Input placeholder="Search documents..." className="w-[280px] h-9" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
+      {/* Toolbar */}
+      <div className="flex flex-wrap justify-between items-center gap-2 bg-card p-2 rounded-lg border shadow-sm">
+        <div className="flex gap-2 items-center">
+          <Input placeholder="Search documents..." className="w-[240px] h-9" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
+          {selectedIds.size > 0 && (
+            <span className="text-sm font-medium text-primary">{selectedIds.size} selected</span>
+          )}
         </div>
-        <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm" className="h-9"><Upload className="mr-2 h-4 w-4" /> Upload Document</Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Upload Document</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 py-2">
-              <AIProcedurePanel projectCode={projectCode} projectName={projectName} discipline={discipline} documentType={docType} partialTitle={title} onApply={handleAIProcedureApply} />
-              <div className="border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors cursor-pointer">
-                <Upload className="h-6 w-6 text-muted-foreground mb-2" />
-                <p className="font-medium text-sm">Click to browse or drag file here</p>
-                <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, DWG, XLSX up to 50MB</p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="text-sm font-medium mb-1 block">Document Number</label>
-                  <Input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="Auto-generated or from AI" className="font-mono" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-sm font-medium mb-1 block">Title *</label>
-                  <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Discipline</label>
-                  <Input value={discipline} onChange={e => setDiscipline(e.target.value)} placeholder="E.g. Electrical" />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1 block">Revision</label>
-                  <Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="01" className="font-mono" />
-                </div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsUploadOpen(false)}>Cancel</Button>
-              <Button onClick={handleUpload} disabled={createDoc.isPending}>
-                {createDoc.isPending ? "Saving..." : "Save Document"}
+        <div className="flex gap-2">
+          {selectedIds.size > 0 && (
+            <>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsBulkTransOpen(true)}>
+                <Send className="h-3.5 w-3.5" /> Create Transmittal
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsBulkAssignOpen(true)}>
+                <UserCheck className="h-3.5 w-3.5" /> Change Status
+              </Button>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5"
+                onClick={() => { toast({ title: `Downloading ${selectedIds.size} document(s)...` }); clearSelection(); }}>
+                <FileDown className="h-3.5 w-3.5" /> Download
+              </Button>
+              <Button size="sm" variant="ghost" className="h-9 gap-1 text-muted-foreground" onClick={clearSelection}>
+                <X className="h-3.5 w-3.5" /> Clear
+              </Button>
+            </>
+          )}
+          <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
+            <Button size="sm" className="h-9" onClick={() => setIsUploadOpen(true)}>
+              <Upload className="mr-2 h-4 w-4" /> Upload Document
+            </Button>
+            <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
+              <div className="space-y-4 py-2">
+                <AIProcedurePanel projectCode={projectCode} projectName={projectName} discipline={discipline} documentType={docType} partialTitle={title} onApply={handleAIProcedureApply} />
+                <div className="border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors cursor-pointer">
+                  <Upload className="h-6 w-6 text-muted-foreground mb-2" />
+                  <p className="font-medium text-sm">Click to browse or drag file here</p>
+                  <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, DWG, XLSX up to 50MB</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2">
+                    <label className="text-sm font-medium mb-1 block">Document Number</label>
+                    <Input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="Auto-generated or from AI" className="font-mono" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-sm font-medium mb-1 block">Title *</label>
+                    <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Discipline</label>
+                    <Input value={discipline} onChange={e => setDiscipline(e.target.value)} placeholder="E.g. Electrical" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Revision</label>
+                    <Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="01" className="font-mono" />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsUploadOpen(false)}>Cancel</Button>
+                <Button onClick={handleUpload} disabled={createDoc.isPending}>
+                  {createDoc.isPending ? "Saving..." : "Save Document"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
+      {/* Bulk Transmittal Dialog */}
+      <Dialog open={isBulkTransOpen} onOpenChange={setIsBulkTransOpen}>
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5" />
+              Create Transmittal — {selectedDocs.length} Document(s)
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {/* Selected doc list */}
+            <div className="bg-muted/40 rounded-lg p-3 space-y-1 max-h-32 overflow-y-auto">
+              {selectedDocs.map((d: any) => (
+                <div key={d.id} className="flex items-center gap-2 text-xs">
+                  <FileText className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span className="font-mono text-muted-foreground">{d.documentNumber}</span>
+                  <span className="truncate">{d.title}</span>
+                  <span className="font-mono text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <Label>Subject *</Label>
+              <Input value={bulkTrsForm.subject} onChange={e => setBulkTrsForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject..." className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Purpose</Label>
+                <Select value={bulkTrsForm.purpose} onValueChange={v => setBulkTrsForm(f => ({ ...f, purpose: v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[["for_information","For Information"],["for_review","For Review"],["for_approval","For Approval"],["for_construction","For Construction"],["as_built","As Built"]].map(([v,l]) => (
+                      <SelectItem key={v} value={v}>{l}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>To (External)</Label>
+                <Input value={bulkTrsForm.toExternal} onChange={e => setBulkTrsForm(f => ({ ...f, toExternal: e.target.value }))} placeholder="Recipient / company" className="mt-1" />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <Label>Description / Cover Note</Label>
+                <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={generateAISummary} disabled={aiSummaryLoading}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {aiSummaryLoading ? "Generating..." : "AI Summary"}
+                </Button>
+              </div>
+              <Textarea value={bulkTrsForm.description} onChange={e => setBulkTrsForm(f => ({ ...f, description: e.target.value }))} rows={3} className="mt-1" placeholder="Describe the purpose of this transmittal..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBulkTransOpen(false)}>Cancel</Button>
+            <Button onClick={() => createBulkTransmittal.mutate()} disabled={createBulkTransmittal.isPending || !bulkTrsForm.subject}>
+              {createBulkTransmittal.isPending ? "Creating..." : "Create Transmittal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Status Change Dialog */}
+      <Dialog open={isBulkAssignOpen} onOpenChange={setIsBulkAssignOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader><DialogTitle>Change Status — {selectedDocs.length} Document(s)</DialogTitle></DialogHeader>
+          <div className="py-4 space-y-3">
+            <Label>New Status</Label>
+            <Select value={bulkAssignStatus} onValueChange={setBulkAssignStatus}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {["draft","in_review","approved","rejected","superseded"].map(s => (
+                  <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g, " ")}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBulkAssignOpen(false)}>Cancel</Button>
+            <Button onClick={() => bulkUpdateStatus.mutate()} disabled={bulkUpdateStatus.isPending}>
+              {bulkUpdateStatus.isPending ? "Updating..." : `Update ${selectedDocs.length} Document(s)`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Documents Table */}
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
+              <TableHead className="w-10">
+                <button onClick={toggleAll} className="p-0.5 rounded hover:bg-accent transition-colors" title={selectedIds.size === filtered.length ? "Deselect all" : "Select all"}>
+                  {selectedIds.size > 0 && selectedIds.size === filtered.length
+                    ? <CheckSquare className="h-4 w-4 text-primary" />
+                    : selectedIds.size > 0
+                    ? <CheckSquare className="h-4 w-4 text-primary opacity-60" />
+                    : <Square className="h-4 w-4 text-muted-foreground" />
+                  }
+                </button>
+              </TableHead>
               <TableHead>Document No.</TableHead>
               <TableHead className="w-1/3">Title</TableHead>
               <TableHead>Discipline</TableHead>
@@ -232,36 +422,61 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !filtered.length ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
-            ) : filtered.map((doc: any) => (
-              <TableRow key={doc.id} className="hover:bg-muted/30 group">
-                <TableCell className="font-mono text-xs font-medium">{doc.documentNumber}</TableCell>
-                <TableCell className="font-medium">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary/70 shrink-0" />
-                    <span className="line-clamp-1">{doc.title}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>
-                <TableCell><span className="bg-muted px-2 py-0.5 rounded text-xs font-mono">{doc.revision ?? "01"}</span></TableCell>
-                <TableCell><StatusBadge status={doc.status} /></TableCell>
-                <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), 'MMM d, yyyy')}</TableCell>
-                <TableCell className="text-right">
-                  <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" title="AI Analyze" onClick={() => setAiDoc(doc)}>
-                      <Sparkles className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8"><Download className="h-4 w-4" /></Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
+            ) : filtered.map((doc: any) => {
+              const isSelected = selectedIds.has(doc.id);
+              return (
+                <TableRow key={doc.id} className={`hover:bg-muted/30 group cursor-pointer ${isSelected ? "bg-primary/5" : ""}`} onClick={() => toggleSelect(doc.id)}>
+                  <TableCell onClick={e => e.stopPropagation()}>
+                    <button onClick={() => toggleSelect(doc.id)} className="p-0.5 rounded hover:bg-accent">
+                      {isSelected
+                        ? <CheckSquare className="h-4 w-4 text-primary" />
+                        : <Square className="h-4 w-4 text-muted-foreground" />
+                      }
+                    </button>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs font-medium">{doc.documentNumber}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-primary/70 shrink-0" />
+                      <span className="line-clamp-1">{doc.title}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>
+                  <TableCell><span className="bg-muted px-2 py-0.5 rounded text-xs font-mono">{doc.revision ?? "01"}</span></TableCell>
+                  <TableCell><StatusBadge status={doc.status} /></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), "MMM d, yyyy")}</TableCell>
+                  <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" title="AI Analyze" onClick={() => setAiDoc(doc)}>
+                        <Sparkles className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8"><Download className="h-4 w-4" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
+
+      {/* Selection summary bar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-primary text-white rounded-full shadow-lg px-5 py-2.5 flex items-center gap-4 text-sm font-medium">
+          <CheckSquare className="h-4 w-4" />
+          {selectedIds.size} document{selectedIds.size !== 1 ? "s" : ""} selected
+          <button onClick={() => setIsBulkTransOpen(true)} className="px-3 py-1 rounded-full bg-white/20 hover:bg-white/30 transition-colors text-xs gap-1 flex items-center">
+            <Send className="h-3.5 w-3.5" /> Transmit
+          </button>
+          <button onClick={clearSelection} className="text-white/70 hover:text-white">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       <Sheet open={!!aiDoc} onOpenChange={(open) => !open && setAiDoc(null)}>
         <SheetContent className="w-[420px] sm:max-w-[420px] overflow-y-auto">

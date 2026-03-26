@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
 
 export const userRoleEnum = pgEnum("user_role", [
+  "system_owner",
   "admin",
   "project_manager",
   "document_controller",

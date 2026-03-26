@@ -41,7 +41,56 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - `max_completion_tokens` must be 8192+ (models truncate to `{}` with lower limits when using response_format json_object)
 - `suggestDocumentProcedure` uses `jsonMode=false` to avoid empty responses from `response_format: json_object`; it parses JSON from text output with a fallback generator
 
-## Construction EDMS Expansion (Latest)
+## Usability & Administration Improvements (Latest)
+
+### Multi-Document Transmittals
+- Documents tab has checkboxes in first column (click row or header to select/deselect all)
+- Bulk action bar appears when docs selected: Create Transmittal, Change Status, Download, Clear
+- "Create Transmittal" bulk action opens dialog pre-filled with selected docs (number, title, revision)
+- AI Summary button generates cover note text listing selected documents
+- Floating bottom bar shows count and quick transmit button
+
+### Outlook-Style Correspondence UI (`/correspondence`)
+- Three-pane layout: Left (folders), Middle (list), Right (preview + quick reply)
+- Left pane: All/General/Projects/Flagged/Starred/Overdue folders, per-project folders, per-type filters
+- Middle pane: search bar, sort by date/priority/subject/type, type filter dropdown
+- Right pane: full item detail with metadata, body, conversation thread placeholder, quick reply box
+- Item-level flagging (🚩) and starring (⭐) via icon buttons
+- Compose dialog creates general or project-specific correspondence
+
+### Project Navigation
+- Header "Switch Project" button opens searchable project dropdown (Command-palette style)
+- Recent Projects section in sidebar (last 5 visited, stored in localStorage per browser)
+- Recent projects update when user navigates to a project detail page
+
+### System Owner Control Panel (`/admin`)
+- 10-tab admin interface: Organization, User Roles, Metadata, Corr. Types, Numbering, Workflows, AI Config, Email, Storage, Security
+- User Roles tab: change any user's role from a dropdown inline
+- Metadata tab: define custom metadata fields (name, label, type: text/number/date/dropdown/boolean/url, required, scope: global/project)
+- Correspondence Types tab: view built-in types, add custom types with prefix, SLA days, color
+- Numbering tab: manage document numbering format, revision format, reference prefixes, SLA defaults
+- AI Config tab: per-module AI enable toggles, model selection, cache duration
+- Email tab: SMTP configuration form
+- Storage tab: storage provider, file size limits, allowed extensions
+- Security tab: session timeout, password policy, 2FA, audit settings, IP allowlisting, JWT expiry
+
+### Settings Access (Role-Based)
+- `system_owner` role added to user_role enum (DB schema updated and pushed)
+- System Admin and Configuration pages gated to `admin` or `system_owner` roles
+- User role management available via System Admin → User Roles tab
+
+### Document Bulk Actions
+- Select all: click header checkbox
+- Select individual: click row or checkbox
+- Bulk Create Transmittal: opens pre-filled dialog with doc list
+- Bulk Change Status: set new status for all selected documents
+- Bulk Download: triggers toast confirmation with count
+- Clear selection: X button in action bar
+
+### General Inbox Fix
+- Fixed `items.slice is not a function` — response unwrapping now handles both array and `{ items: [...] }` shapes
+
+## Construction EDMS Expansion
 
 ### New DB Tables
 - `transmittals` + `transmittal_items` — Formal document transmittal tracking
