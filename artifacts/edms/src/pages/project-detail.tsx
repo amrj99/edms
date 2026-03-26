@@ -1,6 +1,6 @@
 import { useParams, Link, useLocation } from "wouter";
 import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/api-client-react";
-import { FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2, Plus, Download, Upload, Eye } from "lucide-react";
+import { FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2, Plus, Download, Upload, Eye, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { format } from "date-fns";
 
@@ -9,7 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
+import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 
 export default function ProjectDetail() {
   const params = useParams();
@@ -95,12 +97,25 @@ export default function ProjectDetail() {
   );
 }
 
+interface DocForAI {
+  id: number;
+  title: string;
+  documentNumber: string;
+  documentType: string;
+  discipline?: string | null;
+  revision?: string | null;
+  status: string;
+  description?: string | null;
+  fileName?: string | null;
+}
+
 function DocumentTab({ projectId }: { projectId: number }) {
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const createDoc = useCreateDocument();
   const [docNumber, setDocNumber] = useState("");
   const [title, setTitle] = useState("");
+  const [aiDoc, setAiDoc] = useState<DocForAI | null>(null);
 
   const handleUpload = async () => {
     await createDoc.mutateAsync({
@@ -199,6 +214,25 @@ function DocumentTab({ projectId }: { projectId: number }) {
                   <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), 'MMM d, yyyy')}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-primary hover:bg-primary/10"
+                        title="AI Analyze"
+                        onClick={() => setAiDoc({
+                          id: doc.id,
+                          title: doc.title,
+                          documentNumber: doc.documentNumber,
+                          documentType: (doc as any).documentType ?? "general",
+                          discipline: (doc as any).discipline,
+                          revision: doc.revision,
+                          status: doc.status,
+                          description: (doc as any).description,
+                          fileName: (doc as any).fileName,
+                        })}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="h-4 w-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8"><Download className="h-4 w-4" /></Button>
                     </div>
@@ -209,6 +243,22 @@ function DocumentTab({ projectId }: { projectId: number }) {
           </TableBody>
         </Table>
       </div>
+
+      {/* AI Insights Sheet */}
+      <Sheet open={!!aiDoc} onOpenChange={(open) => !open && setAiDoc(null)}>
+        <SheetContent className="w-[420px] sm:max-w-[420px] overflow-y-auto">
+          <SheetHeader className="mb-4">
+            <SheetTitle className="text-base">Document AI Analysis</SheetTitle>
+          </SheetHeader>
+          {aiDoc && (
+            <AIInsightsPanel
+              entityId={aiDoc.id}
+              entityType="document"
+              entityTitle={`${aiDoc.documentNumber} — ${aiDoc.title}`}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

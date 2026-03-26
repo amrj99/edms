@@ -8,3 +8,4 @@ export * from "./tasks";
 export * from "./metadata";
 export * from "./audit-logs";
 export * from "./password-reset-tokens";
+export * from "./ai";

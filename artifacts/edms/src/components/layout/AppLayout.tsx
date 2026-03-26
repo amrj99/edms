@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 import { 
+  Brain,
   Building2, 
   CheckSquare, 
   FolderKanban, 
@@ -57,6 +58,7 @@ export function AppSidebar() {
     { title: "Organizations", url: "/organizations", icon: Building2 },
     { title: "Users & Roles", url: "/users", icon: Users },
     { title: "Settings", url: "/settings", icon: Settings },
+    { title: "AI Settings", url: "/ai-settings", icon: Brain },
   ];
 
   return (

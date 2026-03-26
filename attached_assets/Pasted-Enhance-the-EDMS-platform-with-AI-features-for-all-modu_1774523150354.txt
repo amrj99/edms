@@ -1,0 +1,71 @@
+Enhance the EDMS platform with AI features for all modules to differentiate it from standard solutions. Implement modular, scalable AI that can be expanded in the future.
+
+GENERAL AI REQUIREMENTS
+- Modular architecture for AI, separate service or module
+- Use NLP/ML models for document, correspondence, and project analysis
+- AI features must integrate seamlessly with existing UI and API
+- Configurable per project and organization
+- Keep performance optimized (async processing, queue system if needed)
+
+MODULE-SPECIFIC AI FEATURES
+
+1. DOCUMENTS
+- Auto-summarization of uploaded documents
+- Intelligent tagging and metadata suggestion
+- Document classification (drawing, report, memo, etc.)
+- Version comparison with AI highlights changes
+- Auto-detect overdue revisions or critical status
+
+2. CORRESPONDENCE
+- AI email/reply suggestion based on content
+- Prioritize messages that require urgent attention
+- Categorize correspondence automatically (RFI, transmittal, memo, notice)
+- Detect duplicate or related correspondence across projects
+
+3. TASKS & WORKFLOW
+- AI predicts task priority based on deadlines, dependencies, and project status
+- Suggests next steps or assignments for users
+- Detect bottlenecks or overdue tasks automatically
+
+4. MEETINGS
+- AI meeting summarization from uploaded recordings or minutes
+- Key points extraction
+- Auto-generate action items for tasks
+
+5. REGISTERS
+- AI-assisted register verification and anomaly detection
+- Highlight missing or inconsistent data
+- Suggest updates for master registers
+
+6. INSPECTIONS
+- AI categorizes inspection reports (ITR, MIR, NCR, SOR)
+- Detect recurring issues or trends
+- Summarize inspection outcomes per project
+
+7. SEARCH & KNOWLEDGE
+- AI-powered search across all project documents, correspondence, and tasks
+- Natural language queries (e.g., “Find all NCRs related to electrical work in Project X”)
+- Contextual suggestions for related documents or actions
+
+8. NOTIFICATIONS
+- AI predicts which notifications are urgent or critical
+- Suggests reminders or escalations automatically
+
+TECHNICAL REQUIREMENTS
+- Use AI/ML models compatible with Node.js / NestJS backend
+- Store AI-processed metadata in PostgreSQL or Elasticsearch
+- Async processing (queue workers or background jobs)
+- Scalable to support multi-tenant SaaS in future
+- Include logging and monitoring of AI actions
+- Provide toggle to enable/disable AI per module
+
+DELIVERABLES
+- Working AI features integrated into existing modules
+- Documentation for AI module and APIs
+- Example usage for each feature
+- Admin toggle for enabling/disabling AI features
+
+IMPORTANT
+- Ensure system remains fully production-ready
+- No disruption to existing authentication, documents, or workflows
+- Optimize AI for performance and minimal latency

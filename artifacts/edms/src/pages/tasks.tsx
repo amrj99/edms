@@ -1,28 +1,75 @@
+import { useState } from "react";
 import { useListTasks } from "@workspace/api-client-react";
-import { CheckSquare, Clock, AlertCircle, Loader2 } from "lucide-react";
+import { CheckSquare, Clock, AlertCircle, Loader2, Brain } from "lucide-react";
 import { format } from "date-fns";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { AITaskInsights } from "@/components/ai/AITaskInsights";
+
+interface AIPriorityInsight {
+  taskId: number;
+  aiPriority: "low" | "medium" | "high" | "urgent";
+  aiScore: number;
+  reasoning: string;
+  isBottleneck: boolean;
+}
 
 export default function Tasks() {
   const { data, isLoading } = useListTasks({ assignedToMe: true });
+  const [showAI, setShowAI] = useState(false);
+  const [aiInsights, setAiInsights] = useState<Record<number, AIPriorityInsight>>({});
 
   const getPriorityColor = (priority: string) => {
-    switch(priority) {
-      case 'urgent': return 'text-red-500 bg-red-50 dark:bg-red-500/10';
-      case 'high': return 'text-orange-500 bg-orange-50 dark:bg-orange-500/10';
-      case 'medium': return 'text-blue-500 bg-blue-50 dark:bg-blue-500/10';
-      default: return 'text-slate-500 bg-slate-50 dark:bg-slate-500/10';
+    switch (priority) {
+      case "urgent": return "text-red-500 bg-red-50 dark:bg-red-500/10";
+      case "high": return "text-orange-500 bg-orange-50 dark:bg-orange-500/10";
+      case "medium": return "text-blue-500 bg-blue-50 dark:bg-blue-500/10";
+      default: return "text-slate-500 bg-slate-50 dark:bg-slate-500/10";
     }
   };
 
+  const getAIPriorityBadge = (priority: string) => {
+    switch (priority) {
+      case "urgent": return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300";
+      case "high": return "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300";
+      case "medium": return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300";
+      default: return "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300";
+    }
+  };
+
+  const handlePriorityChange = (taskId: number, insight: AIPriorityInsight) => {
+    setAiInsights((prev) => ({ ...prev, [taskId]: insight }));
+  };
+
+  const taskIds = data?.tasks?.map((t) => t.id) ?? [];
+
   return (
     <div className="space-y-6 animate-in fade-in">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">My Tasks</h1>
-        <p className="text-muted-foreground mt-1">Manage your assigned workflows, reviews, and actions.</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">My Tasks</h1>
+          <p className="text-muted-foreground mt-1">Manage your assigned workflows, reviews, and actions.</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 border-primary/30 text-primary hover:bg-primary/5"
+          onClick={() => setShowAI((v) => !v)}
+        >
+          <Brain className="h-4 w-4" />
+          {showAI ? "Hide" : "AI"} Insights
+        </Button>
       </div>
+
+      {/* AI Task Insights Panel */}
+      {showAI && (
+        <AITaskInsights
+          taskIds={taskIds}
+          onPriorityChange={handlePriorityChange}
+        />
+      )}
 
       <div className="flex gap-4 border-b pb-4">
         <Badge variant="secondary" className="px-4 py-1 text-sm bg-primary text-primary-foreground hover:bg-primary">All Active</Badge>
@@ -40,33 +87,52 @@ export default function Tasks() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {data.tasks.map(task => (
-            <Card key={task.id} className="hover:shadow-md transition-shadow cursor-pointer">
-              <CardContent className="p-5 flex items-center gap-4">
-                <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0 ${getPriorityColor(task.priority)}`}>
-                  {task.priority === 'urgent' ? <AlertCircle className="h-5 w-5" /> : <CheckSquare className="h-5 w-5" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{task.projectName}</span>
-                    <span className="text-xs text-muted-foreground">•</span>
-                    <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
+          {data.tasks.map(task => {
+            const aiInsight = aiInsights[task.id];
+            return (
+              <Card key={task.id} className="hover:shadow-md transition-shadow cursor-pointer">
+                <CardContent className="p-5 flex items-center gap-4">
+                  <div className={`h-10 w-10 rounded-full flex items-center justify-center shrink-0 ${getPriorityColor(task.priority)}`}>
+                    {task.priority === "urgent" ? <AlertCircle className="h-5 w-5" /> : <CheckSquare className="h-5 w-5" />}
                   </div>
-                  <h3 className="text-lg font-semibold text-foreground truncate">{task.title}</h3>
-                  {task.description && <p className="text-sm text-muted-foreground truncate mt-1">{task.description}</p>}
-                </div>
-                <div className="flex flex-col items-end gap-2 shrink-0">
-                  <Badge variant="outline" className="capitalize">{task.status.replace('_', ' ')}</Badge>
-                  {task.dueDate && (
-                    <div className="flex items-center text-xs font-medium text-orange-600 dark:text-orange-400">
-                      <Clock className="mr-1 h-3 w-3" />
-                      Due {format(new Date(task.dueDate), 'MMM d, yyyy')}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{task.projectName}</span>
+                      <span className="text-xs text-muted-foreground">•</span>
+                      <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
+                      {aiInsight?.isBottleneck && (
+                        <Badge className="text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
+                          Bottleneck
+                        </Badge>
+                      )}
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    <h3 className="text-lg font-semibold text-foreground truncate">{task.title}</h3>
+                    {task.description && <p className="text-sm text-muted-foreground truncate mt-1">{task.description}</p>}
+                    {aiInsight?.reasoning && (
+                      <p className="text-xs text-primary mt-1 flex items-center gap-1">
+                        <Brain className="h-3 w-3" />
+                        {aiInsight.reasoning}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <Badge variant="outline" className="capitalize">{task.status.replace("_", " ")}</Badge>
+                    {aiInsight && (
+                      <Badge className={`text-[10px] capitalize ${getAIPriorityBadge(aiInsight.aiPriority)}`}>
+                        AI: {aiInsight.aiPriority}
+                      </Badge>
+                    )}
+                    {task.dueDate && (
+                      <div className="flex items-center text-xs font-medium text-orange-600 dark:text-orange-400">
+                        <Clock className="mr-1 h-3 w-3" />
+                        Due {format(new Date(task.dueDate), "MMM d, yyyy")}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

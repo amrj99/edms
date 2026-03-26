@@ -21,6 +21,7 @@ import Tasks from "@/pages/tasks";
 import Search from "@/pages/search";
 import Users from "@/pages/users";
 import Settings from "@/pages/settings";
+import AISettings from "@/pages/ai-settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -71,6 +72,9 @@ function Router() {
       </Route>
       <Route path="/settings">
         <ProtectedRoute component={Settings} />
+      </Route>
+      <Route path="/ai-settings">
+        <ProtectedRoute component={AISettings} />
       </Route>
 
       <Route component={NotFound} />

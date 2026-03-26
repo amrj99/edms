@@ -4,6 +4,36 @@
 
 Full-stack Engineering Document Management System (EDMS) built as a scalable monorepo. Designed to evolve into a multi-tenant SaaS platform for medium-size engineering companies.
 
+## AI Features (Powered by OpenAI via Replit AI Integrations)
+
+- **Document AI Analysis** — Auto-summarize, classify type, suggest discipline/tags, urgency detection
+- **Correspondence AI Analysis** — Categorize, urgency score, reply draft generation, key point extraction
+- **Task Prioritization** — AI priority scores (0-100), bottleneck detection, risk assessment, recommendations
+- **Natural Language Search** — Parse plain English queries into structured EDMS filters
+- **AI Settings Admin** — Per-module enable/disable toggles for the organization (`/ai-settings`)
+- **AI Caching** — Results cached 1 hour in `ai_cache` table to minimize API calls
+- **AI Logging** — Every AI call logged in `ai_logs` table with latency, tokens, success
+
+### AI Integration
+- Provider: Replit AI Integrations (OpenAI proxy, no API key required, billed to Replit credits)
+- Fast model: `gpt-5-mini` for document/correspondence analysis
+- Smart model: `gpt-5.2` for task prioritization (complex reasoning)
+- Package: `@workspace/integrations-openai-ai-server` at `lib/integrations-openai-ai-server/`
+
+### AI Routes
+- `POST /api/ai/documents/:id/analyze` — Document analysis
+- `POST /api/ai/correspondence/:id/analyze` — Correspondence analysis
+- `POST /api/ai/tasks/prioritize` — Task list prioritization
+- `POST /api/ai/search/natural` — Natural language search parsing
+- `GET /api/ai/settings` — Get AI module settings
+- `PUT /api/ai/settings` — Update AI module settings
+
+### AI Frontend Components
+- `artifacts/edms/src/components/ai/AIInsightsPanel.tsx` — Reusable AI analysis panel (Sheet slide-over on documents)
+- `artifacts/edms/src/components/ai/AISearchBar.tsx` — Natural language search with example queries
+- `artifacts/edms/src/components/ai/AITaskInsights.tsx` — Task prioritization panel
+- `artifacts/edms/src/pages/ai-settings.tsx` — Admin module toggle page
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
