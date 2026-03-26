@@ -10,6 +10,7 @@ import {
   analyzeCorrespondence,
   prioritizeTasks,
   parseNaturalLanguageSearch,
+  suggestDocumentProcedure,
   getAiSettings,
   updateAiSettings,
   isModuleEnabled,
@@ -96,6 +97,26 @@ router.post("/tasks/prioritize", async (req, res) => {
 
   const insights = await prioritizeTasks(tasks, req.user!.id);
   res.json(insights);
+});
+
+// ─── AI Document Procedure Suggestion ────────────────────────────────────────
+
+router.post("/documents/suggest-procedure", async (req, res) => {
+  const {
+    projectCode, projectName, discipline, documentType, partialTitle,
+    existingNumbers, organizationName,
+  } = req.body ?? {};
+
+  if (!await isModuleEnabled("documents", req.user!.organizationId)) {
+    res.status(403).json({ error: "AI is disabled for the Documents module" });
+    return;
+  }
+
+  const suggestion = await suggestDocumentProcedure(
+    { projectCode, projectName, discipline, documentType, partialTitle, existingNumbers, organizationName },
+    req.user!.id,
+  );
+  res.json(suggestion);
 });
 
 // ─── Natural Language Search ─────────────────────────────────────────────────

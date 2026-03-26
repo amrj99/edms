@@ -9,6 +9,9 @@ export const correspondenceTypeEnum = pgEnum("correspondence_type", [
   "letter",
   "memo",
   "rfi",
+  "notice",
+  "email",
+  "internal",
 ]);
 
 export const correspondenceFolderEnum = pgEnum("correspondence_folder", [
@@ -33,7 +36,7 @@ export const correspondenceTable = pgTable("correspondence", {
   folder: correspondenceFolderEnum("folder").notNull().default("draft"),
   body: text("body"),
   fromUserId: integer("from_user_id").references(() => usersTable.id).notNull(),
-  projectId: integer("project_id").references(() => projectsTable.id).notNull(),
+  projectId: integer("project_id").references(() => projectsTable.id),
   parentId: integer("parent_id"),
   referenceNumber: text("reference_number"),
   status: correspondenceStatusEnum("status").notNull().default("draft"),

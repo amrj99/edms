@@ -8,10 +8,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
+import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
 
 export default function ProjectDetail() {
   const params = useParams();
@@ -63,7 +64,7 @@ export default function ProjectDetail() {
         
         <div className="mt-6">
           <TabsContent value="documents">
-            <DocumentTab projectId={projectId} />
+            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} />
           </TabsContent>
           <TabsContent value="correspondence">
             <div className="bg-card p-12 text-center rounded-xl border border-dashed">
@@ -109,12 +110,15 @@ interface DocForAI {
   fileName?: string | null;
 }
 
-function DocumentTab({ projectId }: { projectId: number }) {
+function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const createDoc = useCreateDocument();
   const [docNumber, setDocNumber] = useState("");
   const [title, setTitle] = useState("");
+  const [discipline, setDiscipline] = useState("");
+  const [revision, setRevision] = useState("01");
+  const [docType, setDocType] = useState("general");
   const [aiDoc, setAiDoc] = useState<DocForAI | null>(null);
 
   const handleUpload = async () => {
@@ -123,11 +127,32 @@ function DocumentTab({ projectId }: { projectId: number }) {
       data: {
         documentNumber: docNumber || `DOC-${Date.now()}`,
         title: title || "New Document",
-        revision: "01",
-        status: "draft"
+        revision: revision || "01",
+        status: "draft",
+        discipline: discipline || undefined,
+        documentType: docType || "general",
       }
     });
     setIsUploadOpen(false);
+    setDocNumber("");
+    setTitle("");
+    setDiscipline("");
+    setRevision("01");
+    setDocType("general");
+  };
+
+  const handleAIProcedureApply = (suggestion: Partial<{
+    documentNumber: string;
+    discipline: string;
+    documentType: string;
+    revision: string;
+    title: string;
+  }>) => {
+    if (suggestion.documentNumber) setDocNumber(suggestion.documentNumber);
+    if (suggestion.discipline) setDiscipline(suggestion.discipline);
+    if (suggestion.documentType) setDocType(suggestion.documentType);
+    if (suggestion.revision) setRevision(suggestion.revision);
+    if (suggestion.title && !title) setTitle(suggestion.title);
   };
 
   const getStatusBadge = (status: string) => {
@@ -150,30 +175,52 @@ function DocumentTab({ projectId }: { projectId: number }) {
           <DialogTrigger asChild>
             <Button size="sm" className="h-9"><Upload className="mr-2 h-4 w-4" /> Upload Document</Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Upload Document</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="border-2 border-dashed border-border rounded-xl p-8 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors cursor-pointer">
-                <Upload className="h-8 w-8 text-muted-foreground mb-4" />
+            <div className="space-y-4 py-2">
+              {/* AI Procedure Panel */}
+              <AIProcedurePanel
+                projectCode={projectCode}
+                projectName={projectName}
+                discipline={discipline}
+                documentType={docType}
+                partialTitle={title}
+                onApply={handleAIProcedureApply}
+              />
+
+              {/* File drop */}
+              <div className="border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors cursor-pointer">
+                <Upload className="h-6 w-6 text-muted-foreground mb-2" />
                 <p className="font-medium text-sm">Click to browse or drag file here</p>
-                <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, DWG up to 50MB</p>
+                <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, DWG, XLSX up to 50MB</p>
               </div>
-              <div className="grid gap-4">
-                <div>
+
+              {/* Form fields */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
                   <label className="text-sm font-medium mb-1 block">Document Number</label>
-                  <Input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="Auto-generated if blank" />
+                  <Input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="Auto-generated or from AI suggestion" className="font-mono" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-sm font-medium mb-1 block">Title *</label>
+                  <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">Title</label>
-                  <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
+                  <label className="text-sm font-medium mb-1 block">Discipline</label>
+                  <Input value={discipline} onChange={e => setDiscipline(e.target.value)} placeholder="E.g. Electrical" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">Revision</label>
+                  <Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="01" className="font-mono" />
                 </div>
               </div>
             </div>
             <DialogFooter>
+              <Button variant="outline" onClick={() => setIsUploadOpen(false)}>Cancel</Button>
               <Button onClick={handleUpload} disabled={createDoc.isPending}>
-                {createDoc.isPending ? "Uploading..." : "Save Document"}
+                {createDoc.isPending ? "Saving..." : "Save Document"}
               </Button>
             </DialogFooter>
           </DialogContent>

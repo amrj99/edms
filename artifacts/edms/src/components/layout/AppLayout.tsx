@@ -8,6 +8,7 @@ import {
   CheckSquare, 
   FolderKanban, 
   Home, 
+  Inbox,
   LogOut, 
   Moon, 
   Search, 
@@ -50,6 +51,7 @@ export function AppSidebar() {
   const navigation = [
     { title: "Dashboard", url: "/", icon: Home },
     { title: "Projects", url: "/projects", icon: FolderKanban },
+    { title: "General", url: "/general", icon: Inbox },
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
     { title: "Search", url: "/search", icon: Search },
   ];

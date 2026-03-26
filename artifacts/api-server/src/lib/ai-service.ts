@@ -71,7 +71,7 @@ async function callAI(prompt: string, systemPrompt: string, model = FAST_MODEL, 
   const start = Date.now();
   const response = await openai.chat.completions.create({
     model,
-    max_completion_tokens: 1024,
+    max_completion_tokens: 8192,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },
@@ -79,16 +79,23 @@ async function callAI(prompt: string, systemPrompt: string, model = FAST_MODEL, 
     ...(jsonMode && model !== SMART_MODEL ? { response_format: { type: "json_object" } } : {}),
   });
 
-  const content = response.choices[0]?.message?.content ?? "{}";
+  const rawContent = response.choices[0]?.message?.content;
+  const content = (rawContent === null || rawContent === undefined || rawContent === "")
+    ? "{}"
+    : rawContent;
   const latency = Date.now() - start;
   const tokens = response.usage?.total_tokens;
 
-  logger.debug({ model, latency, tokens }, "AI call completed");
+  logger.debug({ model, latency, tokens, contentLength: content.length }, "AI call completed");
 
   if (jsonMode) {
     try {
-      return JSON.parse(content);
+      // Extract JSON from possible markdown code blocks
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/```\s*([\s\S]*?)```/);
+      const jsonStr = jsonMatch ? jsonMatch[1].trim() : content.trim();
+      return JSON.parse(jsonStr);
     } catch {
+      logger.warn({ content: content.substring(0, 200) }, "Failed to parse AI JSON response");
       return { raw: content };
     }
   }
@@ -402,6 +409,95 @@ Respond ONLY with valid JSON in this exact schema:
   ) as NaturalLanguageSearchResult;
 
   return { ...result, query };
+}
+
+// ─── Module: AI Document Management & Coding ─────────────────────────────────
+
+export interface DocumentProcedureSuggestion {
+  suggestedDocumentNumber: string;
+  numberingReason: string;
+  suggestedClassification: string;
+  suggestedDiscipline: string;
+  suggestedTitle?: string;
+  suggestedRevision: string;
+  requiredMetadata?: Array<{ field: string; description: string; required: boolean }>;
+  namingConvention: string;
+  procedureNotes: string;
+  confidence: number;
+}
+
+export async function suggestDocumentProcedure(input: {
+  projectCode?: string;
+  projectName?: string;
+  discipline?: string;
+  documentType?: string;
+  partialTitle?: string;
+  existingNumbers?: string[];
+  organizationName?: string;
+}, userId?: number): Promise<DocumentProcedureSuggestion> {
+  const start = Date.now();
+  try {
+    const result = await callAI(
+      `Generate a document numbering suggestion. Return JSON with these fields:
+- suggestedDocumentNumber: the document number (e.g. "${input.projectCode ?? "PRJ"}-ELE-DWG-001")
+- numberingReason: brief explanation
+- suggestedClassification: document classification
+- suggestedDiscipline: engineering discipline  
+- suggestedTitle: full document title
+- suggestedRevision: revision code (e.g. "00" or "A")
+- namingConvention: naming pattern used
+- procedureNotes: key procedure notes
+- confidence: number between 0 and 1
+
+Context:
+Project Code: ${input.projectCode ?? "PRJ"}
+Project Name: ${input.projectName ?? "Unknown Project"}
+Discipline: ${input.discipline ?? "General"}
+Document Type: ${input.documentType ?? "Drawing"}
+Partial Title: ${input.partialTitle ?? ""}
+Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
+      `You are an engineering document management expert. Respond with valid JSON only.`,
+      FAST_MODEL,
+      false,
+    ) as string;
+
+    // Parse JSON from the text response
+    let parsed: DocumentProcedureSuggestion;
+    try {
+      const jsonMatch = (result as string).match(/```json\s*([\s\S]*?)```/) ||
+                        (result as string).match(/```\s*([\s\S]*?)```/) ||
+                        (result as string).match(/(\{[\s\S]*\})/);
+      const jsonStr = jsonMatch ? jsonMatch[1].trim() : (result as string).trim();
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      logger.warn({ result: String(result).substring(0, 200) }, "Failed to parse procedure suggestion");
+      parsed = {
+        suggestedDocumentNumber: `${input.projectCode ?? "PRJ"}-${(input.discipline ?? "GEN").substring(0, 3).toUpperCase()}-001`,
+        numberingReason: "Standard engineering document numbering",
+        suggestedClassification: input.documentType ?? "Drawing",
+        suggestedDiscipline: input.discipline ?? "General",
+        suggestedTitle: input.partialTitle ?? "Engineering Document",
+        suggestedRevision: "00",
+        namingConvention: "[ProjectCode]-[Discipline]-[Sequence]",
+        procedureNotes: "Follow project document control procedures",
+        confidence: 0.5,
+      };
+    }
+
+    await logAiAction({
+      userId, module: "documents", action: "suggest_procedure",
+      latencyMs: Date.now() - start, success: true,
+    });
+
+    return parsed;
+  } catch (err) {
+    await logAiAction({
+      userId, module: "documents", action: "suggest_procedure",
+      latencyMs: Date.now() - start, success: false,
+      errorMessage: String(err),
+    });
+    throw err;
+  }
 }
 
 // ─── Module: Notifications / Urgency ─────────────────────────────────────────

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
 import aiRouter from "./ai.js";
+import generalRouter from "./general.js";
 import organizationsRouter from "./organizations.js";
 import usersRouter from "./users.js";
 import projectsRouter from "./projects.js";
@@ -30,5 +31,6 @@ router.use("/dashboard", dashboardRouter);
 router.use("/search", searchRouter);
 router.use("/audit-logs", auditLogsRouter);
 router.use("/ai", aiRouter);
+router.use("/general", generalRouter);
 
 export default router;

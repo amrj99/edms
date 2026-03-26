@@ -10,6 +10,7 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - **Correspondence AI Analysis** — Categorize, urgency score, reply draft generation, key point extraction
 - **Task Prioritization** — AI priority scores (0-100), bottleneck detection, risk assessment, recommendations
 - **Natural Language Search** — Parse plain English queries into structured EDMS filters
+- **AI Document Procedure** — AI-assisted document numbering and classification during upload (follows engineering standards ISO 9001, PMBOK)
 - **AI Settings Admin** — Per-module enable/disable toggles for the organization (`/ai-settings`)
 - **AI Caching** — Results cached 1 hour in `ai_cache` table to minimize API calls
 - **AI Logging** — Every AI call logged in `ai_logs` table with latency, tokens, success
@@ -25,6 +26,7 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - `POST /api/ai/correspondence/:id/analyze` — Correspondence analysis
 - `POST /api/ai/tasks/prioritize` — Task list prioritization
 - `POST /api/ai/search/natural` — Natural language search parsing
+- `POST /api/ai/documents/suggest-procedure` — Document numbering/classification suggestion
 - `GET /api/ai/settings` — Get AI module settings
 - `PUT /api/ai/settings` — Update AI module settings
 
@@ -32,7 +34,24 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - `artifacts/edms/src/components/ai/AIInsightsPanel.tsx` — Reusable AI analysis panel (Sheet slide-over on documents)
 - `artifacts/edms/src/components/ai/AISearchBar.tsx` — Natural language search with example queries
 - `artifacts/edms/src/components/ai/AITaskInsights.tsx` — Task prioritization panel
+- `artifacts/edms/src/components/ai/AIProcedurePanel.tsx` — AI document numbering panel (embedded in Upload Document dialog)
 - `artifacts/edms/src/pages/ai-settings.tsx` — Admin module toggle page
+
+### AI Service Notes
+- `max_completion_tokens` must be 8192+ (models truncate to `{}` with lower limits when using response_format json_object)
+- `suggestDocumentProcedure` uses `jsonMode=false` to avoid empty responses from `response_format: json_object`; it parses JSON from text output with a fallback generator
+
+## General Section (Cross-Department Inbox)
+- Route: `/general` — Cross-department inbox for items not tied to any specific project
+- `correspondenceTable.projectId` is nullable — items with `projectId IS NULL` appear in General
+- Correspondence types added: `notice`, `email`, `internal` (in addition to existing transmittal, letter, memo, rfi)
+- API Routes at `/api/general/`:
+  - `GET /api/general/correspondence` — List general inbox items
+  - `POST /api/general/correspondence` — Create new general item
+  - `POST /api/general/correspondence/:id/move-to-project` — Move item to a project
+  - `POST /api/general/correspondence/:id/reply` — Reply to an item
+- Frontend: `artifacts/edms/src/pages/general.tsx` — Full inbox UI with compose dialog, detail pane, AI analysis, move-to-project
+- Sidebar nav: Dashboard, Projects, **General** (Inbox icon), My Tasks, Search
 
 ## Stack
 
