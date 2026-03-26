@@ -1,0 +1,166 @@
+import { Router } from "express";
+import { db } from "@workspace/db";
+import {
+  transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable
+} from "@workspace/db";
+import { eq, and, desc } from "drizzle-orm";
+import { requireAuth } from "../lib/auth.js";
+import { createAuditLog } from "../lib/audit.js";
+
+const router = Router({ mergeParams: true });
+router.use(requireAuth);
+
+// List transmittals for a project
+router.get("/", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const transmittals = await db
+    .select({
+      id: transmittalsTable.id,
+      transmittalNumber: transmittalsTable.transmittalNumber,
+      subject: transmittalsTable.subject,
+      description: transmittalsTable.description,
+      status: transmittalsTable.status,
+      purpose: transmittalsTable.purpose,
+      dueDate: transmittalsTable.dueDate,
+      sentAt: transmittalsTable.sentAt,
+      acknowledgedAt: transmittalsTable.acknowledgedAt,
+      createdAt: transmittalsTable.createdAt,
+      createdByName: usersTable.firstName,
+      toExternal: transmittalsTable.toExternal,
+    })
+    .from(transmittalsTable)
+    .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
+    .where(eq(transmittalsTable.projectId, projectId))
+    .orderBy(desc(transmittalsTable.createdAt));
+  res.json(transmittals);
+});
+
+// Get single transmittal with items
+router.get("/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  const [transmittal] = await db
+    .select()
+    .from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+
+  const items = await db
+    .select({
+      id: transmittalItemsTable.id,
+      documentId: transmittalItemsTable.documentId,
+      revision: transmittalItemsTable.revision,
+      copies: transmittalItemsTable.copies,
+      purpose: transmittalItemsTable.purpose,
+      documentNumber: documentsTable.documentNumber,
+      documentTitle: documentsTable.title,
+      documentType: documentsTable.documentType,
+      discipline: documentsTable.discipline,
+    })
+    .from(transmittalItemsTable)
+    .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
+    .where(eq(transmittalItemsTable.transmittalId, id));
+
+  res.json({ ...transmittal, items });
+});
+
+// Create transmittal
+router.post("/", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { subject, description, purpose, dueDate, toExternal, documentIds } = req.body;
+  if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
+
+  // Generate transmittal number
+  const existing = await db
+    .select({ count: transmittalsTable.id })
+    .from(transmittalsTable)
+    .where(eq(transmittalsTable.projectId, projectId));
+  const seq = String(existing.length + 1).padStart(4, "0");
+  const [project] = await db.select({ code: projectsTable.code }).from(projectsTable).where(eq(projectsTable.id, projectId));
+  const transmittalNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
+
+  const [transmittal] = await db.insert(transmittalsTable).values({
+    transmittalNumber,
+    subject,
+    description,
+    purpose: purpose || "for_information",
+    dueDate: dueDate ? new Date(dueDate) : undefined,
+    toExternal,
+    projectId,
+    createdById: req.user!.id,
+  }).returning();
+
+  // Add documents
+  if (documentIds?.length) {
+    await db.insert(transmittalItemsTable).values(
+      documentIds.map((docId: number) => ({
+        transmittalId: transmittal.id,
+        documentId: docId,
+      }))
+    );
+  }
+
+  await createAuditLog({
+    userId: req.user!.id,
+    action: "create",
+    entityType: "transmittal",
+    entityId: transmittal.id,
+    details: { transmittalNumber },
+  });
+
+  res.status(201).json(transmittal);
+});
+
+// Update transmittal
+router.put("/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { subject, description, purpose, dueDate, toExternal, status } = req.body;
+  const [transmittal] = await db.update(transmittalsTable)
+    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, status, updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id))
+    .returning();
+  res.json(transmittal);
+});
+
+// Send transmittal
+router.post("/:id/send", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const [transmittal] = await db.update(transmittalsTable)
+    .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id))
+    .returning();
+  await createAuditLog({
+    userId: req.user!.id, action: "update", entityType: "transmittal",
+    entityId: id, details: { action: "sent" },
+  });
+  res.json(transmittal);
+});
+
+// Acknowledge transmittal
+router.post("/:id/acknowledge", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const [transmittal] = await db.update(transmittalsTable)
+    .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id))
+    .returning();
+  res.json(transmittal);
+});
+
+// Add document to transmittal
+router.post("/:id/items", async (req, res) => {
+  const transmittalId = parseInt(req.params.id);
+  const { documentId, revision, copies, purpose } = req.body;
+  const [item] = await db.insert(transmittalItemsTable).values({
+    transmittalId, documentId, revision, copies, purpose,
+  }).returning();
+  res.status(201).json(item);
+});
+
+// Remove document from transmittal
+router.delete("/:id/items/:itemId", async (req, res) => {
+  const itemId = parseInt(req.params.itemId);
+  await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
+  res.json({ success: true });
+});
+
+export default router;

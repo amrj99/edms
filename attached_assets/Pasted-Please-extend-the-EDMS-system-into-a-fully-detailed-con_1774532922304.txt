@@ -1,0 +1,136 @@
+Please extend the EDMS system into a fully detailed construction project EDMS with the following modules and configurations:
+
+1. PROJECT STRUCTURE
+- Company → Program → Project → Package → Discipline → Folder hierarchy
+- Allow configurable structure per organization
+- Support for multi-project membership
+
+2. DOCUMENT CONTROL MODULE
+- Configurable document numbering format (Project-Discipline-Type-Sequence-Revision)
+- Revision control with:
+    Draft
+    Review
+    Approved
+    Superseded
+    Void
+- Version comparison
+- Superseded automatic flagging
+- Transmittal generation
+
+3. CORRESPONDENCE MANAGEMENT
+- Types:
+    RFI
+    Submittal
+    Transmittal
+    NCR
+    Technical Query
+    Memo
+- Internal and External correspondence
+- Link correspondence to:
+    Project
+    Package
+    Document
+    Task
+
+4. GENERAL MAILBOX (already created – extend it)
+- Inbox
+- Sent
+- Archived
+- Move to Project
+- Move to Folder
+- Assign Owner
+- Add Due Date
+
+5. WORKFLOW ENGINE
+- Configurable approval workflow:
+    Reviewer
+    Checker
+    Approver
+- Sequential or parallel workflow
+- SLA timers
+- Escalation rules
+- AI priority suggestion
+
+6. PERMISSIONS & ROLES
+- Organization Admin
+- Project Admin
+- Document Controller
+- Engineer
+- Viewer
+- Custom roles
+- Folder-level permissions
+
+7. AI DOCUMENT MANAGEMENT (extend existing AI)
+- AI suggests:
+    Document numbering
+    Discipline
+    Type
+    Revision code
+    Metadata fields
+- AI validates naming compliance
+- AI flags incorrect numbering
+- AI auto-tags documents
+
+8. SEARCH & FILTERING
+- Global search
+- Filter by:
+    Project
+    Discipline
+    Status
+    Revision
+    Date
+    Owner
+- AI natural language search
+
+9. DASHBOARDS
+- Project dashboard
+- Document status chart
+- Overdue tasks
+- Correspondence tracking
+- AI risk summary
+
+10. TRANSMITTALS
+- Create transmittal packages
+- Select multiple documents
+- Generate transmittal number
+- Send internally or externally
+- Track acknowledgement
+
+11. AUDIT TRAIL
+- Full audit log:
+    Upload
+    Download
+    Edit
+    Approve
+    Move
+    Delete
+- Export audit log
+
+12. CONFIGURATION PANEL
+- Document numbering format editor
+- Discipline list editor
+- Document type editor
+- Workflow templates
+- AI configuration toggle
+
+13. FILE MANAGEMENT
+- Bulk upload
+- Drag & drop
+- Folder structure
+- File preview
+- Version download
+
+14. NOTIFICATIONS
+- Email notifications
+- In-app notifications
+- AI smart reminders
+- Overdue alerts
+
+15. REPORTING
+- Document register export
+- RFI log
+- Submittal log
+- Transmittal log
+- Project progress report
+
+Ensure all modules integrate with existing AI features and remain VPS-ready and Docker deployable.

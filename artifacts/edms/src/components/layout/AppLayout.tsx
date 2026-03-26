@@ -1,7 +1,9 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
 import { 
   Brain,
   Building2, 
@@ -14,7 +16,14 @@ import {
   Search, 
   Settings, 
   Sun, 
-  Users 
+  Users,
+  Bell,
+  BarChart3,
+  SlidersHorizontal,
+  Send,
+  X,
+  Check,
+  CheckCheck,
 } from "lucide-react";
 import { 
   Sidebar, 
@@ -40,6 +49,113 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { formatDistanceToNow } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
+
+function NotificationIcon(type: string) {
+  if (type.startsWith("task")) return <CheckSquare className="h-4 w-4 text-blue-500" />;
+  if (type.startsWith("document")) return <FolderKanban className="h-4 w-4 text-green-500" />;
+  if (type.startsWith("transmittal")) return <Send className="h-4 w-4 text-purple-500" />;
+  return <Bell className="h-4 w-4 text-muted-foreground" />;
+}
+
+function NotificationBell() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+
+  const { data } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: async () => {
+      const r = await fetch("/api/notifications");
+      return r.json();
+    },
+    refetchInterval: 30000,
+  });
+
+  const markRead = useMutation({
+    mutationFn: async (id: number) => {
+      await fetch(`/api/notifications/${id}/read`, { method: "POST" });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+
+  const markAllRead = useMutation({
+    mutationFn: async () => {
+      await fetch("/api/notifications/read-all", { method: "POST" });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      toast({ title: "All notifications marked as read" });
+    },
+  });
+
+  const notifications = data?.notifications ?? [];
+  const unreadCount = data?.unreadCount ?? 0;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="icon" className="relative">
+          <Bell className="h-5 w-5" />
+          {unreadCount > 0 && (
+            <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center text-[10px]">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </Badge>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-96 p-0">
+        <div className="flex items-center justify-between p-4 border-b">
+          <div className="flex items-center gap-2">
+            <Bell className="h-4 w-4" />
+            <span className="font-semibold">Notifications</span>
+            {unreadCount > 0 && <Badge variant="secondary">{unreadCount}</Badge>}
+          </div>
+          {unreadCount > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => markAllRead.mutate()} className="h-7 text-xs gap-1">
+              <CheckCheck className="h-3 w-3" />
+              Mark all read
+            </Button>
+          )}
+        </div>
+        <ScrollArea className="h-[400px]">
+          {notifications.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+              <Bell className="h-8 w-8 mb-2 opacity-30" />
+              <p className="text-sm">No notifications</p>
+            </div>
+          ) : (
+            <div className="divide-y">
+              {notifications.map((n: any) => (
+                <div
+                  key={n.id}
+                  className={`flex items-start gap-3 p-4 hover:bg-accent/50 transition-colors cursor-pointer ${!n.isRead ? "bg-primary/5" : ""}`}
+                  onClick={() => !n.isRead && markRead.mutate(n.id)}
+                >
+                  <div className="mt-0.5 shrink-0">{NotificationIcon(n.type)}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm ${!n.isRead ? "font-medium" : "text-muted-foreground"}`}>{n.title}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">
+                      {formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
+                    </p>
+                  </div>
+                  {!n.isRead && (
+                    <div className="h-2 w-2 rounded-full bg-primary mt-1.5 shrink-0" />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -51,14 +167,16 @@ export function AppSidebar() {
   const navigation = [
     { title: "Dashboard", url: "/", icon: Home },
     { title: "Projects", url: "/projects", icon: FolderKanban },
-    { title: "General", url: "/general", icon: Inbox },
+    { title: "General Inbox", url: "/general", icon: Inbox },
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
+    { title: "Reports", url: "/reports", icon: BarChart3 },
     { title: "Search", url: "/search", icon: Search },
   ];
 
   const adminNav = [
     { title: "Organizations", url: "/organizations", icon: Building2 },
     { title: "Users & Roles", url: "/users", icon: Users },
+    { title: "Configuration", url: "/config", icon: SlidersHorizontal },
     { title: "Settings", url: "/settings", icon: Settings },
     { title: "AI Settings", url: "/ai-settings", icon: Brain },
   ];
@@ -159,7 +277,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   if (!user && location !== "/login") {
-    // If we drop here, AuthProvider should have redirected, but just in case
     return null;
   }
 
@@ -176,9 +293,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-card px-6 shadow-sm z-10 sticky top-0">
             <SidebarTrigger className="hover:bg-accent" />
             <div className="flex-1" />
-            <div className="text-sm font-medium text-muted-foreground hidden sm:block">
+            <div className="text-sm font-medium text-muted-foreground hidden sm:block mr-2">
               {user?.organizationName}
             </div>
+            <NotificationBell />
           </header>
           <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">

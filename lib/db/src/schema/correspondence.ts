@@ -12,6 +12,9 @@ export const correspondenceTypeEnum = pgEnum("correspondence_type", [
   "notice",
   "email",
   "internal",
+  "submittal",
+  "ncr",
+  "technical_query",
 ]);
 
 export const correspondenceFolderEnum = pgEnum("correspondence_folder", [
@@ -27,6 +30,14 @@ export const correspondenceStatusEnum = pgEnum("correspondence_status", [
   "read",
   "responded",
   "closed",
+  "overdue",
+]);
+
+export const correspondencePriorityEnum = pgEnum("correspondence_priority", [
+  "low",
+  "medium",
+  "high",
+  "urgent",
 ]);
 
 export const correspondenceTable = pgTable("correspondence", {
@@ -40,7 +51,13 @@ export const correspondenceTable = pgTable("correspondence", {
   parentId: integer("parent_id"),
   referenceNumber: text("reference_number"),
   status: correspondenceStatusEnum("status").notNull().default("draft"),
+  priority: correspondencePriorityEnum("priority").notNull().default("medium"),
+  assignedToId: integer("assigned_to_id").references(() => usersTable.id),
+  linkedDocumentId: integer("linked_document_id"),
+  packageId: integer("package_id"),
+  dueDate: timestamp("due_date"),
   sentAt: timestamp("sent_at"),
+  closedAt: timestamp("closed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

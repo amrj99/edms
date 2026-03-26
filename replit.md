@@ -41,6 +41,47 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - `max_completion_tokens` must be 8192+ (models truncate to `{}` with lower limits when using response_format json_object)
 - `suggestDocumentProcedure` uses `jsonMode=false` to avoid empty responses from `response_format: json_object`; it parses JSON from text output with a fallback generator
 
+## Construction EDMS Expansion (Latest)
+
+### New DB Tables
+- `transmittals` + `transmittal_items` — Formal document transmittal tracking
+- `notifications` — In-app notifications (14 types)
+- `org_config` — Organization-level EDMS configuration
+- `packages` — Document work packages (per project)
+- Extended `correspondence` enum: `submittal`, `ncr`, `technical_query` added
+- New fields on `correspondence`: `priority`, `assignedToId`, `linkedDocumentId`, `packageId`, `dueDate`, `closedAt`
+
+### New API Routes
+- `GET/POST /api/projects/:id/transmittals` — Transmittal CRUD
+- `POST /api/projects/:id/transmittals/:id/send` — Mark sent
+- `POST /api/projects/:id/transmittals/:id/acknowledge` — Mark acknowledged
+- `GET/POST /api/projects/:id/packages` — Package CRUD
+- `GET /api/notifications`, `POST /api/notifications/:id/read`, `POST /api/notifications/read-all` — Notification management
+- `GET/PUT /api/config` — Org configuration
+
+### New Frontend Pages
+- `/config` — System Configuration panel (numbering format, disciplines, doc types, workflow templates, SLA defaults, reference prefixes)
+- `/reports` — Reports page (document register, RFI log, submittal log, transmittal log with CSV export)
+
+### Enhanced Sidebar Navigation
+- Added: Reports, Configuration (admin-only) to sidebar
+- General Inbox label updated
+- Notification Bell in header with unread count badge, popover with mark-read
+
+### Enhanced Project Detail (7 tabs)
+- **Transmittals tab**: Create/list/send/acknowledge transmittals with purpose, to-field, due date
+- **Packages tab**: Create/list/delete document work packages with card layout
+- **Correspondence tab**: Full RFI/Submittal/NCR/TQ UI with priority, due date, type filter pills, overdue highlighting
+- **Tasks tab**: Project-scoped task list with priority and overdue indicators
+- **Members tab**: Project team member cards
+
+### Enhanced Dashboard
+- Recharts PieChart for document status distribution
+- Project Portfolio progress bars (active/on-hold/completed/cancelled)
+- Overdue Items widget with task due dates
+- Priority badges on tasks
+- Correspondence type color-coded badges
+
 ## General Section (Cross-Department Inbox)
 - Route: `/general` — Cross-department inbox for items not tied to any specific project
 - `correspondenceTable.projectId` is nullable — items with `projectId IS NULL` appear in General

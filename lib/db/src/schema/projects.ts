@@ -33,6 +33,17 @@ export const projectMembersTable = pgTable("project_members", {
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
 });
 
+export const packagesTable = pgTable("packages", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  code: text("code").notNull(),
+  description: text("description"),
+  projectId: integer("project_id").references(() => projectsTable.id).notNull(),
+  createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const insertProjectSchema = createInsertSchema(projectsTable).omit({
   id: true,
   createdAt: true,
@@ -44,6 +55,13 @@ export const insertProjectMemberSchema = createInsertSchema(projectMembersTable)
   joinedAt: true,
 });
 
+export const insertPackageSchema = createInsertSchema(packagesTable).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type Project = typeof projectsTable.$inferSelect;
 export type ProjectMember = typeof projectMembersTable.$inferSelect;
+export type Package = typeof packagesTable.$inferSelect;

@@ -14,6 +14,10 @@ import metadataRouter from "./metadata.js";
 import dashboardRouter from "./dashboard.js";
 import searchRouter from "./search.js";
 import auditLogsRouter from "./audit-logs.js";
+import packagesRouter from "./packages.js";
+import transmittalsRouter from "./transmittals.js";
+import notificationsRouter from "./notifications.js";
+import configRouter from "./config.js";
 
 const router: IRouter = Router();
 
@@ -25,6 +29,8 @@ router.use("/projects", projectsRouter);
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", correspondenceRouter);
 router.use("/projects/:projectId/workflows", workflowsRouter);
+router.use("/projects/:projectId/packages", packagesRouter);
+router.use("/projects/:projectId/transmittals", transmittalsRouter);
 router.use("/tasks", tasksRouter);
 router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);
@@ -32,5 +38,7 @@ router.use("/search", searchRouter);
 router.use("/audit-logs", auditLogsRouter);
 router.use("/ai", aiRouter);
 router.use("/general", generalRouter);
+router.use("/notifications", notificationsRouter);
+router.use("/config", configRouter);
 
 export default router;

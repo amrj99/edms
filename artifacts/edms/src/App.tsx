@@ -23,6 +23,8 @@ import Users from "@/pages/users";
 import Settings from "@/pages/settings";
 import AISettings from "@/pages/ai-settings";
 import General from "@/pages/general";
+import Config from "@/pages/config";
+import Reports from "@/pages/reports";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +81,12 @@ function Router() {
       </Route>
       <Route path="/general">
         <ProtectedRoute component={General} />
+      </Route>
+      <Route path="/config">
+        <ProtectedRoute component={Config} />
+      </Route>
+      <Route path="/reports">
+        <ProtectedRoute component={Reports} />
       </Route>
 
       <Route component={NotFound} />
