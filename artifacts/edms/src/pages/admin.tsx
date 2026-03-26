@@ -19,7 +19,9 @@ import {
   Mail, HardDrive, Plus, X, Save, RefreshCw, Key, Globe,
   FileType, Hash, GitBranch, Clock, Layers,
   Pencil, Lock, UserX, UserCheck, UserPlus, FolderKanban,
-  CheckCircle2, AlertCircle, Loader2,
+  CheckCircle2, AlertCircle, Loader2, Activity, Database,
+  Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
+  Server, Wifi, WifiOff,
 } from "lucide-react";
 
 const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
@@ -270,6 +272,8 @@ export default function Admin() {
             { value: "email", label: "Email", icon: Mail },
             { value: "storage", label: "Storage", icon: HardDrive },
             { value: "security", label: "Security", icon: Key },
+            { value: "audit", label: "Audit Log", icon: Activity },
+            { value: "system", label: "System", icon: Server },
           ].map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="gap-1.5 text-xs px-3">
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -978,32 +982,7 @@ export default function Admin() {
 
         {/* Email */}
         <TabsContent value="email" className="mt-4 space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><Mail className="h-4 w-4" />Email Configuration</CardTitle>
-              <CardDescription>Configure SMTP settings for outbound notifications and transmittals</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label>Enable Email Notifications</Label>
-                <Switch defaultChecked={false} />
-              </div>
-              <Separator />
-              <div className="grid md:grid-cols-2 gap-3">
-                <div><Label>SMTP Host</Label><Input placeholder="smtp.company.com" className="mt-1" /></div>
-                <div><Label>SMTP Port</Label><Input type="number" defaultValue={587} className="mt-1" /></div>
-                <div><Label>Username</Label><Input placeholder="noreply@company.com" className="mt-1" /></div>
-                <div><Label>Password</Label><Input type="password" placeholder="••••••••" className="mt-1" /></div>
-                <div><Label>From Name</Label><Input defaultValue="ArcScale EDMS" className="mt-1" /></div>
-                <div><Label>From Email</Label><Input placeholder="edms@company.com" className="mt-1" /></div>
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Use TLS/SSL</Label>
-                <Switch defaultChecked={true} />
-              </div>
-              <Button variant="outline" size="sm" className="gap-1"><Mail className="h-4 w-4" /> Send Test Email</Button>
-            </CardContent>
-          </Card>
+          <EmailConfigTab />
         </TabsContent>
 
         {/* Storage */}
@@ -1067,8 +1046,472 @@ export default function Admin() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Audit Log */}
+        <AuditLogTab />
+
+        {/* System & Backup */}
+        <SystemTab />
       </Tabs>
     </div>
+  );
+}
+
+// ─── Email Config Tab ─────────────────────────────────────────────────────────
+function EmailConfigTab() {
+  const { toast } = useToast();
+  const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const { data: sysInfo } = useQuery({
+    queryKey: ["admin-system-info"],
+    queryFn: async () => { const r = await fetch("/api/admin/system-info"); return r.json(); },
+  });
+
+  const handleSmtpTest = async () => {
+    setSmtpTesting(true);
+    setSmtpResult(null);
+    try {
+      const r = await fetch("/api/admin/smtp/test", { method: "POST" });
+      const d = await r.json();
+      setSmtpResult(d);
+    } catch {
+      setSmtpResult({ success: false, message: "Request failed — check API server logs" });
+    } finally {
+      setSmtpTesting(false);
+    }
+  };
+
+  const configured = sysInfo?.emailConfigured ?? false;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Mail className="h-4 w-4" />Email Configuration</CardTitle>
+          <CardDescription>Outbound SMTP for review notifications, transmittals, and alerts</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className={`flex items-center gap-3 p-3 rounded-lg border ${configured ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
+            {configured
+              ? <><CheckCircle2 className="h-5 w-5 text-green-600 shrink-0" /><div><p className="text-sm font-medium text-green-800">SMTP Configured</p><p className="text-xs text-green-700">Host: {sysInfo?.smtpHost ?? "set"} · From: {sysInfo?.smtpFrom ?? "set"}</p></div></>
+              : <><AlertCircle className="h-5 w-5 text-amber-600 shrink-0" /><div><p className="text-sm font-medium text-amber-800">SMTP Not Configured</p><p className="text-xs text-amber-700">Set environment variables to enable email notifications</p></div></>
+            }
+          </div>
+          <Separator />
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold">Required Environment Variables</h4>
+            {[
+              { name: "SMTP_HOST", example: "smtp.gmail.com", desc: "SMTP server hostname" },
+              { name: "SMTP_PORT", example: "587", desc: "SMTP port (587 for TLS, 465 for SSL)" },
+              { name: "SMTP_USER", example: "user@company.com", desc: "Authentication username" },
+              { name: "SMTP_PASS", example: "••••••••", desc: "Authentication password / app password" },
+              { name: "SMTP_FROM", example: "edms@company.com", desc: "From address for outgoing emails" },
+              { name: "SMTP_SECURE", example: "false", desc: "Set to 'true' for SSL (port 465)" },
+              { name: "APP_URL", example: "https://your-edms.replit.app", desc: "Base URL used in email links" },
+            ].map(({ name, example, desc }) => (
+              <div key={name} className="flex items-center gap-3 text-sm">
+                <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded w-28 shrink-0">{name}</span>
+                <span className="text-muted-foreground text-xs flex-1">{desc}</span>
+                <span className="font-mono text-xs text-muted-foreground">{example}</span>
+              </div>
+            ))}
+          </div>
+          <Separator />
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold">Email Triggers</h4>
+            {[
+              { event: "Document submitted for review", desc: "Sent to assigned reviewers" },
+              { event: "Document approved", desc: "Sent to document creator" },
+              { event: "Document rejected", desc: "Sent to document creator with reason" },
+              { event: "Transmittal sent", desc: "Sent to external recipients with access link" },
+              { event: "Task assigned", desc: "Sent to task assignee" },
+            ].map(({ event, desc }) => (
+              <div key={event} className="flex items-center justify-between text-sm">
+                <div>
+                  <p className="font-medium text-sm">{event}</p>
+                  <p className="text-xs text-muted-foreground">{desc}</p>
+                </div>
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+              </div>
+            ))}
+          </div>
+          <Separator />
+          <div className="space-y-2">
+            <Button onClick={handleSmtpTest} disabled={smtpTesting} variant="outline" className="gap-2 w-full">
+              {smtpTesting ? <><Loader2 className="h-4 w-4 animate-spin" /> Testing Connection…</> : <><Mail className="h-4 w-4" /> Test SMTP Connection</>}
+            </Button>
+            {smtpResult && (
+              <div className={`flex items-start gap-2 p-3 rounded-lg text-sm border ${smtpResult.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"}`}>
+                {smtpResult.success ? <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />}
+                <span>{smtpResult.message}</span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Audit Log Tab ────────────────────────────────────────────────────────────
+function AuditLogTab() {
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditFilters, setAuditFilters] = useState({ action: "_all", entityType: "_all", search: "", dateFrom: "", dateTo: "" });
+  const { toast } = useToast();
+
+  const params = new URLSearchParams();
+  params.set("page", String(auditPage));
+  params.set("limit", "50");
+  if (auditFilters.action !== "_all") params.set("action", auditFilters.action);
+  if (auditFilters.entityType !== "_all") params.set("entityType", auditFilters.entityType);
+  if (auditFilters.search) params.set("search", auditFilters.search);
+  if (auditFilters.dateFrom) params.set("dateFrom", auditFilters.dateFrom);
+  if (auditFilters.dateTo) params.set("dateTo", auditFilters.dateTo);
+
+  const { data: auditData, isLoading: auditLoading } = useQuery({
+    queryKey: ["admin-audit-logs", auditPage, auditFilters],
+    queryFn: async () => {
+      const r = await fetch(`/api/audit-logs?${params}`);
+      return r.json();
+    },
+  });
+
+  const logs: any[] = auditData?.logs ?? [];
+  const hasMore: boolean = auditData?.hasMore ?? false;
+
+  const handleExport = () => {
+    const ep = new URLSearchParams();
+    if (auditFilters.action !== "_all") ep.set("action", auditFilters.action);
+    if (auditFilters.entityType !== "_all") ep.set("entityType", auditFilters.entityType);
+    if (auditFilters.dateFrom) ep.set("dateFrom", auditFilters.dateFrom);
+    if (auditFilters.dateTo) ep.set("dateTo", auditFilters.dateTo);
+    window.open(`/api/audit-logs/export?${ep}`, "_blank");
+  };
+
+  const ACTION_COLORS: Record<string, string> = {
+    create: "bg-green-100 text-green-700",
+    update: "bg-blue-100 text-blue-700",
+    delete: "bg-red-100 text-red-700",
+    approve: "bg-emerald-100 text-emerald-700",
+    reject: "bg-orange-100 text-orange-700",
+    submit_review: "bg-purple-100 text-purple-700",
+    login: "bg-gray-100 text-gray-700",
+    send: "bg-cyan-100 text-cyan-700",
+  };
+
+  return (
+    <TabsContent value="audit" className="mt-4 space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2"><Activity className="h-4 w-4" />Audit Log</CardTitle>
+              <CardDescription>Full history of all system actions across all projects</CardDescription>
+            </div>
+            <Button variant="outline" size="sm" className="gap-1" onClick={handleExport}>
+              <Download className="h-3.5 w-3.5" /> Export CSV
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* Filters */}
+          <div className="flex flex-wrap gap-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search…"
+                value={auditFilters.search}
+                onChange={e => { setAuditFilters(f => ({ ...f, search: e.target.value })); setAuditPage(1); }}
+                className="pl-7 h-8 w-44 text-sm"
+              />
+            </div>
+            <Select value={auditFilters.action} onValueChange={v => { setAuditFilters(f => ({ ...f, action: v })); setAuditPage(1); }}>
+              <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Action" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">All Actions</SelectItem>
+                {["create","update","delete","approve","reject","submit_review","login","send","acknowledge"].map(a =>
+                  <SelectItem key={a} value={a} className="text-xs capitalize">{a.replace(/_/g, " ")}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <Select value={auditFilters.entityType} onValueChange={v => { setAuditFilters(f => ({ ...f, entityType: v })); setAuditPage(1); }}>
+              <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Entity" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">All Types</SelectItem>
+                {["document","correspondence","transmittal","project","user","workflow","task"].map(t =>
+                  <SelectItem key={t} value={t} className="text-xs capitalize">{t}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <Input type="date" value={auditFilters.dateFrom} onChange={e => { setAuditFilters(f => ({ ...f, dateFrom: e.target.value })); setAuditPage(1); }} className="h-8 w-36 text-xs" />
+            <Input type="date" value={auditFilters.dateTo} onChange={e => { setAuditFilters(f => ({ ...f, dateTo: e.target.value })); setAuditPage(1); }} className="h-8 w-36 text-xs" />
+            {(auditFilters.action !== "_all" || auditFilters.entityType !== "_all" || auditFilters.search || auditFilters.dateFrom || auditFilters.dateTo) && (
+              <Button variant="ghost" size="sm" className="h-8 text-xs gap-1" onClick={() => { setAuditFilters({ action: "_all", entityType: "_all", search: "", dateFrom: "", dateTo: "" }); setAuditPage(1); }}>
+                <X className="h-3 w-3" /> Clear
+              </Button>
+            )}
+          </div>
+
+          {/* Table */}
+          {auditLoading ? (
+            <div className="flex items-center justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : logs.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">No audit log entries found.</p>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-36 text-xs">Date / Time</TableHead>
+                    <TableHead className="text-xs">User</TableHead>
+                    <TableHead className="text-xs">Action</TableHead>
+                    <TableHead className="text-xs">Entity</TableHead>
+                    <TableHead className="text-xs">Title</TableHead>
+                    <TableHead className="text-xs w-20">Project</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.map((log: any) => (
+                    <TableRow key={log.id} className="text-xs">
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {new Date(log.createdAt).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">{log.userName ?? "System"}</TableCell>
+                      <TableCell>
+                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${ACTION_COLORS[log.action] ?? "bg-gray-100 text-gray-700"}`}>
+                          {log.action?.replace(/_/g, " ")}
+                        </span>
+                      </TableCell>
+                      <TableCell className="capitalize">{log.entityType}</TableCell>
+                      <TableCell className="max-w-[200px] truncate">{log.entityTitle}</TableCell>
+                      <TableCell className="text-muted-foreground">{log.projectId ?? "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-xs text-muted-foreground">Page {auditPage}</span>
+            <div className="flex gap-1">
+              <Button variant="outline" size="sm" className="h-7 w-7 p-0" disabled={auditPage <= 1} onClick={() => setAuditPage(p => p - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 w-7 p-0" disabled={!hasMore} onClick={() => setAuditPage(p => p + 1)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </TabsContent>
+  );
+}
+
+// ─── System & Backup Tab ──────────────────────────────────────────────────────
+function SystemTab() {
+  const { toast } = useToast();
+  const [smtpTesting, setSmtpTesting] = useState(false);
+  const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreResult, setRestoreResult] = useState<any>(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
+
+  const { data: sysInfo, isLoading: sysLoading, refetch: refetchSys } = useQuery({
+    queryKey: ["admin-system-info"],
+    queryFn: async () => { const r = await fetch("/api/admin/system-info"); return r.json(); },
+  });
+
+  const handleSmtpTest = async () => {
+    setSmtpTesting(true);
+    setSmtpResult(null);
+    try {
+      const r = await fetch("/api/admin/smtp/test", { method: "POST" });
+      const d = await r.json();
+      setSmtpResult(d);
+    } catch {
+      setSmtpResult({ success: false, message: "Request failed" });
+    } finally {
+      setSmtpTesting(false);
+    }
+  };
+
+  const handleBackupDownload = () => {
+    window.open("/api/admin/backup", "_blank");
+  };
+
+  const handleRestoreValidate = async () => {
+    if (!restoreFile) return;
+    setRestoreLoading(true);
+    setRestoreResult(null);
+    try {
+      const text = await restoreFile.text();
+      const backup = JSON.parse(text);
+      const r = await fetch("/api/admin/restore/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backup }),
+      });
+      const d = await r.json();
+      setRestoreResult(d);
+    } catch (e: any) {
+      setRestoreResult({ valid: false, error: e.message });
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  const fmtBytes = (b: number) => b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`;
+  const fmtUptime = (s: number) => {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return `${h}h ${m}m`;
+  };
+
+  return (
+    <TabsContent value="system" className="mt-4 space-y-4">
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* System Info */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2"><Server className="h-4 w-4" />System Info</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => refetchSys()} className="h-7 gap-1 text-xs">
+                <RefreshCw className="h-3 w-3" /> Refresh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {sysLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+            ) : sysInfo ? (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: "Users", value: sysInfo.counts?.users ?? 0 },
+                    { label: "Projects", value: sysInfo.counts?.projects ?? 0 },
+                    { label: "Documents", value: sysInfo.counts?.documents ?? 0 },
+                    { label: "Organizations", value: sysInfo.counts?.organizations ?? 0 },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-muted rounded-lg p-3 text-center">
+                      <p className="text-xl font-bold">{value}</p>
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                    </div>
+                  ))}
+                </div>
+                <Separator />
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Node Version</span><span className="font-mono text-xs">{sysInfo.nodeVersion}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Uptime</span><span>{fmtUptime(sysInfo.uptime)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Memory (RSS)</span><span>{fmtBytes(sysInfo.memory?.rss ?? 0)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Environment</span><span className="capitalize">{sysInfo.env}</span></div>
+                </div>
+                <Separator />
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Email (SMTP)</span>
+                    {sysInfo.emailConfigured
+                      ? <span className="flex items-center gap-1 text-green-600 text-xs font-medium"><Wifi className="h-3 w-3" /> Configured</span>
+                      : <span className="flex items-center gap-1 text-amber-600 text-xs font-medium"><WifiOff className="h-3 w-3" /> Not Set</span>}
+                  </div>
+                  {sysInfo.smtpHost && <div className="flex justify-between"><span className="text-muted-foreground">SMTP Host</span><span className="text-xs font-mono">{sysInfo.smtpHost}</span></div>}
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Object Storage</span>
+                    {sysInfo.storageConfigured
+                      ? <span className="flex items-center gap-1 text-green-600 text-xs font-medium"><Wifi className="h-3 w-3" /> Connected</span>
+                      : <span className="flex items-center gap-1 text-amber-600 text-xs font-medium"><WifiOff className="h-3 w-3" /> Not Set</span>}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Failed to load system info.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* SMTP Test */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><Mail className="h-4 w-4" />SMTP Connection Test</CardTitle>
+            <CardDescription>Verify your SMTP configuration is working correctly</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Configure SMTP by setting the <span className="font-mono text-xs bg-muted px-1 rounded">SMTP_HOST</span>, <span className="font-mono text-xs bg-muted px-1 rounded">SMTP_USER</span>, and <span className="font-mono text-xs bg-muted px-1 rounded">SMTP_PASS</span> environment variables.
+            </p>
+            <Button onClick={handleSmtpTest} disabled={smtpTesting} className="gap-2 w-full" variant="outline">
+              {smtpTesting ? <><Loader2 className="h-4 w-4 animate-spin" /> Testing…</> : <><Mail className="h-4 w-4" /> Test SMTP Connection</>}
+            </Button>
+            {smtpResult && (
+              <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${smtpResult.success ? "bg-green-50 text-green-800 border border-green-200" : "bg-red-50 text-red-800 border border-red-200"}`}>
+                {smtpResult.success ? <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" /> : <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />}
+                <span>{smtpResult.message}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Backup & Restore */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Database className="h-4 w-4" />Backup &amp; Restore</CardTitle>
+          <CardDescription>Export all system data as JSON, or validate a backup file before restoring</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Backup */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold flex items-center gap-2"><Download className="h-4 w-4" /> Export Backup</h4>
+              <p className="text-sm text-muted-foreground">
+                Downloads a complete JSON export of all data (users, projects, documents, correspondence, transmittals, tasks). Passwords are excluded for security.
+              </p>
+              <Button onClick={handleBackupDownload} className="gap-2 w-full" variant="outline">
+                <Download className="h-4 w-4" /> Download Backup JSON
+              </Button>
+            </div>
+            {/* Restore */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold flex items-center gap-2"><Upload className="h-4 w-4" /> Validate Backup</h4>
+              <p className="text-sm text-muted-foreground">
+                Upload a backup JSON file to verify its integrity before contacting your system administrator to perform a restore.
+              </p>
+              <Input
+                type="file"
+                accept=".json"
+                onChange={e => { setRestoreFile(e.target.files?.[0] ?? null); setRestoreResult(null); }}
+                className="text-sm"
+              />
+              <Button onClick={handleRestoreValidate} disabled={!restoreFile || restoreLoading} className="gap-2 w-full" variant="outline">
+                {restoreLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Validating…</> : <><CheckCircle2 className="h-4 w-4" /> Validate File</>}
+              </Button>
+              {restoreResult && (
+                <div className={`p-3 rounded-lg text-sm border space-y-2 ${restoreResult.valid ? "bg-green-50 border-green-200 text-green-900" : "bg-red-50 border-red-200 text-red-900"}`}>
+                  <div className="flex items-center gap-2 font-semibold">
+                    {restoreResult.valid ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                    {restoreResult.valid ? "Valid backup file" : "Invalid backup file"}
+                  </div>
+                  {restoreResult.valid && (
+                    <>
+                      <p className="text-xs">Exported: {restoreResult.exportedAt ? new Date(restoreResult.exportedAt).toLocaleString() : "Unknown"}</p>
+                      <div className="grid grid-cols-2 gap-1 text-xs">
+                        {Object.entries(restoreResult.counts ?? {}).map(([t, c]) => (
+                          <div key={t} className="flex justify-between"><span className="capitalize">{t}:</span><span className="font-mono">{String(c)}</span></div>
+                        ))}
+                      </div>
+                      <p className="text-xs opacity-75">{restoreResult.message}</p>
+                    </>
+                  )}
+                  {restoreResult.error && <p className="text-xs">{restoreResult.error}</p>}
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </TabsContent>
   );
 }
 

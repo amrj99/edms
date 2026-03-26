@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable } from "@workspace/db";
-import { eq, and, count, desc } from "drizzle-orm";
+import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable } from "@workspace/db";
+import { eq, and, count, desc, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
 
@@ -29,7 +30,9 @@ router.post("/folders", requireAuth, async (req, res) => {
 // Documents
 router.get("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { discipline, documentType, status, folderId } = req.query;
+  const { discipline, documentType, status, folderId, page, limit, search } = req.query;
+  const lim = Math.min(parseInt(limit as string || "50"), 200);
+  const pg = Math.max(1, parseInt(page as string || "1"));
 
   const docs = await db.select({
     doc: documentsTable,
@@ -46,14 +49,29 @@ router.get("/", requireAuth, async (req, res) => {
   if (documentType) filtered = filtered.filter(d => d.doc.documentType === documentType);
   if (status) filtered = filtered.filter(d => d.doc.status === status);
   if (folderId) filtered = filtered.filter(d => d.doc.folderId === parseInt(folderId as string));
+  if (search) {
+    const q = (search as string).toLowerCase();
+    filtered = filtered.filter(d =>
+      d.doc.title?.toLowerCase().includes(q) ||
+      d.doc.documentNumber?.toLowerCase().includes(q)
+    );
+  }
+
+  const totalCount = filtered.length;
+  const totalPages = Math.ceil(totalCount / lim);
+  const paginated = filtered.slice((pg - 1) * lim, pg * lim);
 
   res.json({
-    documents: filtered.map(({ doc, createdBy, folder }) => ({
+    documents: paginated.map(({ doc, createdBy, folder }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName: folder?.name,
     })),
-    total: filtered.length,
+    total: totalCount,
+    page: pg,
+    totalPages,
+    limit: lim,
+    hasMore: pg < totalPages,
   });
 });
 
@@ -222,6 +240,26 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "approve", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+
+  // Email: notify document creator of approval
+  if (doc.createdById) {
+    const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
+    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (creator?.email) {
+      const approver = req.user!;
+      sendDocumentApprovedEmail({
+        to: creator.email,
+        documentNumber: doc.documentNumber ?? "",
+        documentTitle: doc.title,
+        revision: doc.revision ?? "01",
+        approvedBy: `${(approver as any).firstName} ${(approver as any).lastName}`,
+        projectName: project?.name ?? "Unknown Project",
+        comment,
+        projectId,
+      }).catch(() => {});
+    }
+  }
+
   res.json({ ...doc });
 });
 
@@ -249,6 +287,26 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "reject", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+
+  // Email: notify document creator of rejection
+  if (doc.createdById) {
+    const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
+    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (creator?.email) {
+      const rejector = req.user!;
+      sendDocumentRejectedEmail({
+        to: creator.email,
+        documentNumber: doc.documentNumber ?? "",
+        documentTitle: doc.title,
+        revision: doc.revision ?? "01",
+        rejectedBy: `${(rejector as any).firstName} ${(rejector as any).lastName}`,
+        projectName: project?.name ?? "Unknown Project",
+        comment,
+        projectId,
+      }).catch(() => {});
+    }
+  }
+
   res.json({ ...doc });
 });
 
@@ -298,6 +356,31 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "submit_review", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+
+  // Email reviewers that they have a document to review
+  if (reviewerIds?.length > 0) {
+    const reviewers = await db.select().from(usersTable).where(
+      // @ts-ignore — in operator
+      sql`${usersTable.id} = ANY(${reviewerIds})`
+    );
+    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    const submitter = req.user!;
+    const reviewerEmails = reviewers.map((r: any) => r.email).filter(Boolean);
+    if (reviewerEmails.length > 0) {
+      sendReviewSubmittedEmail({
+        to: reviewerEmails,
+        documentNumber: doc.documentNumber ?? "",
+        documentTitle: doc.title,
+        revision: doc.revision ?? "01",
+        submittedBy: `${(submitter as any).firstName} ${(submitter as any).lastName}`,
+        projectName: project?.name ?? "Unknown Project",
+        comment,
+        projectId,
+        documentId: id,
+      }).catch(() => {});
+    }
+  }
+
   res.json({ ...doc });
 });
 

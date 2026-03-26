@@ -18,6 +18,8 @@ import packagesRouter from "./packages.js";
 import transmittalsRouter from "./transmittals.js";
 import notificationsRouter from "./notifications.js";
 import configRouter from "./config.js";
+import storageRouter from "./storage.js";
+import adminRouter from "./admin.js";
 
 const router: IRouter = Router();
 
@@ -40,5 +42,7 @@ router.use("/ai", aiRouter);
 router.use("/general", generalRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
+router.use("/storage", storageRouter);
+router.use("/admin", adminRouter);
 
 export default router;

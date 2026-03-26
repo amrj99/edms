@@ -19,16 +19,20 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
+    "@types/nodemailer": "^7.0.11",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "@workspace/integrations-openai-ai-server": "workspace:*",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
+    "google-auth-library": "^10.6.2",
+    "nodemailer": "^8.0.4",
     "pino": "^9",
-    "pino-http": "^10",
-    "@workspace/integrations-openai-ai-server": "workspace:*"
+    "pino-http": "^10"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
