@@ -146,7 +146,7 @@ export default function CorrespondencePage() {
 
   const createCorr = useMutation({
     mutationFn: async (data: any) => {
-      const projectId = data.projectId ? parseInt(data.projectId) : null;
+      const projectId = data.projectId && data.projectId !== "_none" ? parseInt(data.projectId) : null;
       const url = projectId ? `/api/projects/${projectId}/correspondence` : "/api/general/correspondence";
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, folder: "inbox", status: "draft" }) });
       if (!r.ok) throw new Error("Failed");
@@ -465,7 +465,7 @@ export default function CorrespondencePage() {
               <Select value={compose.projectId} onValueChange={v => setCompose(f => ({ ...f, projectId: v }))}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="General (no project)" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">General (no project)</SelectItem>
+                  <SelectItem value="_none">General (no project)</SelectItem>
                   {projects.map((p: any) => <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>)}
                 </SelectContent>
               </Select>

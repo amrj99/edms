@@ -174,6 +174,84 @@ router.get("/:id/revisions", requireAuth, async (req, res) => {
   });
 });
 
+router.get("/:id/reviews", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const steps = await db.select({
+    step: workflowStepsTable,
+    user: usersTable,
+    wf: workflowsTable,
+  }).from(workflowStepsTable)
+    .leftJoin(workflowsTable, eq(workflowStepsTable.workflowId, workflowsTable.id))
+    .leftJoin(usersTable, eq(workflowStepsTable.userId, usersTable.id))
+    .where(eq(workflowsTable.documentId, id))
+    .orderBy(desc(workflowStepsTable.createdAt));
+
+  res.json({
+    history: steps.map(({ step, user }) => ({
+      id: step.id,
+      step: step.step,
+      action: step.action,
+      comment: step.comment,
+      createdAt: step.createdAt,
+      userName: user ? `${user.firstName} ${user.lastName}` : "System",
+    })),
+  });
+});
+
+router.post("/:id/approve", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { comment } = req.body;
+
+  const [doc] = await db.update(documentsTable)
+    .set({ status: "approved", updatedAt: new Date() })
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .returning();
+  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const workflows = await db.select().from(workflowsTable)
+    .where(and(eq(workflowsTable.documentId, id), eq(workflowsTable.status, "active")))
+    .limit(1);
+
+  if (workflows[0]) {
+    await db.update(workflowsTable).set({ status: "completed", currentStep: "approved" }).where(eq(workflowsTable.id, workflows[0].id));
+    await db.insert(workflowStepsTable).values({
+      workflowId: workflows[0].id, step: "approved", action: "approved",
+      comment: comment || "Document approved", userId: req.user!.id,
+    });
+  }
+
+  await createAuditLog({ userId: req.user!.id, action: "approve", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+  res.json({ ...doc });
+});
+
+router.post("/:id/reject", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { comment } = req.body;
+
+  const [doc] = await db.update(documentsTable)
+    .set({ status: "draft", updatedAt: new Date() })
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .returning();
+  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const workflows = await db.select().from(workflowsTable)
+    .where(and(eq(workflowsTable.documentId, id), eq(workflowsTable.status, "active")))
+    .limit(1);
+
+  if (workflows[0]) {
+    await db.update(workflowsTable).set({ status: "rejected", currentStep: "rejected" }).where(eq(workflowsTable.id, workflows[0].id));
+    await db.insert(workflowStepsTable).values({
+      workflowId: workflows[0].id, step: "rejected", action: "rejected",
+      comment: comment || "Document rejected", userId: req.user!.id,
+    });
+  }
+
+  await createAuditLog({ userId: req.user!.id, action: "reject", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+  res.json({ ...doc });
+});
+
 router.post("/:id/submit-review", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);

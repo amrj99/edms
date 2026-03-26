@@ -41,7 +41,51 @@ Full-stack Engineering Document Management System (EDMS) built as a scalable mon
 - `max_completion_tokens` must be 8192+ (models truncate to `{}` with lower limits when using response_format json_object)
 - `suggestDocumentProcedure` uses `jsonMode=false` to avoid empty responses from `response_format: json_object`; it parses JSON from text output with a fallback generator
 
-## Usability & Administration Improvements (Latest)
+## Latest Features (Session 3)
+
+### Document Review Workflow (T006)
+- New "Review" tab in project detail — two-pane layout: document list (left) + review detail (right)
+- State machine visualisation: Draft → Under Review → Approved / Rejected
+- Submit for review button with reviewer assignment (per-member checkboxes) and submission note
+- Approve (green) and Reject (red) action buttons with comment field
+- Review history log showing who did what and when
+- Backend: `POST /:id/submit-review`, `POST /:id/approve`, `POST /:id/reject`, `GET /:id/reviews`
+
+### Document Compare Revisions (T010)
+- Per-document-row "Compare" (GitCompare) icon button (visible on row hover)
+- Dialog shows two revision selectors; side-by-side metadata diff table (changed fields highlighted)
+- AI comparison summary button calls `POST /api/ai/compare-revisions`
+- Shows informational message when only one revision exists
+
+### AI Document Control Validation (T008)
+- "Validate" toolbar button in Documents tab → opens AI Document Control Validation dialog
+- Checks: missing document numbers, missing titles, missing disciplines, missing revisions, duplicates
+- Severity-coded issue list (errors in red, warnings in amber, info in blue)
+- Summary line showing total errors and warnings; green check-mark when all pass
+- Backend: `POST /api/ai/validate-documents`
+
+### Global Search Enhancements (T007)
+- Advanced Filters panel (toggle with "Filters" button): Result Type, Project, Status, Discipline, Date From/To
+- Active filter count badge on toggle button; "Clear filters" shortcut button
+- Client-side date filtering applied to both documents and correspondence results
+- Rich result cards show updated dates, revision, and project name
+- Landing-state category cards when search is empty
+
+### Members Tab Rebuild (T005 / project admin delegation)
+- Full table view with per-member role selector (live updates via delete+re-add)
+- "Add Member" dialog: user selector (excludes existing members), role dropdown
+- Remove button per member row
+- Role options: Project Admin, Project Manager, Document Controller, Reviewer, Viewer
+
+### Transmittals Enhancement (T009)
+- External email recipients field in create dialog (comma-separated addresses)
+- "Detail" button on each row opens a slide-over panel with:
+  - Summary, status, purpose, due date
+  - External recipients section
+  - Copyable read-only access link (`/transmittals/ext/{number}`)
+  - Audit trail timeline: Created → Sent → Acknowledged (with timestamps)
+
+## Usability & Administration Improvements
 
 ### Multi-Document Transmittals
 - Documents tab has checkboxes in first column (click row or header to select/deselect all)

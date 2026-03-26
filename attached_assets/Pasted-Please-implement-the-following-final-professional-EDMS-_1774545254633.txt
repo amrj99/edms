@@ -1,0 +1,79 @@
+Please implement the following final professional EDMS features and fix the noted issues:
+
+A. BUG FIXES
+
+1. Compose Correspondence Error
+- Fix runtime error when creating a new correspondence (Compose)
+- Ensure form validation works
+- Ensure POST request body is properly sent
+- Add error handling and user feedback
+
+2. Packages Module Error
+- Fix Packages tab functionality
+- Ensure packages can be created, edited, and linked to documents
+- Restore previous working behaviour
+
+3. Multi Upload "Copy to Panel"
+- Confirm and enable "Copy to panel" option for multi-file upload
+- Allow selecting target folder/package while uploading
+- Allow metadata inheritance for bulk uploads
+
+B. USER & ROLE MANAGEMENT
+
+4. System Owner User Management
+- System owner can:
+    - Create users
+    - Edit users
+    - Disable users
+    - Reset password
+    - Assign roles
+
+5. Project Assignment
+- System owner can assign users to:
+    - Organization
+    - Project
+    - Multiple projects
+- Bulk assignment support
+
+6. Project Admin Delegation
+- System owner can assign Project Admin role
+- Each project can have its own admin
+- Project Admin permissions:
+    - Manage project users
+    - Manage documents
+    - Manage correspondence
+    - Cannot change system-level settings
+
+C. FINAL PROFESSIONAL FEATURES
+
+7. Document Review Workflow
+- Submit for review
+- Reviewer comments
+- Revise and resubmit
+- Approve / Reject
+- Automatic revision increment
+- Review history log
+
+8. External Transmittals
+- External recipients
+- Read-only external users
+- Acknowledgement tracking
+- Download audit log
+
+9. Document Version Comparison
+- Compare revisions
+- Highlight changes
+- AI summary of differences
+
+10. AI Document Control Validation
+- Check numbering compliance
+- Detect missing metadata
+- Detect duplicates
+- Flag incorrect revisions
+
+11. Global Search Across Projects
+- Search all projects
+- Advanced filters
+- AI search mode
+
+Ensure all fixes and features remain compatible with AI modules and VPS deployment.

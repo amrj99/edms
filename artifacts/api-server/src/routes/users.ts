@@ -85,4 +85,20 @@ router.delete("/:id", requireAuth, async (req, res) => {
   res.status(204).send();
 });
 
+router.post("/:id/reset-password", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 6) {
+    res.status(400).json({ error: "Password must be at least 6 characters" });
+    return;
+  }
+  const [user] = await db.update(usersTable)
+    .set({ passwordHash: hashPassword(newPassword), updatedAt: new Date() })
+    .where(eq(usersTable.id, id))
+    .returning();
+  if (!user) { res.status(404).json({ error: "Not Found" }); return; }
+  await createAuditLog({ userId: req.user!.id, action: "reset_password", entityType: "user", entityId: id, entityTitle: `${user.firstName} ${user.lastName}` });
+  res.json({ message: "Password reset successfully" });
+});
+
 export default router;

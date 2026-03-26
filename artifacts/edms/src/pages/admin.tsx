@@ -11,10 +11,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ShieldCheck, Building2, Users, Database, Settings, Brain,
-  Mail, HardDrive, Plus, X, Save, RefreshCw, Key, Globe, Server,
+  ShieldCheck, Building2, Users, Brain,
+  Mail, HardDrive, Plus, X, Save, RefreshCw, Key, Globe,
   FileType, Hash, GitBranch, Clock, Layers,
+  Pencil, Lock, UserX, UserCheck, UserPlus, FolderKanban,
+  CheckCircle2, AlertCircle, Loader2,
 } from "lucide-react";
 
 const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
@@ -26,6 +31,16 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   reviewer: "Review and comment on documents",
   viewer: "Read-only access to assigned documents",
 };
+const ROLE_BADGE: Record<string, string> = {
+  system_owner: "bg-red-100 text-red-700",
+  admin: "bg-orange-100 text-orange-700",
+  project_manager: "bg-blue-100 text-blue-700",
+  document_controller: "bg-purple-100 text-purple-700",
+  reviewer: "bg-cyan-100 text-cyan-700",
+  viewer: "bg-gray-100 text-gray-700",
+};
+
+const PROJECT_ROLES = ["project_manager", "document_controller", "reviewer", "viewer", "project_admin"];
 
 export default function Admin() {
   const { user } = useAuth();
@@ -38,7 +53,7 @@ export default function Admin() {
     queryFn: async () => { const r = await fetch("/api/config"); return r.json(); },
   });
 
-  const { data: usersData } = useQuery({
+  const { data: usersData, isLoading: usersLoading } = useQuery({
     queryKey: ["users"],
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
@@ -48,9 +63,27 @@ export default function Admin() {
     queryFn: async () => { const r = await fetch("/api/organizations"); return r.json(); },
   });
 
+  const { data: projectsData } = useQuery({
+    queryKey: ["projects"],
+    queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
+  });
+
   const [form, setForm] = useState<any>(null);
   const [newCorrType, setNewCorrType] = useState({ name: "", prefix: "", slaDays: 7, color: "#3B82F6" });
   const [newMetaField, setNewMetaField] = useState({ name: "", label: "", type: "text", required: false, scope: "global" });
+
+  // User management state
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [editUserOpen, setEditUserOpen] = useState(false);
+  const [resetPwOpen, setResetPwOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [userForm, setUserForm] = useState({ email: "", firstName: "", lastName: "", role: "reviewer", password: "", organizationId: "" });
+  const [editForm, setEditForm] = useState({ firstName: "", lastName: "", role: "reviewer", organizationId: "" });
+  const [newPassword, setNewPassword] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+
+  // Project assignment state
+  const [assignUser, setAssignUser] = useState<any>(null);
 
   if (config && !form) setForm({ ...config });
 
@@ -64,14 +97,104 @@ export default function Admin() {
     onError: () => toast({ title: "Save failed", variant: "destructive" }),
   });
 
-  const updateUserRole = useMutation({
-    mutationFn: async ({ id, role }: { id: number; role: string }) => {
-      const r = await fetch(`/api/users/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) });
+  const createUser = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...data, organizationId: data.organizationId ? parseInt(data.organizationId) : undefined }),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["users"] });
+      setCreateUserOpen(false);
+      setUserForm({ email: "", firstName: "", lastName: "", role: "reviewer", password: "", organizationId: "" });
+      toast({ title: "User created successfully" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to create user", variant: "destructive" }),
+  });
+
+  const updateUser = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+      const r = await fetch(`/api/users/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...data, organizationId: data.organizationId ? parseInt(data.organizationId) : undefined }),
+      });
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["users"] }); toast({ title: "User role updated" }); },
-    onError: () => toast({ title: "Failed to update role", variant: "destructive" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["users"] });
+      setEditUserOpen(false);
+      toast({ title: "User updated" });
+    },
+    onError: () => toast({ title: "Failed to update user", variant: "destructive" }),
+  });
+
+  const toggleUserActive = useMutation({
+    mutationFn: async ({ id, isActive }: { id: number; isActive: boolean }) => {
+      const r = await fetch(`/api/users/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["users"] });
+      toast({ title: vars.isActive ? "User enabled" : "User disabled" });
+    },
+    onError: () => toast({ title: "Failed to update user", variant: "destructive" }),
+  });
+
+  const resetPassword = useMutation({
+    mutationFn: async ({ id, password }: { id: number; password: string }) => {
+      const r = await fetch(`/api/users/${id}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newPassword: password }),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      setResetPwOpen(false);
+      setNewPassword("");
+      setSelectedUser(null);
+      toast({ title: "Password reset successfully" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to reset password", variant: "destructive" }),
+  });
+
+  const addToProject = useMutation({
+    mutationFn: async ({ projectId, userId, role }: { projectId: number; userId: number; role: string }) => {
+      const r = await fetch(`/api/projects/${projectId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, role }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project-members"] });
+      toast({ title: "User added to project" });
+    },
+    onError: () => toast({ title: "Failed to add user to project", variant: "destructive" }),
+  });
+
+  const removeFromProject = useMutation({
+    mutationFn: async ({ projectId, userId }: { projectId: number; userId: number }) => {
+      await fetch(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project-members"] });
+      toast({ title: "User removed from project" });
+    },
   });
 
   const addCorrType = () => {
@@ -97,6 +220,11 @@ export default function Admin() {
 
   const users = usersData?.users ?? [];
   const orgs = orgsData?.organizations ?? [];
+  const projects = projectsData?.projects ?? [];
+
+  const filteredUsers = users.filter((u: any) =>
+    !userSearch || `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(userSearch.toLowerCase())
+  );
 
   if (configLoading || !form) {
     return <div className="flex items-center justify-center py-20"><RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
@@ -132,7 +260,8 @@ export default function Admin() {
         <TabsList className="flex flex-wrap h-auto gap-1 justify-start bg-muted p-1 rounded-lg w-full">
           {[
             { value: "organization", label: "Organization", icon: Building2 },
-            { value: "users", label: "User Roles", icon: Users },
+            { value: "users", label: "Users", icon: Users },
+            { value: "project-assign", label: "Project Assignment", icon: FolderKanban },
             { value: "metadata", label: "Metadata", icon: Layers },
             { value: "corrtypes", label: "Corr. Types", icon: FileType },
             { value: "numbering", label: "Numbering", icon: Hash },
@@ -218,50 +347,325 @@ export default function Admin() {
           </div>
         </TabsContent>
 
-        {/* User Roles Management */}
+        {/* Full User Management */}
         <TabsContent value="users" className="mt-4 space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4" />Role Definitions</CardTitle>
-                <CardDescription>Understanding access levels in the system</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
+          {/* Create User Dialog */}
+          <Dialog open={createUserOpen} onOpenChange={setCreateUserOpen}>
+            <DialogContent className="sm:max-w-[520px]">
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><UserPlus className="h-5 w-5" />Create New User</DialogTitle></DialogHeader>
+              <div className="space-y-3 py-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>First Name *</Label>
+                    <Input value={userForm.firstName} onChange={e => setUserForm(f => ({ ...f, firstName: e.target.value }))} placeholder="First name" className="mt-1" />
+                  </div>
+                  <div>
+                    <Label>Last Name *</Label>
+                    <Input value={userForm.lastName} onChange={e => setUserForm(f => ({ ...f, lastName: e.target.value }))} placeholder="Last name" className="mt-1" />
+                  </div>
+                </div>
+                <div>
+                  <Label>Email Address *</Label>
+                  <Input type="email" value={userForm.email} onChange={e => setUserForm(f => ({ ...f, email: e.target.value }))} placeholder="user@company.com" className="mt-1" />
+                </div>
+                <div>
+                  <Label>Temporary Password *</Label>
+                  <Input type="password" value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} placeholder="Min. 6 characters" className="mt-1" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>System Role *</Label>
+                    <Select value={userForm.role} onValueChange={v => setUserForm(f => ({ ...f, role: v }))}>
+                      <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {ROLES.map(r => <SelectItem key={r} value={r} className="capitalize">{r.replace(/_/g, " ")}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Organization</Label>
+                    <Select value={userForm.organizationId} onValueChange={v => setUserForm(f => ({ ...f, organizationId: v }))}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">None</SelectItem>
+                        {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setCreateUserOpen(false)}>Cancel</Button>
+                <Button
+                  onClick={() => createUser.mutate({ ...userForm, organizationId: userForm.organizationId === "_none" ? "" : userForm.organizationId })}
+                  disabled={createUser.isPending || !userForm.email || !userForm.firstName || !userForm.lastName || !userForm.password}
+                >
+                  {createUser.isPending ? "Creating..." : "Create User"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Edit User Dialog */}
+          <Dialog open={editUserOpen} onOpenChange={setEditUserOpen}>
+            <DialogContent className="sm:max-w-[480px]">
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-5 w-5" />Edit User</DialogTitle></DialogHeader>
+              <div className="space-y-3 py-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>First Name</Label>
+                    <Input value={editForm.firstName} onChange={e => setEditForm(f => ({ ...f, firstName: e.target.value }))} className="mt-1" />
+                  </div>
+                  <div>
+                    <Label>Last Name</Label>
+                    <Input value={editForm.lastName} onChange={e => setEditForm(f => ({ ...f, lastName: e.target.value }))} className="mt-1" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>System Role</Label>
+                    <Select value={editForm.role} onValueChange={v => setEditForm(f => ({ ...f, role: v }))}>
+                      <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {ROLES.map(r => <SelectItem key={r} value={r} className="capitalize">{r.replace(/_/g, " ")}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Organization</Label>
+                    <Select value={editForm.organizationId} onValueChange={v => setEditForm(f => ({ ...f, organizationId: v }))}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">None</SelectItem>
+                        {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditUserOpen(false)}>Cancel</Button>
+                <Button
+                  onClick={() => selectedUser && updateUser.mutate({ id: selectedUser.id, data: { ...editForm, organizationId: editForm.organizationId === "_none" ? null : editForm.organizationId } })}
+                  disabled={updateUser.isPending}
+                >
+                  {updateUser.isPending ? "Saving..." : "Save Changes"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Reset Password Dialog */}
+          <Dialog open={resetPwOpen} onOpenChange={setResetPwOpen}>
+            <DialogContent className="sm:max-w-[400px]">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2"><Lock className="h-5 w-5" />Reset Password</DialogTitle>
+              </DialogHeader>
+              <div className="py-2 space-y-3">
+                <p className="text-sm text-muted-foreground">Setting new password for: <strong>{selectedUser?.firstName} {selectedUser?.lastName}</strong></p>
+                <div>
+                  <Label>New Password</Label>
+                  <Input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Min. 6 characters" className="mt-1" />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setResetPwOpen(false); setNewPassword(""); }}>Cancel</Button>
+                <Button
+                  onClick={() => selectedUser && resetPassword.mutate({ id: selectedUser.id, password: newPassword })}
+                  disabled={resetPassword.isPending || newPassword.length < 6}
+                >
+                  {resetPassword.isPending ? "Resetting..." : "Reset Password"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* User List */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4" />User Management</CardTitle>
+                  <CardDescription>Create, edit, disable users and manage system roles</CardDescription>
+                </div>
+                <Button className="gap-2" onClick={() => setCreateUserOpen(true)}>
+                  <UserPlus className="h-4 w-4" /> Add User
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Search users..."
+                  value={userSearch}
+                  onChange={e => setUserSearch(e.target.value)}
+                  className="max-w-xs h-9"
+                />
+                <Badge variant="outline" className="h-9 px-3 flex items-center">{users.length} users</Badge>
+              </div>
+
+              {usersLoading ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+              ) : (
+                <div className="border rounded-lg overflow-hidden">
+                  <Table>
+                    <TableHeader className="bg-muted/50">
+                      <TableRow>
+                        <TableHead>User</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>System Role</TableHead>
+                        <TableHead>Organization</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredUsers.map((u: any) => (
+                        <TableRow key={u.id} className={!u.isActive ? "opacity-50" : ""}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                                {u.firstName?.[0]}{u.lastName?.[0]}
+                              </div>
+                              <span className="font-medium text-sm">{u.firstName} {u.lastName}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{u.email}</TableCell>
+                          <TableCell>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${ROLE_BADGE[u.role] ?? "bg-muted text-muted-foreground"}`}>
+                              {u.role?.replace(/_/g, " ")}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{u.organizationName || "—"}</TableCell>
+                          <TableCell>
+                            {u.isActive ? (
+                              <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Active
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-xs text-red-500 font-medium">
+                                <AlertCircle className="h-3.5 w-3.5" /> Disabled
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                variant="ghost" size="icon" className="h-7 w-7"
+                                title="Edit user"
+                                onClick={() => {
+                                  setSelectedUser(u);
+                                  setEditForm({ firstName: u.firstName, lastName: u.lastName, role: u.role, organizationId: u.organizationId ? String(u.organizationId) : "_none" });
+                                  setEditUserOpen(true);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon" className="h-7 w-7"
+                                title="Reset password"
+                                onClick={() => { setSelectedUser(u); setResetPwOpen(true); }}
+                              >
+                                <Lock className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon" className={`h-7 w-7 ${u.isActive ? "text-amber-500 hover:bg-amber-50" : "text-emerald-600 hover:bg-emerald-50"}`}
+                                title={u.isActive ? "Disable user" : "Enable user"}
+                                onClick={() => toggleUserActive.mutate({ id: u.id, isActive: !u.isActive })}
+                              >
+                                {u.isActive ? <UserX className="h-3.5 w-3.5" /> : <UserCheck className="h-3.5 w-3.5" />}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {filteredUsers.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                            {userSearch ? "No users match your search." : "No users found."}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Role Definitions */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><ShieldCheck className="h-4 w-4" />Role Definitions</CardTitle>
+              <CardDescription>Understanding access levels in the system</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-2 gap-2">
                 {ROLES.map(role => (
                   <div key={role} className="flex items-start gap-3 p-2 rounded border">
-                    <Badge variant={role === "system_owner" ? "default" : "outline"} className="capitalize mt-0.5 shrink-0">{role.replace(/_/g, " ")}</Badge>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize mt-0.5 shrink-0 ${ROLE_BADGE[role]}`}>{role.replace(/_/g, " ")}</span>
                     <p className="text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
                   </div>
                 ))}
-              </CardContent>
-            </Card>
-            <Card>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Project Assignment */}
+        <TabsContent value="project-assign" className="mt-4 space-y-4">
+          <div className="grid md:grid-cols-5 gap-4">
+            {/* User selector */}
+            <Card className="md:col-span-2">
               <CardHeader>
-                <CardTitle className="text-base">User Role Management</CardTitle>
-                <CardDescription>Change roles for existing users</CardDescription>
+                <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4" />Select User</CardTitle>
+                <CardDescription>Choose a user to manage their project access</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2 max-h-96 overflow-y-auto">
+              <CardContent className="space-y-2 max-h-[480px] overflow-y-auto">
                 {users.map((u: any) => (
-                  <div key={u.id} className="flex items-center justify-between gap-2 py-2 border-b last:border-b-0">
+                  <button
+                    key={u.id}
+                    onClick={() => setAssignUser(u)}
+                    className={`w-full flex items-center gap-3 p-2.5 rounded-lg border text-left transition-colors ${assignUser?.id === u.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}
+                  >
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                      {u.firstName?.[0]}{u.lastName?.[0]}
+                    </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{u.firstName} {u.lastName}</p>
                       <p className="text-xs text-muted-foreground truncate">{u.email}</p>
                     </div>
-                    <Select
-                      value={u.role}
-                      onValueChange={(role) => updateUserRole.mutate({ id: u.id, role })}
-                    >
-                      <SelectTrigger className="w-40 h-8 text-xs shrink-0">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ROLES.map(r => (
-                          <SelectItem key={r} value={r} className="text-xs capitalize">{r.replace(/_/g, " ")}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    {!u.isActive && <Badge variant="outline" className="text-xs ml-auto shrink-0">Disabled</Badge>}
+                  </button>
                 ))}
+              </CardContent>
+            </Card>
+
+            {/* Project assignment */}
+            <Card className="md:col-span-3">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FolderKanban className="h-4 w-4" />
+                  {assignUser ? `Projects — ${assignUser.firstName} ${assignUser.lastName}` : "Project Access"}
+                </CardTitle>
+                <CardDescription>
+                  {assignUser ? "Toggle projects to add or remove access. Set the role for each project." : "Select a user from the left to manage their project assignments."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!assignUser ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                    <Users className="h-10 w-10 mb-3 opacity-30" />
+                    <p className="text-sm">Select a user to manage project access</p>
+                  </div>
+                ) : (
+                  <ProjectAssignmentPanel
+                    userId={assignUser.id}
+                    projects={projects}
+                    addToProject={addToProject.mutate}
+                    removeFromProject={removeFromProject.mutate}
+                  />
+                )}
               </CardContent>
             </Card>
           </div>
@@ -355,7 +759,6 @@ export default function Admin() {
               <CardDescription>Define custom correspondence types with prefixes, SLA days, and workflows</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Built-in types */}
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">System Types (built-in)</p>
                 <div className="flex flex-wrap gap-2">
@@ -365,7 +768,6 @@ export default function Admin() {
                 </div>
               </div>
               <Separator />
-              {/* Custom types */}
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">Custom Types</p>
                 {(form.correspondenceTypes || []).length === 0 && (
@@ -508,7 +910,7 @@ export default function Admin() {
                 </div>
               ))}
               <Button variant="outline" className="gap-1 w-full" onClick={() => window.location.href = "/config"}>
-                <Settings className="h-4 w-4" /> Manage in Configuration Panel
+                <GitBranch className="h-4 w-4" /> Manage in Configuration Panel
               </Button>
             </CardContent>
           </Card>
@@ -526,6 +928,7 @@ export default function Admin() {
                   { key: "taskPrioritization", label: "Task Prioritization", desc: "AI-driven priority scores and bottleneck detection" },
                   { key: "naturalLanguageSearch", label: "Natural Language Search", desc: "Parse plain English queries into EDMS filters" },
                   { key: "documentProcedure", label: "Document Numbering", desc: "AI-assisted document classification during upload" },
+                  { key: "docControlValidation", label: "Document Control Validation", desc: "AI checks for numbering compliance, missing metadata, and duplicates" },
                 ].map(({ key, label, desc }) => (
                   <div key={key} className="flex items-start justify-between gap-3">
                     <div>
@@ -587,30 +990,12 @@ export default function Admin() {
               </div>
               <Separator />
               <div className="grid md:grid-cols-2 gap-3">
-                <div>
-                  <Label>SMTP Host</Label>
-                  <Input placeholder="smtp.company.com" className="mt-1" />
-                </div>
-                <div>
-                  <Label>SMTP Port</Label>
-                  <Input type="number" defaultValue={587} className="mt-1" />
-                </div>
-                <div>
-                  <Label>Username</Label>
-                  <Input placeholder="noreply@company.com" className="mt-1" />
-                </div>
-                <div>
-                  <Label>Password</Label>
-                  <Input type="password" placeholder="••••••••" className="mt-1" />
-                </div>
-                <div>
-                  <Label>From Name</Label>
-                  <Input defaultValue="ArcScale EDMS" className="mt-1" />
-                </div>
-                <div>
-                  <Label>From Email</Label>
-                  <Input placeholder="edms@company.com" className="mt-1" />
-                </div>
+                <div><Label>SMTP Host</Label><Input placeholder="smtp.company.com" className="mt-1" /></div>
+                <div><Label>SMTP Port</Label><Input type="number" defaultValue={587} className="mt-1" /></div>
+                <div><Label>Username</Label><Input placeholder="noreply@company.com" className="mt-1" /></div>
+                <div><Label>Password</Label><Input type="password" placeholder="••••••••" className="mt-1" /></div>
+                <div><Label>From Name</Label><Input defaultValue="ArcScale EDMS" className="mt-1" /></div>
+                <div><Label>From Email</Label><Input placeholder="edms@company.com" className="mt-1" /></div>
               </div>
               <div className="flex items-center justify-between">
                 <Label>Use TLS/SSL</Label>
@@ -642,22 +1027,10 @@ export default function Admin() {
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label>Max File Size (MB)</Label>
-                <Input type="number" defaultValue={50} className="mt-1" />
-              </div>
-              <div>
-                <Label>Allowed File Types</Label>
-                <Input defaultValue="pdf,docx,dwg,xlsx,png,jpg,zip" className="mt-1 font-mono text-sm" />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Enable Version Control</Label>
-                <Switch defaultChecked={true} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Auto-backup Enabled</Label>
-                <Switch defaultChecked={false} />
-              </div>
+              <div><Label>Max File Size (MB)</Label><Input type="number" defaultValue={50} className="mt-1" /></div>
+              <div><Label>Allowed File Types</Label><Input defaultValue="pdf,docx,dwg,xlsx,png,jpg,zip" className="mt-1 font-mono text-sm" /></div>
+              <div className="flex items-center justify-between"><Label>Enable Version Control</Label><Switch defaultChecked={true} /></div>
+              <div className="flex items-center justify-between"><Label>Auto-backup Enabled</Label><Switch defaultChecked={false} /></div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -669,26 +1042,11 @@ export default function Admin() {
               <CardTitle className="text-base flex items-center gap-2"><Key className="h-4 w-4" />Security Settings</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <Label>Session Timeout (minutes)</Label>
-                <Input type="number" defaultValue={60} className="mt-1" />
-              </div>
-              <div>
-                <Label>Password Minimum Length</Label>
-                <Input type="number" defaultValue={8} className="mt-1" />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Require Strong Passwords</Label>
-                <Switch defaultChecked={true} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Enable 2FA</Label>
-                <Switch defaultChecked={false} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label>Audit All Actions</Label>
-                <Switch defaultChecked={true} />
-              </div>
+              <div><Label>Session Timeout (minutes)</Label><Input type="number" defaultValue={60} className="mt-1" /></div>
+              <div><Label>Password Minimum Length</Label><Input type="number" defaultValue={8} className="mt-1" /></div>
+              <div className="flex items-center justify-between"><Label>Require Strong Passwords</Label><Switch defaultChecked={true} /></div>
+              <div className="flex items-center justify-between"><Label>Enable 2FA</Label><Switch defaultChecked={false} /></div>
+              <div className="flex items-center justify-between"><Label>Audit All Actions</Label><Switch defaultChecked={true} /></div>
               <div>
                 <Label>Allowed IP Ranges (CIDR, one per line)</Label>
                 <textarea className="mt-1 w-full rounded-md border bg-background p-2 text-sm font-mono min-h-[80px]" placeholder="0.0.0.0/0 (allow all)" />
@@ -710,6 +1068,78 @@ export default function Admin() {
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ─── Project Assignment Panel ─────────────────────────────────────────────────
+function ProjectAssignmentPanel({
+  userId,
+  projects,
+  addToProject,
+  removeFromProject,
+}: {
+  userId: number;
+  projects: any[];
+  addToProject: (args: { projectId: number; userId: number; role: string }) => void;
+  removeFromProject: (args: { projectId: number; userId: number }) => void;
+}) {
+  const { data: membershipsData } = useQuery({
+    queryKey: ["user-project-memberships", userId],
+    queryFn: async () => {
+      const results = await Promise.all(
+        projects.map(async (p: any) => {
+          const r = await fetch(`/api/projects/${p.id}/members`);
+          const d = await r.json();
+          const member = (d.members ?? []).find((m: any) => m.userId === userId);
+          return { projectId: p.id, member: member ?? null };
+        })
+      );
+      return results;
+    },
+    enabled: projects.length > 0,
+  });
+
+  const membershipMap = new Map((membershipsData ?? []).map((m: any) => [m.projectId, m.member]));
+  const [projectRoles, setProjectRoles] = useState<Record<number, string>>({});
+
+  return (
+    <div className="space-y-2 max-h-[400px] overflow-y-auto">
+      {projects.length === 0 && (
+        <p className="text-sm text-muted-foreground text-center py-8">No projects found.</p>
+      )}
+      {projects.map((p: any) => {
+        const member = membershipMap.get(p.id);
+        const isMember = !!member;
+        const role = projectRoles[p.id] ?? member?.role ?? "reviewer";
+        return (
+          <div key={p.id} className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${isMember ? "border-primary/30 bg-primary/5" : ""}`}>
+            <Checkbox
+              checked={isMember}
+              onCheckedChange={(checked) => {
+                if (checked) {
+                  addToProject({ projectId: p.id, userId, role });
+                } else {
+                  removeFromProject({ projectId: p.id, userId });
+                }
+              }}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-muted-foreground">{p.code}</span>
+                <span className="font-medium text-sm truncate">{p.name}</span>
+              </div>
+              {isMember && <span className="text-xs text-primary">Member</span>}
+            </div>
+            <Select value={role} onValueChange={v => setProjectRoles(r => ({ ...r, [p.id]: v }))}>
+              <SelectTrigger className="w-36 h-7 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PROJECT_ROLES.map(r => <SelectItem key={r} value={r} className="text-xs capitalize">{r.replace(/_/g, " ")}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        );
+      })}
     </div>
   );
 }

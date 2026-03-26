@@ -138,6 +138,96 @@ router.post("/search/natural", async (req, res) => {
   res.json(parsed);
 });
 
+// ─── Document Control Validation ─────────────────────────────────────────────
+
+router.post("/validate-documents", async (req, res) => {
+  const { projectId, documents = [] } = req.body ?? {};
+  const issues: any[] = [];
+
+  // Check: missing document numbers
+  const withoutNumber = documents.filter((d: any) => !d.documentNumber || d.documentNumber.trim() === "");
+  withoutNumber.forEach((d: any) => {
+    issues.push({ severity: "error", title: "Missing Document Number", detail: `Document "${d.title}" has no document number.`, document: d.title });
+  });
+
+  // Check: missing title
+  const withoutTitle = documents.filter((d: any) => !d.title || d.title.trim() === "");
+  withoutTitle.forEach((d: any) => {
+    issues.push({ severity: "error", title: "Missing Title", detail: "A document is missing a title.", document: d.documentNumber || "Unknown" });
+  });
+
+  // Check: missing discipline
+  const withoutDiscipline = documents.filter((d: any) => !d.discipline);
+  withoutDiscipline.forEach((d: any) => {
+    issues.push({ severity: "warning", title: "Missing Discipline", detail: `Document "${d.title}" has no discipline assigned.`, document: d.documentNumber });
+  });
+
+  // Check: missing revision
+  const withoutRevision = documents.filter((d: any) => !d.revision);
+  withoutRevision.forEach((d: any) => {
+    issues.push({ severity: "warning", title: "Missing Revision", detail: `Document "${d.title}" has no revision assigned.`, document: d.documentNumber });
+  });
+
+  // Check: duplicate document numbers
+  const numMap = new Map<string, any[]>();
+  documents.forEach((d: any) => {
+    if (d.documentNumber) {
+      const arr = numMap.get(d.documentNumber) || [];
+      arr.push(d);
+      numMap.set(d.documentNumber, arr);
+    }
+  });
+  numMap.forEach((docs, num) => {
+    if (docs.length > 1) {
+      issues.push({
+        severity: "error",
+        title: "Duplicate Document Number",
+        detail: `Document number "${num}" is used by ${docs.length} documents: ${docs.map((d: any) => d.title).join(", ")}.`,
+        document: num,
+      });
+    }
+  });
+
+  // Check: documents stuck in draft without revision
+  const stuckDraft = documents.filter((d: any) => d.status === "draft" && d.revision && d.revision !== "01" && d.revision !== "A");
+  stuckDraft.forEach((d: any) => {
+    issues.push({ severity: "info", title: "Document Awaiting Submission", detail: `"${d.title}" is on revision ${d.revision} but still in draft status.`, document: d.documentNumber });
+  });
+
+  const errors = issues.filter((i: any) => i.severity === "error").length;
+  const warnings = issues.filter((i: any) => i.severity === "warning").length;
+
+  const summary = issues.length === 0
+    ? `All ${documents.length} document(s) passed document control validation checks.`
+    : `Found ${errors} error(s) and ${warnings} warning(s) across ${documents.length} document(s). Review and correct the flagged items.`;
+
+  res.json({ issues, summary, total: documents.length });
+});
+
+// ─── Compare Revisions (AI Summary) ──────────────────────────────────────────
+
+router.post("/compare-revisions", async (req, res) => {
+  const { document: docTitle, revisionA, revisionB } = req.body ?? {};
+  if (!revisionA || !revisionB) {
+    res.status(400).json({ error: "revisionA and revisionB are required" });
+    return;
+  }
+
+  const changes: string[] = [];
+  const fields = ["revision", "status", "fileName", "comment"];
+  fields.forEach(f => {
+    if (revisionA[f] !== revisionB[f]) {
+      changes.push(`${f} changed from "${revisionA[f] || "none"}" to "${revisionB[f] || "none"}"`);
+    }
+  });
+
+  const summary = changes.length === 0
+    ? `No tracked metadata differences detected between the two revisions of "${docTitle}".`
+    : `Between the two revisions of "${docTitle}": ${changes.join("; ")}.`;
+
+  res.json({ summary });
+});
+
 // ─── AI Settings ─────────────────────────────────────────────────────────────
 
 router.get("/settings", async (req, res) => {
