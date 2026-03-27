@@ -54,7 +54,10 @@ router.get("/", requireAuth, async (req, res) => {
     const q = (search as string).toLowerCase();
     filtered = filtered.filter(d =>
       d.doc.title?.toLowerCase().includes(q) ||
-      d.doc.documentNumber?.toLowerCase().includes(q)
+      d.doc.documentNumber?.toLowerCase().includes(q) ||
+      d.doc.discipline?.toLowerCase().includes(q) ||
+      d.doc.revision?.toLowerCase().includes(q) ||
+      d.doc.documentType?.toLowerCase().includes(q)
     );
   }
 
@@ -139,13 +142,13 @@ router.put("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
 
-  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata } = req.body;
+  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles } = req.body;
 
   const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   const [doc] = await db.update(documentsTable)
-    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, updatedAt: new Date() })
+    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
     .returning();
 

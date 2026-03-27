@@ -18,6 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { FileDropZone } from "@/components/file-drop-zone";
+import { RecipientAutocomplete, CCAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
@@ -585,49 +586,24 @@ export default function CorrespondencePage() {
             {/* To Recipients */}
             <div>
               <Label>To (Recipients)</Label>
-              <div className="mt-1 space-y-2">
-                {compose.toUserIds.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {compose.toUserIds.map(uid => {
-                      const u = allUsers.find(u => u.id === uid);
-                      return (
-                        <span key={uid} className="inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full">
-                          {u ? `${u.firstName} ${u.lastName}` : `User #${uid}`}
-                          <button type="button" onClick={() => setCompose(f => ({ ...f, toUserIds: f.toUserIds.filter(id => id !== uid) }))} className="hover:text-destructive">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <Select value={toPickUser} onValueChange={v => {
-                    if (v && v !== "_none") {
-                      const uid = parseInt(v);
-                      if (!compose.toUserIds.includes(uid)) {
-                        setCompose(f => ({ ...f, toUserIds: [...f.toUserIds, uid] }));
-                      }
-                      setToPickUser("");
-                    }
-                  }}>
-                    <SelectTrigger className="flex-1 h-8 text-sm">
-                      <SelectValue placeholder="Add recipient..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">— Select user —</SelectItem>
-                      {allUsers.filter(u => !compose.toUserIds.includes(u.id)).map(u => (
-                        <SelectItem key={u.id} value={String(u.id)}>{u.firstName} {u.lastName} — {u.email}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+              <RecipientAutocomplete
+                users={allUsers as RecipientUser[]}
+                selectedIds={compose.toUserIds}
+                onChange={ids => setCompose(f => ({ ...f, toUserIds: ids }))}
+                placeholder="Search by name or email…"
+                className="mt-1"
+              />
             </div>
             {/* CC */}
             <div>
-              <Label>CC (email addresses, comma-separated)</Label>
-              <Input value={compose.cc} onChange={e => setCompose(f => ({ ...f, cc: e.target.value }))} placeholder="cc@example.com, another@example.com" className="mt-1 text-sm" />
+              <Label>CC (email addresses)</Label>
+              <CCAutocomplete
+                users={allUsers as RecipientUser[]}
+                value={compose.cc}
+                onChange={v => setCompose(f => ({ ...f, cc: v }))}
+                placeholder="cc@example.com, another@example.com"
+                className="mt-1"
+              />
             </div>
             {/* Subject */}
             <div>
@@ -642,15 +618,14 @@ export default function CorrespondencePage() {
               </div>
               <div>
                 <Label>Task To (assign responsible)</Label>
-                <Select value={compose.taskToId || "_none"} onValueChange={v => setCompose(f => ({ ...f, taskToId: v === "_none" ? "" : v }))}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_none">None</SelectItem>
-                    {allUsers.map(u => (
-                      <SelectItem key={u.id} value={String(u.id)}>{u.firstName} {u.lastName}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <RecipientAutocomplete
+                  users={allUsers as RecipientUser[]}
+                  selectedIds={compose.taskToId && compose.taskToId !== "_none" ? [parseInt(compose.taskToId)] : []}
+                  onChange={ids => setCompose(f => ({ ...f, taskToId: ids[0] ? String(ids[0]) : "" }))}
+                  placeholder="Search user…"
+                  single
+                  className="mt-1"
+                />
               </div>
             </div>
             {/* Attachments */}

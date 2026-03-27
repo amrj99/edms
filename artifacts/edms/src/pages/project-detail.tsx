@@ -11,6 +11,7 @@ import {
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
+import { RecipientAutocomplete } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -149,6 +150,8 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [revision, setRevision] = useState("01");
   const [docType, setDocType] = useState("general");
   const [searchQ, setSearchQ] = useState("");
+  const [filterDiscipline, setFilterDiscipline] = useState("_all");
+  const [filterDocType, setFilterDocType] = useState("_all");
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [validateOpen, setValidateOpen] = useState(false);
@@ -165,6 +168,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [editDoc, setEditDoc] = useState<any>(null);
   const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "" });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
+  const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
   // Document share state
   const [shareDoc, setShareDoc] = useState<any>(null);
   const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
@@ -258,9 +262,22 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   };
 
   const allDocs = data?.documents ?? [];
-  const filtered = allDocs.filter((d: any) =>
-    !searchQ || d.title?.toLowerCase().includes(searchQ.toLowerCase()) || d.documentNumber?.toLowerCase().includes(searchQ.toLowerCase())
-  );
+  const uniqueDisciplines = Array.from(new Set(allDocs.map((d: any) => d.discipline).filter(Boolean))) as string[];
+  const uniqueDocTypes = Array.from(new Set(allDocs.map((d: any) => d.documentType).filter(Boolean))) as string[];
+  const filtered = allDocs.filter((d: any) => {
+    if (searchQ) {
+      const q = searchQ.toLowerCase();
+      const match = d.title?.toLowerCase().includes(q) ||
+        d.documentNumber?.toLowerCase().includes(q) ||
+        d.discipline?.toLowerCase().includes(q) ||
+        d.revision?.toLowerCase().includes(q) ||
+        d.documentType?.toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    if (filterDiscipline !== "_all" && d.discipline !== filterDiscipline) return false;
+    if (filterDocType !== "_all" && d.documentType !== filterDocType) return false;
+    return true;
+  });
 
   const toggleSelect = (id: number) => {
     setSelectedIds(s => { const ns = new Set(s); ns.has(id) ? ns.delete(id) : ns.add(id); return ns; });
@@ -327,8 +344,35 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex flex-wrap justify-between items-center gap-2 bg-card p-2 rounded-lg border shadow-sm">
-        <div className="flex gap-2 items-center">
-          <Input placeholder="Search documents..." className="w-[240px] h-9" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
+        <div className="flex flex-wrap gap-2 items-center">
+          <Input placeholder="Search title, number, discipline…" className="w-[220px] h-9" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
+          {uniqueDisciplines.length > 0 && (
+            <Select value={filterDiscipline} onValueChange={setFilterDiscipline}>
+              <SelectTrigger className="h-9 w-[150px] text-sm">
+                <SelectValue placeholder="Discipline" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">All Disciplines</SelectItem>
+                {uniqueDisciplines.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {uniqueDocTypes.length > 0 && (
+            <Select value={filterDocType} onValueChange={setFilterDocType}>
+              <SelectTrigger className="h-9 w-[140px] text-sm">
+                <SelectValue placeholder="Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">All Types</SelectItem>
+                {uniqueDocTypes.map(t => <SelectItem key={t} value={t} className="capitalize">{t.replace(/_/g, " ")}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {(filterDiscipline !== "_all" || filterDocType !== "_all") && (
+            <button onClick={() => { setFilterDiscipline("_all"); setFilterDocType("_all"); }} className="text-xs text-muted-foreground hover:text-foreground underline">
+              Clear filters
+            </button>
+          )}
           {selectedIds.size > 0 && (
             <span className="text-sm font-medium text-primary">{selectedIds.size} selected</span>
           )}
@@ -572,7 +616,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
       </div>
 
       {/* Edit Document Dialog */}
-      <Dialog open={!!editDoc} onOpenChange={v => { if (!v) { setEditDoc(null); setEditFile(null); } }}>
+      <Dialog open={!!editDoc} onOpenChange={v => { if (!v) { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); } }}>
         <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-4 w-4" /> Edit Document</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
@@ -599,20 +643,56 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               <Textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} className="mt-1" rows={3} />
             </div>
             <div>
-              <Label className="mb-2 block">Replace File (optional)</Label>
+              <Label className="mb-2 block">Replace Primary File (optional)</Label>
               <FileDropZone onUpload={setEditFile} label="Drop new file version here" />
               {editFile && <p className="text-xs text-muted-foreground mt-1">New file: {editFile.name}</p>}
               {!editFile && editDoc?.fileName && <p className="text-xs text-muted-foreground mt-1">Current: {editDoc.fileName}</p>}
             </div>
+            <div>
+              <Label className="mb-2 block flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Additional Files</Label>
+              <FileDropZone
+                onUpload={f => setEditAdditionalFiles(prev => [...prev, f])}
+                onMultiUpload={files => setEditAdditionalFiles(prev => [...prev, ...files])}
+                label="Attach supporting files"
+                multiple
+              />
+              {(() => {
+                const existing: any[] = Array.isArray(editDoc?.additionalFiles) ? editDoc.additionalFiles : [];
+                const combined = [...existing.filter((ef: any) => !editAdditionalFiles.find(nf => nf.name === ef.name)), ...editAdditionalFiles];
+                if (!combined.length) return null;
+                return (
+                  <div className="mt-2 space-y-1">
+                    {combined.map((f: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1">
+                        <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <span className="truncate flex-1">{f.name}</span>
+                        <button type="button" onClick={() => {
+                          const isNew = editAdditionalFiles.find(nf => nf.name === f.name);
+                          if (isNew) setEditAdditionalFiles(prev => prev.filter(nf => nf.name !== f.name));
+                          else if (editDoc) setEditDoc((d: any) => ({ ...d, additionalFiles: (d.additionalFiles || []).filter((_: any, j: number) => j !== i) }));
+                        }} className="text-destructive hover:bg-destructive/10 rounded p-0.5 shrink-0">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setEditDoc(null); setEditFile(null); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); }}>Cancel</Button>
             <Button
-              onClick={() => updateDoc.mutate({
-                title: editForm.title, discipline: editForm.discipline, revision: editForm.revision,
-                documentType: editForm.documentType, description: editForm.description,
-                ...(editFile ? { fileUrl: editFile.url, fileName: editFile.name, fileSize: editFile.size } : {}),
-              })}
+              onClick={() => {
+                const existing: any[] = Array.isArray(editDoc?.additionalFiles) ? editDoc.additionalFiles : [];
+                const combined = [...existing.filter((ef: any) => !editAdditionalFiles.find(nf => nf.name === ef.name)), ...editAdditionalFiles];
+                updateDoc.mutate({
+                  title: editForm.title, discipline: editForm.discipline, revision: editForm.revision,
+                  documentType: editForm.documentType, description: editForm.description,
+                  additionalFiles: combined,
+                  ...(editFile ? { fileUrl: editFile.url, fileName: editFile.name, fileSize: editFile.size } : {}),
+                });
+              }}
               disabled={updateDoc.isPending || !editForm.title}
             >
               {updateDoc.isPending ? "Saving..." : "Save Changes"}
@@ -1069,8 +1149,22 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas. Recipients will receive an external access link.</p>
             </div>
             <div>
-              <Label>Attach Documents from Project</Label>
-              <div className="mt-1 border rounded-lg p-2 max-h-36 overflow-y-auto space-y-1 bg-muted/20">
+              <div className="flex items-center justify-between mb-1">
+                <Label>Attach Documents from Project</Label>
+                {documents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (createDocIds.length === documents.length) setCreateDocIds([]);
+                      else setCreateDocIds(documents.map((d: any) => d.id));
+                    }}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    {createDocIds.length === documents.length ? "Deselect All" : "Select All"}
+                  </button>
+                )}
+              </div>
+              <div className="border rounded-lg p-2 max-h-40 overflow-y-auto space-y-1 bg-muted/20">
                 {documents.length === 0 ? (
                   <p className="text-xs text-muted-foreground text-center py-2">No documents in this project yet</p>
                 ) : documents.map((d: any) => {
@@ -1085,7 +1179,9 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                   );
                 })}
               </div>
-              {createDocIds.length > 0 && <p className="text-xs text-primary mt-1">{createDocIds.length} document(s) selected</p>}
+              {createDocIds.length > 0 && (
+                <p className="text-xs text-primary mt-1">{createDocIds.length} of {documents.length} document(s) selected</p>
+              )}
             </div>
             <div>
               <Label>Description</Label>
