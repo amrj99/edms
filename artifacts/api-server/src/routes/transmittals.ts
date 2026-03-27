@@ -7,6 +7,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
+import type { Request, Response } from "express";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -198,6 +199,37 @@ router.post("/:id/share", async (req, res) => {
     shareToken: token,
     expiresAt: expiresAt,
   });
+});
+
+// Upload external file and add as transmittal attachment (creates a stub doc)
+router.post("/:id/upload-attachment", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const transmittalId = parseInt(req.params.id);
+  const { fileName, fileUrl, fileSize } = req.body;
+  if (!fileName || !fileUrl) { res.status(400).json({ error: "fileName and fileUrl required" }); return; }
+
+  // Create a stub document record for the external file
+  const [doc] = await db.insert(documentsTable).values({
+    documentNumber: `EXT-${Date.now().toString().slice(-6)}`,
+    title: fileName,
+    documentType: "external",
+    revision: "1",
+    status: "issued",
+    projectId,
+    createdById: (req as any).user!.id,
+    fileUrl,
+    fileName,
+    fileSize: fileSize ?? 0,
+  }).returning();
+
+  // Add as transmittal item
+  const [item] = await db.insert(transmittalItemsTable).values({
+    transmittalId,
+    documentId: doc.id,
+    purpose: "external_attachment",
+  }).returning();
+
+  res.status(201).json({ ...item, documentTitle: doc.title, documentNumber: doc.documentNumber, documentType: doc.documentType });
 });
 
 // Revoke share link

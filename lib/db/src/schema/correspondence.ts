@@ -58,6 +58,10 @@ export const correspondenceTable = pgTable("correspondence", {
   dueDate: timestamp("due_date"),
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
+  cc: text("cc"),
+  shareToken: text("share_token"),
+  shareExpiresAt: timestamp("share_expires_at"),
+  sharePasswordHash: text("share_password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

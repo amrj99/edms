@@ -6,10 +6,11 @@ import {
   Clock, RefreshCw, Check, X, Square,
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
-  UserPlus, Diff,
+  UserPlus, Diff, Pencil, Link2, Paperclip,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { format, differenceInDays, parseISO } from "date-fns";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -158,6 +159,16 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [bulkTrsForm, setBulkTrsForm] = useState({ subject: "", purpose: "for_review", toExternal: "", description: "" });
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [bulkAssignStatus, setBulkAssignStatus] = useState("in_review");
+  // File upload state
+  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
+  // Document edit state
+  const [editDoc, setEditDoc] = useState<any>(null);
+  const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "" });
+  const [editFile, setEditFile] = useState<UploadedFile | null>(null);
+  // Document share state
+  const [shareDoc, setShareDoc] = useState<any>(null);
+  const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
+  const [docShareResult, setDocShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
 
   const handleUpload = async () => {
     await createDoc.mutateAsync({
@@ -169,11 +180,56 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
         status: "draft",
         discipline: discipline || undefined,
         documentType: docType || "general",
-      }
+        fileUrl: uploadedFile?.url,
+        fileName: uploadedFile?.name,
+        fileSize: uploadedFile?.size,
+      } as any
     });
     setIsUploadOpen(false);
     setDocNumber(""); setTitle(""); setDiscipline(""); setRevision("01"); setDocType("general");
+    setUploadedFile(null);
   };
+
+  const updateDoc = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${editDoc!.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!r.ok) throw new Error("Failed to update");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["documents", projectId] });
+      setEditDoc(null);
+      setEditFile(null);
+      toast({ title: "Document updated" });
+    },
+    onError: () => toast({ title: "Failed to update document", variant: "destructive" }),
+  });
+
+  const createDocShare = useMutation({
+    mutationFn: async ({ id, expiresInDays, password }: { id: number; expiresInDays: string; password: string }) => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${id}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expiresInDays: expiresInDays ? parseInt(expiresInDays) : null, password: password || undefined }),
+      });
+      if (!r.ok) throw new Error("Failed to create share link");
+      return r.json();
+    },
+    onSuccess: (data) => { setDocShareResult(data); toast({ title: "Share link created" }); },
+    onError: () => toast({ title: "Failed to create share link", variant: "destructive" }),
+  });
+
+  const revokeDocShare = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${id}/share`, { method: "DELETE" });
+      return r.json();
+    },
+    onSuccess: () => { setDocShareResult(null); toast({ title: "Share link revoked" }); },
+  });
 
   const handleAIProcedureApply = (suggestion: any) => {
     if (suggestion.documentNumber) setDocNumber(suggestion.documentNumber);
@@ -307,11 +363,10 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
               <div className="space-y-4 py-2">
                 <AIProcedurePanel projectCode={projectCode} projectName={projectName} discipline={discipline} documentType={docType} partialTitle={title} onApply={handleAIProcedureApply} />
-                <div className="border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center justify-center text-center hover:bg-muted/50 transition-colors cursor-pointer">
-                  <Upload className="h-6 w-6 text-muted-foreground mb-2" />
-                  <p className="font-medium text-sm">Click to browse or drag file here</p>
-                  <p className="text-xs text-muted-foreground mt-1">PDF, DOCX, DWG, XLSX up to 50MB</p>
-                </div>
+                <FileDropZone
+                  onUpload={(f) => { setUploadedFile(f); if (!title) setTitle(f.name.replace(/\.[^.]+$/, "")); }}
+                  label="Click to browse or drag file here"
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <div className="col-span-2">
                     <label className="text-sm font-medium mb-1 block">Document Number</label>
@@ -488,8 +543,25 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Compare revisions" onClick={() => setCompareDoc(doc)}>
                         <GitCompare className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8"><Eye className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8"><Download className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document" onClick={() => {
+                        setEditDoc(doc);
+                        setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "" });
+                        setEditFile(null);
+                      }}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Generate share link" onClick={() => {
+                        setShareDoc(doc);
+                        setDocShareResult(null);
+                        setDocShareForm({ expiresInDays: "30", password: "" });
+                      }}>
+                        <Link2 className="h-4 w-4" />
+                      </Button>
+                      {doc.fileUrl && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Download" asChild>
+                          <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"><Download className="h-4 w-4" /></a>
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -498,6 +570,99 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </TableBody>
         </Table>
       </div>
+
+      {/* Edit Document Dialog */}
+      <Dialog open={!!editDoc} onOpenChange={v => { if (!v) { setEditDoc(null); setEditFile(null); } }}>
+        <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-4 w-4" /> Edit Document</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <Label>Title *</Label>
+                <Input value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} className="mt-1" />
+              </div>
+              <div>
+                <Label>Discipline</Label>
+                <Input value={editForm.discipline} onChange={e => setEditForm(f => ({ ...f, discipline: e.target.value }))} className="mt-1" placeholder="E.g. Electrical" />
+              </div>
+              <div>
+                <Label>Revision</Label>
+                <Input value={editForm.revision} onChange={e => setEditForm(f => ({ ...f, revision: e.target.value }))} className="mt-1 font-mono" placeholder="01" />
+              </div>
+              <div>
+                <Label>Document Type</Label>
+                <Input value={editForm.documentType} onChange={e => setEditForm(f => ({ ...f, documentType: e.target.value }))} className="mt-1" placeholder="E.g. drawing" />
+              </div>
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} className="mt-1" rows={3} />
+            </div>
+            <div>
+              <Label className="mb-2 block">Replace File (optional)</Label>
+              <FileDropZone onUpload={setEditFile} label="Drop new file version here" />
+              {editFile && <p className="text-xs text-muted-foreground mt-1">New file: {editFile.name}</p>}
+              {!editFile && editDoc?.fileName && <p className="text-xs text-muted-foreground mt-1">Current: {editDoc.fileName}</p>}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setEditDoc(null); setEditFile(null); }}>Cancel</Button>
+            <Button
+              onClick={() => updateDoc.mutate({
+                title: editForm.title, discipline: editForm.discipline, revision: editForm.revision,
+                documentType: editForm.documentType, description: editForm.description,
+                ...(editFile ? { fileUrl: editFile.url, fileName: editFile.name, fileSize: editFile.size } : {}),
+              })}
+              disabled={updateDoc.isPending || !editForm.title}
+            >
+              {updateDoc.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Share Document Dialog */}
+      <Dialog open={!!shareDoc} onOpenChange={v => { if (!v) { setShareDoc(null); setDocShareResult(null); } }}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Share Document</DialogTitle></DialogHeader>
+          {shareDoc && (
+            <div className="space-y-4 py-2">
+              <p className="text-sm text-muted-foreground">{shareDoc.documentNumber} — {shareDoc.title}</p>
+              {docShareResult ? (
+                <div className="space-y-3">
+                  <div className="bg-muted rounded-md p-2 text-xs font-mono break-all text-muted-foreground">{docShareResult.shareUrl}</div>
+                  {docShareResult.expiresAt && <p className="text-xs text-amber-600">Expires: {format(new Date(docShareResult.expiresAt), "dd MMM yyyy HH:mm")}</p>}
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="flex-1 gap-1.5 text-xs" onClick={() => { navigator.clipboard.writeText(docShareResult.shareUrl); toast({ title: "Link copied" }); }}>
+                      Copy Link
+                    </Button>
+                    <Button variant="ghost" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => { setDocShareResult(null); revokeDocShare.mutate(shareDoc.id); }}>
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs mb-1 block">Expires in (days)</Label>
+                      <Input type="number" min="1" max="365" value={docShareForm.expiresInDays} onChange={e => setDocShareForm(f => ({ ...f, expiresInDays: e.target.value }))} placeholder="30 (never if blank)" className="h-8 text-sm" />
+                    </div>
+                    <div>
+                      <Label className="text-xs mb-1 block">Password (optional)</Label>
+                      <Input type="password" value={docShareForm.password} onChange={e => setDocShareForm(f => ({ ...f, password: e.target.value }))} placeholder="Leave blank for none" className="h-8 text-sm" />
+                    </div>
+                  </div>
+                  <Button className="w-full gap-1.5" onClick={() => createDocShare.mutate({ id: shareDoc.id, ...docShareForm })} disabled={createDocShare.isPending}>
+                    {createDocShare.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating…</> : <><Link2 className="h-3.5 w-3.5" /> Generate Secure Link</>}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => { setShareDoc(null); setDocShareResult(null); }}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Selection summary bar */}
       {selectedIds.size > 0 && (
@@ -736,6 +901,8 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
     subject: "", description: "", purpose: "for_information",
     toExternal: "", externalEmails: "", dueDate: "",
   });
+  const [createDocIds, setCreateDocIds] = useState<number[]>([]);
+  const [addItemDocId, setAddItemDocId] = useState("_none");
 
   const { data: transmittalsData, isLoading } = useQuery({
     queryKey: ["transmittals", projectId],
@@ -746,15 +913,48 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
   });
   const transmittals = Array.isArray(transmittalsData) ? transmittalsData : (transmittalsData?.transmittals ?? transmittalsData ?? []);
 
+  // Full detail query (with items) when detail sheet is open
+  const { data: detailData, refetch: refetchDetail } = useQuery({
+    queryKey: ["transmittal-detail", selected?.id],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${selected!.id}`);
+      return r.json();
+    },
+    enabled: !!selected?.id && detailOpen,
+  });
+  const detailItems: any[] = detailData?.items ?? [];
+
   const { data: docsData } = useListDocuments(projectId);
   const documents = docsData?.documents ?? [];
+
+  const addItemMutation = useMutation({
+    mutationFn: async ({ transmittalId, documentId }: { transmittalId: number; documentId: number }) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId }),
+      });
+      if (!r.ok) throw new Error("Failed to add item");
+      return r.json();
+    },
+    onSuccess: () => { refetchDetail(); setAddItemDocId("_none"); toast({ title: "Document added to transmittal" }); },
+    onError: () => toast({ title: "Failed to add item", variant: "destructive" }),
+  });
+
+  const removeItemMutation = useMutation({
+    mutationFn: async ({ transmittalId, itemId }: { transmittalId: number; itemId: number }) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/items/${itemId}`, { method: "DELETE" });
+      return r.json();
+    },
+    onSuccess: () => { refetchDetail(); toast({ title: "Item removed" }); },
+  });
 
   const create = useMutation({
     mutationFn: async (data: any) => {
       const r = await fetch(`/api/projects/${projectId}/transmittals`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, documentIds: createDocIds }),
       });
       if (!r.ok) throw new Error("Failed to create transmittal");
       return r.json();
@@ -763,6 +963,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       setIsCreateOpen(false);
       setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "" });
+      setCreateDocIds([]);
       toast({ title: "Transmittal created" });
     },
     onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
@@ -866,6 +1067,25 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <Label>External Recipients (emails)</Label>
               <Input value={form.externalEmails} onChange={e => setForm(f => ({ ...f, externalEmails: e.target.value }))} placeholder="alice@firm.com, bob@client.com (comma separated)" className="mt-1" />
               <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas. Recipients will receive an external access link.</p>
+            </div>
+            <div>
+              <Label>Attach Documents from Project</Label>
+              <div className="mt-1 border rounded-lg p-2 max-h-36 overflow-y-auto space-y-1 bg-muted/20">
+                {documents.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-2">No documents in this project yet</p>
+                ) : documents.map((d: any) => {
+                  const checked = createDocIds.includes(d.id);
+                  return (
+                    <label key={d.id} className="flex items-center gap-2 cursor-pointer px-1 py-0.5 rounded hover:bg-muted/50">
+                      <input type="checkbox" checked={checked} onChange={() => setCreateDocIds(prev => checked ? prev.filter(id => id !== d.id) : [...prev, d.id])} className="rounded" />
+                      <span className="text-xs font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
+                      <span className="text-xs truncate">{d.title}</span>
+                      <span className="text-xs text-muted-foreground ml-auto shrink-0">Rev {d.revision ?? "01"}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {createDocIds.length > 0 && <p className="text-xs text-primary mt-1">{createDocIds.length} document(s) selected</p>}
             </div>
             <div>
               <Label>Description</Label>
@@ -974,6 +1194,50 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">No external company specified</p>
+                )}
+              </div>
+
+              {/* Attached Documents / Items */}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <Paperclip className="h-3.5 w-3.5" /> Attached Documents
+                </p>
+                {detailItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No documents attached</p>
+                ) : (
+                  <div className="border rounded-lg divide-y text-sm">
+                    {detailItems.map((item: any) => (
+                      <div key={item.id} className="flex items-center gap-2 p-2 group">
+                        <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="font-mono text-xs text-muted-foreground shrink-0">{item.document?.documentNumber ?? "—"}</span>
+                        <span className="text-xs truncate flex-1">{item.document?.title ?? item.fileName ?? "Attachment"}</span>
+                        {item.document?.fileUrl && (
+                          <a href={item.document.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></a>
+                        )}
+                        <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => removeItemMutation.mutate({ transmittalId: selected.id, itemId: item.id })}>
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Add from project docs */}
+                {selected?.status === "draft" && (
+                  <div className="flex gap-2 mt-1">
+                    <Select value={addItemDocId} onValueChange={setAddItemDocId}>
+                      <SelectTrigger className="flex-1 h-8 text-xs"><SelectValue placeholder="Add project document..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— Select document —</SelectItem>
+                        {documents.filter((d: any) => !detailItems.some((it: any) => it.documentId === d.id)).map((d: any) => (
+                          <SelectItem key={d.id} value={String(d.id)}>{d.documentNumber} — {d.title}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button size="sm" className="h-8 text-xs gap-1 shrink-0" disabled={addItemDocId === "_none" || addItemMutation.isPending}
+                      onClick={() => addItemMutation.mutate({ transmittalId: selected.id, documentId: parseInt(addItemDocId) })}>
+                      <Plus className="h-3 w-3" /> Add
+                    </Button>
+                  </div>
                 )}
               </div>
 

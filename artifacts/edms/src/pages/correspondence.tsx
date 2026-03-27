@@ -5,7 +5,7 @@ import {
   Mail, Inbox, Send, Folder, FolderOpen, Search, Plus, Flag, Star,
   RefreshCw, Filter, ChevronDown, ArrowUp, ArrowDown, Clock, AlertCircle,
   MessageSquare, Reply, MoreHorizontal, X, Tag, Archive, Loader2,
-  FolderKanban, Globe, CheckSquare, TriangleAlert,
+  FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { FileDropZone } from "@/components/file-drop-zone";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
@@ -66,6 +67,10 @@ export default function CorrespondencePage() {
     projectId: string; toUserIds: number[]; cc: string; taskToId: string;
   }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
   const [toPickUser, setToPickUser] = useState("");
+  const [composeAttachments, setComposeAttachments] = useState<{ url: string; name: string; size: number }[]>([]);
+  const [corrShareOpen, setCorrShareOpen] = useState(false);
+  const [corrShareForm, setCorrShareForm] = useState({ expiresInDays: "30", password: "" });
+  const [corrShareResult, setCorrShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
 
   // Fetch projects
   const { data: projectsData } = useQuery({
@@ -165,6 +170,9 @@ export default function CorrespondencePage() {
         priority: data.priority,
         dueDate: data.dueDate || undefined,
         toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
+        cc: data.cc || undefined,
+        taskToId: data.taskToId && data.taskToId !== "_none" ? data.taskToId : undefined,
+        attachments: composeAttachments.length > 0 ? composeAttachments.map(a => ({ fileName: a.name, fileUrl: a.url, fileSize: a.size })) : undefined,
         sendNow,
         folder: "inbox",
       };
@@ -177,9 +185,37 @@ export default function CorrespondencePage() {
       setComposeOpen(false);
       setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
       setToPickUser("");
+      setComposeAttachments([]);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
     },
     onError: () => toast({ title: "Failed to create", variant: "destructive" }),
+  });
+
+  const createCorrShare = useMutation({
+    mutationFn: async ({ id, source, expiresInDays, password }: { id: number; source: string; expiresInDays: string; password: string }) => {
+      const url = source === "general"
+        ? `/api/general/correspondence/${id}/share`
+        : `/api/projects/${selected?.projectId}/correspondence/${id}/share`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expiresInDays: expiresInDays ? parseInt(expiresInDays) : null, password: password || undefined }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: (data) => setCorrShareResult({ shareUrl: data.shareUrl, expiresAt: data.expiresAt }),
+    onError: () => toast({ title: "Failed to generate share link", variant: "destructive" }),
+  });
+
+  const revokeCorrShare = useMutation({
+    mutationFn: async ({ id, source }: { id: number; source: string }) => {
+      const url = source === "general"
+        ? `/api/general/correspondence/${id}/share`
+        : `/api/projects/${selected?.projectId}/correspondence/${id}/share`;
+      await fetch(url, { method: "DELETE" });
+    },
+    onSuccess: () => { setCorrShareResult(null); toast({ title: "Share link revoked" }); },
   });
 
   const overdueCount = allItems.filter((i: any) => i.dueDate && isPast(new Date(i.dueDate)) && i.status !== "closed").length;
@@ -420,6 +456,59 @@ export default function CorrespondencePage() {
                   <p className="text-muted-foreground text-sm italic">No body content</p>
                 )}
 
+                {/* Attachments */}
+                {selected.attachments && selected.attachments.length > 0 && (
+                  <div className="mt-4 pt-4 border-t">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
+                      <Paperclip className="h-3.5 w-3.5" /> Attachments ({selected.attachments.length})
+                    </p>
+                    <div className="space-y-1">
+                      {selected.attachments.map((att: any, i: number) => (
+                        <div key={i} className="flex items-center gap-2 text-xs bg-muted/40 rounded px-2 py-1.5">
+                          <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <span className="truncate flex-1">{att.fileName ?? att.name ?? "Attachment"}</span>
+                          {att.fileUrl && (
+                            <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0 text-xs">Download</a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Share Link */}
+                <div className="mt-4 pt-4 border-t">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
+                    <Link2 className="h-3.5 w-3.5" /> Secure Share Link
+                  </p>
+                  {corrShareResult ? (
+                    <div className="space-y-2">
+                      <div className="bg-muted rounded-md p-2 text-xs font-mono break-all text-muted-foreground">{corrShareResult.shareUrl}</div>
+                      {corrShareResult.expiresAt && <p className="text-xs text-amber-600">Expires: {format(new Date(corrShareResult.expiresAt), "dd MMM yyyy HH:mm")}</p>}
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" className="flex-1 text-xs gap-1" onClick={() => { navigator.clipboard.writeText(corrShareResult.shareUrl); toast({ title: "Link copied" }); }}>Copy Link</Button>
+                        <Button variant="ghost" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => revokeCorrShare.mutate({ id: selected.id, source: selected._source })}>Revoke</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <p className="text-xs font-medium mb-1">Expires in (days)</p>
+                          <input type="number" min="1" max="365" value={corrShareForm.expiresInDays} onChange={e => setCorrShareForm(f => ({ ...f, expiresInDays: e.target.value }))} placeholder="30" className="w-full h-7 px-2 rounded border bg-background text-xs" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium mb-1">Password (optional)</p>
+                          <input type="password" value={corrShareForm.password} onChange={e => setCorrShareForm(f => ({ ...f, password: e.target.value }))} placeholder="None" className="w-full h-7 px-2 rounded border bg-background text-xs" />
+                        </div>
+                      </div>
+                      <Button size="sm" className="w-full gap-1.5 text-xs" onClick={() => createCorrShare.mutate({ id: selected.id, source: selected._source, ...corrShareForm })} disabled={createCorrShare.isPending}>
+                        {createCorrShare.isPending ? <><Loader2 className="h-3 w-3 animate-spin" /> Generating…</> : <><Link2 className="h-3 w-3" /> Generate Link</>}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Thread placeholder */}
                 <div className="mt-6 pt-4 border-t">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1">
@@ -562,6 +651,32 @@ export default function CorrespondencePage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+            {/* Attachments */}
+            <div>
+              <Label className="flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Attachments</Label>
+              <div className="mt-1">
+                <FileDropZone
+                  onUpload={file => setComposeAttachments(prev => [...prev, file])}
+                  onMultiUpload={files => setComposeAttachments(prev => [...prev, ...files])}
+                  label="Drop files or click to attach"
+                  multiple
+                />
+                {composeAttachments.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {composeAttachments.map((f, i) => (
+                      <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1">
+                        <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <span className="truncate flex-1">{f.name}</span>
+                        <span className="text-muted-foreground shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
+                        <button type="button" onClick={() => setComposeAttachments(prev => prev.filter((_, j) => j !== i))} className="text-destructive hover:bg-destructive/10 rounded p-0.5">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             {/* Body */}

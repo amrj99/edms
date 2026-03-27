@@ -2,8 +2,9 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { correspondenceTable, correspondenceRecipientsTable, correspondenceAttachmentsTable, usersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import crypto from "crypto";
 
 const router = Router({ mergeParams: true });
 
@@ -90,7 +91,7 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { subject, type, body, toUserIds, sendNow } = req.body;
+  const { subject, type, body, toUserIds, sendNow, priority, dueDate, cc, taskToId, attachments } = req.body;
 
   const refNum = `${type.toUpperCase().slice(0, 3)}-${projectId}-${Date.now().toString().slice(-6)}`;
 
@@ -103,16 +104,28 @@ router.post("/", requireAuth, async (req, res) => {
     status: sendNow ? "sent" : "draft",
     referenceNumber: refNum,
     sentAt: sendNow ? new Date() : undefined,
+    priority: priority || "medium",
+    dueDate: dueDate ? new Date(dueDate) : undefined,
+    cc: cc || null,
+    assignedToId: taskToId ? parseInt(taskToId) : undefined,
   }).returning();
 
   if (toUserIds?.length > 0) {
     await db.insert(correspondenceRecipientsTable).values(
       toUserIds.map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
     );
-    // Create inbox items for recipients
-    if (sendNow) {
-      // Recipients see it in their inbox automatically via query
-    }
+  }
+
+  // Save attachments
+  if (attachments?.length > 0) {
+    await db.insert(correspondenceAttachmentsTable).values(
+      attachments.map((a: { fileName: string; fileUrl: string; fileSize?: number }) => ({
+        correspondenceId: corr.id,
+        fileName: a.fileName,
+        fileUrl: a.fileUrl,
+        fileSize: a.fileSize,
+      }))
+    );
   }
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "correspondence", entityId: corr.id, entityTitle: corr.subject, projectId });
@@ -177,6 +190,69 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
 
   const enriched = await enrichCorrespondence([corr]);
   res.status(201).json(enriched[0]);
+});
+
+// ─── Attachments ──────────────────────────────────────────────────────────────
+router.post("/:id/attachments", requireAuth, async (req, res) => {
+  const corrId = parseInt(req.params.id);
+  const { fileName, fileUrl, fileSize } = req.body;
+  const [att] = await db.insert(correspondenceAttachmentsTable).values({
+    correspondenceId: corrId,
+    fileName,
+    fileUrl,
+    fileSize,
+  }).returning();
+  res.status(201).json(att);
+});
+
+router.delete("/:id/attachments/:attId", requireAuth, async (req, res) => {
+  const attId = parseInt(req.params.attId);
+  await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
+  res.json({ success: true });
+});
+
+// ─── Share link ───────────────────────────────────────────────────────────────
+router.post("/:id/share", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { expiresInDays, password } = req.body;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000) : null;
+  const passwordHash = password ? await hashPassword(password) : null;
+
+  const [corr] = await db.update(correspondenceTable)
+    .set({
+      shareToken: token,
+      shareExpiresAt: expiresAt ?? undefined,
+      sharePasswordHash: passwordHash ?? undefined,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
+    .returning({ id: correspondenceTable.id, shareToken: correspondenceTable.shareToken, shareExpiresAt: correspondenceTable.shareExpiresAt });
+
+  if (!corr) { res.status(404).json({ error: "Not found" }); return; }
+
+  await createAuditLog({
+    userId: req.user!.id, action: "share", entityType: "correspondence",
+    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+  });
+
+  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+  res.json({
+    shareUrl: `${baseUrl}/shared/correspondence/${token}`,
+    shareToken: token,
+    expiresAt,
+  });
+});
+
+router.delete("/:id/share", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  await db.update(correspondenceTable)
+    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)));
+  res.json({ success: true });
 });
 
 export default router;

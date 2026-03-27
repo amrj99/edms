@@ -2,8 +2,9 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable } from "@workspace/db";
 import { eq, and, count, desc, sql } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
@@ -382,6 +383,50 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
   }
 
   res.json({ ...doc });
+});
+
+// ─── Share link ───────────────────────────────────────────────────────────────
+router.post("/:id/share", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { expiresInDays, password } = req.body;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000) : null;
+  const passwordHash = password ? await hashPassword(password) : null;
+
+  const [doc] = await db.update(documentsTable)
+    .set({
+      shareToken: token,
+      shareExpiresAt: expiresAt ?? undefined,
+      sharePasswordHash: passwordHash ?? undefined,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .returning({ id: documentsTable.id, shareToken: documentsTable.shareToken, shareExpiresAt: documentsTable.shareExpiresAt });
+
+  if (!doc) { res.status(404).json({ error: "Not found" }); return; }
+
+  await createAuditLog({
+    userId: req.user!.id, action: "share", entityType: "document",
+    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+  });
+
+  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+  res.json({
+    shareUrl: `${baseUrl}/shared/document/${token}`,
+    shareToken: token,
+    expiresAt,
+  });
+});
+
+router.delete("/:id/share", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  await db.update(documentsTable)
+    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
+  res.json({ success: true });
 });
 
 export default router;

@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,8 +16,9 @@ import {
 } from "@/components/ui/table";
 import {
   BarChart3, Download, Filter, RefreshCw, FileText, Mail, Send, AlertCircle, Clock,
+  FileSpreadsheet, BookOpen,
 } from "lucide-react";
-import { format, parseISO, differenceInDays } from "date-fns";
+import { format, parseISO, differenceInDays, isAfter, isBefore, parseISO as pi } from "date-fns";
 
 function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, string> = {
@@ -35,23 +39,47 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function ExportButton({ data, filename }: { data: any[]; filename: string }) {
-  const exportCsv = () => {
+function ExportButtons({ data, filename, columns }: { data: any[]; filename: string; columns: { key: string; label: string }[] }) {
+  const exportExcel = () => {
     if (!data.length) return;
-    const headers = Object.keys(data[0]).join(",");
-    const rows = data.map(r => Object.values(r).map(v => `"${v ?? ""}"`).join(",")).join("\n");
-    const blob = new Blob([headers + "\n" + rows], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    const rows = data.map(row => {
+      const out: Record<string, any> = {};
+      columns.forEach(col => { out[col.label] = row[col.key] ?? ""; });
+      return out;
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    XLSX.writeFile(wb, `${filename}.xlsx`);
   };
+
+  const exportPdf = () => {
+    if (!data.length) return;
+    const doc = new jsPDF({ orientation: "landscape" });
+    doc.setFontSize(13);
+    doc.text(filename.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()), 14, 15);
+    doc.setFontSize(9);
+    doc.text(`Generated: ${format(new Date(), "dd MMM yyyy HH:mm")}   Records: ${data.length}`, 14, 22);
+    autoTable(doc, {
+      startY: 28,
+      head: [columns.map(c => c.label)],
+      body: data.map(row => columns.map(col => String(row[col.key] ?? "—"))),
+      styles: { fontSize: 7, cellPadding: 2 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [245, 247, 255] },
+    });
+    doc.save(`${filename}.pdf`);
+  };
+
   return (
-    <Button variant="outline" size="sm" onClick={exportCsv} className="gap-2">
-      <Download className="h-4 w-4" /> Export CSV
-    </Button>
+    <div className="flex gap-2">
+      <Button variant="outline" size="sm" onClick={exportExcel} className="gap-1.5 text-xs">
+        <FileSpreadsheet className="h-3.5 w-3.5 text-green-600" /> Excel
+      </Button>
+      <Button variant="outline" size="sm" onClick={exportPdf} className="gap-1.5 text-xs">
+        <BookOpen className="h-3.5 w-3.5 text-red-500" /> PDF
+      </Button>
+    </div>
   );
 }
 
@@ -59,6 +87,9 @@ export default function Reports() {
   const [projectFilter, setProjectFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchFilter, setSearchFilter] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [userFilter, setUserFilter] = useState("all");
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects"],
@@ -69,6 +100,15 @@ export default function Reports() {
   });
   const projects = projectsData?.projects ?? [];
 
+  const { data: usersData } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => {
+      const r = await fetch("/api/users");
+      return r.json();
+    },
+  });
+  const allUsers: any[] = usersData?.users ?? [];
+
   const { data: dashData } = useQuery({
     queryKey: ["dashboard"],
     queryFn: async () => {
@@ -77,7 +117,6 @@ export default function Reports() {
     },
   });
 
-  // Document Register — API returns {documents:[...], total, ...}
   const { data: docsData, isLoading: docsLoading } = useQuery({
     queryKey: ["reports-documents", projectFilter],
     queryFn: async () => {
@@ -88,11 +127,8 @@ export default function Reports() {
     },
     enabled: projectFilter !== "all",
   });
-  const documents: any[] = Array.isArray(docsData)
-    ? docsData
-    : (docsData?.documents ?? []);
+  const documents: any[] = Array.isArray(docsData) ? docsData : (docsData?.documents ?? []);
 
-  // Correspondence — API returns {items:[...], total}
   const { data: corrData, isLoading: corrLoading } = useQuery({
     queryKey: ["reports-correspondence", projectFilter],
     queryFn: async () => {
@@ -103,11 +139,8 @@ export default function Reports() {
     },
     enabled: projectFilter !== "all",
   });
-  const correspondence: any[] = Array.isArray(corrData)
-    ? corrData
-    : (corrData?.items ?? corrData?.correspondence ?? []);
+  const correspondence: any[] = Array.isArray(corrData) ? corrData : (corrData?.items ?? corrData?.correspondence ?? []);
 
-  // Transmittals — API returns plain array
   const { data: transData, isLoading: transLoading } = useQuery({
     queryKey: ["reports-transmittals", projectFilter],
     queryFn: async () => {
@@ -118,51 +151,76 @@ export default function Reports() {
     },
     enabled: projectFilter !== "all",
   });
-  const transmittals: any[] = Array.isArray(transData)
-    ? transData
-    : (transData?.transmittals ?? []);
+  const transmittals: any[] = Array.isArray(transData) ? transData : (transData?.transmittals ?? []);
+
+  const applyDateFilter = (items: any[], dateField: string) => {
+    let result = items;
+    if (fromDate) result = result.filter(i => i[dateField] && !isBefore(new Date(i[dateField]), new Date(fromDate)));
+    if (toDate) result = result.filter(i => i[dateField] && !isAfter(new Date(i[dateField]), new Date(toDate + "T23:59:59")));
+    return result;
+  };
+
+  const applyUserFilter = (items: any[]) => {
+    if (userFilter === "all") return items;
+    const uid = parseInt(userFilter);
+    return items.filter(i => i.createdBy === uid || i.assignedToId === uid || i.toUserIds?.includes(uid));
+  };
 
   const filterText = (items: any[], keys: string[]) =>
-    !searchFilter
-      ? items
-      : items.filter(item =>
-          keys.some(k => String(item[k] ?? "").toLowerCase().includes(searchFilter.toLowerCase()))
-        );
+    !searchFilter ? items : items.filter(item => keys.some(k => String(item[k] ?? "").toLowerCase().includes(searchFilter.toLowerCase())));
 
-  const filteredDocs = filterText(
-    statusFilter === "all" ? documents : documents.filter((d: any) => d.status === statusFilter),
-    ["documentNumber", "title", "discipline", "documentType"]
-  );
+  const filteredDocs = useMemo(() => {
+    let d = documents;
+    if (statusFilter !== "all") d = d.filter((i: any) => i.status === statusFilter);
+    d = applyDateFilter(d, "updatedAt");
+    d = applyUserFilter(d);
+    return filterText(d, ["documentNumber", "title", "discipline", "documentType"]);
+  }, [documents, statusFilter, fromDate, toDate, userFilter, searchFilter]);
 
-  const rfis = correspondence.filter((c: any) => c.type === "rfi");
-  const submittals = correspondence.filter((c: any) => c.type === "submittal");
-  const ncrs = correspondence.filter((c: any) => c.type === "ncr");
+  const rfis = useMemo(() => applyUserFilter(applyDateFilter(filterText(correspondence.filter((c: any) => c.type === "rfi"), ["subject", "referenceNumber"]), "createdAt")), [correspondence, fromDate, toDate, userFilter, searchFilter]);
+  const submittals = useMemo(() => applyUserFilter(applyDateFilter(filterText(correspondence.filter((c: any) => c.type === "submittal"), ["subject", "referenceNumber"]), "createdAt")), [correspondence, fromDate, toDate, userFilter, searchFilter]);
+  const filteredTrans = useMemo(() => applyUserFilter(applyDateFilter(filterText(transmittals, ["transmittalNumber", "subject"]), "createdAt")), [transmittals, fromDate, toDate, userFilter, searchFilter]);
 
   const metrics = [
-    {
-      label: "Total Documents",
-      value: dashData?.totalDocuments ?? "—",
-      icon: FileText,
-      color: "text-blue-500",
-    },
-    {
-      label: "Open RFIs",
-      value: dashData?.correspondence?.filter((c: any) => c.type === "rfi" && c.status !== "closed").length ?? "—",
-      icon: AlertCircle,
-      color: "text-orange-500",
-    },
-    {
-      label: "Pending Tasks",
-      value: dashData?.tasks?.filter((t: any) => t.status === "pending").length ?? "—",
-      icon: Clock,
-      color: "text-yellow-500",
-    },
-    {
-      label: "Active Projects",
-      value: projects.filter((p: any) => p.status === "active").length,
-      icon: BarChart3,
-      color: "text-green-500",
-    },
+    { label: "Total Documents", value: dashData?.totalDocuments ?? "—", icon: FileText, color: "text-blue-500" },
+    { label: "Open RFIs", value: dashData?.correspondence?.filter((c: any) => c.type === "rfi" && c.status !== "closed").length ?? "—", icon: AlertCircle, color: "text-orange-500" },
+    { label: "Pending Tasks", value: dashData?.tasks?.filter((t: any) => t.status === "pending").length ?? "—", icon: Clock, color: "text-yellow-500" },
+    { label: "Active Projects", value: projects.filter((p: any) => p.status === "active").length, icon: BarChart3, color: "text-green-500" },
+  ];
+
+  const DOC_COLS = [
+    { key: "documentNumber", label: "Doc No." },
+    { key: "title", label: "Title" },
+    { key: "discipline", label: "Discipline" },
+    { key: "documentType", label: "Type" },
+    { key: "revision", label: "Rev." },
+    { key: "status", label: "Status" },
+    { key: "updatedAt", label: "Updated" },
+  ];
+  const RFI_COLS = [
+    { key: "referenceNumber", label: "Ref. No." },
+    { key: "subject", label: "Subject" },
+    { key: "priority", label: "Priority" },
+    { key: "status", label: "Status" },
+    { key: "dueDate", label: "Due Date" },
+    { key: "createdAt", label: "Raised" },
+  ];
+  const SUB_COLS = [
+    { key: "referenceNumber", label: "Ref. No." },
+    { key: "subject", label: "Subject" },
+    { key: "priority", label: "Priority" },
+    { key: "status", label: "Status" },
+    { key: "dueDate", label: "Due Date" },
+    { key: "createdAt", label: "Submitted" },
+  ];
+  const TRANS_COLS = [
+    { key: "transmittalNumber", label: "No." },
+    { key: "subject", label: "Subject" },
+    { key: "toExternal", label: "To" },
+    { key: "purpose", label: "Purpose" },
+    { key: "status", label: "Status" },
+    { key: "sentAt", label: "Sent" },
+    { key: "acknowledgedAt", label: "Acknowledged" },
   ];
 
   return (
@@ -194,7 +252,7 @@ export default function Reports() {
 
       {/* Filters */}
       <Card>
-        <CardContent className="flex flex-wrap gap-4 pt-4 pb-4">
+        <CardContent className="flex flex-wrap gap-3 pt-4 pb-4 items-end">
           <div className="flex items-center gap-2">
             <Filter className="h-4 w-4 text-muted-foreground" />
             <Label className="shrink-0">Project</Label>
@@ -222,15 +280,43 @@ export default function Reports() {
                 <SelectItem value="pending_review">Pending Review</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
+                <SelectItem value="closed">Closed</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0">User</Label>
+            <Select value={userFilter} onValueChange={setUserFilter}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="All users" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Users</SelectItem>
+                {allUsers.map((u: any) => (
+                  <SelectItem key={u.id} value={String(u.id)}>{u.firstName} {u.lastName}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0 text-xs">From</Label>
+            <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-36 h-8 text-sm" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="shrink-0 text-xs">To</Label>
+            <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36 h-8 text-sm" />
           </div>
           <Input
             placeholder="Search..."
             value={searchFilter}
             onChange={e => setSearchFilter(e.target.value)}
-            className="w-48"
+            className="w-40 h-8 text-sm"
           />
+          {(fromDate || toDate || userFilter !== "all" || searchFilter) && (
+            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setFromDate(""); setToDate(""); setUserFilter("all"); setSearchFilter(""); }}>
+              Clear filters
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -261,7 +347,7 @@ export default function Reports() {
             </TabsTrigger>
             <TabsTrigger value="transmittals" className="gap-1">
               <Send className="h-3 w-3" /> Transmittals
-              <Badge variant="secondary" className="ml-1">{transmittals.length}</Badge>
+              <Badge variant="secondary" className="ml-1">{filteredTrans.length}</Badge>
             </TabsTrigger>
           </TabsList>
 
@@ -273,7 +359,7 @@ export default function Reports() {
                   <CardTitle>Document Register</CardTitle>
                   <CardDescription>{filteredDocs.length} documents</CardDescription>
                 </div>
-                <ExportButton data={filteredDocs} filename="document-register.csv" />
+                <ExportButtons data={filteredDocs} filename="document-register" columns={DOC_COLS} />
               </CardHeader>
               <CardContent className="p-0">
                 {docsLoading ? (
@@ -326,7 +412,7 @@ export default function Reports() {
                   <CardTitle>RFI Log</CardTitle>
                   <CardDescription>{rfis.length} RFIs</CardDescription>
                 </div>
-                <ExportButton data={rfis} filename="rfi-log.csv" />
+                <ExportButtons data={rfis} filename="rfi-log" columns={RFI_COLS} />
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
@@ -391,7 +477,7 @@ export default function Reports() {
                   <CardTitle>Submittal Log</CardTitle>
                   <CardDescription>{submittals.length} submittals</CardDescription>
                 </div>
-                <ExportButton data={submittals} filename="submittal-log.csv" />
+                <ExportButtons data={submittals} filename="submittal-log" columns={SUB_COLS} />
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
@@ -440,9 +526,9 @@ export default function Reports() {
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle>Transmittal Log</CardTitle>
-                  <CardDescription>{transmittals.length} transmittals</CardDescription>
+                  <CardDescription>{filteredTrans.length} transmittals</CardDescription>
                 </div>
-                <ExportButton data={transmittals} filename="transmittal-log.csv" />
+                <ExportButtons data={filteredTrans} filename="transmittal-log" columns={TRANS_COLS} />
               </CardHeader>
               <CardContent className="p-0">
                 {transLoading ? (
@@ -461,11 +547,11 @@ export default function Reports() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {transmittals.length === 0 ? (
+                      {filteredTrans.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={7} className="text-center text-muted-foreground py-8">No transmittals found</TableCell>
                         </TableRow>
-                      ) : transmittals.map((t: any) => (
+                      ) : filteredTrans.map((t: any) => (
                         <TableRow key={t.id}>
                           <TableCell className="font-mono text-xs">{t.transmittalNumber}</TableCell>
                           <TableCell className="max-w-xs truncate">{t.subject}</TableCell>
