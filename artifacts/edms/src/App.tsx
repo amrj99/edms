@@ -27,6 +27,7 @@ import Config from "@/pages/config";
 import Reports from "@/pages/reports";
 import Admin from "@/pages/admin";
 import CorrespondencePage from "@/pages/correspondence";
+import DocumentsPage from "@/pages/documents";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -95,6 +96,9 @@ function Router() {
       </Route>
       <Route path="/correspondence">
         <ProtectedRoute component={CorrespondencePage} />
+      </Route>
+      <Route path="/documents">
+        <ProtectedRoute component={DocumentsPage} />
       </Route>
 
       <Route component={NotFound} />

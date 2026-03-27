@@ -41,6 +41,8 @@ export const documentsTable = pgTable("documents", {
   shareExpiresAt: timestamp("share_expires_at"),
   sharePasswordHash: text("share_password_hash"),
   additionalFiles: jsonb("additional_files").default([]),
+  source: text("source"),
+  issuedBy: text("issued_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

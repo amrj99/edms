@@ -6,7 +6,7 @@ import {
   Clock, RefreshCw, Check, X, Square,
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
-  UserPlus, Diff, Pencil, Link2, Paperclip,
+  UserPlus, Diff, Pencil, Link2, Paperclip, Building2,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -149,6 +149,8 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [discipline, setDiscipline] = useState("");
   const [revision, setRevision] = useState("01");
   const [docType, setDocType] = useState("general");
+  const [uploadSource, setUploadSource] = useState("");
+  const [uploadIssuedBy, setUploadIssuedBy] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const [filterDiscipline, setFilterDiscipline] = useState("_all");
   const [filterDocType, setFilterDocType] = useState("_all");
@@ -166,24 +168,34 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   // Document edit state
   const [editDoc, setEditDoc] = useState<any>(null);
-  const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "" });
+  const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
   const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
+  // Send for Workflow state
+  const [wfDoc, setWfDoc] = useState<any>(null);
+  const [wfForm, setWfForm] = useState({ subject: "", purpose: "for_review", toUserIds: [] as number[], externalEmails: "", description: "" });
+  // Upload form validation
+  const [uploadError, setUploadError] = useState<string | null>(null);
   // Document share state
   const [shareDoc, setShareDoc] = useState<any>(null);
   const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
   const [docShareResult, setDocShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
 
   const handleUpload = async () => {
+    const resolvedTitle = title.trim() || (uploadedFile ? uploadedFile.name.replace(/\.[^.]+$/, "") : "");
+    if (!resolvedTitle) { setUploadError("Title is required."); return; }
+    setUploadError(null);
     await createDoc.mutateAsync({
       projectId,
       data: {
         documentNumber: docNumber || `DOC-${Date.now()}`,
-        title: title || "New Document",
+        title: resolvedTitle,
         revision: revision || "01",
         status: "draft",
         discipline: discipline || undefined,
         documentType: docType || "general",
+        source: uploadSource || undefined,
+        issuedBy: uploadIssuedBy || undefined,
         fileUrl: uploadedFile?.url,
         fileName: uploadedFile?.name,
         fileSize: uploadedFile?.size,
@@ -191,6 +203,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     });
     setIsUploadOpen(false);
     setDocNumber(""); setTitle(""); setDiscipline(""); setRevision("01"); setDocType("general");
+    setUploadSource(""); setUploadIssuedBy("");
     setUploadedFile(null);
   };
 
@@ -234,6 +247,42 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     },
     onSuccess: () => { setDocShareResult(null); toast({ title: "Share link revoked" }); },
   });
+
+  const sendForWorkflow = useMutation({
+    mutationFn: async () => {
+      if (!wfDoc) return;
+      const r = await fetch(`/api/projects/${projectId}/transmittals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: wfForm.subject || `For Review: ${wfDoc.documentNumber} — ${wfDoc.title}`,
+          purpose: wfForm.purpose,
+          toUserIds: wfForm.toUserIds,
+          externalEmails: wfForm.externalEmails,
+          description: wfForm.description,
+          documentIds: [wfDoc.id],
+        }),
+      });
+      if (!r.ok) throw new Error("Failed to create transmittal");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
+      toast({ title: `Transmittal created for ${wfDoc?.documentNumber}` });
+      setWfDoc(null);
+      setWfForm({ subject: "", purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
+    },
+    onError: () => toast({ title: "Failed to send for workflow", variant: "destructive" }),
+  });
+
+  const { data: usersData } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
+  });
+  const allUsers = (usersData?.users ?? []).map((u: any) => ({
+    id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
+    organizationName: u.organizationName, role: u.role,
+  }));
 
   const handleAIProcedureApply = (suggestion: any) => {
     if (suggestion.documentNumber) setDocNumber(suggestion.documentNumber);
@@ -419,6 +468,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                   <div className="col-span-2">
                     <label className="text-sm font-medium mb-1 block">Title *</label>
                     <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
+                    {uploadError && <p className="text-xs text-destructive mt-1">{uploadError}</p>}
                   </div>
                   <div>
                     <label className="text-sm font-medium mb-1 block">Discipline</label>
@@ -427,6 +477,22 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                   <div>
                     <label className="text-sm font-medium mb-1 block">Revision</label>
                     <Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="01" className="font-mono" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Source</label>
+                    <Select value={uploadSource || "_none"} onValueChange={v => setUploadSource(v === "_none" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="Select source…" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— None —</SelectItem>
+                        {["internal","external","client","contractor","consultant","supplier"].map(s => (
+                          <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Issued By</label>
+                    <Input value={uploadIssuedBy} onChange={e => setUploadIssuedBy(e.target.value)} placeholder="E.g. ABC Engineering" />
                   </div>
                 </div>
               </div>
@@ -543,8 +609,10 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 </button>
               </TableHead>
               <TableHead>Document No.</TableHead>
-              <TableHead className="w-1/3">Title</TableHead>
+              <TableHead className="w-1/4">Title</TableHead>
               <TableHead>Discipline</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead>Issued By</TableHead>
               <TableHead>Rev</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Updated</TableHead>
@@ -553,9 +621,9 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !filtered.length ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
             ) : filtered.map((doc: any) => {
               const isSelected = selectedIds.has(doc.id);
               return (
@@ -576,6 +644,14 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                     </div>
                   </TableCell>
                   <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>
+                  <TableCell>
+                    {doc.source ? (
+                      <span className="inline-flex items-center text-xs bg-muted/60 px-2 py-0.5 rounded-full capitalize">
+                        {doc.source}
+                      </span>
+                    ) : <span className="text-muted-foreground text-xs">—</span>}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-[90px] truncate">{doc.issuedBy || "—"}</TableCell>
                   <TableCell><span className="bg-muted px-2 py-0.5 rounded text-xs font-mono">{doc.revision ?? "01"}</span></TableCell>
                   <TableCell><StatusBadge status={doc.status} /></TableCell>
                   <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), "MMM d, yyyy")}</TableCell>
@@ -589,10 +665,16 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document" onClick={() => {
                         setEditDoc(doc);
-                        setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "" });
+                        setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
                         setEditFile(null);
                       }}>
                         <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Send for Workflow" onClick={() => {
+                        setWfDoc(doc);
+                        setWfForm({ subject: `For Review: ${doc.documentNumber} — ${doc.title}`, purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
+                      }}>
+                        <Send className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Generate share link" onClick={() => {
                         setShareDoc(doc);
@@ -636,6 +718,22 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               <div>
                 <Label>Document Type</Label>
                 <Input value={editForm.documentType} onChange={e => setEditForm(f => ({ ...f, documentType: e.target.value }))} className="mt-1" placeholder="E.g. drawing" />
+              </div>
+              <div>
+                <Label>Source</Label>
+                <Select value={editForm.source || "_none"} onValueChange={v => setEditForm(f => ({ ...f, source: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select source…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {["internal","external","client","contractor","consultant","supplier"].map(s => (
+                      <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Issued By</Label>
+                <Input value={editForm.issuedBy} onChange={e => setEditForm(f => ({ ...f, issuedBy: e.target.value }))} className="mt-1" placeholder="E.g. ABC Engineering" />
               </div>
             </div>
             <div>
@@ -689,6 +787,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 updateDoc.mutate({
                   title: editForm.title, discipline: editForm.discipline, revision: editForm.revision,
                   documentType: editForm.documentType, description: editForm.description,
+                  source: editForm.source || undefined, issuedBy: editForm.issuedBy || undefined,
                   additionalFiles: combined,
                   ...(editFile ? { fileUrl: editFile.url, fileName: editFile.name, fileSize: editFile.size } : {}),
                 });
@@ -741,6 +840,70 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             </div>
           )}
           <DialogFooter><Button variant="outline" onClick={() => { setShareDoc(null); setDocShareResult(null); }}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send for Workflow Dialog */}
+      <Dialog open={!!wfDoc} onOpenChange={v => { if (!v) setWfDoc(null); }}>
+        <DialogContent className="sm:max-w-[540px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Send className="h-4 w-4" /> Send for Workflow</DialogTitle>
+          </DialogHeader>
+          {wfDoc && (
+            <div className="space-y-4 py-2">
+              <div className="bg-muted/40 rounded-lg px-3 py-2 flex items-center gap-3">
+                <FileText className="h-5 w-5 text-primary shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-none truncate">{wfDoc.title}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{wfDoc.documentNumber} · Rev {wfDoc.revision ?? "01"}</p>
+                </div>
+              </div>
+              <div>
+                <Label>Purpose</Label>
+                <Select value={wfForm.purpose} onValueChange={v => setWfForm(f => ({ ...f, purpose: v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[["for_review","For Review"],["for_approval","For Approval"],["for_information","For Information"],["for_construction","For Construction"],["as_built","As Built"]].map(([v,l]) => (
+                      <SelectItem key={v} value={v}>{l}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Subject</Label>
+                <Input value={wfForm.subject} onChange={e => setWfForm(f => ({ ...f, subject: e.target.value }))} className="mt-1" placeholder="Transmittal subject…" />
+              </div>
+              <div>
+                <Label>To (Internal Recipients)</Label>
+                <RecipientAutocomplete
+                  users={allUsers}
+                  selectedIds={wfForm.toUserIds}
+                  onChange={ids => setWfForm(f => ({ ...f, toUserIds: ids }))}
+                  placeholder="Search by name or email…"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>External Recipients</Label>
+                <Input value={wfForm.externalEmails} onChange={e => setWfForm(f => ({ ...f, externalEmails: e.target.value }))} placeholder="alice@firm.com, bob@client.com" className="mt-1 text-sm" />
+                <p className="text-xs text-muted-foreground mt-1">Separate multiple emails with commas.</p>
+              </div>
+              <div>
+                <Label>Cover Note / Instructions</Label>
+                <Textarea value={wfForm.description} onChange={e => setWfForm(f => ({ ...f, description: e.target.value }))} rows={3} className="mt-1" placeholder="Optional instructions…" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWfDoc(null)}>Cancel</Button>
+            <Button
+              onClick={() => sendForWorkflow.mutate()}
+              disabled={sendForWorkflow.isPending || (!wfForm.toUserIds.length && !wfForm.externalEmails)}
+              className="gap-1.5"
+            >
+              {sendForWorkflow.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</> : <><Send className="h-3.5 w-3.5" /> Send for Workflow</>}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

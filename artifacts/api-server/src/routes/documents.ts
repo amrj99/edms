@@ -31,7 +31,7 @@ router.post("/folders", requireAuth, async (req, res) => {
 // Documents
 router.get("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { discipline, documentType, status, folderId, page, limit, search } = req.query;
+  const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy } = req.query;
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
 
@@ -50,6 +50,11 @@ router.get("/", requireAuth, async (req, res) => {
   if (documentType) filtered = filtered.filter(d => d.doc.documentType === documentType);
   if (status) filtered = filtered.filter(d => d.doc.status === status);
   if (folderId) filtered = filtered.filter(d => d.doc.folderId === parseInt(folderId as string));
+  if (source) filtered = filtered.filter(d => d.doc.source === source);
+  if (issuedBy) {
+    const ib = (issuedBy as string).toLowerCase();
+    filtered = filtered.filter(d => d.doc.issuedBy?.toLowerCase().includes(ib));
+  }
   if (search) {
     const q = (search as string).toLowerCase();
     filtered = filtered.filter(d =>
@@ -57,7 +62,9 @@ router.get("/", requireAuth, async (req, res) => {
       d.doc.documentNumber?.toLowerCase().includes(q) ||
       d.doc.discipline?.toLowerCase().includes(q) ||
       d.doc.revision?.toLowerCase().includes(q) ||
-      d.doc.documentType?.toLowerCase().includes(q)
+      d.doc.documentType?.toLowerCase().includes(q) ||
+      d.doc.source?.toLowerCase().includes(q) ||
+      d.doc.issuedBy?.toLowerCase().includes(q)
     );
   }
 
@@ -81,7 +88,12 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata } = req.body;
+  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy } = req.body;
+
+  if (!documentNumber || !title) {
+    res.status(400).json({ error: "documentNumber and title are required" });
+    return;
+  }
 
   const [doc] = await db.insert(documentsTable).values({
     documentNumber, title, documentType, discipline,
@@ -92,6 +104,7 @@ router.post("/", requireAuth, async (req, res) => {
     createdById: req.user!.id,
     fileUrl, fileName, fileSize,
     metadata: metadata || {},
+    source, issuedBy,
   }).returning();
 
   // Save initial revision
@@ -142,13 +155,13 @@ router.put("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
 
-  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles } = req.body;
+  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy } = req.body;
 
   const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   const [doc] = await db.update(documentsTable)
-    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, updatedAt: new Date() })
+    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
     .returning();
 

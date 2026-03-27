@@ -21,6 +21,7 @@ import configRouter from "./config.js";
 import storageRouter from "./storage.js";
 import adminRouter from "./admin.js";
 import publicShareRouter from "./public-share.js";
+import globalDocumentsRouter from "./global-documents.js";
 
 const router: IRouter = Router();
 
@@ -46,5 +47,6 @@ router.use("/config", configRouter);
 router.use("/storage", storageRouter);
 router.use("/admin", adminRouter);
 router.use("/public/share", publicShareRouter);
+router.use("/documents", globalDocumentsRouter);
 
 export default router;
