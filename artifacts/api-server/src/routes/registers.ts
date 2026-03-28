@@ -55,11 +55,13 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    const [existing] = await db.select().from(inspectionRequestsTable)
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     const [row] = await db.update(inspectionRequestsTable)
-      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "approval_submitted", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
@@ -76,6 +78,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(inspectionRequestsTable)
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
     const [row] = await db.update(inspectionRequestsTable)
       .set({
         approvalStatus: "approved",
@@ -86,7 +92,6 @@ router.post(
       })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
@@ -104,6 +109,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(inspectionRequestsTable)
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
     const [row] = await db.update(inspectionRequestsTable)
       .set({
         approvalStatus: "rejected",
@@ -114,7 +123,6 @@ router.post(
       })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_rejected", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
@@ -169,11 +177,13 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    const [existing] = await db.select().from(ncrRecordsTable)
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     const [row] = await db.update(ncrRecordsTable)
-      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "approval_submitted", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
@@ -190,6 +200,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(ncrRecordsTable)
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
     const [row] = await db.update(ncrRecordsTable)
       .set({
         approvalStatus: "approved",
@@ -200,7 +214,6 @@ router.post(
       })
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
@@ -218,6 +231,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(ncrRecordsTable)
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
     const [row] = await db.update(ncrRecordsTable)
       .set({
         approvalStatus: "rejected",
@@ -228,7 +245,6 @@ router.post(
       })
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_rejected", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,

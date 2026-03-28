@@ -253,11 +253,13 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    const [existing] = await db.select().from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     const [row] = await db.update(transmittalsTable)
-      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "approval_submitted", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
@@ -273,6 +275,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
     const [row] = await db.update(transmittalsTable)
       .set({
         approvalStatus: "approved",
@@ -283,7 +289,6 @@ router.post(
       })
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
@@ -300,6 +305,10 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
+    const [existing] = await db.select().from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
     const [row] = await db.update(transmittalsTable)
       .set({
         approvalStatus: "rejected",
@@ -310,7 +319,6 @@ router.post(
       })
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
-    if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
       userId: req.user!.id, action: "record_rejected", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
