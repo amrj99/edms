@@ -9,7 +9,7 @@ import {
   Brain, Building2, CheckSquare, FolderKanban, Home, Inbox, LogOut, Moon,
   Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send,
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
-  History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck,
+  History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -322,6 +322,12 @@ export function AppSidebar() {
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <Link href="/profile">
+              <DropdownMenuItem className="cursor-pointer">
+                <User className="mr-2 h-4 w-4" />
+                My Profile
+              </DropdownMenuItem>
+            </Link>
             <DropdownMenuItem onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="cursor-pointer">
               {theme === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
               Toggle Theme

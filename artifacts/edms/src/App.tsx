@@ -34,6 +34,7 @@ import CorrespondencePage from "@/pages/correspondence";
 import DocumentsPage from "@/pages/documents";
 import DeliverablesPage from "@/pages/deliverables";
 import ActivityLogPage from "@/pages/activity-log";
+import ProfilePage from "@/pages/profile";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -156,6 +157,9 @@ function Router() {
       </Route>
       <Route path="/activity-log">
         <ProtectedRoute component={ActivityLogPage} />
+      </Route>
+      <Route path="/profile">
+        <ProtectedRoute component={ProfilePage} />
       </Route>
 
       <Route component={NotFound} />
