@@ -150,6 +150,12 @@ const translations = {
     noActivityRecords: "No activity records match your filters",
     entries: "entries",
     exportExcelLabel: "Export Excel",
+    details: "Details",
+    clear: "Clear",
+    activityDetail: "Activity Detail",
+    logEntry: "Log entry",
+    loadingActivity: "Loading activity log…",
+    searchEntities: "Search entities, users…",
   },
   ar: {
     // Navigation / menu
@@ -298,6 +304,12 @@ const translations = {
     noActivityRecords: "لا توجد سجلات نشاط تطابق الفلاتر",
     entries: "إدخال",
     exportExcelLabel: "تصدير Excel",
+    details: "التفاصيل",
+    clear: "مسح",
+    activityDetail: "تفاصيل النشاط",
+    logEntry: "إدخال السجل",
+    loadingActivity: "جاري تحميل سجل الأنشطة…",
+    searchEntities: "بحث في الكيانات والمستخدمين…",
   },
 } as const;
 

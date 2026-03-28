@@ -192,6 +192,7 @@ export function AppSidebar() {
   const [recentOpen, setRecentOpen] = useState(true);
 
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
+  const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
 
   useEffect(() => {
     setRecentProjects(getRecentProjects());
@@ -209,7 +210,7 @@ export function AppSidebar() {
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
     { title: "Deliverables", url: "/deliverables", icon: ClipboardList },
     { title: "Reports", url: "/reports", icon: BarChart3 },
-    { title: "Activity Log", url: "/activity-log", icon: ClipboardCheck },
+    ...(canSeeActivityLog ? [{ title: "Activity Log", url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: "Search", url: "/search", icon: Search },
   ];
 
