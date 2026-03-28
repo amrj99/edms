@@ -1230,7 +1230,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === detailItem.projectId)?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.requestNumber ?? "ITR/MIR Detail"}
@@ -1434,7 +1434,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === detailItem.projectId)?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.reportNumber ?? "NCR/SOR Detail"}
@@ -1634,7 +1634,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === detailItem.projectId)?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.nocNumber ?? "NOC Detail"}

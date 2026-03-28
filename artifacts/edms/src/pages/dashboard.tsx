@@ -616,7 +616,7 @@ export default function Dashboard() {
     { title: "Active Projects", value: projects.filter((p: any) => p.status === "active").length, icon: FolderOpen, color: "text-green-500", bg: "bg-green-50 dark:bg-green-500/10" },
   ];
 
-  const isSysAdmin = user?.role === "system_owner" || user?.role === "admin";
+  const isSysAdmin = user?.role === "system_owner";
 
   const widgetData = {
     recentDocuments,

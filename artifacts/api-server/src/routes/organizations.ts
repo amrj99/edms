@@ -106,7 +106,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   if (!orgs[0]) { res.status(404).json({ error: "Not Found" }); return; }
   const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));
   const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, id));
-  res.json({ ...orgs[0], userCount: Number(uc[0]?.cnt ?? 0), projectCount: Number(pc[0]?.cnt ?? 0) });
+  res.json({ ...orgs[0], userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
 });
 
 router.put("/:id", requireAuth, async (req, res) => {

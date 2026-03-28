@@ -202,6 +202,41 @@ export default function Admin() {
     },
   });
 
+  // Org management state
+  const [createOrgOpen, setCreateOrgOpen] = useState(false);
+  const [editOrg, setEditOrg] = useState<any>(null);
+  const [deleteOrg, setDeleteOrg] = useState<any>(null);
+  const [orgForm, setOrgForm] = useState({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" });
+
+  const createOrg = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch("/api/organizations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
+      return r.json();
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: "Organization created" }); },
+    onError: (e: any) => toast({ title: e.message || "Failed to create organization", variant: "destructive" }),
+  });
+
+  const updateOrg = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+      const r = await fetch(`/api/organizations/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setEditOrg(null); toast({ title: "Organization updated" }); },
+    onError: () => toast({ title: "Failed to update organization", variant: "destructive" }),
+  });
+
+  const deleteOrgMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/organizations/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Failed");
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setDeleteOrg(null); toast({ title: "Organization deleted" }); },
+    onError: () => toast({ title: "Failed to delete organization", variant: "destructive" }),
+  });
+
   const addCorrType = () => {
     if (!newCorrType.name.trim()) return;
     const entry = { ...newCorrType, id: newCorrType.name.toLowerCase().replace(/\s+/g, "_") };
@@ -288,72 +323,117 @@ export default function Admin() {
 
         {/* Organization Settings */}
         <TabsContent value="organization" className="mt-4 space-y-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />Organization Details</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {orgs.slice(0, 3).map((org: any) => (
-                  <div key={org.id} className="border rounded-lg p-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium">{org.name}</p>
-                        <p className="text-xs text-muted-foreground">{org.code} · {org.type || "Organization"}</p>
-                      </div>
-                      <Badge variant="outline" className="capitalize">{org.industry || "Engineering"}</Badge>
-                    </div>
-                  </div>
-                ))}
-                <Button variant="outline" size="sm" className="gap-1 w-full" onClick={() => window.location.href = "/organizations"}>
-                  <Building2 className="h-3.5 w-3.5" /> Manage Organizations
+          {/* Org Create Dialog */}
+          <Dialog open={createOrgOpen} onOpenChange={setCreateOrgOpen}>
+            <DialogContent className="sm:max-w-[480px]">
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Building2 className="h-5 w-5" />Create Organization</DialogTitle></DialogHeader>
+              <div className="space-y-3 py-2">
+                <div><Label>Name *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder="Organization name" /></div>
+                <div><Label>Type *</Label>
+                  <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["client","consultant","contractor","subcontractor"].map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div><Label>Contact Email</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
+                <div><Label>Contact Phone</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
+                <div><Label>Address</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setCreateOrgOpen(false)}>Cancel</Button>
+                <Button onClick={() => createOrg.mutate(orgForm)} disabled={!orgForm.name.trim() || createOrg.isPending}>
+                  {createOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
                 </Button>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2"><Globe className="h-4 w-4" />System Settings</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label>System Name</Label>
-                  <Input className="mt-1" defaultValue="ArcScale EDMS" />
-                </div>
-                <div>
-                  <Label>Default Timezone</Label>
-                  <Select defaultValue="utc">
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Org Edit Dialog */}
+          <Dialog open={!!editOrg} onOpenChange={v => { if (!v) setEditOrg(null); }}>
+            <DialogContent className="sm:max-w-[480px]">
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-5 w-5" />Edit Organization</DialogTitle></DialogHeader>
+              <div className="space-y-3 py-2">
+                <div><Label>Name *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" /></div>
+                <div><Label>Type *</Label>
+                  <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="utc">UTC</SelectItem>
-                      <SelectItem value="gmt">GMT+0</SelectItem>
-                      <SelectItem value="est">EST (GMT-5)</SelectItem>
-                      <SelectItem value="pst">PST (GMT-8)</SelectItem>
-                      <SelectItem value="gst">GST (GMT+4)</SelectItem>
-                      <SelectItem value="ist">IST (GMT+5:30)</SelectItem>
+                      {["client","consultant","contractor","subcontractor"].map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Date Format</Label>
-                  <Select defaultValue="dd-mmm-yyyy">
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dd-mmm-yyyy">DD-MMM-YYYY</SelectItem>
-                      <SelectItem value="dd/mm/yyyy">DD/MM/YYYY</SelectItem>
-                      <SelectItem value="mm/dd/yyyy">MM/DD/YYYY</SelectItem>
-                      <SelectItem value="yyyy-mm-dd">YYYY-MM-DD</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label>Allow Self Registration</Label>
-                  <Switch defaultChecked={false} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label>Multi-Organization Mode</Label>
-                  <Switch defaultChecked={true} />
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                <div><Label>Contact Email</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
+                <div><Label>Contact Phone</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
+                <div><Label>Address</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditOrg(null)}>Cancel</Button>
+                <Button onClick={() => updateOrg.mutate({ id: editOrg.id, data: orgForm })} disabled={!orgForm.name.trim() || updateOrg.isPending}>
+                  {updateOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save Changes"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Org Delete Confirm */}
+          <Dialog open={!!deleteOrg} onOpenChange={v => { if (!v) setDeleteOrg(null); }}>
+            <DialogContent className="sm:max-w-[400px]">
+              <DialogHeader><DialogTitle className="text-destructive">Delete Organization</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground py-2">Are you sure you want to delete <strong>{deleteOrg?.name}</strong>? This action cannot be undone.</p>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeleteOrg(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => deleteOrgMutation.mutate(deleteOrg.id)} disabled={deleteOrgMutation.isPending}>
+                  {deleteOrgMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Delete"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-3 flex flex-row items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />All Organizations</CardTitle>
+              <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); setCreateOrgOpen(true); }}>
+                <Plus className="h-3.5 w-3.5" /> New Organization
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader className="bg-muted/40">
+                  <TableRow>
+                    <TableHead className="text-xs">Name</TableHead>
+                    <TableHead className="text-xs">Type</TableHead>
+                    <TableHead className="text-xs">Contact Email</TableHead>
+                    <TableHead className="text-xs">Phone</TableHead>
+                    <TableHead className="text-xs text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {orgs.length === 0 ? (
+                    <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground text-sm">No organizations found</TableCell></TableRow>
+                  ) : orgs.map((org: any) => (
+                    <TableRow key={org.id}>
+                      <TableCell className="font-medium text-sm">{org.name}</TableCell>
+                      <TableCell><Badge variant="outline" className="capitalize text-xs">{org.type || "—"}</Badge></TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{org.contactEmail || "—"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{org.contactPhone || "—"}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDeleteOrg(org)}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Full User Management */}

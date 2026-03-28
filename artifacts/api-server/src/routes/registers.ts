@@ -5,14 +5,26 @@ import {
   projectsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth, requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });
 
+async function checkProjectOwnership(req: any, res: any, projectId: number): Promise<boolean> {
+  if (isSysAdmin(req.user!)) return true;
+  const [project] = await db.select({ organizationId: projectsTable.organizationId })
+    .from(projectsTable).where(eq(projectsTable.id, projectId));
+  if (!project || project.organizationId !== req.user!.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "Project does not belong to your organization" });
+    return false;
+  }
+  return true;
+}
+
 // ─── ITR / MIR ────────────────────────────────────────────────────────────────
 router.get("/inspection-requests", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const rows = await db.select().from(inspectionRequestsTable)
     .where(eq(inspectionRequestsTable.projectId, projectId))
     .orderBy(desc(inspectionRequestsTable.createdAt));
@@ -21,6 +33,7 @@ router.get("/inspection-requests", requireAuth, async (req, res) => {
 
 router.post("/inspection-requests", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { requestNumber, type, description, location, date, status, contractor, linkedCorrespondenceId, remarks } = req.body;
   if (!requestNumber) { res.status(400).json({ message: "requestNumber is required" }); return; }
   const [row] = await db.insert(inspectionRequestsTable).values({
@@ -34,16 +47,21 @@ router.post("/inspection-requests", requireAuth, requireRole("admin", "project_m
 
 router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { description, location, date, status, contractor, remarks } = req.body;
   const [row] = await db.update(inspectionRequestsTable)
     .set({ description, location, date: date ? new Date(date) : undefined, status, contractor, remarks, updatedAt: new Date() })
-    .where(eq(inspectionRequestsTable.id, id))
+    .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
     .returning();
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
 
 router.delete("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  await db.delete(inspectionRequestsTable).where(eq(inspectionRequestsTable.id, parseInt(req.params.id)));
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
+  await db.delete(inspectionRequestsTable).where(and(eq(inspectionRequestsTable.id, parseInt(req.params.id)), eq(inspectionRequestsTable.projectId, projectId)));
   res.json({ ok: true });
 });
 
@@ -55,6 +73,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const [existing] = await db.select().from(inspectionRequestsTable)
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
@@ -77,6 +96,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
     const [existing] = await db.select().from(inspectionRequestsTable)
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
@@ -108,6 +128,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
     const [existing] = await db.select().from(inspectionRequestsTable)
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
@@ -135,6 +156,7 @@ router.post(
 // ─── NCR / SOR ────────────────────────────────────────────────────────────────
 router.get("/ncr-records", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const rows = await db.select().from(ncrRecordsTable)
     .where(eq(ncrRecordsTable.projectId, projectId))
     .orderBy(desc(ncrRecordsTable.createdAt));
@@ -143,6 +165,7 @@ router.get("/ncr-records", requireAuth, async (req, res) => {
 
 router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { reportNumber, type, description, location, raisedBy, status, correctiveAction, closeDate, remarks } = req.body;
   if (!reportNumber) { res.status(400).json({ message: "reportNumber is required" }); return; }
   const [row] = await db.insert(ncrRecordsTable).values({
@@ -156,16 +179,21 @@ router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager",
 
 router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { description, location, raisedBy, status, correctiveAction, closeDate, remarks } = req.body;
   const [row] = await db.update(ncrRecordsTable)
     .set({ description, location, raisedBy, status, correctiveAction, closeDate: closeDate ? new Date(closeDate) : undefined, remarks, updatedAt: new Date() })
-    .where(eq(ncrRecordsTable.id, id))
+    .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
     .returning();
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
 
 router.delete("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  await db.delete(ncrRecordsTable).where(eq(ncrRecordsTable.id, parseInt(req.params.id)));
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
+  await db.delete(ncrRecordsTable).where(and(eq(ncrRecordsTable.id, parseInt(req.params.id)), eq(ncrRecordsTable.projectId, projectId)));
   res.json({ ok: true });
 });
 
@@ -177,6 +205,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const [existing] = await db.select().from(ncrRecordsTable)
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
@@ -199,6 +228,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
     const [existing] = await db.select().from(ncrRecordsTable)
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
@@ -230,6 +260,7 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
     const [existing] = await db.select().from(ncrRecordsTable)
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
@@ -257,6 +288,7 @@ router.post(
 // ─── NOC ──────────────────────────────────────────────────────────────────────
 router.get("/noc-records", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const rows = await db.select().from(nocRecordsTable)
     .where(eq(nocRecordsTable.projectId, projectId))
     .orderBy(desc(nocRecordsTable.createdAt));
@@ -265,6 +297,7 @@ router.get("/noc-records", requireAuth, async (req, res) => {
 
 router.post("/noc-records", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { nocNumber, authority, date, status, linkedDocumentId, remarks } = req.body;
   if (!nocNumber) { res.status(400).json({ message: "nocNumber is required" }); return; }
   const [row] = await db.insert(nocRecordsTable).values({
@@ -278,16 +311,21 @@ router.post("/noc-records", requireAuth, requireRole("admin", "project_manager",
 
 router.put("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
   const { authority, date, status, linkedDocumentId, remarks } = req.body;
   const [row] = await db.update(nocRecordsTable)
     .set({ authority, date: date ? new Date(date) : undefined, status, linkedDocumentId, remarks, updatedAt: new Date() })
-    .where(eq(nocRecordsTable.id, id))
+    .where(and(eq(nocRecordsTable.id, id), eq(nocRecordsTable.projectId, projectId)))
     .returning();
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
 
 router.delete("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  await db.delete(nocRecordsTable).where(eq(nocRecordsTable.id, parseInt(req.params.id)));
+  const projectId = parseInt(req.params.projectId);
+  if (!await checkProjectOwnership(req, res, projectId)) return;
+  await db.delete(nocRecordsTable).where(and(eq(nocRecordsTable.id, parseInt(req.params.id)), eq(nocRecordsTable.projectId, projectId)));
   res.json({ ok: true });
 });
 
