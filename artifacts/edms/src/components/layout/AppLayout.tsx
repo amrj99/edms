@@ -28,6 +28,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/lib/i18n";
+import { useModules } from "@/hooks/use-modules";
 
 // ─── Recent Projects helpers ──────────────────────────────────────────────────
 const RECENT_KEY = "edms_recent_projects";
@@ -190,6 +191,7 @@ export function AppSidebar() {
   const { theme, setTheme } = useTheme();
   const [recentProjects, setRecentProjects] = useState<{ id: number; code: string; name: string }[]>([]);
   const [recentOpen, setRecentOpen] = useState(true);
+  const { modules } = useModules();
 
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
@@ -203,13 +205,13 @@ export function AppSidebar() {
 
   const navigation = [
     { title: "Dashboard", url: "/", icon: Home },
-    { title: "Correspondence", url: "/correspondence", icon: Mail },
+    ...(modules.correspondence ? [{ title: "Correspondence", url: "/correspondence", icon: Mail }] : []),
     { title: "Projects", url: "/projects", icon: FolderKanban },
-    { title: "Documents", url: "/documents", icon: FileText },
+    ...(modules.documents ? [{ title: "Documents", url: "/documents", icon: FileText }] : []),
     { title: "General Inbox", url: "/general", icon: Inbox },
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
-    { title: "Deliverables", url: "/deliverables", icon: ClipboardList },
-    { title: "Reports", url: "/reports", icon: BarChart3 },
+    ...(modules.deliverables ? [{ title: "Deliverables", url: "/deliverables", icon: ClipboardList }] : []),
+    ...(modules.reports ? [{ title: "Reports", url: "/reports", icon: BarChart3 }] : []),
     ...(canSeeActivityLog ? [{ title: "Activity Log", url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: "Search", url: "/search", icon: Search },
   ];
@@ -356,6 +358,7 @@ function LanguageToggle() {
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
+  const { modules } = useModules();
 
   if (isLoading) {
     return (
@@ -381,7 +384,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
               <LanguageToggle />
               <ProjectSwitcher />
-              <NotificationBell />
+              {modules.notifications && <NotificationBell />}
             </div>
           </header>
           <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">

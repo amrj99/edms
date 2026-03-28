@@ -45,6 +45,13 @@ export const orgConfigTable = pgTable("org_config", {
   primaryColor: text("primary_color").default("#2563eb"),
   storageQuotaMb: integer("storage_quota_mb").default(10240),
   storagePath: text("storage_path"),
+  modules: jsonb("modules").notNull().default({
+    deliverables: true,
+    reports: true,
+    correspondence: true,
+    documents: true,
+    notifications: true,
+  }),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

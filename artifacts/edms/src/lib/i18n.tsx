@@ -182,6 +182,22 @@ const translations = {
     entity_user: "User",
     entity_task: "Task",
     entity_workflow: "Workflow",
+
+    // Module Licensing
+    modules: "Modules",
+    modulesDesc: "Enable or disable feature modules per organization",
+    module_deliverables: "Deliverables",
+    module_reports: "Reports & Registers",
+    module_correspondence: "Correspondence",
+    module_documents: "Documents",
+    module_notifications: "Notifications",
+    moduleEnabled: "Enabled",
+    moduleDisabled: "Disabled",
+    saveModules: "Save Module Settings",
+    modulesSaved: "Module settings saved",
+    moduleNotAvailable: "This module is not available for your organization",
+    selectOrgForModules: "Select an organization to configure modules",
+    modulesSaveError: "Failed to save module settings",
   },
   ar: {
     // Navigation / menu
@@ -362,6 +378,22 @@ const translations = {
     entity_user: "مستخدم",
     entity_task: "مهمة",
     entity_workflow: "سير عمل",
+
+    // Module Licensing
+    modules: "الوحدات",
+    modulesDesc: "تفعيل أو تعطيل وحدات الميزات لكل مؤسسة",
+    module_deliverables: "المستخلصات",
+    module_reports: "التقارير والسجلات",
+    module_correspondence: "المراسلات",
+    module_documents: "المستندات",
+    module_notifications: "الإشعارات",
+    moduleEnabled: "مفعّل",
+    moduleDisabled: "معطّل",
+    saveModules: "حفظ إعدادات الوحدات",
+    modulesSaved: "تم حفظ إعدادات الوحدات",
+    moduleNotAvailable: "هذه الوحدة غير متاحة لمؤسستك",
+    selectOrgForModules: "اختر مؤسسة لضبط الوحدات",
+    modulesSaveError: "فشل حفظ إعدادات الوحدات",
   },
 } as const;
 

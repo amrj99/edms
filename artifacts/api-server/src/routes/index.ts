@@ -26,6 +26,7 @@ import registersRouter from "./registers.js";
 import deliverablesRouter from "./deliverables.js";
 import preferencesRouter from "./preferences.js";
 import notificationSummaryRouter from "./notification-summary.js";
+import modulesRouter from "./modules.js";
 
 const router: IRouter = Router();
 
@@ -55,6 +56,7 @@ router.use("/documents", globalDocumentsRouter);
 router.use("/projects/:projectId", registersRouter);
 router.use("/projects/:projectId", deliverablesRouter);
 router.use("/user", preferencesRouter);
+router.use("/modules", modulesRouter);
 router.use("/", notificationSummaryRouter);
 
 export default router;
