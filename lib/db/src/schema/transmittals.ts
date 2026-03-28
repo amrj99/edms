@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { documentsTable } from "./documents";
+import { approvalStatusEnum } from "./registers";
 
 export const transmittalStatusEnum = pgEnum("transmittal_status", [
   "draft",
@@ -29,6 +30,10 @@ export const transmittalsTable = pgTable("transmittals", {
   shareToken: text("share_token"),
   shareExpiresAt: timestamp("share_expires_at"),
   sharePasswordHash: text("share_password_hash"),
+  approvalStatus: approvalStatusEnum("approval_status").notNull().default("none"),
+  approvedById: integer("approved_by_id").references(() => usersTable.id),
+  approvalComment: text("approval_comment"),
+  approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

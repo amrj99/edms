@@ -7,6 +7,7 @@ import autoTable from "jspdf-autotable";
 
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
   BarChart3, FileSpreadsheet, FileText, Printer, RefreshCw, Loader2,
   Mail, Send, PenLine, ClipboardList, ShieldAlert, FileCheck, Plus, Filter, X,
   Eye, EyeOff, Columns3, Save, BookOpen, ChevronDown, Trash2,
+  CheckCircle2, XCircle, Clock, CircleDot,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -60,6 +62,178 @@ function StatusPill({ status }: { status?: string }) {
     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium capitalize ${map[status] ?? "bg-muted text-muted-foreground"}`}>
       {status.replace(/_/g, " ")}
     </span>
+  );
+}
+
+// ─── Approval Badge ───────────────────────────────────────────────────────────
+function ApprovalBadge({ status }: { status?: string | null }) {
+  const { t } = useI18n();
+  if (!status || status === "none") return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+      <CircleDot className="h-3 w-3" />{t("approvalNone")}
+    </span>
+  );
+  if (status === "pending") return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
+      <Clock className="h-3 w-3" />{t("approvalPending")}
+    </span>
+  );
+  if (status === "approved") return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+      <CheckCircle2 className="h-3 w-3" />{t("approvalApproved")}
+    </span>
+  );
+  if (status === "rejected") return (
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+      <XCircle className="h-3 w-3" />{t("approvalRejected")}
+    </span>
+  );
+  return null;
+}
+
+// ─── Approval Panel ───────────────────────────────────────────────────────────
+function ApprovalPanel({
+  record,
+  entityType,
+  projectId,
+  queryKey,
+  onRecordUpdated,
+}: {
+  record: any;
+  entityType: "ncr" | "itr" | "transmittal";
+  projectId: string | number;
+  queryKey: string[];
+  onRecordUpdated?: (updated: any) => void;
+}) {
+  const { t } = useI18n();
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const [comment, setComment] = useState("");
+  const [confirmAction, setConfirmAction] = useState<"approve" | "reject" | null>(null);
+
+  const role = user?.role ?? "";
+  const canSubmit = ["admin", "project_manager", "document_controller"].includes(role);
+  const canDecide = ["admin", "project_manager"].includes(role);
+
+  const baseUrl = entityType === "transmittal"
+    ? `/api/projects/${projectId}/transmittals/${record.id}`
+    : entityType === "ncr"
+      ? `/api/projects/${projectId}/ncr-records/${record.id}`
+      : `/api/projects/${projectId}/inspection-requests/${record.id}`;
+
+  const doMutation = useMutation({
+    mutationFn: async (action: "submit-approval" | "approve" | "reject") => {
+      const r = await fetch(`${baseUrl}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comment }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: (data, action) => {
+      qc.invalidateQueries({ queryKey });
+      onRecordUpdated?.(data);
+      const msgs: Record<string, string> = {
+        "submit-approval": t("approvalSubmitted"),
+        approve: t("approvalApprovedMsg"),
+        reject: t("approvalRejectedMsg"),
+      };
+      toast({ title: msgs[action] ?? t("approvalSubmitted") });
+      setComment("");
+      setConfirmAction(null);
+    },
+    onError: () => toast({ title: t("approvalError"), variant: "destructive" }),
+  });
+
+  const approvalStatus = record?.approvalStatus ?? "none";
+
+  return (
+    <div className="border-t mt-4 pt-4 space-y-3">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t("approvalWorkflow")}</p>
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground font-medium">{t("approvalStatus")}:</span>
+        <ApprovalBadge status={approvalStatus} />
+      </div>
+      {record?.approvedAt && (
+        <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+          <span className="text-xs text-muted-foreground font-medium">{t("approvedAt")}</span>
+          <span className="text-xs">{fmt(record.approvedAt)}</span>
+        </div>
+      )}
+      {record?.approvalComment && (
+        <div className="grid grid-cols-[120px_1fr] gap-2 items-start">
+          <span className="text-xs text-muted-foreground font-medium">{t("approvalComment")}</span>
+          <span className="text-xs break-words">{record.approvalComment}</span>
+        </div>
+      )}
+
+      {canSubmit && approvalStatus === "none" && (
+        <Button
+          size="sm" variant="outline" className="h-8 gap-1.5 text-xs w-full"
+          onClick={() => doMutation.mutate("submit-approval")}
+          disabled={doMutation.isPending}
+        >
+          {doMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
+          {t("submitForApproval")}
+        </Button>
+      )}
+
+      {canDecide && approvalStatus === "pending" && (
+        <>
+          <div>
+            <Label className="text-xs">{t("approvalComment")}</Label>
+            <Textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              placeholder={t("approvalCommentPlaceholder")}
+              rows={2}
+              className="mt-1 text-xs"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm" variant="default" className="h-8 gap-1.5 text-xs flex-1 bg-green-600 hover:bg-green-700"
+              onClick={() => setConfirmAction("approve")}
+              disabled={doMutation.isPending}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />{t("approveRecord")}
+            </Button>
+            <Button
+              size="sm" variant="destructive" className="h-8 gap-1.5 text-xs flex-1"
+              onClick={() => setConfirmAction("reject")}
+              disabled={doMutation.isPending}
+            >
+              <XCircle className="h-3.5 w-3.5" />{t("rejectRecord")}
+            </Button>
+          </div>
+        </>
+      )}
+
+      <Dialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
+        <DialogContent className="sm:max-w-[360px]">
+          <DialogHeader>
+            <DialogTitle>
+              {confirmAction === "approve" ? t("confirmApprove") : t("confirmReject")}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {confirmAction === "approve" ? t("confirmApproveDesc") : t("confirmRejectDesc")}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmAction(null)}>{t("cancel")}</Button>
+            <Button
+              variant={confirmAction === "approve" ? "default" : "destructive"}
+              onClick={() => { if (confirmAction) doMutation.mutate(confirmAction); }}
+              disabled={doMutation.isPending}
+            >
+              {doMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
@@ -261,16 +435,17 @@ function EmptyState({ icon: Icon, message }: { icon: React.ElementType; message:
 
 // ─── Record Detail Sheet ───────────────────────────────────────────────────────
 function RecordDetailSheet({
-  item, open, onClose, title, fields,
+  item, open, onClose, title, fields, children,
 }: {
   item: any; open: boolean; onClose: () => void;
   title: string;
   fields: { key: string; label: string; format?: (v: any) => string }[];
+  children?: React.ReactNode;
 }) {
   if (!item) return null;
   return (
     <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent className="w-[400px] flex flex-col">
+      <SheetContent className="w-[440px] flex flex-col">
         <SheetHeader>
           <SheetTitle className="text-base">{title}</SheetTitle>
           <SheetDescription className="text-xs text-muted-foreground">Record #{item.id}</SheetDescription>
@@ -292,6 +467,7 @@ function RecordDetailSheet({
             <span className="text-xs text-muted-foreground font-medium">Updated</span>
             <span className="text-xs">{fmt(item.updatedAt)}</span>
           </div>
+          {children}
         </div>
       </SheetContent>
     </Sheet>
@@ -813,7 +989,17 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
           { key: "sentAt", label: "Sent Date", format: fmt },
           { key: "acknowledgedAt", label: "Acknowledged", format: fmt },
         ]}
-      />
+      >
+        {detailItem && filters.projectId !== "_all" && (
+          <ApprovalPanel
+            record={detailItem}
+            entityType="transmittal"
+            projectId={filters.projectId}
+            queryKey={["rpt-trans", filters.projectId]}
+            onRecordUpdated={setDetailItem}
+          />
+        )}
+      </RecordDetailSheet>
     </div>
   );
 }
@@ -931,6 +1117,8 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
@@ -981,6 +1169,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
     { key: "location", label: t("location") },
     { key: "date", label: t("date") },
     { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
     { key: "contractor", label: t("contractor") },
     { key: "remarks", label: t("remarks") },
   ];
@@ -990,7 +1179,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
         <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
         <div className="flex gap-2">
-          {filters.projectId !== "_all" && (
+          {filters.projectId !== "_all" && canWrite && (
             <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setAddOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> {t("addRecord")}
             </Button>
@@ -1025,6 +1214,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
                   <TableCell className="text-xs">{item.location || "—"}</TableCell>
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
+                  <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>
                   <TableCell className="text-xs">{item.contractor || "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{item.remarks || "—"}</TableCell>
                 </TableRow>
@@ -1048,7 +1238,17 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
           { key: "date", label: "Date", format: fmt },
           { key: "remarks", label: "Remarks" },
         ]}
-      />
+      >
+        {detailItem && filters.projectId !== "_all" && (
+          <ApprovalPanel
+            record={detailItem}
+            entityType="itr"
+            projectId={filters.projectId}
+            queryKey={["rpt-itr", filters.projectId]}
+            onRecordUpdated={setDetailItem}
+          />
+        )}
+      </RecordDetailSheet>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[480px]">
@@ -1119,6 +1319,8 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
@@ -1169,6 +1371,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
     { key: "location", label: t("location") },
     { key: "raisedBy", label: t("raisedBy") },
     { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
     { key: "correctiveAction", label: t("correctiveAction") },
     { key: "closeDate", label: t("closeDate") },
   ];
@@ -1178,7 +1381,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
         <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
         <div className="flex gap-2">
-          {filters.projectId !== "_all" && (
+          {filters.projectId !== "_all" && canWrite && (
             <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setAddOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> {t("addRecord")}
             </Button>
@@ -1213,6 +1416,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
                   <TableCell className="text-xs">{item.location || "—"}</TableCell>
                   <TableCell className="text-xs">{item.raisedBy || "—"}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
+                  <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>
                   <TableCell className="text-xs max-w-[150px] truncate">{item.correctiveAction || "—"}</TableCell>
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.closeDate)}</TableCell>
                 </TableRow>
@@ -1237,7 +1441,17 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
           { key: "closeDate", label: "Close Date", format: fmt },
           { key: "remarks", label: "Remarks" },
         ]}
-      />
+      >
+        {detailItem && filters.projectId !== "_all" && (
+          <ApprovalPanel
+            record={detailItem}
+            entityType="ncr"
+            projectId={filters.projectId}
+            queryKey={["rpt-ncr", filters.projectId]}
+            onRecordUpdated={setDetailItem}
+          />
+        )}
+      </RecordDetailSheet>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[480px]">
@@ -1308,6 +1522,8 @@ function NocRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
@@ -1368,7 +1584,7 @@ function NocRegister({ filters }: { filters: Filters }) {
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
         <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
         <div className="flex gap-2">
-          {filters.projectId !== "_all" && (
+          {filters.projectId !== "_all" && canWrite && (
             <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setAddOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> {t("addRecord")}
             </Button>

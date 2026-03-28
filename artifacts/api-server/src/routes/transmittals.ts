@@ -4,7 +4,7 @@ import {
   transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth, hashPassword } from "../lib/auth.js";
+import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import type { Request, Response } from "express";
@@ -67,7 +67,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // Create transmittal
-router.post("/", async (req, res) => {
+router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, documentIds } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
@@ -114,7 +114,7 @@ router.post("/", async (req, res) => {
 });
 
 // Update transmittal
-router.put("/:id", async (req, res) => {
+router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const { subject, description, purpose, dueDate, toExternal, status } = req.body;
   const [transmittal] = await db.update(transmittalsTable)
@@ -125,7 +125,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // Send transmittal
-router.post("/:id/send", async (req, res) => {
+router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
@@ -149,7 +149,7 @@ router.post("/:id/acknowledge", async (req, res) => {
 });
 
 // Add document to transmittal
-router.post("/:id/items", async (req, res) => {
+router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const transmittalId = parseInt(req.params.id);
   const { documentId, revision, copies, purpose } = req.body;
   const [item] = await db.insert(transmittalItemsTable).values({
@@ -159,14 +159,14 @@ router.post("/:id/items", async (req, res) => {
 });
 
 // Remove document from transmittal
-router.delete("/:id/items/:itemId", async (req, res) => {
+router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const itemId = parseInt(req.params.itemId);
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
   res.json({ success: true });
 });
 
 // Create / update share link
-router.post("/:id/share", async (req, res) => {
+router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const { expiresInDays, password } = req.body;
 
@@ -233,12 +233,83 @@ router.post("/:id/upload-attachment", async (req, res) => {
 });
 
 // Revoke share link
-router.delete("/:id/share", async (req, res) => {
+router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   await db.update(transmittalsTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id));
   res.json({ success: true });
 });
+
+// ─── Workflow Approval ────────────────────────────────────────────────────────
+router.post(
+  "/:id/submit-approval",
+  requireRole("admin", "project_manager", "document_controller"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(transmittalsTable)
+      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .where(eq(transmittalsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_submit", entityType: "transmittal",
+      entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/:id/approve",
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(transmittalsTable)
+      .set({
+        approvalStatus: "approved",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(transmittalsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_approve", entityType: "transmittal",
+      entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/:id/reject",
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(transmittalsTable)
+      .set({
+        approvalStatus: "rejected",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(transmittalsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_reject", entityType: "transmittal",
+      entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
 
 export default router;

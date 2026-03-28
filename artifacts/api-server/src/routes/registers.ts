@@ -5,7 +5,8 @@ import {
   projectsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, requireRole } from "../lib/auth.js";
+import { createAuditLog } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });
 
@@ -18,7 +19,7 @@ router.get("/inspection-requests", requireAuth, async (req, res) => {
   res.json({ inspectionRequests: rows });
 });
 
-router.post("/inspection-requests", requireAuth, async (req, res) => {
+router.post("/inspection-requests", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { requestNumber, type, description, location, date, status, contractor, linkedCorrespondenceId, remarks } = req.body;
   if (!requestNumber) { res.status(400).json({ message: "requestNumber is required" }); return; }
@@ -31,7 +32,7 @@ router.post("/inspection-requests", requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.put("/inspection-requests/:id", requireAuth, async (req, res) => {
+router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const { description, location, date, status, contractor, remarks } = req.body;
   const [row] = await db.update(inspectionRequestsTable)
@@ -41,10 +42,84 @@ router.put("/inspection-requests/:id", requireAuth, async (req, res) => {
   res.json(row);
 });
 
-router.delete("/inspection-requests/:id", requireAuth, async (req, res) => {
+router.delete("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   await db.delete(inspectionRequestsTable).where(eq(inspectionRequestsTable.id, parseInt(req.params.id)));
   res.json({ ok: true });
 });
+
+// ITR — Workflow approval endpoints
+router.post(
+  "/inspection-requests/:id/submit-approval",
+  requireAuth,
+  requireRole("admin", "project_manager", "document_controller"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(inspectionRequestsTable)
+      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .where(eq(inspectionRequestsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_submit", entityType: "itr",
+      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/inspection-requests/:id/approve",
+  requireAuth,
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(inspectionRequestsTable)
+      .set({
+        approvalStatus: "approved",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(inspectionRequestsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_approve", entityType: "itr",
+      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/inspection-requests/:id/reject",
+  requireAuth,
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(inspectionRequestsTable)
+      .set({
+        approvalStatus: "rejected",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(inspectionRequestsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_reject", entityType: "itr",
+      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
 
 // ─── NCR / SOR ────────────────────────────────────────────────────────────────
 router.get("/ncr-records", requireAuth, async (req, res) => {
@@ -55,7 +130,7 @@ router.get("/ncr-records", requireAuth, async (req, res) => {
   res.json({ ncrRecords: rows });
 });
 
-router.post("/ncr-records", requireAuth, async (req, res) => {
+router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { reportNumber, type, description, location, raisedBy, status, correctiveAction, closeDate, remarks } = req.body;
   if (!reportNumber) { res.status(400).json({ message: "reportNumber is required" }); return; }
@@ -68,7 +143,7 @@ router.post("/ncr-records", requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.put("/ncr-records/:id", requireAuth, async (req, res) => {
+router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const { description, location, raisedBy, status, correctiveAction, closeDate, remarks } = req.body;
   const [row] = await db.update(ncrRecordsTable)
@@ -78,10 +153,84 @@ router.put("/ncr-records/:id", requireAuth, async (req, res) => {
   res.json(row);
 });
 
-router.delete("/ncr-records/:id", requireAuth, async (req, res) => {
+router.delete("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   await db.delete(ncrRecordsTable).where(eq(ncrRecordsTable.id, parseInt(req.params.id)));
   res.json({ ok: true });
 });
+
+// NCR — Workflow approval endpoints
+router.post(
+  "/ncr-records/:id/submit-approval",
+  requireAuth,
+  requireRole("admin", "project_manager", "document_controller"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const [row] = await db.update(ncrRecordsTable)
+      .set({ approvalStatus: "pending", updatedAt: new Date() })
+      .where(eq(ncrRecordsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_submit", entityType: "ncr",
+      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/ncr-records/:id/approve",
+  requireAuth,
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(ncrRecordsTable)
+      .set({
+        approvalStatus: "approved",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(ncrRecordsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_approve", entityType: "ncr",
+      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
+
+router.post(
+  "/ncr-records/:id/reject",
+  requireAuth,
+  requireRole("admin", "project_manager"),
+  async (req, res) => {
+    const id = parseInt(req.params.id);
+    const { comment } = req.body;
+    const [row] = await db.update(ncrRecordsTable)
+      .set({
+        approvalStatus: "rejected",
+        approvedById: req.user!.id,
+        approvalComment: comment ?? null,
+        approvedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(ncrRecordsTable.id, id))
+      .returning();
+    if (!row) { res.status(404).json({ error: "Not found" }); return; }
+    await createAuditLog({
+      userId: req.user!.id, action: "action_workflow_reject", entityType: "ncr",
+      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+      details: { comment },
+    });
+    res.json(row);
+  }
+);
 
 // ─── NOC ──────────────────────────────────────────────────────────────────────
 router.get("/noc-records", requireAuth, async (req, res) => {
@@ -92,7 +241,7 @@ router.get("/noc-records", requireAuth, async (req, res) => {
   res.json({ nocRecords: rows });
 });
 
-router.post("/noc-records", requireAuth, async (req, res) => {
+router.post("/noc-records", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { nocNumber, authority, date, status, linkedDocumentId, remarks } = req.body;
   if (!nocNumber) { res.status(400).json({ message: "nocNumber is required" }); return; }
@@ -105,7 +254,7 @@ router.post("/noc-records", requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.put("/noc-records/:id", requireAuth, async (req, res) => {
+router.put("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const { authority, date, status, linkedDocumentId, remarks } = req.body;
   const [row] = await db.update(nocRecordsTable)
@@ -115,7 +264,7 @@ router.put("/noc-records/:id", requireAuth, async (req, res) => {
   res.json(row);
 });
 
-router.delete("/noc-records/:id", requireAuth, async (req, res) => {
+router.delete("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   await db.delete(nocRecordsTable).where(eq(nocRecordsTable.id, parseInt(req.params.id)));
   res.json({ ok: true });
 });

@@ -2,6 +2,9 @@ import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/p
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 
+// ─── Shared Approval Status Enum ──────────────────────────────────────────────
+export const approvalStatusEnum = pgEnum("approval_status", ["none", "pending", "approved", "rejected"]);
+
 // ─── Inspection Requests (ITR / MIR) ──────────────────────────────────────────
 export const inspectionTypeEnum = pgEnum("inspection_type", ["itr", "mir"]);
 export const inspectionStatusEnum = pgEnum("inspection_status", [
@@ -22,6 +25,10 @@ export const inspectionRequestsTable = pgTable("inspection_requests", {
   remarks: text("remarks"),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => usersTable.id),
+  approvalStatus: approvalStatusEnum("approval_status").notNull().default("none"),
+  approvedById: integer("approved_by_id").references(() => usersTable.id),
+  approvalComment: text("approval_comment"),
+  approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -45,6 +52,10 @@ export const ncrRecordsTable = pgTable("ncr_records", {
   remarks: text("remarks"),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => usersTable.id),
+  approvalStatus: approvalStatusEnum("approval_status").notNull().default("none"),
+  approvedById: integer("approved_by_id").references(() => usersTable.id),
+  approvalComment: text("approval_comment"),
+  approvedAt: timestamp("approved_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

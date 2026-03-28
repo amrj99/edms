@@ -28,8 +28,10 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **AI Integration:** Utilizes Replit AI Integrations (OpenAI proxy) for document analysis, task prioritization, and natural language search.
 - **OpenAPI Specification:** Used for API definition and client code generation via Orval.
 - **UI/UX Design:** Consistent layouts, theming, reusable React components, and interactive elements. Admin panels provide comprehensive configuration.
-- **Multi-Organization Isolation:** Ensures data separation between different organizations.
+- **Multi-Organization Isolation:** Ensures data separation between different organizations. Projects page has org filter for sysadmin, organization dropdown in project creation form (replaces raw ID input), Building2 icon on project cards showing org name.
 - **Module Licensing:** Per-org feature flags `{ dashboard, deliverables, registers, notifications }` stored as JSONB in `org_config`. `GET/PUT /api/modules` API (admin+system_owner gated). `useModules()` React hook. `ModuleGuard` route wrapper blocks direct URL access to disabled modules (`/`, `/deliverables`, `/reports`) with a bilingual "Module Not Available" placeholder. Sidebar hides Deliverables and Reports links when disabled. Notification bell hidden when notifications module is off. Admin "Modules" tab with 4 i18n-labelled toggle cards; system_owner sees org selector. 28 bilingual i18n keys.
+- **RBAC Enforcement:** `requireRole("admin", "project_manager", "document_controller")` guards all write endpoints (POST/PUT/DELETE) on ITR, NCR, NOC registers and Transmittals. Frontend hides "Add Record" button for `viewer` and `reviewer` roles. Also fixed `await hashPassword()` bug in user creation and reset-password routes.
+- **Workflow Approvals:** NCR, ITR, and Transmittal records support submit/approve/reject workflow. `approvalStatus` enum column (none/pending/approved/rejected) + `approvedById`/`approvalComment`/`approvedAt`. API: `submit-approval` (admin+pm+dc), `approve`/`reject` (admin+pm). `ApprovalBadge` + `ApprovalPanel` UI with instant panel update via `onRecordUpdated` callback. Approval actions create audit log entries.
 
 **Key Features and Implementations:**
 

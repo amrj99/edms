@@ -41,7 +41,7 @@ router.post("/", requireAuth, async (req, res) => {
   }
   const [user] = await db.insert(usersTable).values({
     email: email.toLowerCase(),
-    passwordHash: hashPassword(password),
+    passwordHash: await hashPassword(password),
     firstName,
     lastName,
     role,
@@ -93,7 +93,7 @@ router.post("/:id/reset-password", requireAuth, async (req, res) => {
     return;
   }
   const [user] = await db.update(usersTable)
-    .set({ passwordHash: hashPassword(newPassword), updatedAt: new Date() })
+    .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
