@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { I18nProvider } from "@/lib/i18n";
 
 // Pages
 import Login from "@/pages/login";
@@ -108,18 +109,20 @@ function Router() {
 
 function App() {
   return (
-    <ThemeProvider defaultTheme="system" storageKey="edms-theme">
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <AuthProvider>
-              <Router />
-            </AuthProvider>
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
-      </QueryClientProvider>
-    </ThemeProvider>
+    <I18nProvider>
+      <ThemeProvider defaultTheme="system" storageKey="edms-theme">
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+              <AuthProvider>
+                <Router />
+              </AuthProvider>
+            </WouterRouter>
+            <Toaster />
+          </TooltipProvider>
+        </QueryClientProvider>
+      </ThemeProvider>
+    </I18nProvider>
   );
 }
 

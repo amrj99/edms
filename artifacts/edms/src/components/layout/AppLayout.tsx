@@ -27,6 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from "@/components/ui/command";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { useI18n } from "@/lib/i18n";
 
 // ─── Recent Projects helpers ──────────────────────────────────────────────────
 const RECENT_KEY = "edms_recent_projects";
@@ -331,6 +332,23 @@ export function AppSidebar() {
   );
 }
 
+// ─── Language Toggle ──────────────────────────────────────────────────────────
+function LanguageToggle() {
+  const { lang, setLang } = useI18n();
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-8 px-2 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+      onClick={() => setLang(lang === "en" ? "ar" : "en")}
+      title={lang === "en" ? "Switch to Arabic / العربية" : "Switch to English"}
+    >
+      <span className="text-base leading-none">{lang === "en" ? "🇦🇪" : "🇬🇧"}</span>
+      <span className="hidden sm:inline">{lang === "en" ? "عربي" : "EN"}</span>
+    </Button>
+  );
+}
+
 // ─── App Layout ───────────────────────────────────────────────────────────────
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -358,6 +376,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <div className="flex-1" />
             <div className="flex items-center gap-2">
               <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
+              <LanguageToggle />
               <ProjectSwitcher />
               <NotificationBell />
             </div>

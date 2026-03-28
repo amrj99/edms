@@ -12,3 +12,4 @@ export * from "./ai";
 export * from "./transmittals";
 export * from "./notifications";
 export * from "./config";
+export * from "./registers";

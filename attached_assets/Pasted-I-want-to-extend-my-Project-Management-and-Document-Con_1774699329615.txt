@@ -1,0 +1,171 @@
+I want to extend my Project Management and Document Control system with a flexible, bilingual (Arabic & English) reporting and register module.
+
+Main Requirements:
+
+1. Full Bilingual Support
+
+* The entire UI must support Arabic and English.
+* Add language toggle (Arabic / English).
+* Arabic layout must support RTL.
+* All labels, menus, columns, and buttons must be translated.
+* Data values (document numbers, titles) remain unchanged.
+
+2. Unified Reporting Engine
+   Create one flexible reporting engine that generates multiple registers from the same data source.
+
+3. Required Registers (Presets)
+
+* Master Register
+* Correspondence Register (Client / Consultant / Subcontractor / Other)
+* Transmittal Register
+* Drawing Register
+* ITR / MIR Register
+* NCR / SOR Register
+* NOC Register
+
+4. Flexible Dynamic Filters
+   Each register must allow filtering by:
+
+* Project
+* Document Type
+* Status
+* Date Range
+* Department
+* Sender (From)
+* Receiver (To)
+* Linked Correspondence
+* Linked Transmittal
+* Revision
+* Discipline (for drawings)
+
+5. Master Register
+   Should display all documents and related:
+
+* Document Number
+* Title
+* Type
+* Revision
+* Status
+* Project
+* Department
+* Linked Correspondence
+* Linked Transmittal
+* Date
+* Remarks
+
+6. Correspondence Register
+   Fields:
+
+* Correspondence No
+* Date
+* From
+* To
+* Subject
+* Type (Client / Consultant / Subcontractor / Other)
+* Related Documents
+* Status
+* Remarks
+
+7. Transmittal Register
+   Fields:
+
+* Transmittal No
+* Date
+* From
+* To
+* Subject
+* Documents Included
+* Status
+* Remarks
+
+8. Drawing Register
+   Fields:
+
+* Drawing No
+* Title
+* Discipline
+* Revision
+* Status
+* Transmittal
+* Date
+* Remarks
+
+9. ITR / MIR Register
+   Fields:
+
+* Request No
+* Type (ITR / MIR)
+* Location
+* Date
+* Status
+* Contractor
+* Linked Correspondence
+* Remarks
+
+10. NCR / SOR Register
+    Fields:
+
+* Report No
+* Type (NCR / SOR)
+* Description
+* Location
+* Raised By
+* Status
+* Corrective Action
+* Close Date
+
+11. NOC Register
+    Fields:
+
+* NOC No
+* Authority
+* Project
+* Date
+* Status
+* Linked Document
+* Remarks
+
+12. Relationships
+    Documents must link to:
+
+* Correspondence
+* Transmittals
+* Revisions
+* Projects
+* Departments
+
+13. Export Options
+    Each register must support:
+
+* Export to Excel
+* Export to PDF
+* Print
+
+14. Report Presets
+    Create saved report templates:
+
+* Master Register
+* Drawing Register
+* NCR Register
+* ITR Register
+* Correspondence Register
+
+15. UI Structure
+    Add new menu:
+    Reports
+
+* Master Register
+* Correspondence Register
+* Transmittal Register
+* Drawing Register
+* ITR/MIR
+* NCR/SOR
+* NOC
+
+16. Modular Design
+    Registers must be implemented as a module that can be enabled/disabled per client.
+
+17. Performance
+    Reports must load quickly and support pagination and sorting.
+
+Please implement this as a flexible, scalable reporting module connected to the existing document and correspondence system.

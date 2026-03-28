@@ -1,0 +1,64 @@
+import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { projectsTable } from "./projects";
+import { usersTable } from "./users";
+
+// ─── Inspection Requests (ITR / MIR) ──────────────────────────────────────────
+export const inspectionTypeEnum = pgEnum("inspection_type", ["itr", "mir"]);
+export const inspectionStatusEnum = pgEnum("inspection_status", [
+  "pending", "scheduled", "in_progress", "passed", "failed", "cancelled",
+]);
+
+export const inspectionRequestsTable = pgTable("inspection_requests", {
+  id: serial("id").primaryKey(),
+  requestNumber: text("request_number").notNull(),
+  type: inspectionTypeEnum("type").notNull().default("itr"),
+  description: text("description"),
+  location: text("location"),
+  date: timestamp("date"),
+  status: inspectionStatusEnum("status").notNull().default("pending"),
+  contractor: text("contractor"),
+  linkedCorrespondenceId: integer("linked_correspondence_id"),
+  remarks: text("remarks"),
+  projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
+  createdById: integer("created_by_id").notNull().references(() => usersTable.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ─── NCR / SOR Records ────────────────────────────────────────────────────────
+export const ncrTypeEnum = pgEnum("ncr_type", ["ncr", "sor"]);
+export const ncrStatusEnum = pgEnum("ncr_status", ["open", "in_progress", "closed", "voided"]);
+
+export const ncrRecordsTable = pgTable("ncr_records", {
+  id: serial("id").primaryKey(),
+  reportNumber: text("report_number").notNull(),
+  type: ncrTypeEnum("type").notNull().default("ncr"),
+  description: text("description"),
+  location: text("location"),
+  raisedBy: text("raised_by"),
+  status: ncrStatusEnum("status").notNull().default("open"),
+  correctiveAction: text("corrective_action"),
+  closeDate: timestamp("close_date"),
+  remarks: text("remarks"),
+  projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
+  createdById: integer("created_by_id").notNull().references(() => usersTable.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ─── NOC Records ──────────────────────────────────────────────────────────────
+export const nocStatusEnum = pgEnum("noc_status", ["pending", "approved", "rejected", "expired"]);
+
+export const nocRecordsTable = pgTable("noc_records", {
+  id: serial("id").primaryKey(),
+  nocNumber: text("noc_number").notNull(),
+  authority: text("authority"),
+  date: timestamp("date"),
+  status: nocStatusEnum("status").notNull().default("pending"),
+  linkedDocumentId: integer("linked_document_id"),
+  remarks: text("remarks"),
+  projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
+  createdById: integer("created_by_id").notNull().references(() => usersTable.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
