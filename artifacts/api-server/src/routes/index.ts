@@ -23,6 +23,9 @@ import adminRouter from "./admin.js";
 import publicShareRouter from "./public-share.js";
 import globalDocumentsRouter from "./global-documents.js";
 import registersRouter from "./registers.js";
+import deliverablesRouter from "./deliverables.js";
+import preferencesRouter from "./preferences.js";
+import notificationSummaryRouter from "./notification-summary.js";
 
 const router: IRouter = Router();
 
@@ -50,5 +53,8 @@ router.use("/admin", adminRouter);
 router.use("/public/share", publicShareRouter);
 router.use("/documents", globalDocumentsRouter);
 router.use("/projects/:projectId", registersRouter);
+router.use("/projects/:projectId", deliverablesRouter);
+router.use("/user", preferencesRouter);
+router.use("/", notificationSummaryRouter);
 
 export default router;

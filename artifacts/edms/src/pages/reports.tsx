@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isBefore, isAfter } from "date-fns";
 import * as XLSX from "xlsx";
@@ -18,9 +18,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import {
   BarChart3, FileSpreadsheet, FileText, Printer, RefreshCw, Loader2,
   Mail, Send, PenLine, ClipboardList, ShieldAlert, FileCheck, Plus, Filter, X,
+  Eye, EyeOff, Columns3, Save, BookOpen, ChevronDown, Trash2,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -237,6 +241,9 @@ function FilterBar({
             <X className="h-3.5 w-3.5" /> {t("clearFilters")}
           </Button>
         )}
+        <div className="ml-auto">
+          <SavedFiltersUI filters={filters} onLoad={onFiltersChange} />
+        </div>
       </div>
     </div>
   );
@@ -252,11 +259,198 @@ function EmptyState({ icon: Icon, message }: { icon: React.ElementType; message:
   );
 }
 
+// ─── Record Detail Sheet ───────────────────────────────────────────────────────
+function RecordDetailSheet({
+  item, open, onClose, title, fields,
+}: {
+  item: any; open: boolean; onClose: () => void;
+  title: string;
+  fields: { key: string; label: string; format?: (v: any) => string }[];
+}) {
+  if (!item) return null;
+  return (
+    <Sheet open={open} onOpenChange={onClose}>
+      <SheetContent className="w-[400px] flex flex-col">
+        <SheetHeader>
+          <SheetTitle className="text-base">{title}</SheetTitle>
+          <SheetDescription className="text-xs text-muted-foreground">Record #{item.id}</SheetDescription>
+        </SheetHeader>
+        <div className="flex-1 overflow-y-auto space-y-3 py-4">
+          {fields.map(f => (
+            <div key={f.key} className="grid grid-cols-[120px_1fr] gap-2 items-start">
+              <span className="text-xs text-muted-foreground font-medium pt-0.5">{f.label}</span>
+              <span className="text-sm break-words">
+                {f.format ? f.format(item[f.key]) : (item[f.key] ?? "—") || "—"}
+              </span>
+            </div>
+          ))}
+          <div className="border-t pt-3 grid grid-cols-[120px_1fr] gap-2">
+            <span className="text-xs text-muted-foreground font-medium">Created</span>
+            <span className="text-xs">{fmt(item.createdAt)}</span>
+          </div>
+          <div className="grid grid-cols-[120px_1fr] gap-2">
+            <span className="text-xs text-muted-foreground font-medium">Updated</span>
+            <span className="text-xs">{fmt(item.updatedAt)}</span>
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ─── Column Visibility Toggle ─────────────────────────────────────────────────
+function ColumnToggleButton({
+  allCols, visibleKeys, onToggle, storageKey,
+}: {
+  allCols: { key: string; label: string }[];
+  visibleKeys: Set<string>;
+  onToggle: (key: string) => void;
+  storageKey: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+          <Columns3 className="h-3.5 w-3.5" /> Columns
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[160px]">
+        <DropdownMenuLabel className="text-xs">Toggle columns</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {allCols.map(col => (
+          <DropdownMenuCheckboxItem
+            key={col.key}
+            checked={visibleKeys.has(col.key)}
+            onCheckedChange={() => onToggle(col.key)}
+            className="text-xs"
+          >
+            {col.label}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function useColumnVisibility(storageKey: string, defaultKeys: string[]) {
+  const [visible, setVisible] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(`edms_cols_${storageKey}`);
+      if (raw) return new Set(JSON.parse(raw));
+    } catch {}
+    return new Set(defaultKeys);
+  });
+
+  const toggle = (key: string) => {
+    setVisible(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      localStorage.setItem(`edms_cols_${storageKey}`, JSON.stringify([...next]));
+      return next;
+    });
+  };
+  return { visible, toggle };
+}
+
+// ─── Saved Filters ────────────────────────────────────────────────────────────
+const SAVED_FILTERS_KEY = "edms_saved_filters";
+
+function loadSavedFilters(): { name: string; filters: Filters }[] {
+  try { return JSON.parse(localStorage.getItem(SAVED_FILTERS_KEY) ?? "[]"); } catch { return []; }
+}
+function saveSavedFilters(list: { name: string; filters: Filters }[]) {
+  localStorage.setItem(SAVED_FILTERS_KEY, JSON.stringify(list));
+}
+
+function SavedFiltersUI({ filters, onLoad }: { filters: Filters; onLoad: (f: Filters) => void }) {
+  const [saved, setSaved] = useState<{ name: string; filters: Filters }[]>(() => loadSavedFilters());
+  const [saveName, setSaveName] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  const handleSave = () => {
+    if (!saveName.trim()) return;
+    const updated = [...saved.filter(s => s.name !== saveName.trim()), { name: saveName.trim(), filters }];
+    saveSavedFilters(updated);
+    setSaved(updated);
+    setSaveName("");
+    setSaveOpen(false);
+  };
+
+  const handleDelete = (name: string) => {
+    const updated = saved.filter(s => s.name !== name);
+    saveSavedFilters(updated);
+    setSaved(updated);
+  };
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {saved.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs">
+              <BookOpen className="h-3.5 w-3.5" /> Saved <ChevronDown className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-[200px]">
+            <DropdownMenuLabel className="text-xs">Saved filters</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {saved.map(s => (
+              <div key={s.name} className="flex items-center gap-1 px-2 py-1">
+                <button className="flex-1 text-xs text-left hover:text-primary" onClick={() => onLoad(s.filters)}>{s.name}</button>
+                <button className="text-muted-foreground hover:text-destructive" onClick={() => handleDelete(s.name)}><X className="h-3 w-3" /></button>
+              </div>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+      {saveOpen ? (
+        <div className="flex items-center gap-1">
+          <Input
+            value={saveName}
+            onChange={e => setSaveName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setSaveOpen(false); }}
+            placeholder="Filter name…"
+            className="h-7 w-[130px] text-xs"
+            autoFocus
+          />
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleSave}><Save className="h-3.5 w-3.5" /></Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSaveOpen(false)}><X className="h-3.5 w-3.5" /></Button>
+        </div>
+      ) : (
+        <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={() => setSaveOpen(true)}>
+          <Save className="h-3.5 w-3.5" /> Save
+        </Button>
+      )}
+    </div>
+  );
+}
+
 // ─── 1. Master Register ────────────────────────────────────────────────────────
 function MasterRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
+  const { toast } = useToast();
+  const qc = useQueryClient();
   const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [detailItem, setDetailItem] = useState<any>(null);
+  const [bulkStatus, setBulkStatus] = useState("_none");
   const PER_PAGE = 50;
+
+  const COLS_DEF = [
+    { key: "documentNumber", label: t("docNumber") },
+    { key: "title", label: t("title") },
+    { key: "documentType", label: t("documentType") },
+    { key: "discipline", label: t("discipline") },
+    { key: "revision", label: t("revision") },
+    { key: "status", label: t("status") },
+    { key: "source", label: t("source") },
+    { key: "issuedBy", label: t("issuedBy") },
+    { key: "projectName", label: t("project_col") },
+    { key: "updatedAt", label: t("updatedAt") },
+  ];
+
+  const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("master", COLS_DEF.map(c => c.key));
+  const COLS = COLS_DEF.filter(c => visibleCols.has(c.key));
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-global-docs"],
@@ -280,60 +474,134 @@ function MasterRegister({ filters }: { filters: Filters }) {
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
 
-  const COLS = [
-    { key: "documentNumber", label: t("docNumber") },
-    { key: "title", label: t("title") },
-    { key: "documentType", label: t("documentType") },
-    { key: "discipline", label: t("discipline") },
-    { key: "revision", label: t("revision") },
-    { key: "status", label: t("status") },
-    { key: "source", label: t("source") },
-    { key: "issuedBy", label: t("issuedBy") },
-    { key: "projectName", label: t("project_col") },
-    { key: "updatedAt", label: t("updatedAt") },
+  const allPageSelected = paginated.length > 0 && paginated.every(d => selectedIds.has(d.id));
+  const toggleAll = () => {
+    if (allPageSelected) {
+      setSelectedIds(prev => { const n = new Set(prev); paginated.forEach(d => n.delete(d.id)); return n; });
+    } else {
+      setSelectedIds(prev => { const n = new Set(prev); paginated.forEach(d => n.add(d.id)); return n; });
+    }
+  };
+
+  const bulkMutation = useMutation({
+    mutationFn: async (status: string) => {
+      const ids = [...selectedIds];
+      await Promise.all(ids.map(id =>
+        fetch(`/api/documents/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        })
+      ));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["rpt-global-docs"] });
+      setSelectedIds(new Set());
+      setBulkStatus("_none");
+      toast({ title: `Updated ${selectedIds.size} documents` });
+    },
+    onError: () => toast({ title: "Bulk update failed", variant: "destructive" }),
+  });
+
+  const handleBulkExport = () => {
+    const selected = filtered.filter(d => selectedIds.has(d.id));
+    const rows = selected.map(d => Object.fromEntries(COLS_DEF.map(c => [c.label, c.key === "updatedAt" ? fmt(d.updatedAt) : d[c.key] ?? "—"])));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Selected");
+    XLSX.writeFile(wb, "selected-documents.xlsx");
+  };
+
+  const DETAIL_FIELDS = [
+    { key: "documentNumber", label: "Doc Number" },
+    { key: "title", label: "Title" },
+    { key: "documentType", label: "Type" },
+    { key: "discipline", label: "Discipline" },
+    { key: "revision", label: "Revision" },
+    { key: "status", label: "Status" },
+    { key: "source", label: "Source" },
+    { key: "issuedBy", label: "Issued By" },
+    { key: "projectName", label: "Project" },
+    { key: "description", label: "Description" },
+    { key: "updatedAt", label: "Last Updated", format: fmt },
   ];
 
   return (
     <div className="space-y-3">
-      <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
-        <div>
-          <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg flex-wrap">
+          <span className="text-xs font-semibold text-primary">{selectedIds.size} selected</span>
+          <Select value={bulkStatus} onValueChange={setBulkStatus}>
+            <SelectTrigger className="h-7 w-[140px] text-xs"><SelectValue placeholder="Change status…" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_none">— Change status —</SelectItem>
+              {["draft","pending","approved","rejected","issued","superseded","cancelled"].map(s => (
+                <SelectItem key={s} value={s} className="capitalize text-xs">{s.replace(/_/g, " ")}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" className="h-7 text-xs" disabled={bulkStatus === "_none" || bulkMutation.isPending}
+            onClick={() => bulkStatus !== "_none" && bulkMutation.mutate(bulkStatus)}>
+            {bulkMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
+          </Button>
+          <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={handleBulkExport}>
+            <FileSpreadsheet className="h-3 w-3 text-green-600" /> Export selected
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 text-xs ml-auto" onClick={() => setSelectedIds(new Set())}>
+            <X className="h-3 w-3" /> Clear
+          </Button>
         </div>
-        <ExportButtons
-          data={filtered.map(d => ({ ...d, updatedAt: fmt(d.updatedAt) }))}
-          filename="master-register"
-          columns={COLS}
-          title={t("masterRegister")}
-        />
+      )}
+
+      <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
+        <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
+        <div className="flex gap-1.5 flex-wrap">
+          <ColumnToggleButton allCols={COLS_DEF} visibleKeys={visibleCols} onToggle={toggleCol} storageKey="master" />
+          <ExportButtons
+            data={filtered.map(d => ({ ...d, updatedAt: fmt(d.updatedAt) }))}
+            filename="master-register"
+            columns={COLS_DEF}
+            title={t("masterRegister")}
+          />
+        </div>
       </div>
       <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
+              <TableHead className="w-[36px]">
+                <Checkbox checked={allPageSelected} onCheckedChange={toggleAll} className="h-3.5 w-3.5" />
+              </TableHead>
               {COLS.map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center">
+              <TableRow><TableCell colSpan={COLS.length + 1} className="py-12 text-center">
                 <Loader2 className="h-5 w-5 animate-spin mx-auto" />
               </TableCell></TableRow>
             ) : paginated.length === 0 ? (
-              <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">
+              <TableRow><TableCell colSpan={COLS.length + 1} className="py-12 text-center text-muted-foreground text-sm">
                 {t("noData")}
               </TableCell></TableRow>
             ) : paginated.map(doc => (
-              <TableRow key={doc.id} className="hover:bg-muted/20 transition-colors">
-                <TableCell className="font-mono text-xs">{doc.documentNumber}</TableCell>
-                <TableCell className="text-sm max-w-[200px] truncate">{doc.title}</TableCell>
-                <TableCell className="text-xs capitalize">{doc.documentType || "—"}</TableCell>
-                <TableCell className="text-xs">{doc.discipline || "—"}</TableCell>
-                <TableCell className="font-mono text-xs">{doc.revision || "—"}</TableCell>
-                <TableCell><StatusPill status={doc.status} /></TableCell>
-                <TableCell className="text-xs capitalize">{doc.source || "—"}</TableCell>
-                <TableCell className="text-xs max-w-[100px] truncate">{doc.issuedBy || "—"}</TableCell>
-                <TableCell className="text-xs">{doc.projectName || "—"}</TableCell>
-                <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmt(doc.updatedAt)}</TableCell>
+              <TableRow key={doc.id} className={`hover:bg-muted/20 transition-colors cursor-pointer ${selectedIds.has(doc.id) ? "bg-primary/5" : ""}`}
+                onClick={() => setDetailItem(doc)}>
+                <TableCell onClick={e => e.stopPropagation()}>
+                  <Checkbox checked={selectedIds.has(doc.id)} className="h-3.5 w-3.5"
+                    onCheckedChange={checked => setSelectedIds(prev => { const n = new Set(prev); checked ? n.add(doc.id) : n.delete(doc.id); return n; })} />
+                </TableCell>
+                {visibleCols.has("documentNumber") && <TableCell className="font-mono text-xs text-primary">{doc.documentNumber}</TableCell>}
+                {visibleCols.has("title") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{doc.title}</TableCell>}
+                {visibleCols.has("documentType") && <TableCell className="text-xs capitalize">{doc.documentType || "—"}</TableCell>}
+                {visibleCols.has("discipline") && <TableCell className="text-xs">{doc.discipline || "—"}</TableCell>}
+                {visibleCols.has("revision") && <TableCell className="font-mono text-xs">{doc.revision || "—"}</TableCell>}
+                {visibleCols.has("status") && <TableCell><StatusPill status={doc.status} /></TableCell>}
+                {visibleCols.has("source") && <TableCell className="text-xs capitalize">{doc.source || "—"}</TableCell>}
+                {visibleCols.has("issuedBy") && <TableCell className="text-xs max-w-[100px] truncate">{doc.issuedBy || "—"}</TableCell>}
+                {visibleCols.has("projectName") && <TableCell className="text-xs">{doc.projectName || "—"}</TableCell>}
+                {visibleCols.has("updatedAt") && <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmt(doc.updatedAt)}</TableCell>}
               </TableRow>
             ))}
           </TableBody>
@@ -346,6 +614,13 @@ function MasterRegister({ filters }: { filters: Filters }) {
           <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p+1))} disabled={page === totalPages}>→</Button>
         </div>
       )}
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.title ?? "Document Detail"}
+        fields={DETAIL_FIELDS}
+      />
     </div>
   );
 }
@@ -353,6 +628,7 @@ function MasterRegister({ filters }: { filters: Filters }) {
 // ─── 2. Correspondence Register ───────────────────────────────────────────────
 function CorrespondenceRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
+  const [detailItem, setDetailItem] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-corr", filters.projectId],
@@ -416,11 +692,11 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
             ) : filtered.length === 0 ? (
               <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
             ) : filtered.map(c => (
-              <TableRow key={c.id} className="hover:bg-muted/20">
-                <TableCell className="font-mono text-xs">{c.referenceNumber || `COR-${String(c.id).padStart(4,"0")}`}</TableCell>
+              <TableRow key={c.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(c)}>
+                <TableCell className="font-mono text-xs text-primary">{c.referenceNumber || `COR-${String(c.id).padStart(4,"0")}`}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{fmt(c.createdAt)}</TableCell>
                 <TableCell className="text-xs capitalize">{c.type?.replace(/_/g," ") || "—"}</TableCell>
-                <TableCell className="text-sm max-w-[250px] truncate">{c.subject}</TableCell>
+                <TableCell className="text-sm max-w-[250px] truncate font-medium">{c.subject}</TableCell>
                 <TableCell><StatusPill status={c.status} /></TableCell>
                 <TableCell className="text-xs capitalize">{c.priority || "—"}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{fmt(c.dueDate)}</TableCell>
@@ -429,6 +705,22 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
           </TableBody>
         </Table>
       </div>
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.subject ?? "Correspondence Detail"}
+        fields={[
+          { key: "referenceNumber", label: "Reference No" },
+          { key: "subject", label: "Subject" },
+          { key: "type", label: "Type" },
+          { key: "status", label: "Status" },
+          { key: "priority", label: "Priority" },
+          { key: "folder", label: "Folder" },
+          { key: "dueDate", label: "Due Date", format: fmt },
+          { key: "createdAt", label: "Date", format: fmt },
+        ]}
+      />
     </div>
   );
 }
@@ -436,6 +728,7 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
 // ─── 3. Transmittal Register ──────────────────────────────────────────────────
 function TransmittalRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
+  const [detailItem, setDetailItem] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-trans", filters.projectId],
@@ -492,10 +785,10 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
             ) : filtered.length === 0 ? (
               <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
             ) : filtered.map(tr => (
-              <TableRow key={tr.id} className="hover:bg-muted/20">
-                <TableCell className="font-mono text-xs">{tr.transmittalNumber || `TRS-${String(tr.id).padStart(4,"0")}`}</TableCell>
+              <TableRow key={tr.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(tr)}>
+                <TableCell className="font-mono text-xs text-primary">{tr.transmittalNumber || `TRS-${String(tr.id).padStart(4,"0")}`}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{fmt(tr.createdAt)}</TableCell>
-                <TableCell className="text-sm max-w-[200px] truncate">{tr.subject}</TableCell>
+                <TableCell className="text-sm max-w-[200px] truncate font-medium">{tr.subject}</TableCell>
                 <TableCell className="text-xs max-w-[120px] truncate">{tr.toExternal || "—"}</TableCell>
                 <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>
                 <TableCell><StatusPill status={tr.status} /></TableCell>
@@ -506,6 +799,21 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
           </TableBody>
         </Table>
       </div>
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.subject ?? "Transmittal Detail"}
+        fields={[
+          { key: "transmittalNumber", label: "Transmittal No" },
+          { key: "subject", label: "Subject" },
+          { key: "toExternal", label: "To" },
+          { key: "purpose", label: "Purpose" },
+          { key: "status", label: "Status" },
+          { key: "sentAt", label: "Sent Date", format: fmt },
+          { key: "acknowledgedAt", label: "Acknowledged", format: fmt },
+        ]}
+      />
     </div>
   );
 }
@@ -513,6 +821,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
 // ─── 4. Drawing Register ──────────────────────────────────────────────────────
 function DrawingRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
+  const [detailItem, setDetailItem] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-drawings", filters.projectId],
@@ -583,9 +892,9 @@ function DrawingRegister({ filters }: { filters: Filters }) {
             ) : filtered.length === 0 ? (
               <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
             ) : filtered.map(doc => (
-              <TableRow key={doc.id} className="hover:bg-muted/20">
-                <TableCell className="font-mono text-xs">{doc.documentNumber}</TableCell>
-                <TableCell className="text-sm max-w-[200px] truncate">{doc.title}</TableCell>
+              <TableRow key={doc.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(doc)}>
+                <TableCell className="font-mono text-xs text-primary">{doc.documentNumber}</TableCell>
+                <TableCell className="text-sm max-w-[200px] truncate font-medium">{doc.title}</TableCell>
                 <TableCell className="text-xs">{doc.discipline || "—"}</TableCell>
                 <TableCell className="font-mono text-xs">{doc.revision || "—"}</TableCell>
                 <TableCell><StatusPill status={doc.status} /></TableCell>
@@ -597,6 +906,22 @@ function DrawingRegister({ filters }: { filters: Filters }) {
           </TableBody>
         </Table>
       </div>
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.documentNumber ?? "Drawing Detail"}
+        fields={[
+          { key: "documentNumber", label: "Drawing No" },
+          { key: "title", label: "Title" },
+          { key: "discipline", label: "Discipline" },
+          { key: "revision", label: "Revision" },
+          { key: "status", label: "Status" },
+          { key: "issuedBy", label: "Issued By" },
+          { key: "description", label: "Description" },
+          { key: "updatedAt", label: "Updated", format: fmt },
+        ]}
+      />
     </div>
   );
 }
@@ -607,6 +932,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -692,10 +1018,10 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
               ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
               ) : filtered.map(item => (
-                <TableRow key={item.id} className="hover:bg-muted/20">
-                  <TableCell className="font-mono text-xs">{item.requestNumber}</TableCell>
+                <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
+                  <TableCell className="font-mono text-xs text-primary">{item.requestNumber}</TableCell>
                   <TableCell><span className="text-xs font-semibold uppercase text-primary">{item.type}</span></TableCell>
-                  <TableCell className="text-sm max-w-[200px] truncate">{item.description || "—"}</TableCell>
+                  <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>
                   <TableCell className="text-xs">{item.location || "—"}</TableCell>
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
@@ -707,6 +1033,22 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
           </Table>
         </div>
       )}
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.requestNumber ?? "ITR/MIR Detail"}
+        fields={[
+          { key: "requestNumber", label: "Request No" },
+          { key: "type", label: "Type" },
+          { key: "description", label: "Description" },
+          { key: "location", label: "Location" },
+          { key: "status", label: "Status" },
+          { key: "contractor", label: "Contractor" },
+          { key: "date", label: "Date", format: fmt },
+          { key: "remarks", label: "Remarks" },
+        ]}
+      />
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[480px]">
@@ -778,6 +1120,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -863,10 +1206,10 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
               ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
               ) : filtered.map(item => (
-                <TableRow key={item.id} className="hover:bg-muted/20">
-                  <TableCell className="font-mono text-xs">{item.reportNumber}</TableCell>
+                <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
+                  <TableCell className="font-mono text-xs text-destructive font-semibold">{item.reportNumber}</TableCell>
                   <TableCell><span className="text-xs font-semibold uppercase text-destructive">{item.type}</span></TableCell>
-                  <TableCell className="text-sm max-w-[200px] truncate">{item.description || "—"}</TableCell>
+                  <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>
                   <TableCell className="text-xs">{item.location || "—"}</TableCell>
                   <TableCell className="text-xs">{item.raisedBy || "—"}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
@@ -878,6 +1221,23 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
           </Table>
         </div>
       )}
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.reportNumber ?? "NCR/SOR Detail"}
+        fields={[
+          { key: "reportNumber", label: "Report No" },
+          { key: "type", label: "Type" },
+          { key: "description", label: "Description" },
+          { key: "location", label: "Location" },
+          { key: "raisedBy", label: "Raised By" },
+          { key: "status", label: "Status" },
+          { key: "correctiveAction", label: "Corrective Action" },
+          { key: "closeDate", label: "Close Date", format: fmt },
+          { key: "remarks", label: "Remarks" },
+        ]}
+      />
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[480px]">
@@ -949,6 +1309,7 @@ function NocRegister({ filters }: { filters: Filters }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -1035,9 +1396,9 @@ function NocRegister({ filters }: { filters: Filters }) {
               ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
               ) : filtered.map(item => (
-                <TableRow key={item.id} className="hover:bg-muted/20">
-                  <TableCell className="font-mono text-xs">{item.nocNumber}</TableCell>
-                  <TableCell className="text-sm max-w-[150px] truncate">{item.authority || "—"}</TableCell>
+                <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
+                  <TableCell className="font-mono text-xs text-primary font-semibold">{item.nocNumber}</TableCell>
+                  <TableCell className="text-sm max-w-[150px] truncate font-medium">{item.authority || "—"}</TableCell>
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{item.remarks || "—"}</TableCell>
@@ -1047,6 +1408,19 @@ function NocRegister({ filters }: { filters: Filters }) {
           </Table>
         </div>
       )}
+      <RecordDetailSheet
+        item={detailItem}
+        open={!!detailItem}
+        onClose={() => setDetailItem(null)}
+        title={detailItem?.nocNumber ?? "NOC Detail"}
+        fields={[
+          { key: "nocNumber", label: "NOC No" },
+          { key: "authority", label: "Authority" },
+          { key: "date", label: "Date", format: fmt },
+          { key: "status", label: "Status" },
+          { key: "remarks", label: "Remarks" },
+        ]}
+      />
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[420px]">
