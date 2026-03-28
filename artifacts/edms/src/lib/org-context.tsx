@@ -14,14 +14,21 @@ const OrgContext = createContext<OrgContextType>({
 export function OrgContextProvider({ children }: { children: ReactNode }) {
   const [activeOrgId, setActiveOrgId] = useState<number | null>(null);
   const qc = useQueryClient();
-  const prevOrgId = useRef<number | null>(null);
+  const prevOrgId = useRef<number | null | undefined>(undefined);
 
   useEffect(() => {
-    // Patch window.fetch to inject orgOverride on every /api/ call
+    // On every org transition (including back to null), flush stale cached data
+    if (prevOrgId.current !== activeOrgId) {
+      prevOrgId.current = activeOrgId;
+      qc.invalidateQueries();
+    }
+
     if (activeOrgId === null) {
-      prevOrgId.current = null;
+      // No fetch patching needed when viewing all orgs
       return;
     }
+
+    // Patch window.fetch to inject orgOverride on all /api/ calls
     const origFetch = window.fetch.bind(window);
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
@@ -37,12 +44,6 @@ export function OrgContextProvider({ children }: { children: ReactNode }) {
       }
       return origFetch(input, init);
     };
-
-    // Invalidate all cached queries so they refetch with the new org context
-    if (prevOrgId.current !== activeOrgId) {
-      prevOrgId.current = activeOrgId;
-      qc.invalidateQueries();
-    }
 
     return () => {
       window.fetch = origFetch;

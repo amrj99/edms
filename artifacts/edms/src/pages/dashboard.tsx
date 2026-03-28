@@ -450,6 +450,7 @@ function SystemActivityWidget() {
 
 // ─── Cross-Org Stats Widget (system_owner only) ───────────────────────────────
 function CrossOrgStatsWidget() {
+  const { t } = useI18n();
   const { data, isLoading } = useQuery({
     queryKey: ["cross-org-stats"],
     queryFn: async () => { const r = await fetch("/api/organizations/cross-org-stats"); return r.json(); },
@@ -461,15 +462,15 @@ function CrossOrgStatsWidget() {
     <Card className="col-span-2">
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
         <div>
-          <CardTitle className="text-sm flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-primary" />Cross-Organization Overview</CardTitle>
-          <CardDescription className="text-xs">Project and document counts per organization</CardDescription>
+          <CardTitle className="text-sm flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-primary" />{t("crossOrgStats")}</CardTitle>
+          <CardDescription className="text-xs">{t("crossOrgStatsDesc")}</CardDescription>
         </div>
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
         ) : stats.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-6">No organizations found</p>
+          <p className="text-xs text-muted-foreground text-center py-6">{t("noOrgsFound")}</p>
         ) : (
           <div className="space-y-2 max-h-[240px] overflow-y-auto">
             {stats.map((o: any) => (
@@ -485,21 +486,21 @@ function CrossOrgStatsWidget() {
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-bold">{o.projectCount}</p>
-                  <p className="text-[10px] text-muted-foreground">Projects</p>
+                  <p className="text-[10px] text-muted-foreground">{t("crossOrgProjects")}</p>
                 </div>
                 <div className="text-center">
                   <p className="text-sm font-bold">{o.documentCount}</p>
-                  <p className="text-[10px] text-muted-foreground">Docs</p>
+                  <p className="text-[10px] text-muted-foreground">{t("crossOrgDocs")}</p>
                 </div>
                 <div className="text-center">
                   <p className={`text-sm font-bold ${o.openNcrCount > 0 ? "text-red-600" : "text-muted-foreground"}`}>{o.openNcrCount}</p>
-                  <p className="text-[10px] text-muted-foreground">Open NCR</p>
+                  <p className="text-[10px] text-muted-foreground">{t("crossOrgOpenNCR")}</p>
                 </div>
               </div>
             ))}
           </div>
         )}
-        <Link href="/organizations"><Button variant="ghost" size="sm" className="w-full mt-2 h-7 text-xs">Manage Organizations <ArrowRight className="ml-1 h-3 w-3" /></Button></Link>
+        <Link href="/organizations"><Button variant="ghost" size="sm" className="w-full mt-2 h-7 text-xs">{t("manageOrganizations")} <ArrowRight className="ml-1 h-3 w-3" /></Button></Link>
       </CardContent>
     </Card>
   );

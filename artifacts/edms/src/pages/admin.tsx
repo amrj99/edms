@@ -410,17 +410,17 @@ export default function Admin() {
               <Table>
                 <TableHeader className="bg-muted/40">
                   <TableRow>
-                    <TableHead className="text-xs">Name</TableHead>
-                    <TableHead className="text-xs">Type</TableHead>
-                    <TableHead className="text-xs text-center">Projects</TableHead>
-                    <TableHead className="text-xs text-center">Members</TableHead>
-                    <TableHead className="text-xs">Contact Email</TableHead>
-                    <TableHead className="text-xs text-right">Actions</TableHead>
+                    <TableHead className="text-xs">{t("orgName")}</TableHead>
+                    <TableHead className="text-xs">{t("orgType")}</TableHead>
+                    <TableHead className="text-xs text-center">{t("orgProjects")}</TableHead>
+                    <TableHead className="text-xs text-center">{t("orgMembers")}</TableHead>
+                    <TableHead className="text-xs">{t("orgContactEmail")}</TableHead>
+                    <TableHead className="text-xs text-right">{t("orgActions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground text-sm">No organizations found</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground text-sm">{t("noOrgsFound")}</TableCell></TableRow>
                   ) : orgs.map((org: any) => (
                     <TableRow key={org.id}>
                       <TableCell className="font-medium text-sm">{org.name}</TableCell>
@@ -1490,6 +1490,7 @@ function StorageTab() {
 
 // ─── System & Backup Tab ──────────────────────────────────────────────────────
 function SystemTab() {
+  const { t } = useI18n();
   const { toast } = useToast();
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);

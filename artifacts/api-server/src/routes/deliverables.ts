@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { db } from "@workspace/db";
 import { deliverablesTable, documentsTable, projectsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
@@ -6,11 +6,17 @@ import { requireAuth } from "../lib/auth.js";
 
 const router = Router({ mergeParams: true });
 
-async function checkProjectOwnership(req: any, res: any, projectId: number): Promise<boolean> {
-  if (req.user!.role === "system_owner") return true;
+async function checkProjectOwnership(req: Request, res: Response, projectId: number): Promise<boolean> {
   const [project] = await db.select({ organizationId: projectsTable.organizationId })
     .from(projectsTable).where(eq(projectsTable.id, projectId));
-  if (!project || project.organizationId !== req.user!.organizationId) {
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return false;
+  }
+  // system_owner with no org restriction (no override active): allow all projects
+  if (req.user!.role === "system_owner" && !req.user!.organizationId) return true;
+  // All others (including system_owner with active org override): enforce org match
+  if (project.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden", message: "Project does not belong to your organization" });
     return false;
   }

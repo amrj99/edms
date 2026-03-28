@@ -277,6 +277,7 @@ const translations = {
     users: "Users",
     documents: "Documents",
     projects: "Projects",
+    manageOrganizations: "Manage Organizations",
   },
   ar: {
     // Navigation / menu
@@ -552,6 +553,7 @@ const translations = {
     users: "المستخدمون",
     documents: "المستندات",
     projects: "المشاريع",
+    manageOrganizations: "إدارة المؤسسات",
   },
 } as const;
 
