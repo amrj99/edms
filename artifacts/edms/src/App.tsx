@@ -30,6 +30,7 @@ import Admin from "@/pages/admin";
 import CorrespondencePage from "@/pages/correspondence";
 import DocumentsPage from "@/pages/documents";
 import DeliverablesPage from "@/pages/deliverables";
+import ActivityLogPage from "@/pages/activity-log";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -104,6 +105,9 @@ function Router() {
       </Route>
       <Route path="/deliverables">
         <ProtectedRoute component={DeliverablesPage} />
+      </Route>
+      <Route path="/activity-log">
+        <ProtectedRoute component={ActivityLogPage} />
       </Route>
 
       <Route component={NotFound} />

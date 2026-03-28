@@ -8,7 +8,7 @@ import {
   Brain, Building2, CheckSquare, FolderKanban, Home, Inbox, LogOut, Moon,
   Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send,
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
-  History, Star, FileText, ClipboardList, AlertCircle,
+  History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -209,6 +209,7 @@ export function AppSidebar() {
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
     { title: "Deliverables", url: "/deliverables", icon: ClipboardList },
     { title: "Reports", url: "/reports", icon: BarChart3 },
+    { title: "Activity Log", url: "/activity-log", icon: ClipboardCheck },
     { title: "Search", url: "/search", icon: Search },
   ];
 

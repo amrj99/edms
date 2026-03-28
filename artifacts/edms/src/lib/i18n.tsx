@@ -134,6 +134,22 @@ const translations = {
     openRfis: "Open Correspondence",
     transmittals: "Transmittals",
     activeProjects: "Active Projects",
+
+    // Activity Log
+    activityLog: "Activity Log",
+    activityLogDesc: "Full audit trail of all system actions",
+    allEntityTypes: "All Entity Types",
+    allActions: "All Actions",
+    allUsers: "All Users",
+    timestamp: "Timestamp",
+    user: "User",
+    action: "Action",
+    entityType: "Entity Type",
+    entityTitle: "Entity / Title",
+    changeDetails: "Change Details",
+    noActivityRecords: "No activity records match your filters",
+    entries: "entries",
+    exportExcelLabel: "Export Excel",
   },
   ar: {
     // Navigation / menu
@@ -266,6 +282,22 @@ const translations = {
     openRfis: "المراسلات المفتوحة",
     transmittals: "ملاحظات الإرسال",
     activeProjects: "المشاريع النشطة",
+
+    // Activity Log
+    activityLog: "سجل الأنشطة",
+    activityLogDesc: "سجل تدقيق شامل لجميع إجراءات النظام",
+    allEntityTypes: "جميع أنواع الكيانات",
+    allActions: "جميع الإجراءات",
+    allUsers: "جميع المستخدمين",
+    timestamp: "الطابع الزمني",
+    user: "المستخدم",
+    action: "الإجراء",
+    entityType: "نوع الكيان",
+    entityTitle: "الكيان / العنوان",
+    changeDetails: "تفاصيل التغيير",
+    noActivityRecords: "لا توجد سجلات نشاط تطابق الفلاتر",
+    entries: "إدخال",
+    exportExcelLabel: "تصدير Excel",
   },
 } as const;
 
