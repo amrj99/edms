@@ -1125,6 +1125,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   const qc = useQueryClient();
   const { user } = useAuth();
   const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
+  const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const ITR_COLS = [
@@ -1137,19 +1138,33 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "contractor", label: t("contractor") },
     { key: "remarks", label: t("remarks") },
+    ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("itr", ITR_COLS.map(c => c.key));
   const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["rpt-itr", filters.projectId],
+    queryKey: ["rpt-itr", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
-      if (filters.projectId === "_all") return { inspectionRequests: [] };
-      const r = await fetch(`/api/projects/${filters.projectId}/inspection-requests`);
-      if (!r.ok) throw new Error("Failed");
-      return r.json();
+      if (filters.projectId !== "_all") {
+        const r = await fetch(`/api/projects/${filters.projectId}/inspection-requests`);
+        if (!r.ok) throw new Error("Failed");
+        return r.json();
+      }
+      if (!isCrossOrg || projects.length === 0) return { inspectionRequests: [] };
+      const results = await Promise.all(
+        projects.map(async (p: any) => {
+          const r = await fetch(`/api/projects/${p.id}/inspection-requests`);
+          if (!r.ok) return [];
+          const d = await r.json();
+          return (d.inspectionRequests ?? []).map((item: any) => ({
+            ...item, _projectName: p.name, _orgName: p.organizationName,
+          }));
+        }),
+      );
+      return { inspectionRequests: results.flat() };
     },
-    enabled: filters.projectId !== "_all",
+    enabled: filters.projectId !== "_all" || isCrossOrg,
   });
   const allItems: any[] = data?.inspectionRequests ?? [];
 
@@ -1200,7 +1215,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
         </div>
       </div>
 
-      {filters.projectId === "_all" ? (
+      {filters.projectId === "_all" && !isCrossOrg ? (
         <EmptyState icon={ClipboardList} message={t("selectProject")} />
       ) : (
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
@@ -1224,6 +1239,8 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
                   {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
                   {visibleCols.has("contractor") && <TableCell className="text-xs">{item.contractor || "—"}</TableCell>}
                   {visibleCols.has("remarks") && <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{item.remarks || "—"}</TableCell>}
+                  {visibleCols.has("_orgName") && <TableCell className="text-xs font-medium text-blue-700 dark:text-blue-400">{item._orgName || "—"}</TableCell>}
+                  {visibleCols.has("_projectName") && <TableCell className="text-xs text-muted-foreground">{item._projectName || "—"}</TableCell>}
                 </TableRow>
               ))}
             </TableBody>
@@ -1329,6 +1346,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
   const qc = useQueryClient();
   const { user } = useAuth();
   const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
+  const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const NCR_COLS = [
@@ -1341,19 +1359,33 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "correctiveAction", label: t("correctiveAction") },
     { key: "closeDate", label: t("closeDate") },
+    ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("ncr", NCR_COLS.map(c => c.key));
   const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["rpt-ncr", filters.projectId],
+    queryKey: ["rpt-ncr", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
-      if (filters.projectId === "_all") return { ncrRecords: [] };
-      const r = await fetch(`/api/projects/${filters.projectId}/ncr-records`);
-      if (!r.ok) throw new Error("Failed");
-      return r.json();
+      if (filters.projectId !== "_all") {
+        const r = await fetch(`/api/projects/${filters.projectId}/ncr-records`);
+        if (!r.ok) throw new Error("Failed");
+        return r.json();
+      }
+      if (!isCrossOrg || projects.length === 0) return { ncrRecords: [] };
+      const results = await Promise.all(
+        projects.map(async (p: any) => {
+          const r = await fetch(`/api/projects/${p.id}/ncr-records`);
+          if (!r.ok) return [];
+          const d = await r.json();
+          return (d.ncrRecords ?? []).map((item: any) => ({
+            ...item, _projectName: p.name, _orgName: p.organizationName,
+          }));
+        }),
+      );
+      return { ncrRecords: results.flat() };
     },
-    enabled: filters.projectId !== "_all",
+    enabled: filters.projectId !== "_all" || isCrossOrg,
   });
   const allItems: any[] = data?.ncrRecords ?? [];
 
@@ -1404,7 +1436,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
         </div>
       </div>
 
-      {filters.projectId === "_all" ? (
+      {filters.projectId === "_all" && !isCrossOrg ? (
         <EmptyState icon={ShieldAlert} message={t("selectProject")} />
       ) : (
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
@@ -1428,6 +1460,8 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
                   {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
                   {visibleCols.has("correctiveAction") && <TableCell className="text-xs max-w-[150px] truncate">{item.correctiveAction || "—"}</TableCell>}
                   {visibleCols.has("closeDate") && <TableCell className="text-xs whitespace-nowrap">{fmt(item.closeDate)}</TableCell>}
+                  {visibleCols.has("_orgName") && <TableCell className="text-xs font-medium text-blue-700 dark:text-blue-400">{item._orgName || "—"}</TableCell>}
+                  {visibleCols.has("_projectName") && <TableCell className="text-xs text-muted-foreground">{item._projectName || "—"}</TableCell>}
                 </TableRow>
               ))}
             </TableBody>
@@ -1534,19 +1568,33 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
   const qc = useQueryClient();
   const { user } = useAuth();
   const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
+  const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["rpt-noc", filters.projectId],
+    queryKey: ["rpt-noc", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
-      if (filters.projectId === "_all") return { nocRecords: [] };
-      const r = await fetch(`/api/projects/${filters.projectId}/noc-records`);
-      if (!r.ok) throw new Error("Failed");
-      return r.json();
+      if (filters.projectId !== "_all") {
+        const r = await fetch(`/api/projects/${filters.projectId}/noc-records`);
+        if (!r.ok) throw new Error("Failed");
+        return r.json();
+      }
+      if (!isCrossOrg || projects.length === 0) return { nocRecords: [] };
+      const results = await Promise.all(
+        projects.map(async (p: any) => {
+          const r = await fetch(`/api/projects/${p.id}/noc-records`);
+          if (!r.ok) return [];
+          const d = await r.json();
+          return (d.nocRecords ?? []).map((item: any) => ({
+            ...item, _projectName: p.name, _orgName: p.organizationName,
+          }));
+        }),
+      );
+      return { nocRecords: results.flat() };
     },
-    enabled: filters.projectId !== "_all",
+    enabled: filters.projectId !== "_all" || isCrossOrg,
   });
   const allItems: any[] = data?.nocRecords ?? [];
 
@@ -1587,6 +1635,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
     { key: "date", label: t("date") },
     { key: "status", label: t("status") },
     { key: "remarks", label: t("remarks") },
+    ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
 
   return (
@@ -1608,7 +1657,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
         </div>
       </div>
 
-      {filters.projectId === "_all" ? (
+      {filters.projectId === "_all" && !isCrossOrg ? (
         <EmptyState icon={FileCheck} message={t("selectProject")} />
       ) : (
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
@@ -1628,6 +1677,8 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{item.remarks || "—"}</TableCell>
+                  {isCrossOrg && <TableCell className="text-xs font-medium text-blue-700 dark:text-blue-400">{item._orgName || "—"}</TableCell>}
+                  {isCrossOrg && <TableCell className="text-xs text-muted-foreground">{item._projectName || "—"}</TableCell>}
                 </TableRow>
               ))}
             </TableBody>

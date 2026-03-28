@@ -50,6 +50,7 @@ const PROJECT_ROLES = ["project_manager", "document_controller", "reviewer", "vi
 export default function Admin() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { t } = useI18n();
   const qc = useQueryClient();
   const isOwner = user?.role === "system_owner" || user?.role === "admin";
 
@@ -214,7 +215,7 @@ export default function Admin() {
       if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: "Organization created" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: t("orgCreated") }); },
     onError: (e: any) => toast({ title: e.message || "Failed to create organization", variant: "destructive" }),
   });
 
@@ -224,7 +225,7 @@ export default function Admin() {
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setEditOrg(null); toast({ title: "Organization updated" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setEditOrg(null); toast({ title: t("orgUpdated") }); },
     onError: () => toast({ title: "Failed to update organization", variant: "destructive" }),
   });
 
@@ -233,7 +234,7 @@ export default function Admin() {
       const r = await fetch(`/api/organizations/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error("Failed");
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setDeleteOrg(null); toast({ title: "Organization deleted" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setDeleteOrg(null); toast({ title: t("orgDeleted") }); },
     onError: () => toast({ title: "Failed to delete organization", variant: "destructive" }),
   });
 
@@ -326,25 +327,28 @@ export default function Admin() {
           {/* Org Create Dialog */}
           <Dialog open={createOrgOpen} onOpenChange={setCreateOrgOpen}>
             <DialogContent className="sm:max-w-[480px]">
-              <DialogHeader><DialogTitle className="flex items-center gap-2"><Building2 className="h-5 w-5" />Create Organization</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Building2 className="h-5 w-5" />{t("addOrganization")}</DialogTitle></DialogHeader>
               <div className="space-y-3 py-2">
-                <div><Label>Name *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder="Organization name" /></div>
-                <div><Label>Type *</Label>
+                <div><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder={t("orgName")} /></div>
+                <div><Label>{t("orgType")} *</Label>
                   <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {["client","consultant","contractor","subcontractor"].map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                      <SelectItem value="client">{t("orgTypeClient")}</SelectItem>
+                      <SelectItem value="consultant">{t("orgTypeConsultant")}</SelectItem>
+                      <SelectItem value="contractor">{t("orgTypeContractor")}</SelectItem>
+                      <SelectItem value="subcontractor">{t("orgTypeSubcontractor")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label>Contact Email</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
-                <div><Label>Contact Phone</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
-                <div><Label>Address</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgContactEmail")}</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgContactPhone")}</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgAddress")}</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setCreateOrgOpen(false)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setCreateOrgOpen(false)}>{t("cancel")}</Button>
                 <Button onClick={() => createOrg.mutate(orgForm)} disabled={!orgForm.name.trim() || createOrg.isPending}>
-                  {createOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
+                  {createOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("create")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -353,25 +357,28 @@ export default function Admin() {
           {/* Org Edit Dialog */}
           <Dialog open={!!editOrg} onOpenChange={v => { if (!v) setEditOrg(null); }}>
             <DialogContent className="sm:max-w-[480px]">
-              <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-5 w-5" />Edit Organization</DialogTitle></DialogHeader>
+              <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-5 w-5" />{t("editOrganization")}</DialogTitle></DialogHeader>
               <div className="space-y-3 py-2">
-                <div><Label>Name *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" /></div>
-                <div><Label>Type *</Label>
+                <div><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgType")} *</Label>
                   <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {["client","consultant","contractor","subcontractor"].map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                      <SelectItem value="client">{t("orgTypeClient")}</SelectItem>
+                      <SelectItem value="consultant">{t("orgTypeConsultant")}</SelectItem>
+                      <SelectItem value="contractor">{t("orgTypeContractor")}</SelectItem>
+                      <SelectItem value="subcontractor">{t("orgTypeSubcontractor")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label>Contact Email</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
-                <div><Label>Contact Phone</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
-                <div><Label>Address</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgContactEmail")}</Label><Input type="email" value={orgForm.contactEmail} onChange={e => setOrgForm(f => ({ ...f, contactEmail: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgContactPhone")}</Label><Input value={orgForm.contactPhone} onChange={e => setOrgForm(f => ({ ...f, contactPhone: e.target.value }))} className="mt-1" /></div>
+                <div><Label>{t("orgAddress")}</Label><Input value={orgForm.address} onChange={e => setOrgForm(f => ({ ...f, address: e.target.value }))} className="mt-1" /></div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setEditOrg(null)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setEditOrg(null)}>{t("cancel")}</Button>
                 <Button onClick={() => updateOrg.mutate({ id: editOrg.id, data: orgForm })} disabled={!orgForm.name.trim() || updateOrg.isPending}>
-                  {updateOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save Changes"}
+                  {updateOrg.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("saveChanges")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -380,12 +387,13 @@ export default function Admin() {
           {/* Org Delete Confirm */}
           <Dialog open={!!deleteOrg} onOpenChange={v => { if (!v) setDeleteOrg(null); }}>
             <DialogContent className="sm:max-w-[400px]">
-              <DialogHeader><DialogTitle className="text-destructive">Delete Organization</DialogTitle></DialogHeader>
-              <p className="text-sm text-muted-foreground py-2">Are you sure you want to delete <strong>{deleteOrg?.name}</strong>? This action cannot be undone.</p>
+              <DialogHeader><DialogTitle className="text-destructive">{t("deleteOrganization")}</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground py-2">{t("orgDeleteConfirm")}</p>
+              <p className="text-sm font-semibold mt-1">{deleteOrg?.name}</p>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setDeleteOrg(null)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setDeleteOrg(null)}>{t("cancel")}</Button>
                 <Button variant="destructive" onClick={() => deleteOrgMutation.mutate(deleteOrg.id)} disabled={deleteOrgMutation.isPending}>
-                  {deleteOrgMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Delete"}
+                  {deleteOrgMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t("delete")}
                 </Button>
               </DialogFooter>
             </DialogContent>

@@ -188,6 +188,14 @@ function ProjectPortfolioWidget({ projects }: { projects: any[] }) {
     { status: "completed", label: "Completed", color: "bg-blue-500" },
     { status: "cancelled", label: "Cancelled", color: "bg-gray-400" },
   ];
+  const orgGroups = Object.entries(
+    projects.reduce((acc: Record<string, number>, p: any) => {
+      const name = p.organizationName ?? "—";
+      acc[name] = (acc[name] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  const showOrgs = orgGroups.length > 1;
   return (
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-3.5 w-3.5" />Project Portfolio</CardTitle></CardHeader>
@@ -202,6 +210,19 @@ function ProjectPortfolioWidget({ projects }: { projects: any[] }) {
             </div>
           );
         })}
+        {showOrgs && (
+          <div className="border-t pt-2 mt-2">
+            <p className="text-xs text-muted-foreground mb-1.5 font-medium">By Organization</p>
+            <div className="space-y-1">
+              {orgGroups.map(([name, count]) => (
+                <div key={name} className="flex justify-between text-xs">
+                  <span className="text-muted-foreground truncate max-w-[140px]">{name}</span>
+                  <span className="font-mono font-medium">{count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

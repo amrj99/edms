@@ -271,6 +271,9 @@ const translations = {
     confirmRejectDesc: "Are you sure you want to reject this record?",
     cancel: "Cancel",
     confirm: "Confirm",
+    create: "Create",
+    saveChanges: "Save Changes",
+    delete: "Delete",
   },
   ar: {
     // Navigation / menu
@@ -540,6 +543,9 @@ const translations = {
     confirmRejectDesc: "هل أنت متأكد من رفض هذا السجل؟",
     cancel: "إلغاء",
     confirm: "تأكيد",
+    create: "إنشاء",
+    saveChanges: "حفظ التغييرات",
+    delete: "حذف",
   },
 } as const;
 
