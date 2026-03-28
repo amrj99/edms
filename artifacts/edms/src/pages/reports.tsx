@@ -933,6 +933,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
     { key: "toExternal", label: t("to") },
     { key: "purpose", label: t("purpose") },
     { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
     { key: "sentAt", label: t("sentDate") },
     { key: "acknowledgedAt", label: t("acknowledged") },
   ];
@@ -968,6 +969,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
                 <TableCell className="text-xs max-w-[120px] truncate">{tr.toExternal || "—"}</TableCell>
                 <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>
                 <TableCell><StatusPill status={tr.status} /></TableCell>
+                <TableCell><ApprovalBadge status={tr.approvalStatus} /></TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{fmt(tr.sentAt)}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap">{fmt(tr.acknowledgedAt)}</TableCell>
               </TableRow>

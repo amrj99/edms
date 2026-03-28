@@ -29,6 +29,11 @@ router.get("/", async (req, res) => {
       createdAt: transmittalsTable.createdAt,
       createdByName: usersTable.firstName,
       toExternal: transmittalsTable.toExternal,
+      projectId: transmittalsTable.projectId,
+      approvalStatus: transmittalsTable.approvalStatus,
+      approvedById: transmittalsTable.approvedById,
+      approvalComment: transmittalsTable.approvalComment,
+      approvedAt: transmittalsTable.approvedAt,
     })
     .from(transmittalsTable)
     .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
@@ -247,13 +252,14 @@ router.post(
   requireRole("admin", "project_manager", "document_controller"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const [row] = await db.update(transmittalsTable)
       .set({ approvalStatus: "pending", updatedAt: new Date() })
-      .where(eq(transmittalsTable.id, id))
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_submit", entityType: "transmittal",
+      userId: req.user!.id, action: "approval_submitted", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
     });
     res.json(row);
@@ -265,6 +271,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(transmittalsTable)
       .set({
@@ -274,11 +281,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(transmittalsTable.id, id))
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_approve", entityType: "transmittal",
+      userId: req.user!.id, action: "record_approved", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
       details: { comment },
     });
@@ -291,6 +298,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(transmittalsTable)
       .set({
@@ -300,11 +308,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(transmittalsTable.id, id))
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_reject", entityType: "transmittal",
+      userId: req.user!.id, action: "record_rejected", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
       details: { comment },
     });

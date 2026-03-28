@@ -54,13 +54,14 @@ router.post(
   requireRole("admin", "project_manager", "document_controller"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const [row] = await db.update(inspectionRequestsTable)
       .set({ approvalStatus: "pending", updatedAt: new Date() })
-      .where(eq(inspectionRequestsTable.id, id))
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_submit", entityType: "itr",
+      userId: req.user!.id, action: "approval_submitted", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
     });
     res.json(row);
@@ -73,6 +74,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(inspectionRequestsTable)
       .set({
@@ -82,11 +84,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(inspectionRequestsTable.id, id))
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_approve", entityType: "itr",
+      userId: req.user!.id, action: "record_approved", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
       details: { comment },
     });
@@ -100,6 +102,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(inspectionRequestsTable)
       .set({
@@ -109,11 +112,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(inspectionRequestsTable.id, id))
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_reject", entityType: "itr",
+      userId: req.user!.id, action: "record_rejected", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
       details: { comment },
     });
@@ -165,13 +168,14 @@ router.post(
   requireRole("admin", "project_manager", "document_controller"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const [row] = await db.update(ncrRecordsTable)
       .set({ approvalStatus: "pending", updatedAt: new Date() })
-      .where(eq(ncrRecordsTable.id, id))
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_submit", entityType: "ncr",
+      userId: req.user!.id, action: "approval_submitted", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
     });
     res.json(row);
@@ -184,6 +188,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(ncrRecordsTable)
       .set({
@@ -193,11 +198,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(ncrRecordsTable.id, id))
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_approve", entityType: "ncr",
+      userId: req.user!.id, action: "record_approved", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
       details: { comment },
     });
@@ -211,6 +216,7 @@ router.post(
   requireRole("admin", "project_manager"),
   async (req, res) => {
     const id = parseInt(req.params.id);
+    const projectId = parseInt(req.params.projectId);
     const { comment } = req.body;
     const [row] = await db.update(ncrRecordsTable)
       .set({
@@ -220,11 +226,11 @@ router.post(
         approvedAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(ncrRecordsTable.id, id))
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
     await createAuditLog({
-      userId: req.user!.id, action: "action_workflow_reject", entityType: "ncr",
+      userId: req.user!.id, action: "record_rejected", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
       details: { comment },
     });
