@@ -1,85 +1,90 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { auditLogsTable, usersTable, projectsTable } from "@workspace/db";
-import { eq, and, desc, gte, lte, ilike, or, inArray, count } from "drizzle-orm";
+import { eq, and, desc, gte, lte, ilike, or, inArray, count, type SQL } from "drizzle-orm";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 
 const router = Router();
 
-// Only admin, project_manager, document_controller, and system_owner can access audit logs
-const auditRoles = ["system_owner", "admin", "project_manager", "document_controller"];
+const AUDIT_ROLES = ["system_owner", "admin", "project_manager", "document_controller"] as const;
 
-// Build org-scope condition (pre-fetches org user/project IDs)
-async function buildOrgCondition(organizationId: number) {
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Safely extract a string query-param value. */
+function qstr(val: unknown): string | undefined {
+  return typeof val === "string" && val !== "" ? val : undefined;
+}
+
+/** Build a WHERE condition that scopes audit logs to a single organization. */
+async function buildOrgCondition(organizationId: number): Promise<SQL<unknown>> {
   const [orgUsers, orgProjects] = await Promise.all([
     db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.organizationId, organizationId)),
     db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, organizationId)),
   ]);
+
   const userIds = orgUsers.map(u => u.id);
   const projectIds = orgProjects.map(p => p.id);
 
-  const conditions = [];
-  if (userIds.length > 0) conditions.push(inArray(auditLogsTable.userId, userIds));
-  if (projectIds.length > 0) conditions.push(inArray(auditLogsTable.projectId, projectIds));
-  if (conditions.length === 0) return eq(auditLogsTable.id, -1); // no data visible
-  return or(...conditions as [any, ...any[]]);
+  const clauses: SQL<unknown>[] = [];
+  if (userIds.length > 0) clauses.push(inArray(auditLogsTable.userId, userIds));
+  if (projectIds.length > 0) clauses.push(inArray(auditLogsTable.projectId, projectIds));
+
+  // If the org has no users and no projects, return a condition that matches nothing.
+  if (clauses.length === 0) return eq(auditLogsTable.id, -1);
+
+  const [first, ...rest] = clauses;
+  return rest.length > 0 ? (or(first, ...rest) as SQL<unknown>) : first;
 }
 
-router.get("/", requireAuth, requireRole(...auditRoles), async (req, res) => {
-  const { projectId, entityType, action, userId, dateFrom, dateTo, search, limit, page } = req.query;
-  const lim = Math.min(parseInt(limit as string || "50"), 200);
-  const pg = Math.max(1, parseInt(page as string || "1"));
+/** Combine an array of conditions with AND, returning undefined when empty. */
+function buildWhere(conditions: SQL<unknown>[]): SQL<unknown> | undefined {
+  if (conditions.length === 0) return undefined;
+  const [first, ...rest] = conditions;
+  return rest.length > 0 ? (and(first, ...rest) as SQL<unknown>) : first;
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+  const lim = Math.min(parseInt(qstr(req.query.limit) ?? "50"), 200);
+  const pg  = Math.max(1, parseInt(qstr(req.query.page) ?? "1"));
   const offset = (pg - 1) * lim;
 
-  // Build WHERE conditions
-  const conditions: any[] = [];
+  const projectId  = qstr(req.query.projectId);
+  const entityType = qstr(req.query.entityType);
+  const action     = qstr(req.query.action);
+  const userId     = qstr(req.query.userId);
+  const dateFrom   = qstr(req.query.dateFrom);
+  const dateTo     = qstr(req.query.dateTo);
+  const search     = qstr(req.query.search);
+
+  const conditions: SQL<unknown>[] = [];
 
   const currentUser = req.user!;
   if (!isSysAdmin(currentUser)) {
-    const orgCond = await buildOrgCondition(currentUser.organizationId!);
-    conditions.push(orgCond);
+    conditions.push(await buildOrgCondition(currentUser.organizationId!));
   }
-
-  if (projectId && projectId !== "_all") {
-    conditions.push(eq(auditLogsTable.projectId, parseInt(projectId as string)));
-  }
-  if (entityType && entityType !== "_all") {
-    conditions.push(eq(auditLogsTable.entityType, entityType as string));
-  }
-  if (action && action !== "_all") {
-    conditions.push(eq(auditLogsTable.action, action as string));
-  }
-  if (userId && userId !== "_all") {
-    conditions.push(eq(auditLogsTable.userId, parseInt(userId as string)));
-  }
-  if (dateFrom) {
-    conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom as string)));
-  }
+  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+  if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
+  if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
+  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
+  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
   if (dateTo) {
-    const to = new Date(dateTo as string);
+    const to = new Date(dateTo);
     to.setHours(23, 59, 59, 999);
     conditions.push(lte(auditLogsTable.createdAt, to));
   }
   if (search) {
     const q = `%${search}%`;
     conditions.push(
-      or(
-        ilike(auditLogsTable.entityTitle, q),
-        ilike(auditLogsTable.action, q),
-        ilike(auditLogsTable.entityType, q)
-      )
+      or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
     );
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = buildWhere(conditions);
 
-  // COUNT query for pagination
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(auditLogsTable)
-    .where(where);
+  const [{ total }] = await db.select({ total: count() }).from(auditLogsTable).where(where);
 
-  // Data query with joins
   const items = await db.select({
     log: auditLogsTable,
     user: {
@@ -107,9 +112,9 @@ router.get("/", requireAuth, requireRole(...auditRoles), async (req, res) => {
     logs: items.map(({ log, user, project }) => ({
       ...log,
       userName: user ? `${user.firstName} ${user.lastName}` : "System",
-      userEmail: user?.email,
-      projectName: project?.name,
-      projectCode: project?.code,
+      userEmail: user?.email ?? null,
+      projectName: project?.name ?? null,
+      projectCode: project?.code ?? null,
     })),
     total,
     page: pg,
@@ -118,33 +123,39 @@ router.get("/", requireAuth, requireRole(...auditRoles), async (req, res) => {
   });
 });
 
-// Excel export — same role guard, same org-scoped filtering
-router.get("/export-xlsx", requireAuth, requireRole(...auditRoles), async (req, res) => {
-  const { projectId, entityType, action, userId, dateFrom, dateTo, search } = req.query;
+// ─── Excel export ─────────────────────────────────────────────────────────────
 
-  const conditions: any[] = [];
+router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+  const projectId  = qstr(req.query.projectId);
+  const entityType = qstr(req.query.entityType);
+  const action     = qstr(req.query.action);
+  const userId     = qstr(req.query.userId);
+  const dateFrom   = qstr(req.query.dateFrom);
+  const dateTo     = qstr(req.query.dateTo);
+  const search     = qstr(req.query.search);
+
+  const conditions: SQL<unknown>[] = [];
+
   const currentUser = req.user!;
   if (!isSysAdmin(currentUser)) {
-    const orgCond = await buildOrgCondition(currentUser.organizationId!);
-    conditions.push(orgCond);
+    conditions.push(await buildOrgCondition(currentUser.organizationId!));
   }
-
-  if (projectId && projectId !== "_all") conditions.push(eq(auditLogsTable.projectId, parseInt(projectId as string)));
-  if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType as string));
-  if (action && action !== "_all") conditions.push(eq(auditLogsTable.action, action as string));
-  if (userId && userId !== "_all") conditions.push(eq(auditLogsTable.userId, parseInt(userId as string)));
-  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom as string)));
+  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+  if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
+  if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
+  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
+  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
   if (dateTo) {
-    const to = new Date(dateTo as string);
+    const to = new Date(dateTo);
     to.setHours(23, 59, 59, 999);
     conditions.push(lte(auditLogsTable.createdAt, to));
   }
   if (search) {
     const q = `%${search}%`;
-    conditions.push(or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q)));
+    conditions.push(or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q)) as SQL<unknown>);
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = buildWhere(conditions);
 
   const items = await db.select({
     log: auditLogsTable,
@@ -180,30 +191,32 @@ router.get("/export-xlsx", requireAuth, requireRole(...auditRoles), async (req, 
   });
 });
 
-// CSV export (for legacy admin panel) — same role + org scope as main endpoint
-router.get("/export", requireAuth, requireRole(...auditRoles), async (req, res) => {
-  const { projectId, entityType, action, dateFrom, dateTo } = req.query;
+// ─── CSV export (legacy) ──────────────────────────────────────────────────────
+
+router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+  const projectId  = qstr(req.query.projectId);
+  const entityType = qstr(req.query.entityType);
+  const action     = qstr(req.query.action);
+  const dateFrom   = qstr(req.query.dateFrom);
+  const dateTo     = qstr(req.query.dateTo);
+
+  const conditions: SQL<unknown>[] = [];
+
   const currentUser = req.user!;
-
-  const conditions: any[] = [];
-
-  // Org scoping — non-sysadmin users must only see their org's data
   if (!isSysAdmin(currentUser)) {
-    const orgCond = await buildOrgCondition(currentUser.organizationId!);
-    conditions.push(orgCond);
+    conditions.push(await buildOrgCondition(currentUser.organizationId!));
   }
-
-  if (projectId && projectId !== "_all") conditions.push(eq(auditLogsTable.projectId, parseInt(projectId as string)));
-  if (entityType && entityType !== "all" && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType as string));
-  if (action && action !== "all" && action !== "_all") conditions.push(eq(auditLogsTable.action, action as string));
-  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom as string)));
+  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+  if (entityType && entityType !== "_all" && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType));
+  if (action     && action     !== "_all" && action     !== "all") conditions.push(eq(auditLogsTable.action,     action));
+  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
   if (dateTo) {
-    const d = new Date(dateTo as string);
+    const d = new Date(dateTo);
     d.setHours(23, 59, 59, 999);
     conditions.push(lte(auditLogsTable.createdAt, d));
   }
 
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = buildWhere(conditions);
 
   const logs = await db.select({
     log: auditLogsTable,

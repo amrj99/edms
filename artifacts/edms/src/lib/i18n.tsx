@@ -156,6 +156,7 @@ const translations = {
     logEntry: "Log entry",
     loadingActivity: "Loading activity log…",
     searchEntities: "Search entities, users…",
+    exportFailed: "Export failed. Please try again.",
     // Action labels
     action_create: "Create",
     action_update: "Update",
@@ -335,6 +336,7 @@ const translations = {
     logEntry: "إدخال السجل",
     loadingActivity: "جاري تحميل سجل الأنشطة…",
     searchEntities: "بحث في الكيانات والمستخدمين…",
+    exportFailed: "فشل التصدير. يرجى المحاولة مجدداً.",
     // Action labels
     action_create: "إنشاء",
     action_update: "تحديث",
@@ -363,7 +365,7 @@ const translations = {
   },
 } as const;
 
-type TranslationKeys = keyof typeof translations.en;
+export type TranslationKeys = keyof typeof translations.en;
 
 interface I18nContextType {
   lang: Lang;

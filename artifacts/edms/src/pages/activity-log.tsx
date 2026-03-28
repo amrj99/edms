@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 
-import { useI18n } from "@/lib/i18n";
+import { useI18n, type TranslationKeys } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -20,17 +20,105 @@ import {
   User, FolderKanban, Activity, Calendar, Info, ShieldOff,
 } from "lucide-react";
 
-// Roles that may access this page
-const ALLOWED_ROLES = ["system_owner", "admin", "project_manager", "document_controller"];
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function fmtDateTime(d: string | null | undefined) {
-  if (!d) return "—";
-  try { return format(new Date(d), "dd MMM yyyy HH:mm"); } catch { return d; }
+type TranslateFn = (key: TranslationKeys) => string;
+
+interface AuditLogItem {
+  id: number;
+  createdAt: string | null;
+  action: string;
+  entityType: string;
+  entityId: number | null;
+  entityTitle: string | null;
+  details: Record<string, unknown> | string | null;
+  userId: number | null;
+  projectId: number | null;
+  userName: string;
+  userEmail: string | null;
+  projectName: string | null;
+  projectCode: string | null;
 }
 
-// Badge colour maps — no human-readable label here; labels come from t()
-const ACTION_COLORS: Record<string, string> = {
+interface LogsResponse {
+  logs: AuditLogItem[];
+  total: number;
+  page: number;
+  totalPages: number;
+  hasMore: boolean;
+}
+
+interface Project {
+  id: number;
+  name: string;
+  code: string;
+}
+
+interface OrgUser {
+  id: number;
+  firstName: string;
+  lastName: string;
+  email: string;
+}
+
+interface LogFilters {
+  projectId: string;
+  entityType: string;
+  action: string;
+  userId: string;
+  dateFrom: string;
+  dateTo: string;
+  search: string;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const ALLOWED_ROLES = ["system_owner", "admin", "project_manager", "document_controller"] as const;
+
+const ENTITY_TYPES = [
+  "document", "correspondence", "transmittal", "ncr", "itr", "noc",
+  "deliverable", "project", "user", "task", "workflow",
+] as const;
+
+const ACTIONS = [
+  "create", "update", "delete", "approve", "reject", "upload",
+  "submit", "workflow_approve", "workflow_reject", "workflow_submit", "share", "login",
+] as const;
+
+type EntityTypeKey = (typeof ENTITY_TYPES)[number];
+type ActionKey = (typeof ACTIONS)[number];
+
+// Maps action/entity slugs to their i18n translation keys
+const ACTION_I18N: Record<ActionKey, TranslationKeys> = {
+  create: "action_create",
+  update: "action_update",
+  delete: "action_delete",
+  approve: "action_approve",
+  reject: "action_reject",
+  upload: "action_upload",
+  submit: "action_submit",
+  workflow_approve: "action_workflow_approve",
+  workflow_reject: "action_workflow_reject",
+  workflow_submit: "action_workflow_submit",
+  share: "action_share",
+  login: "action_login",
+};
+
+const ENTITY_I18N: Record<EntityTypeKey, TranslationKeys> = {
+  document: "entity_document",
+  correspondence: "entity_correspondence",
+  transmittal: "entity_transmittal",
+  ncr: "entity_ncr",
+  itr: "entity_itr",
+  noc: "entity_noc",
+  deliverable: "entity_deliverable",
+  project: "entity_project",
+  user: "entity_user",
+  task: "entity_task",
+  workflow: "entity_workflow",
+};
+
+const ACTION_COLORS: Record<ActionKey | string, string> = {
   create: "bg-green-100 text-green-700",
   update: "bg-blue-100 text-blue-700",
   delete: "bg-red-100 text-red-700",
@@ -45,7 +133,7 @@ const ACTION_COLORS: Record<string, string> = {
   share: "bg-indigo-100 text-indigo-700",
 };
 
-const ENTITY_COLORS: Record<string, string> = {
+const ENTITY_COLORS: Record<EntityTypeKey | string, string> = {
   document: "bg-blue-50 text-blue-600",
   correspondence: "bg-yellow-50 text-yellow-700",
   transmittal: "bg-purple-50 text-purple-600",
@@ -59,38 +147,75 @@ const ENTITY_COLORS: Record<string, string> = {
   workflow: "bg-violet-50 text-violet-700",
 };
 
-type TranslateFn = (key: any) => string;
+const DEFAULT_FILTERS: LogFilters = {
+  projectId: "_all", entityType: "_all", action: "_all",
+  userId: "_all", dateFrom: "", dateTo: "", search: "",
+};
+
+const PER_PAGE = 50;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtDateTime(d: string | null | undefined): string {
+  if (!d) return "—";
+  try { return format(new Date(d), "dd MMM yyyy HH:mm"); } catch { return d; }
+}
+
+function actionLabel(action: string, t: TranslateFn): string {
+  const key = ACTION_I18N[action as ActionKey];
+  return key ? t(key) : action.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function entityLabel(type: string, t: TranslateFn): string {
+  const key = ENTITY_I18N[type as EntityTypeKey];
+  return key ? t(key) : type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function parseDetails(raw: Record<string, unknown> | string | null): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+  }
+  return raw;
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function ActionBadge({ action, t }: { action: string; t: TranslateFn }) {
   const cls = ACTION_COLORS[action] ?? "bg-muted text-muted-foreground";
-  const key = `action_${action}` as any;
-  const label = t(key) || action.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   return (
     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}`}>
-      {label}
+      {actionLabel(action, t)}
     </span>
   );
 }
 
 function EntityTypeBadge({ type, t }: { type: string; t: TranslateFn }) {
   const cls = ENTITY_COLORS[type] ?? "bg-muted text-muted-foreground";
-  const key = `entity_${type}` as any;
-  const label = t(key) || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   return (
     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}`}>
-      {label}
+      {entityLabel(type, t)}
     </span>
   );
 }
 
-// ─── Detail Sheet ─────────────────────────────────────────────────────────────
-function LogDetailSheet({ item, open, onClose, t }: { item: any; open: boolean; onClose: () => void; t: TranslateFn }) {
-  if (!item) return null;
+function Row({ label, value, icon }: { label: string; value: React.ReactNode; icon?: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
+        {icon}
+        {label}
+      </div>
+      <div className="text-sm">{value}</div>
+    </div>
+  );
+}
 
-  let details: Record<string, any> = {};
-  try {
-    details = typeof item.details === "string" ? JSON.parse(item.details) : (item.details ?? {});
-  } catch {}
+function LogDetailSheet({ item, open, onClose, t }: {
+  item: AuditLogItem | null; open: boolean; onClose: () => void; t: TranslateFn;
+}) {
+  if (!item) return null;
+  const details = parseDetails(item.details);
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
@@ -108,7 +233,11 @@ function LogDetailSheet({ item, open, onClose, t }: { item: any; open: boolean; 
         <div className="flex-1 overflow-y-auto space-y-4 py-4">
           <div className="space-y-3">
             <Row label={t("timestamp")} value={fmtDateTime(item.createdAt)} icon={<Calendar className="h-3.5 w-3.5" />} />
-            <Row label={t("user")} value={item.userName + (item.userEmail ? ` <${item.userEmail}>` : "")} icon={<User className="h-3.5 w-3.5" />} />
+            <Row
+              label={t("user")}
+              value={item.userName + (item.userEmail ? ` <${item.userEmail}>` : "")}
+              icon={<User className="h-3.5 w-3.5" />}
+            />
             <Row label={t("action")} value={<ActionBadge action={item.action} t={t} />} icon={<Activity className="h-3.5 w-3.5" />} />
             <Row label={t("entityType")} value={<EntityTypeBadge type={item.entityType} t={t} />} icon={<Info className="h-3.5 w-3.5" />} />
             <Row label={t("entityTitle")} value={item.entityTitle ?? `ID: ${item.entityId}`} />
@@ -146,30 +275,15 @@ function LogDetailSheet({ item, open, onClose, t }: { item: any; open: boolean; 
   );
 }
 
-function Row({ label, value, icon }: { label: string; value: React.ReactNode; icon?: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-        {icon}
-        {label}
-      </div>
-      <div className="text-sm">{value}</div>
-    </div>
-  );
-}
-
-// ─── Pagination ────────────────────────────────────────────────────────────────
-function Pagination({ page, totalPages, total, perPage, onPage }: {
-  page: number; totalPages: number; total: number; perPage: number; onPage: (p: number) => void;
+function Pagination({ page, totalPages, total, onPage }: {
+  page: number; totalPages: number; total: number; onPage: (p: number) => void;
 }) {
-  const from = (page - 1) * perPage + 1;
-  const to = Math.min(page * perPage, total);
+  const from = (page - 1) * PER_PAGE + 1;
+  const to = Math.min(page * PER_PAGE, total);
   if (totalPages <= 1) return null;
   return (
     <div className="flex items-center justify-between border-t pt-3 mt-2">
-      <span className="text-xs text-muted-foreground">
-        {from}–{to} / {total}
-      </span>
+      <span className="text-xs text-muted-foreground">{from}–{to} / {total}</span>
       <div className="flex items-center gap-1">
         <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1} onClick={() => onPage(page - 1)}>
           <ChevronLeft className="h-3.5 w-3.5" />
@@ -183,31 +297,7 @@ function Pagination({ page, totalPages, total, perPage, onPage }: {
   );
 }
 
-// ─── Activity Log Page ────────────────────────────────────────────────────────
-interface LogFilters {
-  projectId: string;
-  entityType: string;
-  action: string;
-  userId: string;
-  dateFrom: string;
-  dateTo: string;
-  search: string;
-}
-
-const DEFAULT_FILTERS: LogFilters = {
-  projectId: "_all", entityType: "_all", action: "_all",
-  userId: "_all", dateFrom: "", dateTo: "", search: "",
-};
-
-const ENTITY_TYPES = [
-  "document", "correspondence", "transmittal", "ncr", "itr", "noc",
-  "deliverable", "project", "user", "task", "workflow",
-];
-
-const ACTIONS = [
-  "create", "update", "delete", "approve", "reject", "upload",
-  "submit", "workflow_approve", "workflow_reject", "workflow_submit", "share", "login",
-];
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function ActivityLogPage() {
   const { t, isRtl } = useI18n();
@@ -215,15 +305,13 @@ export default function ActivityLogPage() {
   const { toast } = useToast();
   const [filters, setFilters] = useState<LogFilters>(DEFAULT_FILTERS);
   const [page, setPage] = useState(1);
-  const [selectedLog, setSelectedLog] = useState<any>(null);
-  const PER_PAGE = 50;
+  const [selectedLog, setSelectedLog] = useState<AuditLogItem | null>(null);
 
-  // Role guard — show access-denied message for unauthorised roles
-  const hasAccess = user && ALLOWED_ROLES.includes(user.role);
+  const hasAccess = user != null && (ALLOWED_ROLES as readonly string[]).includes(user.role);
   const isSysOwner = user?.role === "system_owner";
 
-  const set = (key: keyof LogFilters, val: string) => {
-    setFilters(f => ({ ...f, [key]: val }));
+  const setFilter = (key: keyof LogFilters, val: string) => {
+    setFilters(prev => ({ ...prev, [key]: val }));
     setPage(1);
   };
 
@@ -231,7 +319,7 @@ export default function ActivityLogPage() {
     k === "search" ? v !== "" : v !== "_all" && v !== ""
   );
 
-  const params = useMemo(() => {
+  const queryParams = useMemo(() => {
     const p = new URLSearchParams();
     p.set("page", String(page));
     p.set("limit", String(PER_PAGE));
@@ -245,49 +333,53 @@ export default function ActivityLogPage() {
     return p.toString();
   }, [filters, page]);
 
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ["activity-logs", params],
+  const { data: logsData, isLoading, refetch } = useQuery<LogsResponse>({
+    queryKey: ["activity-logs", queryParams],
     queryFn: async () => {
-      const r = await fetch(`/api/audit-logs?${params}`);
-      if (!r.ok) throw new Error("Failed to load");
-      return r.json();
+      const r = await fetch(`/api/audit-logs?${queryParams}`);
+      if (!r.ok) throw new Error("Failed to load audit logs");
+      return r.json() as Promise<LogsResponse>;
     },
-    enabled: !!hasAccess,
+    enabled: hasAccess,
   });
 
-  const { data: projectsData } = useQuery({
+  const { data: projectsData } = useQuery<{ projects: Project[] }>({
     queryKey: ["projects-list"],
-    queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
-    enabled: !!hasAccess,
+    queryFn: async () => {
+      const r = await fetch("/api/projects");
+      return r.json() as Promise<{ projects: Project[] }>;
+    },
+    enabled: hasAccess,
   });
-  const projects: any[] = projectsData?.projects ?? [];
 
-  // Fetch org-scoped users for the user filter dropdown
   const usersUrl = useMemo(() => {
     if (!hasAccess) return null;
-    if (isSysOwner || !user?.organizationId) return "/api/users";
-    return `/api/users?organizationId=${user.organizationId}`;
+    return isSysOwner || !user?.organizationId
+      ? "/api/users"
+      : `/api/users?organizationId=${user.organizationId}`;
   }, [hasAccess, isSysOwner, user?.organizationId]);
 
-  const { data: usersData } = useQuery({
-    queryKey: ["users-list-org", usersUrl],
-    queryFn: async () => { const r = await fetch(usersUrl!); return r.json(); },
+  const { data: usersData } = useQuery<OrgUser[] | { users: OrgUser[] }>({
+    queryKey: ["activity-log-users", usersUrl],
+    queryFn: async () => {
+      const r = await fetch(usersUrl!);
+      return r.json() as Promise<OrgUser[] | { users: OrgUser[] }>;
+    },
     enabled: !!usersUrl,
   });
-  const users: any[] = usersData?.users ?? usersData ?? [];
 
-  const logs: any[] = data?.logs ?? [];
-  const total: number = data?.total ?? 0;
-  const totalPages: number = data?.totalPages ?? 1;
+  const logs: AuditLogItem[] = logsData?.logs ?? [];
+  const total: number = logsData?.total ?? 0;
+  const totalPages: number = logsData?.totalPages ?? 1;
+  const projects: Project[] = projectsData?.projects ?? [];
+  const users: OrgUser[] = Array.isArray(usersData) ? usersData : (usersData?.users ?? []);
 
-  // ─── Access Denied ────────────────────────────────────────────────────────
+  // ─── Access Denied ─────────────────────────────────────────────────────────
   if (!hasAccess) {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-4">
         <ShieldOff className="h-12 w-12 opacity-30" />
-        <p className="text-base font-medium">
-          {isRtl ? "وصول مقيّد" : "Access Restricted"}
-        </p>
+        <p className="text-base font-medium">{isRtl ? "وصول مقيّد" : "Access Restricted"}</p>
         <p className="text-sm text-center max-w-sm">
           {isRtl
             ? "هذه الصفحة متاحة للمسؤولين ومديري المشاريع ومتحكمي المستندات فقط."
@@ -297,7 +389,7 @@ export default function ActivityLogPage() {
     );
   }
 
-  // ─── Export ───────────────────────────────────────────────────────────────
+  // ─── Export Excel ──────────────────────────────────────────────────────────
   const handleExport = async () => {
     try {
       const exportParams = new URLSearchParams();
@@ -311,8 +403,9 @@ export default function ActivityLogPage() {
 
       const r = await fetch(`/api/audit-logs/export-xlsx?${exportParams.toString()}`);
       if (!r.ok) throw new Error("Export failed");
-      const json = await r.json();
-      const rows = json.data.map((d: any) => ({
+      const json = await r.json() as { data: Array<Record<string, string | number>> };
+
+      const rows = json.data.map(d => ({
         "ID": d.id,
         "Timestamp": d.timestamp,
         "User": d.user,
@@ -324,16 +417,17 @@ export default function ActivityLogPage() {
         "Project Code": d.projectCode,
         "Details": d.details,
       }));
+
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
       XLSX.writeFile(wb, `activity-log-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
     } catch {
-      toast({ title: t("exportFailed") ?? "Export failed", variant: "destructive" });
+      toast({ title: t("exportFailed"), variant: "destructive" });
     }
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div className={`space-y-6 ${isRtl ? "font-[Tahoma,Arial,sans-serif]" : ""}`} dir={isRtl ? "rtl" : "ltr"}>
       {/* Header */}
@@ -363,19 +457,19 @@ export default function ActivityLogPage() {
           <div className="flex flex-wrap gap-2 items-center">
             <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
 
-            <Select value={filters.projectId} onValueChange={v => set("projectId", v)}>
+            <Select value={filters.projectId} onValueChange={v => setFilter("projectId", v)}>
               <SelectTrigger className="h-8 w-[150px] text-xs">
                 <SelectValue placeholder={t("allProjects")} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">{t("allProjects")}</SelectItem>
-                {projects.map((p: any) => (
+                {projects.map(p => (
                   <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            <Select value={filters.entityType} onValueChange={v => set("entityType", v)}>
+            <Select value={filters.entityType} onValueChange={v => setFilter("entityType", v)}>
               <SelectTrigger className="h-8 w-[150px] text-xs">
                 <SelectValue placeholder={t("allEntityTypes")} />
               </SelectTrigger>
@@ -383,13 +477,13 @@ export default function ActivityLogPage() {
                 <SelectItem value="_all">{t("allEntityTypes")}</SelectItem>
                 {ENTITY_TYPES.map(et => (
                   <SelectItem key={et} value={et}>
-                    {t(`entity_${et}` as any) || et}
+                    {entityLabel(et, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            <Select value={filters.action} onValueChange={v => set("action", v)}>
+            <Select value={filters.action} onValueChange={v => setFilter("action", v)}>
               <SelectTrigger className="h-8 w-[140px] text-xs">
                 <SelectValue placeholder={t("allActions")} />
               </SelectTrigger>
@@ -397,19 +491,19 @@ export default function ActivityLogPage() {
                 <SelectItem value="_all">{t("allActions")}</SelectItem>
                 {ACTIONS.map(a => (
                   <SelectItem key={a} value={a}>
-                    {t(`action_${a}` as any) || a}
+                    {actionLabel(a, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
-            <Select value={filters.userId} onValueChange={v => set("userId", v)}>
+            <Select value={filters.userId} onValueChange={v => setFilter("userId", v)}>
               <SelectTrigger className="h-8 w-[150px] text-xs">
                 <SelectValue placeholder={t("allUsers")} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">{t("allUsers")}</SelectItem>
-                {users.map((u: any) => (
+                {users.map(u => (
                   <SelectItem key={u.id} value={String(u.id)}>
                     {u.firstName} {u.lastName}
                   </SelectItem>
@@ -419,23 +513,33 @@ export default function ActivityLogPage() {
 
             <div className="flex items-center gap-1">
               <Label className="text-xs shrink-0 text-muted-foreground">{t("dateFrom")}</Label>
-              <Input type="date" value={filters.dateFrom} onChange={e => set("dateFrom", e.target.value)} className="h-8 w-[130px] text-xs" />
+              <Input
+                type="date" value={filters.dateFrom}
+                onChange={e => setFilter("dateFrom", e.target.value)}
+                className="h-8 w-[130px] text-xs"
+              />
             </div>
             <div className="flex items-center gap-1">
               <Label className="text-xs shrink-0 text-muted-foreground">{t("dateTo")}</Label>
-              <Input type="date" value={filters.dateTo} onChange={e => set("dateTo", e.target.value)} className="h-8 w-[130px] text-xs" />
+              <Input
+                type="date" value={filters.dateTo}
+                onChange={e => setFilter("dateTo", e.target.value)}
+                className="h-8 w-[130px] text-xs"
+              />
             </div>
 
             <Input
               placeholder={t("searchEntities")}
               value={filters.search}
-              onChange={e => set("search", e.target.value)}
+              onChange={e => setFilter("search", e.target.value)}
               className="h-8 w-[180px] text-xs"
             />
 
             {hasFilters && (
-              <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground"
-                onClick={() => { setFilters(DEFAULT_FILTERS); setPage(1); }}>
+              <Button
+                variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground"
+                onClick={() => { setFilters(DEFAULT_FILTERS); setPage(1); }}
+              >
                 <X className="h-3.5 w-3.5" /> {t("clear")}
               </Button>
             )}
@@ -476,17 +580,12 @@ export default function ActivityLogPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {logs.map((log: any) => {
-                    let detailSnippet = "";
-                    try {
-                      const d = typeof log.details === "string" ? JSON.parse(log.details) : log.details;
-                      if (d && Object.keys(d).length > 0) {
-                        detailSnippet = Object.entries(d)
-                          .slice(0, 2)
-                          .map(([k, v]) => `${k}: ${String(v).slice(0, 20)}`)
-                          .join(", ");
-                      }
-                    } catch {}
+                  {logs.map(log => {
+                    const details = parseDetails(log.details);
+                    const detailSnippet = Object.entries(details)
+                      .slice(0, 2)
+                      .map(([k, v]) => `${k}: ${String(v).slice(0, 20)}`)
+                      .join(", ");
 
                     return (
                       <TableRow
@@ -510,7 +609,9 @@ export default function ActivityLogPage() {
                           <EntityTypeBadge type={log.entityType} t={t} />
                         </TableCell>
                         <TableCell className="text-xs max-w-[160px] truncate" title={log.entityTitle ?? ""}>
-                          {log.entityTitle ?? <span className="text-muted-foreground">ID: {log.entityId}</span>}
+                          {log.entityTitle ?? (
+                            <span className="text-muted-foreground">ID: {log.entityId}</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {log.projectName ? (
@@ -520,7 +621,10 @@ export default function ActivityLogPage() {
                             </span>
                           ) : "—"}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate font-mono" title={detailSnippet}>
+                        <TableCell
+                          className="text-xs text-muted-foreground max-w-[180px] truncate font-mono"
+                          title={detailSnippet}
+                        >
                           {detailSnippet || "—"}
                         </TableCell>
                       </TableRow>
@@ -533,14 +637,14 @@ export default function ActivityLogPage() {
 
           {!isLoading && logs.length > 0 && (
             <div className="px-4 pb-4">
-              <Pagination page={page} totalPages={totalPages} total={total} perPage={PER_PAGE} onPage={setPage} />
+              <Pagination page={page} totalPages={totalPages} total={total} onPage={setPage} />
             </div>
           )}
         </CardContent>
       </Card>
 
       {/* Detail Sheet */}
-      <LogDetailSheet item={selectedLog} open={!!selectedLog} onClose={() => setSelectedLog(null)} t={t} />
+      <LogDetailSheet item={selectedLog} open={selectedLog != null} onClose={() => setSelectedLog(null)} t={t} />
     </div>
   );
 }
