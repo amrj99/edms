@@ -65,7 +65,15 @@ function ModuleDisabledPlaceholder() {
 
 function ModuleGuard({ moduleKey, component: Component }: { moduleKey: keyof OrgModules; component: React.ComponentType }) {
   const { modules, isLoading } = useModules();
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+        </div>
+      </AppLayout>
+    );
+  }
   if (!modules[moduleKey]) {
     return (
       <AppLayout>

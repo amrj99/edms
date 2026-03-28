@@ -59,11 +59,22 @@ async function setModulesForOrg(orgId: number, modules: OrgModules): Promise<Org
   }
 }
 
+function parseOrgIdParam(raw: unknown): number | null {
+  if (!raw) return null;
+  const n = parseInt(String(raw), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 router.get("/", async (req, res) => {
   const role = req.user?.role;
   const isSysOwner = role === "system_owner";
 
-  const orgIdParam = req.query.orgId ? parseInt(String(req.query.orgId)) : null;
+  const orgIdParam = parseOrgIdParam(req.query.orgId);
+
+  if (req.query.orgId && orgIdParam === null) {
+    res.status(400).json({ error: "Invalid orgId parameter" });
+    return;
+  }
 
   if (orgIdParam && !isSysOwner) {
     res.status(403).json({ error: "Only system owners can query modules for other organizations" });
@@ -84,7 +95,12 @@ router.put("/", requireRole("admin", "system_owner"), async (req, res) => {
   const role = req.user?.role;
   const isSysOwner = role === "system_owner";
 
-  const orgIdParam = req.query.orgId ? parseInt(String(req.query.orgId)) : null;
+  const orgIdParam = parseOrgIdParam(req.query.orgId);
+
+  if (req.query.orgId && orgIdParam === null) {
+    res.status(400).json({ error: "Invalid orgId parameter" });
+    return;
+  }
 
   if (orgIdParam && !isSysOwner) {
     res.status(403).json({ error: "Only system owners can update modules for other organizations" });
