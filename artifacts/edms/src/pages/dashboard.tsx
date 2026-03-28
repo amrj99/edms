@@ -24,6 +24,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import { useI18n } from "@/lib/i18n";
+import { useOrgContext, useOrgOverrideUrl } from "@/lib/org-context";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DOC_STATUS_COLORS: Record<string, string> = {
@@ -563,10 +564,12 @@ export default function Dashboard() {
   const { data, isLoading, error } = useGetDashboard();
   const [layout, setLayout] = useState<string[]>(() => loadLayout());
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const { activeOrgId } = useOrgContext();
+  const addOverride = useOrgOverrideUrl();
 
   const { data: projectsData } = useQuery({
-    queryKey: ["projects"],
-    queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
+    queryKey: ["projects", activeOrgId],
+    queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
   const projects = projectsData?.projects ?? [];
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
 interface OrgContextType {
   activeOrgId: number | null;
@@ -21,4 +21,16 @@ export function OrgContextProvider({ children }: { children: ReactNode }) {
 
 export function useOrgContext() {
   return useContext(OrgContext);
+}
+
+export function useOrgOverrideUrl() {
+  const { activeOrgId } = useOrgContext();
+  return useCallback(
+    (url: string): string => {
+      if (activeOrgId === null) return url;
+      const separator = url.includes("?") ? "&" : "?";
+      return `${url}${separator}orgOverride=${activeOrgId}`;
+    },
+    [activeOrgId],
+  );
 }

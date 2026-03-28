@@ -7,6 +7,7 @@ import autoTable from "jspdf-autotable";
 
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
+import { useOrgContext, useOrgOverrideUrl } from "@/lib/org-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,8 @@ export default function DeliverablesPage() {
   const { isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { activeOrgId } = useOrgContext();
+  const addOverride = useOrgOverrideUrl();
 
   const [projectId, setProjectId] = useState<string>("_all");
   const [statusFilter, setStatusFilter] = useState("_all");
@@ -70,8 +73,8 @@ export default function DeliverablesPage() {
   const [form, setForm] = useState({ ...EMPTY_FORM });
 
   const { data: projectsData } = useQuery({
-    queryKey: ["projects"],
-    queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
+    queryKey: ["projects", activeOrgId],
+    queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
   const projects: any[] = projectsData?.projects ?? [];
 
@@ -468,6 +471,7 @@ export default function DeliverablesPage() {
                 <div><p className="text-xs text-muted-foreground flex items-center gap-1"><LinkIcon className="h-3 w-3" />Linked Doc</p>
                   <p className="font-mono text-xs text-primary">{detailItem.linkedDocumentNumber || "—"}</p>
                 </div>
+                {(() => { const orgName = projects.find((p: any) => p.id === detailItem.projectId)?.organizationName; return orgName ? <div className="col-span-2"><p className="text-xs text-muted-foreground">Organization</p><p className="text-sm font-medium">{orgName}</p></div> : null; })()}
               </div>
               {detailItem.remarks && (
                 <div><p className="text-xs text-muted-foreground">Remarks</p><p className="text-sm mt-1 bg-muted/40 rounded-lg p-2">{detailItem.remarks}</p></div>

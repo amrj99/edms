@@ -404,20 +404,22 @@ export default function Admin() {
                   <TableRow>
                     <TableHead className="text-xs">Name</TableHead>
                     <TableHead className="text-xs">Type</TableHead>
+                    <TableHead className="text-xs text-center">Projects</TableHead>
+                    <TableHead className="text-xs text-center">Members</TableHead>
                     <TableHead className="text-xs">Contact Email</TableHead>
-                    <TableHead className="text-xs">Phone</TableHead>
                     <TableHead className="text-xs text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground text-sm">No organizations found</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground text-sm">No organizations found</TableCell></TableRow>
                   ) : orgs.map((org: any) => (
                     <TableRow key={org.id}>
                       <TableCell className="font-medium text-sm">{org.name}</TableCell>
                       <TableCell><Badge variant="outline" className="capitalize text-xs">{org.type || "—"}</Badge></TableCell>
+                      <TableCell className="text-xs text-center font-mono">{org.projectCount ?? 0}</TableCell>
+                      <TableCell className="text-xs text-center font-mono">{org.userCount ?? 0}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{org.contactEmail || "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{org.contactPhone || "—"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>

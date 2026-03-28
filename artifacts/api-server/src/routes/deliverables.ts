@@ -7,7 +7,7 @@ import { requireAuth, isSysAdmin } from "../lib/auth.js";
 const router = Router({ mergeParams: true });
 
 async function checkProjectOwnership(req: any, res: any, projectId: number): Promise<boolean> {
-  if (isSysAdmin(req.user!)) return true;
+  if (req.user!.role === "system_owner") return true;
   const [project] = await db.select({ organizationId: projectsTable.organizationId })
     .from(projectsTable).where(eq(projectsTable.id, projectId));
   if (!project || project.organizationId !== req.user!.organizationId) {

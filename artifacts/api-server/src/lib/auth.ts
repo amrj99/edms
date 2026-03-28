@@ -100,6 +100,12 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     return;
   }
   req.user = payload as unknown as AuthUser;
+  if (req.user.role === "system_owner") {
+    const override = req.query.orgOverride;
+    if (override && !isNaN(Number(override))) {
+      req.user = { ...req.user, organizationId: Number(override) };
+    }
+  }
   next();
 }
 
@@ -124,5 +130,15 @@ export function isSysAdmin(user: AuthUser): boolean {
 export function requireSysAdmin(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) { res.status(401).json({ error: "Unauthorized" }); return; }
   if (!isSysAdmin(req.user)) { res.status(403).json({ error: "Forbidden", message: "System admin required" }); return; }
+  next();
+}
+
+export function applyOrgOverride(req: Request, _res: Response, next: NextFunction): void {
+  if (req.user && req.user.role === "system_owner") {
+    const override = req.query.orgOverride;
+    if (override && !isNaN(Number(override))) {
+      req.user = { ...req.user, organizationId: Number(override) };
+    }
+  }
   next();
 }

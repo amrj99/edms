@@ -8,6 +8,7 @@ import autoTable from "jspdf-autotable";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { useOrgContext, useOrgOverrideUrl } from "@/lib/org-context";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1699,10 +1700,12 @@ export default function Reports() {
   const { t, lang, isRtl } = useI18n();
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [activeTab, setActiveTab] = useState("master");
+  const { activeOrgId } = useOrgContext();
+  const addOverride = useOrgOverrideUrl();
 
   const { data: projectsData } = useQuery({
-    queryKey: ["projects"],
-    queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
+    queryKey: ["projects", activeOrgId],
+    queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
   const projects: any[] = projectsData?.projects ?? [];
 
