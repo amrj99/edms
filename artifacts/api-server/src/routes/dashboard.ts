@@ -1,29 +1,49 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { documentsTable, workflowsTable, tasksTable, correspondenceTable, correspondenceRecipientsTable, usersTable, foldersTable, projectsTable } from "@workspace/db";
-import { eq, and, count, desc, gte } from "drizzle-orm";
+import { eq, and, count, desc, gte, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
 
 router.get("/", requireAuth, async (req, res) => {
   const userId = req.user!.id;
+  const orgId = req.user!.organizationId;
+  const isSystemOwner = req.user!.role === "system_owner";
   const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
 
-  const docFilter = projectId
-    ? and(eq(documentsTable.projectId, projectId))
-    : undefined;
+  // Resolve org-scoped project IDs when org context is active
+  let orgProjectIds: number[] | undefined;
+  if (!projectId && orgId) {
+    const orgProjects = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
+    orgProjectIds = orgProjects.map(p => p.id);
+  }
+
+  const buildDocFilter = () => {
+    if (projectId) return and(eq(documentsTable.projectId, projectId));
+    if (orgProjectIds && orgProjectIds.length > 0) return inArray(documentsTable.projectId, orgProjectIds);
+    if (orgProjectIds && orgProjectIds.length === 0) return eq(documentsTable.projectId, -1); // no projects => no docs
+    return undefined;
+  };
+
+  const buildWfFilter = (extra?: ReturnType<typeof eq>) => {
+    if (projectId) return and(eq(workflowsTable.projectId, projectId), extra);
+    if (orgProjectIds && orgProjectIds.length > 0) return and(inArray(workflowsTable.projectId, orgProjectIds), extra);
+    if (orgProjectIds && orgProjectIds.length === 0) return and(eq(workflowsTable.projectId, -1), extra);
+    return extra;
+  };
+
+  const docFilter = buildDocFilter();
 
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
   // Stats
-  const [totalDocsResult] = await db.select({ cnt: count() }).from(documentsTable)
-    .where(docFilter);
+  const [totalDocsResult] = await db.select({ cnt: count() }).from(documentsTable).where(docFilter);
 
   const [pendingApprovalsResult] = await db.select({ cnt: count() }).from(workflowsTable)
-    .where(projectId ? and(eq(workflowsTable.projectId, projectId), eq(workflowsTable.status, "active")) : eq(workflowsTable.status, "active"));
+    .where(buildWfFilter(eq(workflowsTable.status, "active")));
 
   const [openTasksResult] = await db.select({ cnt: count() }).from(tasksTable)
     .where(and(eq(tasksTable.assignedToId, userId), eq(tasksTable.status, "pending")));
@@ -42,10 +62,12 @@ router.get("/", requireAuth, async (req, res) => {
   }
 
   const [docsThisMonthResult] = await db.select({ cnt: count() }).from(documentsTable)
-    .where(projectId ? and(eq(documentsTable.projectId, projectId), gte(documentsTable.createdAt, startOfMonth)) : gte(documentsTable.createdAt, startOfMonth));
+    .where(docFilter
+      ? and(docFilter, gte(documentsTable.createdAt, startOfMonth))
+      : gte(documentsTable.createdAt, startOfMonth));
 
   const [activeWorkflowsResult] = await db.select({ cnt: count() }).from(workflowsTable)
-    .where(eq(workflowsTable.status, "active"));
+    .where(buildWfFilter(eq(workflowsTable.status, "active")));
 
   // Recent documents
   let recentDocs = await db.select({
@@ -61,7 +83,7 @@ router.get("/", requireAuth, async (req, res) => {
 
   // Pending approvals workflows
   let pendingWorkflows = await db.select().from(workflowsTable)
-    .where(projectId ? and(eq(workflowsTable.projectId, projectId), eq(workflowsTable.status, "active")) : eq(workflowsTable.status, "active"))
+    .where(buildWfFilter(eq(workflowsTable.status, "active")))
     .orderBy(desc(workflowsTable.updatedAt))
     .limit(5);
 

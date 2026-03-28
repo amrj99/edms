@@ -401,9 +401,9 @@ export default function Admin() {
 
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />All Organizations</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />{t("orgSwitcherAll")}</CardTitle>
               <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); setCreateOrgOpen(true); }}>
-                <Plus className="h-3.5 w-3.5" /> New Organization
+                <Plus className="h-3.5 w-3.5" /> {t("addOrganization")}
               </Button>
             </CardHeader>
             <CardContent className="p-0">
@@ -482,7 +482,7 @@ export default function Admin() {
                     </Select>
                   </div>
                   <div>
-                    <Label>Organization</Label>
+                    <Label>{t("orgName_label")}</Label>
                     <Select value={userForm.organizationId} onValueChange={v => setUserForm(f => ({ ...f, organizationId: v }))}>
                       <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
                       <SelectContent>
@@ -531,7 +531,7 @@ export default function Admin() {
                     </Select>
                   </div>
                   <div>
-                    <Label>Organization</Label>
+                    <Label>{t("orgName_label")}</Label>
                     <Select value={editForm.organizationId} onValueChange={v => setEditForm(f => ({ ...f, organizationId: v }))}>
                       <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
                       <SelectContent>
@@ -613,7 +613,7 @@ export default function Admin() {
                         <TableHead>User</TableHead>
                         <TableHead>Email</TableHead>
                         <TableHead>System Role</TableHead>
-                        <TableHead>Organization</TableHead>
+                        <TableHead>{t("orgName_label")}</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -1595,10 +1595,10 @@ function SystemTab() {
               <>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { label: "Users", value: sysInfo.counts?.users ?? 0 },
-                    { label: "Projects", value: sysInfo.counts?.projects ?? 0 },
-                    { label: "Documents", value: sysInfo.counts?.documents ?? 0 },
-                    { label: "Organizations", value: sysInfo.counts?.organizations ?? 0 },
+                    { label: t("users"), value: sysInfo.counts?.users ?? 0 },
+                    { label: t("projects"), value: sysInfo.counts?.projects ?? 0 },
+                    { label: t("documents"), value: sysInfo.counts?.documents ?? 0 },
+                    { label: t("moduleOrganization"), value: sysInfo.counts?.organizations ?? 0 },
                   ].map(({ label, value }) => (
                     <div key={label} className="bg-muted rounded-lg p-3 text-center">
                       <p className="text-xl font-bold">{value}</p>

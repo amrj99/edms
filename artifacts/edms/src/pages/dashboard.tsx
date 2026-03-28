@@ -188,14 +188,17 @@ function ProjectPortfolioWidget({ projects }: { projects: any[] }) {
     { status: "completed", label: "Completed", color: "bg-blue-500" },
     { status: "cancelled", label: "Cancelled", color: "bg-gray-400" },
   ];
-  const orgGroups = Object.entries(
-    projects.reduce((acc: Record<string, number>, p: any) => {
-      const name = p.organizationName ?? "—";
-      acc[name] = (acc[name] ?? 0) + 1;
-      return acc;
-    }, {}),
-  ).sort((a, b) => b[1] - a[1]);
-  const showOrgs = orgGroups.length > 1;
+  const orgNames = [...new Set(projects.map((p: any) => p.organizationName).filter(Boolean))];
+  const showOrgs = orgNames.length > 1;
+
+  const { data: crossOrgData } = useQuery({
+    queryKey: ["cross-org-stats-portfolio"],
+    queryFn: async () => { const r = await fetch("/api/organizations/cross-org-stats"); return r.json(); },
+    enabled: showOrgs,
+  });
+  const crossOrgStats: any[] = crossOrgData?.stats ?? [];
+  const orgStatMap = new Map(crossOrgStats.map((o: any) => [o.name, o]));
+
   return (
     <Card>
       <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-3.5 w-3.5" />Project Portfolio</CardTitle></CardHeader>
@@ -213,13 +216,25 @@ function ProjectPortfolioWidget({ projects }: { projects: any[] }) {
         {showOrgs && (
           <div className="border-t pt-2 mt-2">
             <p className="text-xs text-muted-foreground mb-1.5 font-medium">By Organization</p>
+            <div className="grid grid-cols-[1fr_40px_40px_50px] gap-x-1 mb-1">
+              <span className="text-[10px] text-muted-foreground/70"></span>
+              <span className="text-[10px] text-muted-foreground/70 text-center">Proj</span>
+              <span className="text-[10px] text-muted-foreground/70 text-center">Docs</span>
+              <span className="text-[10px] text-muted-foreground/70 text-center text-red-500">NCR</span>
+            </div>
             <div className="space-y-1">
-              {orgGroups.map(([name, count]) => (
-                <div key={name} className="flex justify-between text-xs">
-                  <span className="text-muted-foreground truncate max-w-[140px]">{name}</span>
-                  <span className="font-mono font-medium">{count}</span>
-                </div>
-              ))}
+              {orgNames.map(name => {
+                const projCount = projects.filter((p: any) => p.organizationName === name).length;
+                const s = orgStatMap.get(name);
+                return (
+                  <div key={name} className="grid grid-cols-[1fr_40px_40px_50px] items-center gap-x-1 text-xs">
+                    <span className="text-muted-foreground truncate">{name}</span>
+                    <span className="font-mono font-medium text-center">{projCount}</span>
+                    <span className="font-mono text-center text-muted-foreground">{s?.documentCount ?? "—"}</span>
+                    <span className={`font-mono text-center ${s?.openNcrCount > 0 ? "text-red-600 font-semibold" : "text-muted-foreground"}`}>{s?.openNcrCount ?? "—"}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

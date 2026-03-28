@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { deliverablesTable, documentsTable, projectsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth } from "../lib/auth.js";
 
 const router = Router({ mergeParams: true });
 

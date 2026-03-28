@@ -274,6 +274,9 @@ const translations = {
     create: "Create",
     saveChanges: "Save Changes",
     delete: "Delete",
+    users: "Users",
+    documents: "Documents",
+    projects: "Projects",
   },
   ar: {
     // Navigation / menu
@@ -546,6 +549,9 @@ const translations = {
     create: "إنشاء",
     saveChanges: "حفظ التغييرات",
     delete: "حذف",
+    users: "المستخدمون",
+    documents: "المستندات",
+    projects: "المشاريع",
   },
 } as const;
 

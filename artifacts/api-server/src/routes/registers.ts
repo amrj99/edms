@@ -5,7 +5,7 @@ import {
   projectsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth, requireRole, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });

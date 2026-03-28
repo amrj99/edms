@@ -1261,7 +1261,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
           { key: "contractor", label: "Contractor" },
           { key: "date", label: "Date", format: fmt },
           { key: "remarks", label: "Remarks" },
-          { key: "_orgName", label: "Organization" },
+          { key: "_orgName", label: t("orgName_label") },
         ]}
       >
         {detailItem && filters.projectId !== "_all" && (
@@ -1483,7 +1483,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
           { key: "correctiveAction", label: "Corrective Action" },
           { key: "closeDate", label: "Close Date", format: fmt },
           { key: "remarks", label: "Remarks" },
-          { key: "_orgName", label: "Organization" },
+          { key: "_orgName", label: t("orgName_label") },
         ]}
       >
         {detailItem && filters.projectId !== "_all" && (
@@ -1696,7 +1696,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
           { key: "date", label: "Date", format: fmt },
           { key: "status", label: "Status" },
           { key: "remarks", label: "Remarks" },
-          { key: "_orgName", label: "Organization" },
+          { key: "_orgName", label: t("orgName_label") },
         ]}
       />
 
