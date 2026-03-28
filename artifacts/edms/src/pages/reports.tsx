@@ -905,6 +905,18 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
 function TransmittalRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
   const [detailItem, setDetailItem] = useState<any>(null);
+  const TRS_COLS = [
+    { key: "transmittalNumber", label: t("transmittalNo") },
+    { key: "createdAt", label: t("date") },
+    { key: "subject", label: t("subject") },
+    { key: "toExternal", label: t("to") },
+    { key: "purpose", label: t("purpose") },
+    { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
+    { key: "sentAt", label: t("sentDate") },
+    { key: "acknowledgedAt", label: t("acknowledged") },
+  ];
+  const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("transmittal", TRS_COLS.map(c => c.key));
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-trans", filters.projectId],
@@ -926,52 +938,43 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
     return d;
   }, [allItems, filters]);
 
-  const COLS = [
-    { key: "transmittalNumber", label: t("transmittalNo") },
-    { key: "createdAt", label: t("date") },
-    { key: "subject", label: t("subject") },
-    { key: "toExternal", label: t("to") },
-    { key: "purpose", label: t("purpose") },
-    { key: "status", label: t("status") },
-    { key: "approvalStatus", label: t("approvalStatus") },
-    { key: "sentAt", label: t("sentDate") },
-    { key: "acknowledgedAt", label: t("acknowledged") },
-  ];
-
   if (filters.projectId === "_all") return <EmptyState icon={Send} message={t("selectProject")} />;
 
   return (
     <div className="space-y-3">
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
         <p className="text-sm text-muted-foreground">{filtered.length} {t("records")}</p>
-        <ExportButtons
-          data={filtered.map(d => ({ ...d, createdAt: fmt(d.createdAt), sentAt: fmt(d.sentAt), acknowledgedAt: fmt(d.acknowledgedAt) }))}
-          filename="transmittal-register"
-          columns={COLS}
-          title={t("transmittalRegister")}
-        />
+        <div className="flex gap-2">
+          <ColumnToggleButton allCols={TRS_COLS} visibleKeys={visibleCols} onToggle={toggleCol} storageKey="transmittal" />
+          <ExportButtons
+            data={filtered.map(d => ({ ...d, createdAt: fmt(d.createdAt), sentAt: fmt(d.sentAt), acknowledgedAt: fmt(d.acknowledgedAt) }))}
+            filename="transmittal-register"
+            columns={TRS_COLS}
+            title={t("transmittalRegister")}
+          />
+        </div>
       </div>
       <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
         <Table>
           <TableHeader className="bg-muted/40">
-            <TableRow>{COLS.map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+            <TableRow>{TRS_COLS.filter(c => visibleCols.has(c.key)).map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
             ) : filtered.length === 0 ? (
-              <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
             ) : filtered.map(tr => (
               <TableRow key={tr.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(tr)}>
-                <TableCell className="font-mono text-xs text-primary">{tr.transmittalNumber || `TRS-${String(tr.id).padStart(4,"0")}`}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{fmt(tr.createdAt)}</TableCell>
-                <TableCell className="text-sm max-w-[200px] truncate font-medium">{tr.subject}</TableCell>
-                <TableCell className="text-xs max-w-[120px] truncate">{tr.toExternal || "—"}</TableCell>
-                <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>
-                <TableCell><StatusPill status={tr.status} /></TableCell>
-                <TableCell><ApprovalBadge status={tr.approvalStatus} /></TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{fmt(tr.sentAt)}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap">{fmt(tr.acknowledgedAt)}</TableCell>
+                {visibleCols.has("transmittalNumber") && <TableCell className="font-mono text-xs text-primary">{tr.transmittalNumber || `TRS-${String(tr.id).padStart(4,"0")}`}</TableCell>}
+                {visibleCols.has("createdAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.createdAt)}</TableCell>}
+                {visibleCols.has("subject") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{tr.subject}</TableCell>}
+                {visibleCols.has("toExternal") && <TableCell className="text-xs max-w-[120px] truncate">{tr.toExternal || "—"}</TableCell>}
+                {visibleCols.has("purpose") && <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>}
+                {visibleCols.has("status") && <TableCell><StatusPill status={tr.status} /></TableCell>}
+                {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={tr.approvalStatus} /></TableCell>}
+                {visibleCols.has("sentAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.sentAt)}</TableCell>}
+                {visibleCols.has("acknowledgedAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.acknowledgedAt)}</TableCell>}
               </TableRow>
             ))}
           </TableBody>
@@ -1123,6 +1126,18 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
   const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
+  const ITR_COLS = [
+    { key: "requestNumber", label: t("requestNo") },
+    { key: "type", label: t("requestType") },
+    { key: "description", label: t("description") },
+    { key: "location", label: t("location") },
+    { key: "date", label: t("date") },
+    { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
+    { key: "contractor", label: t("contractor") },
+    { key: "remarks", label: t("remarks") },
+  ];
+  const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("itr", ITR_COLS.map(c => c.key));
   const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -1164,18 +1179,6 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
   });
 
-  const COLS = [
-    { key: "requestNumber", label: t("requestNo") },
-    { key: "type", label: t("requestType") },
-    { key: "description", label: t("description") },
-    { key: "location", label: t("location") },
-    { key: "date", label: t("date") },
-    { key: "status", label: t("status") },
-    { key: "approvalStatus", label: t("approvalStatus") },
-    { key: "contractor", label: t("contractor") },
-    { key: "remarks", label: t("remarks") },
-  ];
-
   return (
     <div className="space-y-3">
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
@@ -1186,10 +1189,11 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
               <Plus className="h-3.5 w-3.5" /> {t("addRecord")}
             </Button>
           )}
+          <ColumnToggleButton allCols={ITR_COLS} visibleKeys={visibleCols} onToggle={toggleCol} storageKey="itr" />
           <ExportButtons
             data={filtered.map(d => ({ ...d, date: fmt(d.date) }))}
             filename="itr-mir-register"
-            columns={COLS}
+            columns={ITR_COLS}
             title={t("itrMirRegister")}
           />
         </div>
@@ -1201,24 +1205,24 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
           <Table>
             <TableHeader className="bg-muted/40">
-              <TableRow>{COLS.map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+              <TableRow>{ITR_COLS.filter(c => visibleCols.has(c.key)).map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
+                <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
               ) : filtered.map(item => (
                 <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
-                  <TableCell className="font-mono text-xs text-primary">{item.requestNumber}</TableCell>
-                  <TableCell><span className="text-xs font-semibold uppercase text-primary">{item.type}</span></TableCell>
-                  <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>
-                  <TableCell className="text-xs">{item.location || "—"}</TableCell>
-                  <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
-                  <TableCell><StatusPill status={item.status} /></TableCell>
-                  <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>
-                  <TableCell className="text-xs">{item.contractor || "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{item.remarks || "—"}</TableCell>
+                  {visibleCols.has("requestNumber") && <TableCell className="font-mono text-xs text-primary">{item.requestNumber}</TableCell>}
+                  {visibleCols.has("type") && <TableCell><span className="text-xs font-semibold uppercase text-primary">{item.type}</span></TableCell>}
+                  {visibleCols.has("description") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>}
+                  {visibleCols.has("location") && <TableCell className="text-xs">{item.location || "—"}</TableCell>}
+                  {visibleCols.has("date") && <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>}
+                  {visibleCols.has("status") && <TableCell><StatusPill status={item.status} /></TableCell>}
+                  {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
+                  {visibleCols.has("contractor") && <TableCell className="text-xs">{item.contractor || "—"}</TableCell>}
+                  {visibleCols.has("remarks") && <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{item.remarks || "—"}</TableCell>}
                 </TableRow>
               ))}
             </TableBody>
@@ -1325,6 +1329,18 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
   const canWrite = !["viewer", "reviewer"].includes(user?.role ?? "");
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
+  const NCR_COLS = [
+    { key: "reportNumber", label: t("reportNo") },
+    { key: "type", label: t("type") },
+    { key: "description", label: t("description") },
+    { key: "location", label: t("location") },
+    { key: "raisedBy", label: t("raisedBy") },
+    { key: "status", label: t("status") },
+    { key: "approvalStatus", label: t("approvalStatus") },
+    { key: "correctiveAction", label: t("correctiveAction") },
+    { key: "closeDate", label: t("closeDate") },
+  ];
+  const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("ncr", NCR_COLS.map(c => c.key));
   const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -1366,18 +1382,6 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
   });
 
-  const COLS = [
-    { key: "reportNumber", label: t("reportNo") },
-    { key: "type", label: t("type") },
-    { key: "description", label: t("description") },
-    { key: "location", label: t("location") },
-    { key: "raisedBy", label: t("raisedBy") },
-    { key: "status", label: t("status") },
-    { key: "approvalStatus", label: t("approvalStatus") },
-    { key: "correctiveAction", label: t("correctiveAction") },
-    { key: "closeDate", label: t("closeDate") },
-  ];
-
   return (
     <div className="space-y-3">
       <div className={`flex items-center justify-between gap-3 flex-wrap ${isRtl ? "flex-row-reverse" : ""}`}>
@@ -1388,10 +1392,11 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
               <Plus className="h-3.5 w-3.5" /> {t("addRecord")}
             </Button>
           )}
+          <ColumnToggleButton allCols={NCR_COLS} visibleKeys={visibleCols} onToggle={toggleCol} storageKey="ncr" />
           <ExportButtons
             data={filtered.map(d => ({ ...d, closeDate: fmt(d.closeDate) }))}
             filename="ncr-sor-register"
-            columns={COLS}
+            columns={NCR_COLS}
             title={t("ncrSorRegister")}
           />
         </div>
@@ -1403,24 +1408,24 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
           <Table>
             <TableHeader className="bg-muted/40">
-              <TableRow>{COLS.map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+              <TableRow>{NCR_COLS.filter(c => visibleCols.has(c.key)).map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></TableCell></TableRow>
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={COLS.length} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
+                <TableRow><TableCell colSpan={visibleCols.size} className="py-12 text-center text-muted-foreground text-sm">{t("noData")}</TableCell></TableRow>
               ) : filtered.map(item => (
                 <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
-                  <TableCell className="font-mono text-xs text-destructive font-semibold">{item.reportNumber}</TableCell>
-                  <TableCell><span className="text-xs font-semibold uppercase text-destructive">{item.type}</span></TableCell>
-                  <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>
-                  <TableCell className="text-xs">{item.location || "—"}</TableCell>
-                  <TableCell className="text-xs">{item.raisedBy || "—"}</TableCell>
-                  <TableCell><StatusPill status={item.status} /></TableCell>
-                  <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>
-                  <TableCell className="text-xs max-w-[150px] truncate">{item.correctiveAction || "—"}</TableCell>
-                  <TableCell className="text-xs whitespace-nowrap">{fmt(item.closeDate)}</TableCell>
+                  {visibleCols.has("reportNumber") && <TableCell className="font-mono text-xs text-destructive font-semibold">{item.reportNumber}</TableCell>}
+                  {visibleCols.has("type") && <TableCell><span className="text-xs font-semibold uppercase text-destructive">{item.type}</span></TableCell>}
+                  {visibleCols.has("description") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>}
+                  {visibleCols.has("location") && <TableCell className="text-xs">{item.location || "—"}</TableCell>}
+                  {visibleCols.has("raisedBy") && <TableCell className="text-xs">{item.raisedBy || "—"}</TableCell>}
+                  {visibleCols.has("status") && <TableCell><StatusPill status={item.status} /></TableCell>}
+                  {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
+                  {visibleCols.has("correctiveAction") && <TableCell className="text-xs max-w-[150px] truncate">{item.correctiveAction || "—"}</TableCell>}
+                  {visibleCols.has("closeDate") && <TableCell className="text-xs whitespace-nowrap">{fmt(item.closeDate)}</TableCell>}
                 </TableRow>
               ))}
             </TableBody>
