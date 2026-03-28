@@ -1118,7 +1118,7 @@ function DrawingRegister({ filters }: { filters: Filters }) {
 }
 
 // ─── 5. ITR / MIR Register ────────────────────────────────────────────────────
-function ItrMirRegister({ filters }: { filters: Filters }) {
+function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects?: any[] }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -1230,7 +1230,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.requestNumber ?? "ITR/MIR Detail"}
@@ -1243,6 +1243,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
           { key: "contractor", label: "Contractor" },
           { key: "date", label: "Date", format: fmt },
           { key: "remarks", label: "Remarks" },
+          { key: "_orgName", label: "Organization" },
         ]}
       >
         {detailItem && filters.projectId !== "_all" && (
@@ -1321,7 +1322,7 @@ function ItrMirRegister({ filters }: { filters: Filters }) {
 }
 
 // ─── 6. NCR / SOR Register ────────────────────────────────────────────────────
-function NcrSorRegister({ filters }: { filters: Filters }) {
+function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects?: any[] }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -1433,7 +1434,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.reportNumber ?? "NCR/SOR Detail"}
@@ -1447,6 +1448,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
           { key: "correctiveAction", label: "Corrective Action" },
           { key: "closeDate", label: "Close Date", format: fmt },
           { key: "remarks", label: "Remarks" },
+          { key: "_orgName", label: "Organization" },
         ]}
       >
         {detailItem && filters.projectId !== "_all" && (
@@ -1525,7 +1527,7 @@ function NcrSorRegister({ filters }: { filters: Filters }) {
 }
 
 // ─── 7. NOC Register ──────────────────────────────────────────────────────────
-function NocRegister({ filters }: { filters: Filters }) {
+function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: any[] }) {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -1632,7 +1634,7 @@ function NocRegister({ filters }: { filters: Filters }) {
         </div>
       )}
       <RecordDetailSheet
-        item={detailItem}
+        item={detailItem ? { ...detailItem, _orgName: projects.find((p: any) => p.id === parseInt(filters.projectId))?.organizationName } : detailItem}
         open={!!detailItem}
         onClose={() => setDetailItem(null)}
         title={detailItem?.nocNumber ?? "NOC Detail"}
@@ -1642,6 +1644,7 @@ function NocRegister({ filters }: { filters: Filters }) {
           { key: "date", label: "Date", format: fmt },
           { key: "status", label: "Status" },
           { key: "remarks", label: "Remarks" },
+          { key: "_orgName", label: "Organization" },
         ]}
       />
 
@@ -1804,13 +1807,13 @@ export default function Reports() {
             <DrawingRegister filters={filters} />
           </TabsContent>
           <TabsContent value="itr" className="mt-0">
-            <ItrMirRegister filters={filters} />
+            <ItrMirRegister filters={filters} projects={projects} />
           </TabsContent>
           <TabsContent value="ncr" className="mt-0">
-            <NcrSorRegister filters={filters} />
+            <NcrSorRegister filters={filters} projects={projects} />
           </TabsContent>
           <TabsContent value="noc" className="mt-0">
-            <NocRegister filters={filters} />
+            <NocRegister filters={filters} projects={projects} />
           </TabsContent>
         </div>
       </Tabs>

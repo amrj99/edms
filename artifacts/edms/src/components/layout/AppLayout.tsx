@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useOrgContext } from "@/lib/org-context";
 
 import {
   Brain, Building2, CheckSquare, FolderKanban, Home, Inbox, LogOut, Moon,
@@ -337,6 +338,71 @@ export function AppSidebar() {
   );
 }
 
+// ─── Org Context Switcher (system_owner only) ─────────────────────────────────
+function OrgSwitcher() {
+  const { user } = useAuth();
+  const { activeOrgId, setActiveOrgId } = useOrgContext();
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+
+  const { data } = useQuery({
+    queryKey: ["organizations"],
+    queryFn: async () => { const r = await fetch("/api/organizations"); return r.json(); },
+    enabled: user?.role === "system_owner",
+  });
+  const orgs: any[] = data?.organizations ?? [];
+
+  if (user?.role !== "system_owner") return null;
+
+  const activeOrg = orgs.find(o => o.id === activeOrgId);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className={`h-8 gap-1.5 text-xs max-w-[200px] ${activeOrgId ? "border-primary text-primary" : ""}`}>
+          <Building2 className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{activeOrg ? activeOrg.name : t("orgSwitcherAll")}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="end">
+        <Command>
+          <CommandInput placeholder={t("orgSwitcher") + "..."} className="h-9" />
+          <CommandEmpty>{t("noOrgsFound")}</CommandEmpty>
+          <CommandGroup heading={t("organizations")}>
+            <ScrollArea className="max-h-72">
+              <CommandItem
+                value="_all"
+                onSelect={() => { setActiveOrgId(null); setOpen(false); }}
+                className="cursor-pointer"
+              >
+                <Building2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                <span>{t("orgSwitcherAll")}</span>
+                {!activeOrgId && <Check className="ml-auto h-3.5 w-3.5 text-primary" />}
+              </CommandItem>
+              {orgs.map((o: any) => (
+                <CommandItem
+                  key={o.id}
+                  value={`${o.name} ${o.type}`}
+                  onSelect={() => { setActiveOrgId(o.id); setOpen(false); }}
+                  className="cursor-pointer"
+                >
+                  <Building2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                  <div className="flex flex-col flex-1 min-w-0">
+                    <span className="truncate text-xs font-medium">{o.name}</span>
+                    <span className="text-[10px] text-muted-foreground capitalize">{o.type}</span>
+                  </div>
+                  {activeOrgId === o.id && <Check className="ml-auto h-3.5 w-3.5 text-primary shrink-0" />}
+                </CommandItem>
+              ))}
+            </ScrollArea>
+          </CommandGroup>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Language Toggle ──────────────────────────────────────────────────────────
 function LanguageToggle() {
   const { lang, setLang } = useI18n();
@@ -383,6 +449,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <div className="flex items-center gap-2">
               <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
               <LanguageToggle />
+              <OrgSwitcher />
               <ProjectSwitcher />
               {modules.notifications && <NotificationBell />}
             </div>

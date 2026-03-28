@@ -2,11 +2,12 @@ import { useGetDashboard } from "@workspace/api-client-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useAuth } from "@/lib/auth";
 import {
   FileText, ClipboardCheck, Mail, CheckSquare, ArrowRight, Loader2, Clock,
   AlertCircle, TrendingUp, Activity, Send, FolderOpen, Upload, CheckCircle2,
   BrainCircuit, Zap, Settings2, GripVertical, X, Plus, ClipboardList,
-  ShieldAlert, FileCheck, PenLine, Bell, RefreshCw,
+  ShieldAlert, FileCheck, PenLine, Bell, RefreshCw, Building2,
 } from "lucide-react";
 import { format, isAfter, parseISO } from "date-fns";
 import {
@@ -59,6 +60,7 @@ const ALL_WIDGETS = [
   { id: "recent_documents", label: "Recent Documents", icon: FileText },
   { id: "my_tasks", label: "My Tasks", icon: CheckSquare },
   { id: "system_activity", label: "System Activity", icon: Activity },
+  { id: "cross_org_stats", label: "Cross-Org Overview", icon: Building2 },
 ];
 
 const DEFAULT_LAYOUT = [
@@ -409,6 +411,63 @@ function SystemActivityWidget() {
   );
 }
 
+// ─── Cross-Org Stats Widget (system_owner only) ───────────────────────────────
+function CrossOrgStatsWidget() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["cross-org-stats"],
+    queryFn: async () => { const r = await fetch("/api/organizations/cross-org-stats"); return r.json(); },
+    refetchInterval: 60000,
+  });
+  const stats: any[] = data?.stats ?? [];
+
+  return (
+    <Card className="col-span-2">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-sm flex items-center gap-2"><Building2 className="h-3.5 w-3.5 text-primary" />Cross-Organization Overview</CardTitle>
+          <CardDescription className="text-xs">Project and document counts per organization</CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
+        ) : stats.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No organizations found</p>
+        ) : (
+          <div className="space-y-2 max-h-[240px] overflow-y-auto">
+            {stats.map((o: any) => (
+              <div key={o.id} className="grid grid-cols-[1fr_80px_80px_80px] items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-muted/40">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="h-6 w-6 rounded bg-primary/10 flex items-center justify-center shrink-0">
+                    <Building2 className="h-3 w-3 text-primary" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium truncate">{o.name}</p>
+                    <p className="text-[10px] text-muted-foreground capitalize">{o.type}</p>
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-bold">{o.projectCount}</p>
+                  <p className="text-[10px] text-muted-foreground">Projects</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-bold">{o.documentCount}</p>
+                  <p className="text-[10px] text-muted-foreground">Docs</p>
+                </div>
+                <div className="text-center">
+                  <p className={`text-sm font-bold ${o.openNcrCount > 0 ? "text-red-600" : "text-muted-foreground"}`}>{o.openNcrCount}</p>
+                  <p className="text-[10px] text-muted-foreground">Open NCR</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <Link href="/organizations"><Button variant="ghost" size="sm" className="w-full mt-2 h-7 text-xs">Manage Organizations <ArrowRight className="ml-1 h-3 w-3" /></Button></Link>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Widget Renderer ──────────────────────────────────────────────────────────
 function WidgetRenderer({ id, data }: { id: string; data: any }) {
   switch (id) {
@@ -423,6 +482,7 @@ function WidgetRenderer({ id, data }: { id: string; data: any }) {
     case "recent_documents": return <RecentDocumentsWidget docs={data.recentDocuments} />;
     case "my_tasks": return <MyTasksWidget tasks={data.myTasks} />;
     case "system_activity": return <SystemActivityWidget />;
+    case "cross_org_stats": return data.isSysAdmin ? <CrossOrgStatsWidget /> : null;
     default: return null;
   }
 }
@@ -499,6 +559,7 @@ function CustomizePanel({
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { isRtl } = useI18n();
+  const { user } = useAuth();
   const { data, isLoading, error } = useGetDashboard();
   const [layout, setLayout] = useState<string[]>(() => loadLayout());
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -555,6 +616,8 @@ export default function Dashboard() {
     { title: "Active Projects", value: projects.filter((p: any) => p.status === "active").length, icon: FolderOpen, color: "text-green-500", bg: "bg-green-50 dark:bg-green-500/10" },
   ];
 
+  const isSysAdmin = user?.role === "system_owner" || user?.role === "admin";
+
   const widgetData = {
     recentDocuments,
     globalDocs,
@@ -562,6 +625,7 @@ export default function Dashboard() {
     myTasks,
     unreadCorrespondence,
     summary,
+    isSysAdmin,
   };
 
   return (

@@ -8,6 +8,7 @@ import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { I18nProvider, useI18n } from "@/lib/i18n";
+import { OrgContextProvider } from "@/lib/org-context";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { ShieldOff } from "lucide-react";
 
@@ -168,11 +169,13 @@ function App() {
       <ThemeProvider defaultTheme="system" storageKey="edms-theme">
         <QueryClientProvider client={queryClient}>
           <TooltipProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-              <AuthProvider>
-                <Router />
-              </AuthProvider>
-            </WouterRouter>
+            <OrgContextProvider>
+              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                <AuthProvider>
+                  <Router />
+                </AuthProvider>
+              </WouterRouter>
+            </OrgContextProvider>
             <Toaster />
           </TooltipProvider>
         </QueryClientProvider>
