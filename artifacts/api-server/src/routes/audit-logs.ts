@@ -180,14 +180,22 @@ router.get("/export-xlsx", requireAuth, requireRole(...auditRoles), async (req, 
   });
 });
 
-// CSV export (for legacy admin panel) — restricted to admins
+// CSV export (for legacy admin panel) — same role + org scope as main endpoint
 router.get("/export", requireAuth, requireRole(...auditRoles), async (req, res) => {
   const { projectId, entityType, action, dateFrom, dateTo } = req.query;
+  const currentUser = req.user!;
 
   const conditions: any[] = [];
-  if (projectId) conditions.push(eq(auditLogsTable.projectId, parseInt(projectId as string)));
-  if (entityType && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType as string));
-  if (action && action !== "all") conditions.push(eq(auditLogsTable.action, action as string));
+
+  // Org scoping — non-sysadmin users must only see their org's data
+  if (!isSysAdmin(currentUser)) {
+    const orgCond = await buildOrgCondition(currentUser.organizationId!);
+    conditions.push(orgCond);
+  }
+
+  if (projectId && projectId !== "_all") conditions.push(eq(auditLogsTable.projectId, parseInt(projectId as string)));
+  if (entityType && entityType !== "all" && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType as string));
+  if (action && action !== "all" && action !== "_all") conditions.push(eq(auditLogsTable.action, action as string));
   if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom as string)));
   if (dateTo) {
     const d = new Date(dateTo as string);

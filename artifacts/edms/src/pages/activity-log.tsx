@@ -29,23 +29,42 @@ function fmtDateTime(d: string | null | undefined) {
   try { return format(new Date(d), "dd MMM yyyy HH:mm"); } catch { return d; }
 }
 
-function ActionBadge({ action }: { action: string }) {
-  const map: Record<string, string> = {
-    create: "bg-green-100 text-green-700",
-    update: "bg-blue-100 text-blue-700",
-    delete: "bg-red-100 text-red-700",
-    approve: "bg-emerald-100 text-emerald-700",
-    reject: "bg-rose-100 text-rose-700",
-    upload: "bg-purple-100 text-purple-700",
-    submit: "bg-yellow-100 text-yellow-700",
-    workflow_approve: "bg-emerald-100 text-emerald-700",
-    workflow_reject: "bg-rose-100 text-rose-700",
-    workflow_submit: "bg-yellow-100 text-yellow-700",
-    login: "bg-slate-100 text-slate-700",
-    share: "bg-indigo-100 text-indigo-700",
-  };
-  const cls = map[action] ?? "bg-muted text-muted-foreground";
-  const label = action.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+// Badge colour maps — no human-readable label here; labels come from t()
+const ACTION_COLORS: Record<string, string> = {
+  create: "bg-green-100 text-green-700",
+  update: "bg-blue-100 text-blue-700",
+  delete: "bg-red-100 text-red-700",
+  approve: "bg-emerald-100 text-emerald-700",
+  reject: "bg-rose-100 text-rose-700",
+  upload: "bg-purple-100 text-purple-700",
+  submit: "bg-yellow-100 text-yellow-700",
+  workflow_approve: "bg-emerald-100 text-emerald-700",
+  workflow_reject: "bg-rose-100 text-rose-700",
+  workflow_submit: "bg-yellow-100 text-yellow-700",
+  login: "bg-slate-100 text-slate-700",
+  share: "bg-indigo-100 text-indigo-700",
+};
+
+const ENTITY_COLORS: Record<string, string> = {
+  document: "bg-blue-50 text-blue-600",
+  correspondence: "bg-yellow-50 text-yellow-700",
+  transmittal: "bg-purple-50 text-purple-600",
+  ncr: "bg-red-50 text-red-600",
+  itr: "bg-cyan-50 text-cyan-700",
+  noc: "bg-green-50 text-green-700",
+  deliverable: "bg-orange-50 text-orange-700",
+  project: "bg-indigo-50 text-indigo-700",
+  user: "bg-slate-50 text-slate-700",
+  task: "bg-rose-50 text-rose-600",
+  workflow: "bg-violet-50 text-violet-700",
+};
+
+type TranslateFn = (key: any) => string;
+
+function ActionBadge({ action, t }: { action: string; t: TranslateFn }) {
+  const cls = ACTION_COLORS[action] ?? "bg-muted text-muted-foreground";
+  const key = `action_${action}` as any;
+  const label = t(key) || action.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   return (
     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}`}>
       {label}
@@ -53,22 +72,10 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-function EntityTypeBadge({ type }: { type: string }) {
-  const map: Record<string, string> = {
-    document: "bg-blue-50 text-blue-600",
-    correspondence: "bg-yellow-50 text-yellow-700",
-    transmittal: "bg-purple-50 text-purple-600",
-    ncr: "bg-red-50 text-red-600",
-    itr: "bg-cyan-50 text-cyan-700",
-    noc: "bg-green-50 text-green-700",
-    deliverable: "bg-orange-50 text-orange-700",
-    project: "bg-indigo-50 text-indigo-700",
-    user: "bg-slate-50 text-slate-700",
-    task: "bg-rose-50 text-rose-600",
-    workflow: "bg-violet-50 text-violet-700",
-  };
-  const cls = map[type] ?? "bg-muted text-muted-foreground";
-  const label = type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+function EntityTypeBadge({ type, t }: { type: string; t: TranslateFn }) {
+  const cls = ENTITY_COLORS[type] ?? "bg-muted text-muted-foreground";
+  const key = `entity_${type}` as any;
+  const label = t(key) || type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   return (
     <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}`}>
       {label}
@@ -77,8 +84,7 @@ function EntityTypeBadge({ type }: { type: string }) {
 }
 
 // ─── Detail Sheet ─────────────────────────────────────────────────────────────
-function LogDetailSheet({ item, open, onClose }: { item: any; open: boolean; onClose: () => void }) {
-  const { t } = useI18n();
+function LogDetailSheet({ item, open, onClose, t }: { item: any; open: boolean; onClose: () => void; t: TranslateFn }) {
   if (!item) return null;
 
   let details: Record<string, any> = {};
@@ -103,8 +109,8 @@ function LogDetailSheet({ item, open, onClose }: { item: any; open: boolean; onC
           <div className="space-y-3">
             <Row label={t("timestamp")} value={fmtDateTime(item.createdAt)} icon={<Calendar className="h-3.5 w-3.5" />} />
             <Row label={t("user")} value={item.userName + (item.userEmail ? ` <${item.userEmail}>` : "")} icon={<User className="h-3.5 w-3.5" />} />
-            <Row label={t("action")} value={<ActionBadge action={item.action} />} icon={<Activity className="h-3.5 w-3.5" />} />
-            <Row label={t("entityType")} value={<EntityTypeBadge type={item.entityType} />} icon={<Info className="h-3.5 w-3.5" />} />
+            <Row label={t("action")} value={<ActionBadge action={item.action} t={t} />} icon={<Activity className="h-3.5 w-3.5" />} />
+            <Row label={t("entityType")} value={<EntityTypeBadge type={item.entityType} t={t} />} icon={<Info className="h-3.5 w-3.5" />} />
             <Row label={t("entityTitle")} value={item.entityTitle ?? `ID: ${item.entityId}`} />
             {item.projectName && (
               <Row
@@ -214,6 +220,7 @@ export default function ActivityLogPage() {
 
   // Role guard — show access-denied message for unauthorised roles
   const hasAccess = user && ALLOWED_ROLES.includes(user.role);
+  const isSysOwner = user?.role === "system_owner";
 
   const set = (key: keyof LogFilters, val: string) => {
     setFilters(f => ({ ...f, [key]: val }));
@@ -255,10 +262,17 @@ export default function ActivityLogPage() {
   });
   const projects: any[] = projectsData?.projects ?? [];
 
+  // Fetch org-scoped users for the user filter dropdown
+  const usersUrl = useMemo(() => {
+    if (!hasAccess) return null;
+    if (isSysOwner || !user?.organizationId) return "/api/users";
+    return `/api/users?organizationId=${user.organizationId}`;
+  }, [hasAccess, isSysOwner, user?.organizationId]);
+
   const { data: usersData } = useQuery({
-    queryKey: ["users-list"],
-    queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
-    enabled: !!hasAccess,
+    queryKey: ["users-list-org", usersUrl],
+    queryFn: async () => { const r = await fetch(usersUrl!); return r.json(); },
+    enabled: !!usersUrl,
   });
   const users: any[] = usersData?.users ?? usersData ?? [];
 
@@ -271,8 +285,10 @@ export default function ActivityLogPage() {
     return (
       <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-4">
         <ShieldOff className="h-12 w-12 opacity-30" />
-        <p className="text-base font-medium">Access Restricted</p>
-        <p className="text-sm">
+        <p className="text-base font-medium">
+          {isRtl ? "وصول مقيّد" : "Access Restricted"}
+        </p>
+        <p className="text-sm text-center max-w-sm">
           {isRtl
             ? "هذه الصفحة متاحة للمسؤولين ومديري المشاريع ومتحكمي المستندات فقط."
             : "This page is available to admins, project managers, and document controllers only."}
@@ -313,7 +329,7 @@ export default function ActivityLogPage() {
       XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
       XLSX.writeFile(wb, `activity-log-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
     } catch {
-      toast({ title: "Export failed", variant: "destructive" });
+      toast({ title: t("exportFailed") ?? "Export failed", variant: "destructive" });
     }
   };
 
@@ -360,28 +376,28 @@ export default function ActivityLogPage() {
             </Select>
 
             <Select value={filters.entityType} onValueChange={v => set("entityType", v)}>
-              <SelectTrigger className="h-8 w-[140px] text-xs">
+              <SelectTrigger className="h-8 w-[150px] text-xs">
                 <SelectValue placeholder={t("allEntityTypes")} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">{t("allEntityTypes")}</SelectItem>
                 {ENTITY_TYPES.map(et => (
-                  <SelectItem key={et} value={et} className="capitalize">
-                    {et.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                  <SelectItem key={et} value={et}>
+                    {t(`entity_${et}` as any) || et}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
 
             <Select value={filters.action} onValueChange={v => set("action", v)}>
-              <SelectTrigger className="h-8 w-[130px] text-xs">
+              <SelectTrigger className="h-8 w-[140px] text-xs">
                 <SelectValue placeholder={t("allActions")} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">{t("allActions")}</SelectItem>
                 {ACTIONS.map(a => (
-                  <SelectItem key={a} value={a} className="capitalize">
-                    {a.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                  <SelectItem key={a} value={a}>
+                    {t(`action_${a}` as any) || a}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -488,10 +504,10 @@ export default function ActivityLogPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <ActionBadge action={log.action} />
+                          <ActionBadge action={log.action} t={t} />
                         </TableCell>
                         <TableCell>
-                          <EntityTypeBadge type={log.entityType} />
+                          <EntityTypeBadge type={log.entityType} t={t} />
                         </TableCell>
                         <TableCell className="text-xs max-w-[160px] truncate" title={log.entityTitle ?? ""}>
                           {log.entityTitle ?? <span className="text-muted-foreground">ID: {log.entityId}</span>}
@@ -524,7 +540,7 @@ export default function ActivityLogPage() {
       </Card>
 
       {/* Detail Sheet */}
-      <LogDetailSheet item={selectedLog} open={!!selectedLog} onClose={() => setSelectedLog(null)} />
+      <LogDetailSheet item={selectedLog} open={!!selectedLog} onClose={() => setSelectedLog(null)} t={t} />
     </div>
   );
 }
