@@ -1,18 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 
 export interface OrgModules {
+  dashboard: boolean;
   deliverables: boolean;
-  reports: boolean;
-  correspondence: boolean;
-  documents: boolean;
+  registers: boolean;
   notifications: boolean;
 }
 
 const DEFAULT_MODULES: OrgModules = {
+  dashboard: true,
   deliverables: true,
-  reports: true,
-  correspondence: true,
-  documents: true,
+  registers: true,
   notifications: true,
 };
 

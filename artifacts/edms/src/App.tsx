@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -7,7 +7,9 @@ import NotFound from "@/pages/not-found";
 import { AuthProvider } from "@/lib/auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, useI18n } from "@/lib/i18n";
+import { useModules, type OrgModules } from "@/hooks/use-modules";
+import { ShieldOff } from "lucide-react";
 
 // Pages
 import Login from "@/pages/login";
@@ -41,6 +43,43 @@ const queryClient = new QueryClient({
   },
 });
 
+function ModuleDisabledPlaceholder() {
+  const { t } = useI18n();
+  const [, navigate] = useLocation();
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center px-4">
+      <div className="rounded-full bg-muted p-6">
+        <ShieldOff className="h-10 w-10 text-muted-foreground" />
+      </div>
+      <h2 className="text-xl font-semibold">{t("moduleNotAvailable")}</h2>
+      <p className="text-sm text-muted-foreground max-w-sm">{t("moduleNotAvailableDesc")}</p>
+      <button
+        onClick={() => navigate("/")}
+        className="mt-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+      >
+        {t("goHome")}
+      </button>
+    </div>
+  );
+}
+
+function ModuleGuard({ moduleKey, component: Component }: { moduleKey: keyof OrgModules; component: React.ComponentType }) {
+  const { modules, isLoading } = useModules();
+  if (isLoading) return null;
+  if (!modules[moduleKey]) {
+    return (
+      <AppLayout>
+        <ModuleDisabledPlaceholder />
+      </AppLayout>
+    );
+  }
+  return (
+    <AppLayout>
+      <Component />
+    </AppLayout>
+  );
+}
+
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   return (
     <AppLayout>
@@ -59,7 +98,7 @@ function Router() {
 
       {/* Protected Routes wrapped in AppLayout */}
       <Route path="/">
-        <ProtectedRoute component={Dashboard} />
+        <ModuleGuard moduleKey="dashboard" component={Dashboard} />
       </Route>
       <Route path="/organizations">
         <ProtectedRoute component={Organizations} />
@@ -92,7 +131,7 @@ function Router() {
         <ProtectedRoute component={Config} />
       </Route>
       <Route path="/reports">
-        <ProtectedRoute component={Reports} />
+        <ModuleGuard moduleKey="registers" component={Reports} />
       </Route>
       <Route path="/admin">
         <ProtectedRoute component={Admin} />
@@ -104,7 +143,7 @@ function Router() {
         <ProtectedRoute component={DocumentsPage} />
       </Route>
       <Route path="/deliverables">
-        <ProtectedRoute component={DeliverablesPage} />
+        <ModuleGuard moduleKey="deliverables" component={DeliverablesPage} />
       </Route>
       <Route path="/activity-log">
         <ProtectedRoute component={ActivityLogPage} />

@@ -46,10 +46,9 @@ export const orgConfigTable = pgTable("org_config", {
   storageQuotaMb: integer("storage_quota_mb").default(10240),
   storagePath: text("storage_path"),
   modules: jsonb("modules").notNull().default({
+    dashboard: true,
     deliverables: true,
-    reports: true,
-    correspondence: true,
-    documents: true,
+    registers: true,
     notifications: true,
   }),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

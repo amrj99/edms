@@ -8,18 +8,16 @@ const router = Router();
 router.use(requireAuth);
 
 export interface OrgModules {
+  dashboard: boolean;
   deliverables: boolean;
-  reports: boolean;
-  correspondence: boolean;
-  documents: boolean;
+  registers: boolean;
   notifications: boolean;
 }
 
 const DEFAULT_MODULES: OrgModules = {
+  dashboard: true,
   deliverables: true,
-  reports: true,
-  correspondence: true,
-  documents: true,
+  registers: true,
   notifications: true,
 };
 
@@ -27,10 +25,9 @@ function mergeModules(raw: unknown): OrgModules {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_MODULES };
   const obj = raw as Record<string, unknown>;
   return {
+    dashboard: obj.dashboard !== false,
     deliverables: obj.deliverables !== false,
-    reports: obj.reports !== false,
-    correspondence: obj.correspondence !== false,
-    documents: obj.documents !== false,
+    registers: obj.registers !== false,
     notifications: obj.notifications !== false,
   };
 }

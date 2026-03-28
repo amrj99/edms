@@ -22,8 +22,10 @@ import {
   CheckCircle2, AlertCircle, Loader2, Activity, Database,
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
+  LayoutDashboard, ClipboardList, Bell,
 } from "lucide-react";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
+import { useI18n, type TranslationKeys } from "@/lib/i18n";
 
 const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -1878,15 +1880,15 @@ function ProjectAssignmentPanel({
 }
 
 // ─── Modules Tab ──────────────────────────────────────────────────────────────
-const MODULE_DEFS: { key: keyof OrgModules; label: string; desc: string; icon: React.ElementType }[] = [
-  { key: "deliverables", label: "Deliverables", desc: "Track project deliverables, planned vs actual dates, and linked documents", icon: CheckCircle2 },
-  { key: "reports", label: "Reports & Registers", desc: "All 7 document registers: master, correspondence, transmittals, drawings, ITR/MIR, NCR/SOR, NOC", icon: Database },
-  { key: "correspondence", label: "Correspondence", desc: "Manage project correspondence, RFIs, and communication records", icon: Mail },
-  { key: "documents", label: "Documents", desc: "Upload, revise, and control project documentation", icon: Download },
-  { key: "notifications", label: "Notifications", desc: "In-app notification bell and alerts for users in this organization", icon: AlertCircle },
+const MODULE_DEFS: { key: keyof OrgModules; labelKey: TranslationKeys; descKey: TranslationKeys; icon: React.ElementType }[] = [
+  { key: "dashboard",     labelKey: "module_dashboard",     descKey: "moduleDesc_dashboard",     icon: LayoutDashboard },
+  { key: "deliverables",  labelKey: "module_deliverables",  descKey: "moduleDesc_deliverables",  icon: ClipboardList },
+  { key: "registers",     labelKey: "module_registers",     descKey: "moduleDesc_registers",     icon: Database },
+  { key: "notifications", labelKey: "module_notifications", descKey: "moduleDesc_notifications", icon: Bell },
 ];
 
 function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) {
+  const { t } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [selectedOrgId, setSelectedOrgId] = useState<string>("_self");
@@ -1908,14 +1910,14 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ modules: displayed }),
       });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || t("modulesSaveError")); }
       return r.json();
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["modules"] });
-      toast({ title: "Module settings saved" });
+      toast({ title: t("modulesSaved") });
     },
-    onError: (e: any) => toast({ title: e.message || "Failed to save module settings", variant: "destructive" }),
+    onError: (e: any) => toast({ title: e.message || t("modulesSaveError"), variant: "destructive" }),
   });
 
   const toggle = (key: keyof OrgModules) => {
@@ -1928,20 +1930,20 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Layers className="h-4 w-4" />
-            Module Licensing
+            {t("moduleLicensing")}
           </CardTitle>
-          <CardDescription>Enable or disable feature modules per organization. Disabled modules are hidden from users' navigation.</CardDescription>
+          <CardDescription>{t("moduleLicensingDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {isSysOwner && orgs.length > 0 && (
             <div className="flex items-center gap-3 pb-4 border-b">
-              <Label className="text-sm shrink-0">Organization</Label>
+              <Label className="text-sm shrink-0">{t("moduleOrganization")}</Label>
               <Select value={selectedOrgId} onValueChange={v => { setSelectedOrgId(v); setLocalModules(null); }}>
                 <SelectTrigger className="max-w-[280px]">
-                  <SelectValue placeholder="Select organization…" />
+                  <SelectValue placeholder={t("selectOrgForModules")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="_self">My Organization</SelectItem>
+                  <SelectItem value="_self">{t("moduleMyOrg")}</SelectItem>
                   {orgs.map((o: any) => (
                     <SelectItem key={o.id} value={String(o.id)}>{o.name} ({o.code})</SelectItem>
                   ))}
@@ -1956,7 +1958,7 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
             </div>
           ) : (
             <div className="space-y-3">
-              {MODULE_DEFS.map(({ key, label, desc, icon: Icon }) => {
+              {MODULE_DEFS.map(({ key, labelKey, descKey, icon: Icon }) => {
                 const enabled = displayed[key];
                 return (
                   <div
@@ -1968,18 +1970,18 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
                         <Icon className="h-4 w-4" />
                       </div>
                       <div>
-                        <p className="font-medium text-sm">{label}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
+                        <p className="font-medium text-sm">{t(labelKey)}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{t(descKey)}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <Badge variant={enabled ? "default" : "secondary"} className="text-xs">
-                        {enabled ? "Enabled" : "Disabled"}
+                        {enabled ? t("moduleEnabled") : t("moduleDisabled")}
                       </Badge>
                       <Switch
                         checked={enabled}
                         onCheckedChange={() => toggle(key)}
-                        aria-label={`Toggle ${label}`}
+                        aria-label={`${t("moduleEnabled")} ${t(labelKey)}`}
                       />
                     </div>
                   </div>
@@ -1991,7 +1993,7 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
           <div className="flex justify-end pt-2">
             <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isLoading} className="gap-2">
               <Save className="h-4 w-4" />
-              {saveMutation.isPending ? "Saving…" : "Save Module Settings"}
+              {saveMutation.isPending ? t("saving") : t("saveModules")}
             </Button>
           </div>
         </CardContent>

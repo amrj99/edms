@@ -205,13 +205,13 @@ export function AppSidebar() {
 
   const navigation = [
     { title: "Dashboard", url: "/", icon: Home },
-    ...(modules.correspondence ? [{ title: "Correspondence", url: "/correspondence", icon: Mail }] : []),
+    { title: "Correspondence", url: "/correspondence", icon: Mail },
     { title: "Projects", url: "/projects", icon: FolderKanban },
-    ...(modules.documents ? [{ title: "Documents", url: "/documents", icon: FileText }] : []),
+    { title: "Documents", url: "/documents", icon: FileText },
     { title: "General Inbox", url: "/general", icon: Inbox },
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: "Deliverables", url: "/deliverables", icon: ClipboardList }] : []),
-    ...(modules.reports ? [{ title: "Reports", url: "/reports", icon: BarChart3 }] : []),
+    ...(modules.registers ? [{ title: "Reports", url: "/reports", icon: BarChart3 }] : []),
     ...(canSeeActivityLog ? [{ title: "Activity Log", url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: "Search", url: "/search", icon: Search },
   ];
