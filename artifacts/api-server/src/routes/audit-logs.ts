@@ -152,7 +152,13 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
   }
   if (search) {
     const q = `%${search}%`;
-    conditions.push(or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q)) as SQL<unknown>);
+    conditions.push(
+      or(
+        ilike(auditLogsTable.entityTitle, q),
+        ilike(auditLogsTable.action, q),
+        ilike(auditLogsTable.entityType, q)
+      ) as SQL<unknown>
+    );
   }
 
   const where = buildWhere(conditions);
