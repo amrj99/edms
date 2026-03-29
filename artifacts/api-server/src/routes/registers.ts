@@ -2,11 +2,12 @@ import { Router, Request, Response } from "express";
 import { db } from "@workspace/db";
 import {
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
-  projectsTable,
+  projectsTable, usersTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 
 const router = Router({ mergeParams: true });
 
@@ -103,11 +104,14 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
-    const { comment } = req.body;
+    const { comment, decision: rawDecision } = req.body;
+    const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
+
     const [existing] = await db.select().from(inspectionRequestsTable)
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
+
     const [row] = await db.update(inspectionRequestsTable)
       .set({
         approvalStatus: "approved",
@@ -118,10 +122,23 @@ router.post(
       })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
+
+    if (existing.linkedDocumentId) {
+      const reviewer = req.user as any;
+      const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+      await applyDocumentReviewDecision({
+        documentId: existing.linkedDocumentId,
+        decision,
+        reviewerId: req.user!.id,
+        reviewerName,
+        comment,
+      });
+    }
+
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
-      details: { comment },
+      details: { comment, decision },
     });
     res.json(row);
   }
@@ -135,11 +152,15 @@ router.post(
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
-    const { comment } = req.body;
+    const { comment, decision: rawDecision } = req.body;
+    const decision: ReviewDecision =
+      (rawDecision === "rejected" || rawDecision === "for_revision") ? rawDecision : "for_revision";
+
     const [existing] = await db.select().from(inspectionRequestsTable)
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
+
     const [row] = await db.update(inspectionRequestsTable)
       .set({
         approvalStatus: "rejected",
@@ -150,10 +171,23 @@ router.post(
       })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
+
+    if (existing.linkedDocumentId) {
+      const reviewer = req.user as any;
+      const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+      await applyDocumentReviewDecision({
+        documentId: existing.linkedDocumentId,
+        decision,
+        reviewerId: req.user!.id,
+        reviewerName,
+        comment,
+      });
+    }
+
     await createAuditLog({
       userId: req.user!.id, action: "record_rejected", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
-      details: { comment },
+      details: { comment, decision },
     });
     res.json(row);
   }

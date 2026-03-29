@@ -8,6 +8,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
+import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import type { Request, Response } from "express";
 
 const router = Router({ mergeParams: true });
@@ -315,11 +316,14 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
-    const { comment } = req.body;
+    const { comment, decision: rawDecision } = req.body;
+    const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
+
     const [existing] = await db.select().from(transmittalsTable)
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
+
     const [row] = await db.update(transmittalsTable)
       .set({
         approvalStatus: "approved",
@@ -330,10 +334,31 @@ router.post(
       })
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
+
+    if (existing.purpose === "for_review") {
+      const items = await db.select({ documentId: transmittalItemsTable.documentId })
+        .from(transmittalItemsTable)
+        .where(eq(transmittalItemsTable.transmittalId, id));
+
+      if (items.length > 0) {
+        const reviewer = req.user as any;
+        const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+        await Promise.all(items.map(item =>
+          applyDocumentReviewDecision({
+            documentId: item.documentId,
+            decision,
+            reviewerId: req.user!.id,
+            reviewerName,
+            comment,
+          })
+        ));
+      }
+    }
+
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
-      details: { comment },
+      details: { comment, decision },
     });
     res.json(row);
   }
@@ -345,11 +370,15 @@ router.post(
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
-    const { comment } = req.body;
+    const { comment, decision: rawDecision } = req.body;
+    const decision: ReviewDecision =
+      (rawDecision === "rejected" || rawDecision === "for_revision") ? rawDecision : "for_revision";
+
     const [existing] = await db.select().from(transmittalsTable)
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
     if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
+
     const [row] = await db.update(transmittalsTable)
       .set({
         approvalStatus: "rejected",
@@ -360,10 +389,31 @@ router.post(
       })
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
       .returning();
+
+    if (existing.purpose === "for_review") {
+      const items = await db.select({ documentId: transmittalItemsTable.documentId })
+        .from(transmittalItemsTable)
+        .where(eq(transmittalItemsTable.transmittalId, id));
+
+      if (items.length > 0) {
+        const reviewer = req.user as any;
+        const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+        await Promise.all(items.map(item =>
+          applyDocumentReviewDecision({
+            documentId: item.documentId,
+            decision,
+            reviewerId: req.user!.id,
+            reviewerName,
+            comment,
+          })
+        ));
+      }
+    }
+
     await createAuditLog({
       userId: req.user!.id, action: "record_rejected", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
-      details: { comment },
+      details: { comment, decision },
     });
     res.json(row);
   }

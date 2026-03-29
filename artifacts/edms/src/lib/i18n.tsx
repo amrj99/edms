@@ -111,6 +111,8 @@ const translations = {
     // Status
     draft: "Draft",
     approved: "Approved",
+    approved_with_comments: "Approved with Comments",
+    for_revision: "For Revision",
     rejected: "Rejected",
     sent: "Sent",
     acknowledged_s: "Acknowledged",
@@ -430,6 +432,8 @@ const translations = {
     // Status
     draft: "مسودة",
     approved: "معتمد",
+    approved_with_comments: "معتمد مع ملاحظات",
+    for_revision: "للمراجعة",
     rejected: "مرفوض",
     sent: "مُرسل",
     acknowledged_s: "تم الاستلام",

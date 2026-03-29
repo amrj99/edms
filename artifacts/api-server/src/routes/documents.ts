@@ -6,6 +6,7 @@ import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
+import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 
 const router = Router({ mergeParams: true });
 
@@ -262,12 +263,15 @@ router.get("/:id/reviews", requireAuth, async (req, res) => {
 router.post("/:id/approve", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
-  const { comment } = req.body;
+  const { comment, decision: rawDecision } = req.body;
+  const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
-  const [doc] = await db.update(documentsTable)
-    .set({ status: "approved", updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning();
+  const reviewer = req.user as any;
+  const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+
+  const doc = await applyDocumentReviewDecision({
+    documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment,
+  });
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
   const workflows = await db.select().from(workflowsTable)
@@ -275,27 +279,38 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
     .limit(1);
 
   if (workflows[0]) {
-    await db.update(workflowsTable).set({ status: "completed", currentStep: "approved" }).where(eq(workflowsTable.id, workflows[0].id));
+    const isFinalApproval = decision === "approved";
+    await db.update(workflowsTable)
+      .set({
+        status: isFinalApproval ? "completed" : "active",
+        currentStep: isFinalApproval ? "approved" : "under_review",
+        updatedAt: new Date(),
+      })
+      .where(eq(workflowsTable.id, workflows[0].id));
     await db.insert(workflowStepsTable).values({
-      workflowId: workflows[0].id, step: "approved", action: "approved",
-      comment: comment || "Document approved", userId: req.user!.id,
+      workflowId: workflows[0].id,
+      step: isFinalApproval ? "approved" : "under_review",
+      action: decision as any,
+      comment: comment || `Document ${decision.replace(/_/g, " ")}`,
+      userId: req.user!.id,
     });
   }
 
-  await createAuditLog({ userId: req.user!.id, action: "approve", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+  await createAuditLog({
+    userId: req.user!.id, action: "approve", entityType: "document",
+    entityId: id, entityTitle: doc.title, projectId, details: { decision },
+  });
 
-  // Email: notify document creator of approval
-  if (doc.createdById) {
+  if (decision === "approved" && doc.createdById) {
     const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
     const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (creator?.email) {
-      const approver = req.user!;
       sendDocumentApprovedEmail({
         to: creator.email,
         documentNumber: doc.documentNumber ?? "",
         documentTitle: doc.title,
         revision: doc.revision ?? "01",
-        approvedBy: `${(approver as any).firstName} ${(approver as any).lastName}`,
+        approvedBy: reviewerName,
         projectName: project?.name ?? "Unknown Project",
         comment,
         projectId,
@@ -309,12 +324,18 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
 router.post("/:id/reject", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
-  const { comment } = req.body;
+  const { comment, decision: rawDecision } = req.body;
+  const decision: ReviewDecision =
+    (rawDecision === "rejected" || rawDecision === "for_revision")
+      ? rawDecision
+      : "for_revision";
 
-  const [doc] = await db.update(documentsTable)
-    .set({ status: "draft", updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning();
+  const reviewer = req.user as any;
+  const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+
+  const doc = await applyDocumentReviewDecision({
+    documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment,
+  });
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
   const workflows = await db.select().from(workflowsTable)
@@ -322,27 +343,30 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
     .limit(1);
 
   if (workflows[0]) {
-    await db.update(workflowsTable).set({ status: "rejected", currentStep: "rejected" }).where(eq(workflowsTable.id, workflows[0].id));
+    await db.update(workflowsTable)
+      .set({ status: "rejected", currentStep: "rejected", updatedAt: new Date() })
+      .where(eq(workflowsTable.id, workflows[0].id));
     await db.insert(workflowStepsTable).values({
-      workflowId: workflows[0].id, step: "rejected", action: "rejected",
-      comment: comment || "Document rejected", userId: req.user!.id,
+      workflowId: workflows[0].id, step: "rejected", action: decision as any,
+      comment: comment || `Document ${decision.replace(/_/g, " ")}`, userId: req.user!.id,
     });
   }
 
-  await createAuditLog({ userId: req.user!.id, action: "reject", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+  await createAuditLog({
+    userId: req.user!.id, action: "reject", entityType: "document",
+    entityId: id, entityTitle: doc.title, projectId, details: { decision },
+  });
 
-  // Email: notify document creator of rejection
   if (doc.createdById) {
     const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
     const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (creator?.email) {
-      const rejector = req.user!;
       sendDocumentRejectedEmail({
         to: creator.email,
         documentNumber: doc.documentNumber ?? "",
         documentTitle: doc.title,
         revision: doc.revision ?? "01",
-        rejectedBy: `${(rejector as any).firstName} ${(rejector as any).lastName}`,
+        rejectedBy: reviewerName,
         projectName: project?.name ?? "Unknown Project",
         comment,
         projectId,

@@ -8,6 +8,9 @@ export const documentStatusEnum = pgEnum("document_status", [
   "draft",
   "under_review",
   "approved",
+  "approved_with_comments",
+  "for_revision",
+  "rejected",
   "issued",
   "superseded",
   "void",
@@ -56,6 +59,8 @@ export const documentRevisionsTable = pgTable("document_revisions", {
   fileName: text("file_name"),
   comment: text("comment"),
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
+  reviewDecision: text("review_decision"),
+  reviewerName: text("reviewer_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

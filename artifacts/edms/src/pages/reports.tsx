@@ -131,6 +131,13 @@ function ApprovalBadge({ status }: { status?: string | null }) {
 }
 
 // ─── Approval Panel ───────────────────────────────────────────────────────────
+const PANEL_DECISION_OPTIONS = [
+  { value: "approved",               label: "Approved",              color: "border-emerald-500 bg-emerald-50 text-emerald-700" },
+  { value: "approved_with_comments", label: "Approved w/ Comments",  color: "border-teal-500 bg-teal-50 text-teal-700" },
+  { value: "for_revision",           label: "Revise",                color: "border-amber-500 bg-amber-50 text-amber-700" },
+  { value: "rejected",               label: "Rejected",              color: "border-red-500 bg-red-50 text-red-700" },
+] as const;
+
 function ApprovalPanel({
   record,
   entityType,
@@ -149,6 +156,7 @@ function ApprovalPanel({
   const qc = useQueryClient();
   const { user } = useAuth();
   const [comment, setComment] = useState("");
+  const [decision, setDecision] = useState<string>("approved");
   const [confirmAction, setConfirmAction] = useState<"approve" | "reject" | null>(null);
 
   const role = user?.role ?? "";
@@ -166,7 +174,7 @@ function ApprovalPanel({
       const r = await fetch(`${baseUrl}/${action}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comment }),
+        body: JSON.stringify({ comment, decision }),
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -187,6 +195,11 @@ function ApprovalPanel({
   });
 
   const approvalStatus = record?.approvalStatus ?? "none";
+
+  const handleSubmitDecision = () => {
+    const isApproveType = decision === "approved" || decision === "approved_with_comments";
+    doMutation.mutate(isApproveType ? "approve" : "reject");
+  };
 
   return (
     <div className="border-t mt-4 pt-4 space-y-3">
@@ -221,6 +234,22 @@ function ApprovalPanel({
 
       {canDecide && approvalStatus === "pending" && (
         <>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Decision</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {PANEL_DECISION_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDecision(opt.value)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium border-2 transition-colors ${
+                    decision === opt.value ? opt.color : "border-transparent bg-muted text-muted-foreground hover:bg-muted/60"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div>
             <Label className="text-xs">{t("approvalComment")}</Label>
             <Textarea
@@ -231,22 +260,20 @@ function ApprovalPanel({
               className="mt-1 text-xs"
             />
           </div>
-          <div className="flex gap-2">
-            <Button
-              size="sm" variant="default" className="h-8 gap-1.5 text-xs flex-1 bg-green-600 hover:bg-green-700"
-              onClick={() => setConfirmAction("approve")}
-              disabled={doMutation.isPending}
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />{t("approveRecord")}
-            </Button>
-            <Button
-              size="sm" variant="destructive" className="h-8 gap-1.5 text-xs flex-1"
-              onClick={() => setConfirmAction("reject")}
-              disabled={doMutation.isPending}
-            >
-              <XCircle className="h-3.5 w-3.5" />{t("rejectRecord")}
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            className={`h-8 gap-1.5 text-xs w-full ${
+              decision === "approved" ? "bg-green-600 hover:bg-green-700" :
+              decision === "approved_with_comments" ? "bg-teal-600 hover:bg-teal-700" :
+              decision === "for_revision" ? "bg-amber-600 hover:bg-amber-700" :
+              "bg-red-600 hover:bg-red-700"
+            }`}
+            onClick={handleSubmitDecision}
+            disabled={doMutation.isPending}
+          >
+            {doMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+            Submit Decision
+          </Button>
         </>
       )}
 

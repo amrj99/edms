@@ -22,6 +22,8 @@ export const workflowStatusEnum = pgEnum("workflow_status", [
 
 export const workflowActionEnum = pgEnum("workflow_action", [
   "approved",
+  "approved_with_comments",
+  "for_revision",
   "rejected",
   "commented",
   "submitted",

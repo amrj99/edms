@@ -36,19 +36,37 @@ function StatusBadge({ status }: { status: string }) {
     acknowledged: "bg-green-100 text-green-700",
     rejected: "bg-red-100 text-red-700",
     approved: "bg-green-100 text-green-700",
+    approved_with_comments: "bg-teal-100 text-teal-700",
+    for_revision: "bg-amber-100 text-amber-700",
     pending_review: "bg-yellow-100 text-yellow-700",
     responded: "bg-purple-100 text-purple-700",
     closed: "bg-gray-100 text-gray-500",
     overdue: "bg-red-100 text-red-700",
     active: "bg-emerald-100 text-emerald-700",
     in_review: "bg-blue-100 text-blue-700",
+    under_review: "bg-blue-100 text-blue-700",
+    issued: "bg-indigo-100 text-indigo-700",
+    superseded: "bg-gray-100 text-gray-500",
+    void: "bg-gray-100 text-gray-400",
+  };
+  const labels: Record<string, string> = {
+    approved_with_comments: "Approved w/ Comments",
+    for_revision: "For Revision",
+    under_review: "Under Review",
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] ?? "bg-muted text-muted-foreground"}`}>
-      {status.replace(/_/g, " ")}
+      {labels[status] ?? status.replace(/_/g, " ")}
     </span>
   );
 }
+
+const REVIEW_DECISION_OPTIONS = [
+  { value: "approved",              label: "Approved",              icon: "✓", activeClass: "border-emerald-500 bg-emerald-50 text-emerald-700" },
+  { value: "approved_with_comments", label: "Approved w/ Comments", icon: "✎", activeClass: "border-teal-500 bg-teal-50 text-teal-700" },
+  { value: "for_revision",          label: "Revise",                icon: "↩", activeClass: "border-amber-500 bg-amber-50 text-amber-700" },
+  { value: "rejected",              label: "Rejected",              icon: "✗", activeClass: "border-red-500 bg-red-50 text-red-700" },
+] as const;
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function ProjectDetail() {
@@ -2340,6 +2358,7 @@ function ReviewTab({ projectId }: { projectId: number }) {
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
+  const [reviewDecision, setReviewDecision] = useState<string>("approved");
   const [submitComment, setSubmitComment] = useState("");
   const [reviewerIds, setReviewerIds] = useState<number[]>([]);
 
@@ -2384,12 +2403,14 @@ function ReviewTab({ projectId }: { projectId: number }) {
     onError: () => toast({ title: "Failed to submit for review", variant: "destructive" }),
   });
 
-  const approveDoc = useMutation({
+  const submitReviewDecision = useMutation({
     mutationFn: async () => {
-      const r = await fetch(`/api/projects/${projectId}/documents/${selectedDoc.id}/approve`, {
+      const endpoint = (reviewDecision === "approved" || reviewDecision === "approved_with_comments")
+        ? "approve" : "reject";
+      const r = await fetch(`/api/projects/${projectId}/documents/${selectedDoc.id}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comment: reviewComment }),
+        body: JSON.stringify({ comment: reviewComment, decision: reviewDecision }),
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -2399,39 +2420,32 @@ function ReviewTab({ projectId }: { projectId: number }) {
       qc.invalidateQueries({ queryKey: ["reviews", selectedDoc?.id] });
       setSelectedDoc(data);
       setReviewComment("");
-      toast({ title: "Document approved" });
+      const labels: Record<string, string> = {
+        approved: "Document approved",
+        approved_with_comments: "Document approved with comments",
+        for_revision: "Document sent back for revision",
+        rejected: "Document rejected",
+      };
+      toast({ title: labels[reviewDecision] ?? "Decision submitted" });
     },
-    onError: () => toast({ title: "Failed to approve", variant: "destructive" }),
+    onError: () => toast({ title: "Failed to submit decision", variant: "destructive" }),
   });
 
-  const rejectDoc = useMutation({
-    mutationFn: async () => {
-      const r = await fetch(`/api/projects/${projectId}/documents/${selectedDoc.id}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comment: reviewComment }),
-      });
-      if (!r.ok) throw new Error("Failed");
-      return r.json();
-    },
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ["documents", projectId] });
-      qc.invalidateQueries({ queryKey: ["reviews", selectedDoc?.id] });
-      setSelectedDoc(data);
-      setReviewComment("");
-      toast({ title: "Document rejected — returned to draft" });
-    },
-    onError: () => toast({ title: "Failed to reject", variant: "destructive" }),
-  });
+  const approveDoc = submitReviewDecision;
+  const rejectDoc = submitReviewDecision;
 
   const REVIEW_STATES = [
-    { key: "draft", label: "Draft", color: "bg-gray-100 text-gray-700" },
-    { key: "under_review", label: "Under Review", color: "bg-blue-100 text-blue-700" },
-    { key: "approved", label: "Approved", color: "bg-emerald-100 text-emerald-700" },
-    { key: "rejected", label: "Rejected", color: "bg-red-100 text-red-700" },
+    { key: "draft",                  label: "Draft",                  color: "bg-gray-100 text-gray-700" },
+    { key: "under_review",           label: "Under Review",           color: "bg-blue-100 text-blue-700" },
+    { key: "approved",               label: "Approved",               color: "bg-emerald-100 text-emerald-700" },
+    { key: "approved_with_comments", label: "Approved w/ Comments",   color: "bg-teal-100 text-teal-700" },
+    { key: "for_revision",           label: "For Revision",           color: "bg-amber-100 text-amber-700" },
+    { key: "rejected",               label: "Rejected",               color: "bg-red-100 text-red-700" },
   ];
 
-  const reviewableDocs = allDocs.filter((d: any) => ["draft", "under_review", "approved", "rejected"].includes(d.status));
+  const reviewableDocs = allDocs.filter((d: any) =>
+    ["draft", "under_review", "approved", "approved_with_comments", "for_revision", "rejected"].includes(d.status)
+  );
 
   return (
     <div className="flex gap-6 h-[calc(100vh-16rem)]">
@@ -2458,12 +2472,7 @@ function ReviewTab({ projectId }: { projectId: number }) {
               <p className="font-medium text-xs font-mono text-muted-foreground">{doc.documentNumber}</p>
               <p className="text-sm font-medium line-clamp-2 mt-0.5">{doc.title}</p>
               <div className="mt-1.5">
-                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                  doc.status === "approved" ? "bg-emerald-100 text-emerald-700" :
-                  doc.status === "under_review" ? "bg-blue-100 text-blue-700" :
-                  doc.status === "rejected" ? "bg-red-100 text-red-700" :
-                  "bg-gray-100 text-gray-700"
-                }`}>{doc.status.replace(/_/g, " ")}</span>
+                <StatusBadge status={doc.status} />
               </div>
             </button>
           ))}
@@ -2514,25 +2523,62 @@ function ReviewTab({ projectId }: { projectId: number }) {
                 </Button>
               )}
               {selectedDoc.status === "under_review" && (
-                <>
-                  <div className="flex-1">
-                    <Label className="text-xs mb-1 block">Review Comment</Label>
-                    <div className="flex gap-2">
-                      <Input value={reviewComment} onChange={e => setReviewComment(e.target.value)} placeholder="Add a comment..." className="h-9" />
-                      <Button className="gap-1.5 bg-emerald-600 hover:bg-emerald-700" onClick={() => approveDoc.mutate()} disabled={approveDoc.isPending}>
-                        <ThumbsUp className="h-4 w-4" /> Approve
-                      </Button>
-                      <Button variant="destructive" className="gap-1.5" onClick={() => rejectDoc.mutate()} disabled={rejectDoc.isPending}>
-                        <ThumbsDown className="h-4 w-4" /> Reject
-                      </Button>
-                    </div>
+                <div className="flex-1 space-y-2">
+                  <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Review Decision</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {REVIEW_DECISION_OPTIONS.map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setReviewDecision(opt.value)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-colors ${
+                          reviewDecision === opt.value
+                            ? opt.activeClass
+                            : "border-transparent bg-muted hover:bg-muted/60 text-muted-foreground"
+                        }`}
+                      >
+                        <span>{opt.icon}</span> {opt.label}
+                      </button>
+                    ))}
                   </div>
-                </>
+                  <div className="flex gap-2">
+                    <Input
+                      value={reviewComment}
+                      onChange={e => setReviewComment(e.target.value)}
+                      placeholder="Add a comment (optional)..."
+                      className="h-9"
+                    />
+                    <Button
+                      className={`gap-1.5 shrink-0 ${
+                        reviewDecision === "approved" ? "bg-emerald-600 hover:bg-emerald-700" :
+                        reviewDecision === "approved_with_comments" ? "bg-teal-600 hover:bg-teal-700" :
+                        reviewDecision === "for_revision" ? "bg-amber-600 hover:bg-amber-700" :
+                        "bg-red-600 hover:bg-red-700"
+                      }`}
+                      onClick={() => submitReviewDecision.mutate()}
+                      disabled={submitReviewDecision.isPending}
+                    >
+                      {submitReviewDecision.isPending
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <ClipboardCheck className="h-4 w-4" />}
+                      Submit Decision
+                    </Button>
+                  </div>
+                </div>
               )}
-              {selectedDoc.status === "approved" && (
+              {(selectedDoc.status === "approved" || selectedDoc.status === "approved_with_comments") && (
                 <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
-                  <Check className="h-5 w-5" /> This document has been approved.
-                  <Button variant="outline" size="sm" className="ml-2" onClick={() => rejectDoc.mutate()}>Revoke Approval</Button>
+                  <Check className="h-5 w-5" />
+                  {selectedDoc.status === "approved_with_comments"
+                    ? "Document approved with comments."
+                    : "This document has been approved."}
+                  <Button variant="outline" size="sm" className="ml-2" onClick={() => setSubmitOpen(true)}>Resubmit</Button>
+                </div>
+              )}
+              {selectedDoc.status === "for_revision" && (
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                  <span className="text-muted-foreground">Document requires revision. Resubmit after changes.</span>
+                  <Button size="sm" className="ml-2" onClick={() => setSubmitOpen(true)}>Resubmit</Button>
                 </div>
               )}
               {selectedDoc.status === "rejected" && (
@@ -2597,27 +2643,46 @@ function ReviewTab({ projectId }: { projectId: number }) {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {reviewHistory.map((event: any) => (
-                    <div key={event.id} className="flex gap-3 text-sm">
-                      <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
-                        event.action === "approved" ? "bg-emerald-100 text-emerald-700" :
-                        event.action === "rejected" ? "bg-red-100 text-red-700" :
-                        "bg-blue-100 text-blue-700"
-                      }`}>
-                        {event.action === "approved" ? <ThumbsUp className="h-3.5 w-3.5" /> :
-                         event.action === "rejected" ? <ThumbsDown className="h-3.5 w-3.5" /> :
-                         <Send className="h-3.5 w-3.5" />}
-                      </div>
-                      <div className="flex-1 border rounded-lg p-2.5">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-medium capitalize">{event.action?.replace(/_/g, " ")}</span>
-                          <span className="text-xs text-muted-foreground">{format(new Date(event.createdAt), "dd MMM yyyy HH:mm")}</span>
+                  {reviewHistory.map((event: any) => {
+                    const actionColorMap: Record<string, string> = {
+                      approved:               "bg-emerald-100 text-emerald-700",
+                      approved_with_comments: "bg-teal-100 text-teal-700",
+                      for_revision:           "bg-amber-100 text-amber-700",
+                      rejected:               "bg-red-100 text-red-700",
+                      submitted:              "bg-blue-100 text-blue-700",
+                      commented:              "bg-purple-100 text-purple-700",
+                    };
+                    const actionLabelMap: Record<string, string> = {
+                      approved:               "Approved",
+                      approved_with_comments: "Approved with Comments",
+                      for_revision:           "Sent for Revision",
+                      rejected:               "Rejected",
+                      submitted:              "Submitted for Review",
+                      commented:              "Commented",
+                    };
+                    const colorClass = actionColorMap[event.action] ?? "bg-blue-100 text-blue-700";
+                    return (
+                      <div key={event.id} className="flex gap-3 text-sm">
+                        <div className={`h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${colorClass}`}>
+                          {event.action === "approved" || event.action === "approved_with_comments"
+                            ? <ThumbsUp className="h-3.5 w-3.5" />
+                            : event.action === "rejected" || event.action === "for_revision"
+                            ? <ThumbsDown className="h-3.5 w-3.5" />
+                            : <Send className="h-3.5 w-3.5" />}
                         </div>
-                        <p className="text-xs text-muted-foreground">by {event.userName}</p>
-                        {event.comment && <p className="text-xs mt-1.5 text-foreground/80 italic">"{event.comment}"</p>}
+                        <div className="flex-1 border rounded-lg p-2.5">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-medium">
+                              {actionLabelMap[event.action] ?? event.action?.replace(/_/g, " ")}
+                            </span>
+                            <span className="text-xs text-muted-foreground">{format(new Date(event.createdAt), "dd MMM yyyy HH:mm")}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">by {event.userName}</p>
+                          {event.comment && <p className="text-xs mt-1.5 text-foreground/80 italic">"{event.comment}"</p>}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
