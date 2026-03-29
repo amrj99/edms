@@ -98,13 +98,22 @@ router.get("/storage-usage", async (req, res) => {
 router.put("/storage-config/:orgId", async (req, res) => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const orgId = parseInt(req.params.orgId);
-  const { storageQuotaMb, storagePath } = req.body;
+  const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
+
+  const updateData: any = { storageQuotaMb, storagePath, updatedAt: new Date() };
+  if (storageType !== undefined) updateData.storageType = storageType;
+  if (s3Endpoint !== undefined) updateData.s3Endpoint = s3Endpoint;
+  if (s3Bucket !== undefined) updateData.s3Bucket = s3Bucket;
+  if (s3Region !== undefined) updateData.s3Region = s3Region;
+  if (s3AccessKey !== undefined) updateData.s3AccessKey = s3AccessKey;
+  // Only update secret key if explicitly provided (not empty string placeholder)
+  if (s3SecretKey) updateData.s3SecretKey = s3SecretKey;
 
   const existing = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId)).limit(1);
   if (existing.length === 0) {
-    await db.insert(orgConfigTable).values({ organizationId: orgId, storageQuotaMb, storagePath });
+    await db.insert(orgConfigTable).values({ organizationId: orgId, ...updateData });
   } else {
-    await db.update(orgConfigTable).set({ storageQuotaMb, storagePath, updatedAt: new Date() }).where(eq(orgConfigTable.organizationId, orgId));
+    await db.update(orgConfigTable).set(updateData).where(eq(orgConfigTable.organizationId, orgId));
   }
   res.json({ success: true });
 });

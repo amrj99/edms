@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -58,6 +58,7 @@ export const correspondenceTable = pgTable("correspondence", {
   dueDate: timestamp("due_date"),
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
+  isRead: boolean("is_read").notNull().default(false),
   cc: text("cc"),
   bcc: text("bcc"),
   shareToken: text("share_token"),

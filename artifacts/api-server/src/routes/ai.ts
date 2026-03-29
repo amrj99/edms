@@ -254,6 +254,67 @@ router.put("/settings", async (req, res) => {
   res.json({ message: "AI settings updated", settings });
 });
 
+// ─── AI Command Assistant ──────────────────────────────────────────────────────
+router.post("/command", async (req, res) => {
+  const { command, projectId } = req.body;
+  if (!command?.trim()) {
+    res.status(400).json({ error: "command is required" });
+    return;
+  }
+
+  try {
+    const systemPrompt = `You are an EDMS (Engineering Document Management System) AI assistant.
+The user will give you a natural-language command to create a record in the system.
+
+Supported record types and their required/optional fields:
+- correspondence: subject (req), type (req: transmittal|letter|memo|rfi|notice|email|internal|submittal|ncr|technical_query), body, priority (low|medium|high|urgent), projectId
+- meeting: title (req), meetingDate (req: ISO date), location, agenda, duration (minutes), status (scheduled|in_progress|completed|cancelled), projectId
+- document: title (req), documentType (Drawing|Specification|Report|Procedure|Datasheet|Certificate|Memo|Letter|Method Statement|ITP), discipline (Civil|Structural|Mechanical|Electrical|Piping|Instrumentation|HVAC|Fire Protection|Architectural|General), description, projectId
+- task: title (req), description, priority (low|medium|high|urgent), dueDate (ISO date)
+
+Current projectId context: ${projectId || "none (user should specify)"}
+
+Respond with a JSON object with this exact structure:
+{
+  "action": "create",
+  "type": "correspondence|meeting|document|task",
+  "data": { ...the fields to populate },
+  "summary": "A brief human-readable sentence describing what will be created"
+}
+
+If the command is ambiguous or you cannot determine the type, return:
+{
+  "action": "unknown",
+  "summary": "A brief explanation of what you couldn't understand"
+}
+
+Return ONLY the JSON object, no markdown, no explanation.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: command.trim() },
+      ],
+      max_tokens: 600,
+      temperature: 0.2,
+    });
+
+    const raw = completion.choices[0]?.message?.content ?? "{}";
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = { action: "unknown", summary: "Could not parse the AI response. Please rephrase your command." };
+    }
+
+    res.json(parsed);
+  } catch (err: any) {
+    console.error("AI command error:", err);
+    res.status(500).json({ error: "AI service unavailable", message: err.message });
+  }
+});
+
 // ─── AI Activity Logs ─────────────────────────────────────────────────────────
 
 router.get("/logs", async (req, res) => {

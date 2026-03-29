@@ -146,6 +146,10 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     return res.status(400).json({ error: "Bad Request", message: "Title and meeting date are required" });
   }
 
+  if (!projectId) {
+    return res.status(400).json({ error: "Bad Request", message: "A project must be selected for every meeting" });
+  }
+
   const count = await db.select({ id: meetingsTable.id }).from(meetingsTable);
   const ref = fmtRef(count.length + 1);
 

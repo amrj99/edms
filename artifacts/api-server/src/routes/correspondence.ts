@@ -136,12 +136,34 @@ router.post("/", requireAuth, async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
+  const userId = req.user!.id;
   const items = await db.select().from(correspondenceTable)
     .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
     .limit(1);
   if (!items[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Auto-mark as read if the current user is a recipient (not the sender)
+  if (!items[0].isRead && items[0].fromUserId !== userId) {
+    await db.update(correspondenceTable)
+      .set({ isRead: true, updatedAt: new Date() })
+      .where(eq(correspondenceTable.id, id));
+    items[0].isRead = true;
+  }
+
   const enriched = await enrichCorrespondence(items);
   res.json(enriched[0]);
+});
+
+router.put("/:id/read", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { isRead } = req.body;
+  const [corr] = await db.update(correspondenceTable)
+    .set({ isRead: !!isRead, updatedAt: new Date() })
+    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
+    .returning();
+  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ id: corr.id, isRead: corr.isRead });
 });
 
 router.put("/:id", requireAuth, async (req, res) => {

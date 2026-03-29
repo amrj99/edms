@@ -4,7 +4,7 @@ import { format, formatDistanceToNow, isPast, parseISO } from "date-fns";
 import {
   Mail, Inbox, Send, Folder, FolderOpen, Search, Plus, Flag, Star,
   RefreshCw, Filter, ChevronDown, ArrowUp, ArrowDown, Clock, AlertCircle,
-  MessageSquare, Reply, MoreHorizontal, X, Tag, Archive, Loader2,
+  MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -277,6 +277,30 @@ export default function CorrespondencePage() {
     setComposeOpen(true);
   };
 
+  const handleReplyAll = () => {
+    if (!selected) return;
+    // Include original sender + all recipients in "To"
+    const allRecipientIds: number[] = [
+      ...(selected.fromUserId ? [selected.fromUserId] : []),
+      ...(selected.toUserIds ?? []),
+    ].filter((id, idx, arr) => arr.indexOf(id) === idx);
+    setCompose({
+      subject: `Re: ${selected.subject}`,
+      type: selected.type ?? "letter",
+      body: `\n\n---------- Original message ----------\n${selected.body || ""}`,
+      priority: selected.priority ?? "medium",
+      dueDate: "",
+      projectId: selected.projectId ? String(selected.projectId) : "_none",
+      toUserIds: allRecipientIds,
+      cc: selected.cc ?? "",
+      bcc: "",
+      taskToId: "",
+    });
+    setComposeAttachments([]);
+    setReplyingToId(selected.id);
+    setComposeOpen(true);
+  };
+
   const overdueCount = allItems.filter((i: any) => i.dueDate && isPast(new Date(i.dueDate)) && i.status !== "closed").length;
   const flaggedCount = flagged.size;
 
@@ -410,7 +434,12 @@ export default function CorrespondencePage() {
                     className={`p-3 cursor-pointer transition-colors relative ${isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-muted/50"} ${isOverdue ? "bg-red-50/50 dark:bg-red-950/5" : ""}`}
                   >
                     <div className="flex items-start gap-2">
-                      <div className="mt-0.5 shrink-0"><PriorityIcon priority={item.priority ?? "medium"} /></div>
+                      <div className="mt-0.5 shrink-0 relative">
+                        <PriorityIcon priority={item.priority ?? "medium"} />
+                        {!item.isRead && (
+                          <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-blue-500 ring-1 ring-background" title="Unread" />
+                        )}
+                      </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
                           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${TYPE_COLORS[item.type] ?? "bg-muted text-muted-foreground"}`}>
@@ -420,7 +449,7 @@ export default function CorrespondencePage() {
                             {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
                           </span>
                         </div>
-                        <p className="text-sm font-medium mt-1 line-clamp-1">{item.subject}</p>
+                        <p className={`text-sm mt-1 line-clamp-1 ${!item.isRead ? "font-semibold" : "font-medium"}`}>{item.subject}</p>
                         {item.referenceNumber && (
                           <p className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</p>
                         )}
@@ -494,6 +523,9 @@ export default function CorrespondencePage() {
                 <div className="flex gap-1 shrink-0">
                   <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => { setReplyingToId(selected.id); setTimeout(() => document.getElementById("quick-reply-ta")?.focus(), 50); }}>
                     <Reply className="h-3.5 w-3.5" /> Reply
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleReplyAll}>
+                    <ReplyAll className="h-3.5 w-3.5" /> Reply All
                   </Button>
                   <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
                     <Send className="h-3.5 w-3.5" /> Forward

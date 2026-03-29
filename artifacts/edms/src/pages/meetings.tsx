@@ -43,6 +43,7 @@ export default function MeetingsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [projectFilter, setProjectFilter] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState(BLANK_FORM);
@@ -53,11 +54,12 @@ export default function MeetingsPage() {
 
   // ─── Data Fetching ────────────────────────────────────────────────────────────
   const { data: meetingsData, isLoading } = useQuery({
-    queryKey: ["meetings", statusFilter, searchQ],
+    queryKey: ["meetings", statusFilter, searchQ, projectFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (searchQ) params.set("q", searchQ);
+      if (projectFilter !== "all") params.set("projectId", projectFilter);
       const r = await fetch(`/api/meetings?${params}`);
       return r.json();
     },
@@ -232,6 +234,17 @@ export default function MeetingsPage() {
               <SelectItem value="all">All Statuses</SelectItem>
               {Object.entries(STATUS_LABELS).map(([k, v]) => (
                 <SelectItem key={k} value={k}>{v}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={projectFilter} onValueChange={setProjectFilter}>
+            <SelectTrigger className="h-7 text-xs">
+              <SelectValue placeholder="All Projects" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              {projects.map((p: any) => (
+                <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -561,11 +574,11 @@ export default function MeetingsPage() {
                 </Select>
               </div>
               <div>
-                <Label>Project (optional)</Label>
+                <Label>Project <span className="text-red-500">*</span></Label>
                 <Select value={form.projectId || "_none"} onValueChange={v => setForm(f => ({ ...f, projectId: v === "_none" ? "" : v }))}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select project..." /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="_none">None</SelectItem>
+                    <SelectItem value="_none" disabled>Select a project...</SelectItem>
                     {projects.map((p: any) => (
                       <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>
                     ))}
@@ -597,7 +610,7 @@ export default function MeetingsPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button
               onClick={handleSubmit}
-              disabled={!form.title.trim() || !form.meetingDate || createMeeting.isPending || updateMeeting.isPending}
+              disabled={!form.title.trim() || !form.meetingDate || !form.projectId || form.projectId === "_none" || createMeeting.isPending || updateMeeting.isPending}
               className="gap-1.5"
             >
               {(createMeeting.isPending || updateMeeting.isPending) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}

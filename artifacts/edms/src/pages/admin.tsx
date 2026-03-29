@@ -1418,14 +1418,26 @@ function StorageTab() {
   });
   const usage = storageData?.usage ?? [];
 
-  const [editQuota, setEditQuota] = useState<{ orgId: number; quotaMb: number; storagePath: string } | null>(null);
+  const [editQuota, setEditQuota] = useState<{
+    orgId: number; quotaMb: number; storagePath: string;
+    storageType: string; s3Endpoint: string; s3Bucket: string; s3Region: string; s3AccessKey: string; s3SecretKey: string;
+  } | null>(null);
 
   const saveQuota = async () => {
     if (!editQuota) return;
     await fetch(`/api/admin/storage-config/${editQuota.orgId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storageQuotaMb: editQuota.quotaMb, storagePath: editQuota.storagePath }),
+      body: JSON.stringify({
+        storageQuotaMb: editQuota.quotaMb,
+        storagePath: editQuota.storagePath,
+        storageType: editQuota.storageType,
+        s3Endpoint: editQuota.s3Endpoint || null,
+        s3Bucket: editQuota.s3Bucket || null,
+        s3Region: editQuota.s3Region || null,
+        s3AccessKey: editQuota.s3AccessKey || null,
+        s3SecretKey: editQuota.s3SecretKey || null,
+      }),
     });
     toast({ title: "Storage config saved" });
     setEditQuota(null);
@@ -1461,7 +1473,12 @@ function StorageTab() {
                     {org.percentUsed}%
                   </Badge>
                   {isOwner && (
-                    <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEditQuota({ orgId: org.orgId, quotaMb: org.quotaMb, storagePath: org.storagePath ?? "" })}>
+                    <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEditQuota({
+                        orgId: org.orgId, quotaMb: org.quotaMb, storagePath: org.storagePath ?? "",
+                        storageType: org.storageType ?? "cloud", s3Endpoint: org.s3Endpoint ?? "",
+                        s3Bucket: org.s3Bucket ?? "", s3Region: org.s3Region ?? "",
+                        s3AccessKey: org.s3AccessKey ?? "", s3SecretKey: "",
+                      })}>
                       <Pencil className="h-3 w-3" /> Edit
                     </Button>
                   )}
@@ -1487,14 +1504,60 @@ function StorageTab() {
           {editQuota && (
             <div className="space-y-4 py-2">
               <div>
+                <Label>Storage Type</Label>
+                <Select value={editQuota.storageType} onValueChange={v => setEditQuota(q => q ? { ...q, storageType: v } : null)}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cloud">Cloud (Replit Object Storage)</SelectItem>
+                    <SelectItem value="s3">Custom S3-Compatible</SelectItem>
+                    <SelectItem value="onpremise">On-Premise (Mounted Path)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {editQuota.storageType === "s3" && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">S3 Endpoint</Label>
+                      <Input value={editQuota.s3Endpoint} onChange={e => setEditQuota(q => q ? { ...q, s3Endpoint: e.target.value } : null)} placeholder="https://s3.amazonaws.com" className="mt-1 text-sm" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Region</Label>
+                      <Input value={editQuota.s3Region} onChange={e => setEditQuota(q => q ? { ...q, s3Region: e.target.value } : null)} placeholder="us-east-1" className="mt-1 text-sm" />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Bucket Name</Label>
+                    <Input value={editQuota.s3Bucket} onChange={e => setEditQuota(q => q ? { ...q, s3Bucket: e.target.value } : null)} placeholder="my-edms-bucket" className="mt-1 text-sm" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Access Key</Label>
+                      <Input value={editQuota.s3AccessKey} onChange={e => setEditQuota(q => q ? { ...q, s3AccessKey: e.target.value } : null)} placeholder="AKIAXXXXXXXX" className="mt-1 text-sm font-mono" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Secret Key</Label>
+                      <Input type="password" value={editQuota.s3SecretKey} onChange={e => setEditQuota(q => q ? { ...q, s3SecretKey: e.target.value } : null)} placeholder="(unchanged)" className="mt-1 text-sm font-mono" />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {editQuota.storageType === "onpremise" && (
+                <div>
+                  <Label>Mounted Base Path</Label>
+                  <Input value={editQuota.storagePath} onChange={e => setEditQuota(q => q ? { ...q, storagePath: e.target.value } : null)} placeholder="/mnt/nas/edms" className="mt-1 font-mono text-sm" />
+                  <p className="text-xs text-muted-foreground mt-1">Files stored as: {"{path}"}/{"{orgId}"}/{"{projectId}"}/{"{type}"}/{"{filename}"}</p>
+                </div>
+              )}
+
+              <div>
                 <Label>Storage Quota (MB)</Label>
                 <Input type="number" value={editQuota.quotaMb} onChange={e => setEditQuota(q => q ? { ...q, quotaMb: parseInt(e.target.value) || 0 } : null)} className="mt-1" />
                 <p className="text-xs text-muted-foreground mt-1">1024 MB = 1 GB. Default is 10240 MB (10 GB).</p>
-              </div>
-              <div>
-                <Label>Storage Path Prefix (optional)</Label>
-                <Input value={editQuota.storagePath} onChange={e => setEditQuota(q => q ? { ...q, storagePath: e.target.value } : null)} placeholder="org-name/documents" className="mt-1 font-mono text-sm" />
-                <p className="text-xs text-muted-foreground mt-1">Prefix used for this org's files in object storage.</p>
               </div>
             </div>
           )}

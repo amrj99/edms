@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
+import { AICommandAssistant } from "@/components/AICommandAssistant";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -436,13 +437,19 @@ function GlobalSearch() {
   const { data, isFetching } = useQuery({
     queryKey: ["global-search", q],
     queryFn: async () => {
-      if (!q.trim()) return { results: [] };
-      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      if (!q.trim()) return {};
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&type=all`);
       return r.json();
     },
     enabled: q.trim().length >= 2,
   });
-  const results: any[] = data?.results ?? [];
+
+  // Merge all result types into a unified list
+  const results: any[] = [
+    ...(data?.documents ?? []).map((d: any) => ({ ...d, type: "document", _label: d.title || d.documentNumber })),
+    ...(data?.correspondence ?? []).map((c: any) => ({ ...c, type: "correspondence", _label: c.subject || c.referenceNumber })),
+    ...(data?.meetings ?? []).map((m: any) => ({ ...m, type: "meeting", _label: m.title || m.referenceNumber })),
+  ];
 
   const typeIcon: Record<string, any> = {
     document: FileText,
@@ -517,7 +524,7 @@ function GlobalSearch() {
                       >
                         <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{r.title || r.name || r.referenceNumber || "Untitled"}</p>
+                          <p className="text-sm font-medium truncate">{r._label || r.title || r.name || r.referenceNumber || "Untitled"}</p>
                           {(r.description || r.projectCode) && (
                             <p className="text-xs text-muted-foreground truncate">{r.projectCode ? `${r.projectCode} · ` : ""}{r.description || ""}</p>
                           )}
@@ -570,6 +577,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
             <div className="flex-1 sm:flex-none" />
             <div className="flex items-center gap-2">
+              <AICommandAssistant />
               <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
               <LanguageToggle />
               <OrgSwitcher />
