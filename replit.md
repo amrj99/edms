@@ -46,12 +46,12 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **Global Search Bar:** Persistent header search widget (Search... button with ⌘K hint). Opens full-screen modal with debounced search against `/api/search`. Results show type icon, title, and navigate to the relevant section. Results categorized by type (document, project, correspondence, meeting, etc.).
 - **Test Data Seed:** `POST /api/admin/seed-test-data` (admin/system_owner only). Creates: 6 documents (3 reports + 3 drawings), 3 correspondence with 1 reply each, 3 transmittals, 3 NCR, 3 ITR, 3 NOC, 3 deliverables, 3 meetings. All with realistic engineering content and varied statuses. "Seed Test Data" card in the Admin → System tab with status display grid.
 - **General Inbox removed:** `/general` route and "General Inbox" sidebar nav entry removed. Replaced by the Meetings entry in the sidebar.
-- **Workflow Engine:** Automates document lifecycle steps and task creation.
+- **Workflow Engine:** Automates document lifecycle steps and task creation. Auto-creates a high-priority review task when a "for_review" transmittal is sent (task assigned to project PM; notification sent if PM ≠ sender). Auto-parses action items from meeting minutes when a meeting is first marked "completed" — supports "Action: ..." and "- [ ] ..." line patterns; only runs if no existing action items.
 - **Task Management:** Tracks tasks from various sources with priority and assignment.
 - **Global Search:** Full-text search with advanced filtering across documents and correspondence.
 - **Audit Logging:** Logs all create/update actions with filtering, pagination, and export capabilities.
 - **Transmittals:** Formal document transmittal tracking with external recipients and audit trails.
-- **Notifications:** In-app and email notifications for various events.
+- **Notifications:** In-app and email notifications for all key events. Notification Bell includes: type filter pills (All/Docs/Tasks/Mail/Meetings/Chat), unread counter badge, "Mark all read" button, and navigation to the related record via `actionUrl` on click. Reminder job in app.ts sends `task_overdue` notifications once per day for overdue tasks and action items with assignees. Push notification infrastructure ready (service worker registered, `/api/notifications/push-subscribe` endpoint; activation requires VAPID keys).
 - **Object Storage:** Integration with Replit Object Storage for file uploads and serving.
 - **System Admin Panel:** Comprehensive administration for organization settings, user roles, metadata, AI config, email, storage, security, and backup.
 - **Reports Module:** Provides 7 tabbed registers (e.g., Master Register, Correspondence Register) with filtering, Excel/PDF/Print export, and bilingual support. Registers support clickable rows for detail views, column visibility toggles, bulk actions, and saved filter presets.

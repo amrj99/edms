@@ -6,6 +6,11 @@ import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
+import { db } from "@workspace/db";
+import {
+  tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable,
+} from "@workspace/db";
+import { and, eq, lt, isNotNull, sql, ne } from "drizzle-orm";
 
 const app: Express = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -95,5 +100,110 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 seedDefaultAdmin().catch((err) => {
   logger.error({ err }, "Seed failed — continuing anyway");
 });
+
+// ─── Due-date reminder job ────────────────────────────────────────────────────
+// Runs every hour; sends a task_overdue notification once per day per overdue item.
+let _lastReminderDate = "";
+async function sendDueDateReminders() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_lastReminderDate === today) return; // already ran today
+  _lastReminderDate = today;
+  try {
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    // Overdue tasks with an assignee
+    const overdueTasks = await db
+      .select({ id: tasksTable.id, title: tasksTable.title, assigneeId: tasksTable.assigneeId, projectId: tasksTable.projectId })
+      .from(tasksTable)
+      .where(and(
+        isNotNull(tasksTable.dueDate),
+        lt(tasksTable.dueDate, now),
+        isNotNull(tasksTable.assigneeId),
+        ne(tasksTable.status, "done"),
+      ));
+
+    for (const task of overdueTasks) {
+      if (!task.assigneeId) continue;
+      // Check if we already sent a reminder in the last 24h
+      const [existing] = await db
+        .select({ id: notificationsTable.id })
+        .from(notificationsTable)
+        .where(and(
+          eq(notificationsTable.userId, task.assigneeId),
+          eq(notificationsTable.type, "task_overdue"),
+          eq(notificationsTable.entityType, "task"),
+          eq(notificationsTable.entityId, task.id),
+          sql`${notificationsTable.createdAt} > ${yesterday}`,
+        ))
+        .limit(1);
+      if (existing) continue;
+      await db.insert(notificationsTable).values({
+        userId: task.assigneeId,
+        type: "task_overdue",
+        title: "Task overdue",
+        message: `Your task "${task.title}" is past its due date.`,
+        projectId: task.projectId,
+        entityType: "task",
+        entityId: task.id,
+        actionUrl: `/tasks`,
+      });
+    }
+
+    // Overdue meeting action items with an assignee
+    const overdueItems = await db
+      .select({
+        id: meetingActionItemsTable.id,
+        title: meetingActionItemsTable.title,
+        assignedToId: meetingActionItemsTable.assignedToId,
+        meetingId: meetingActionItemsTable.meetingId,
+        projectId: meetingsTable.projectId,
+      })
+      .from(meetingActionItemsTable)
+      .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
+      .where(and(
+        isNotNull(meetingActionItemsTable.dueDate),
+        lt(meetingActionItemsTable.dueDate, now),
+        isNotNull(meetingActionItemsTable.assignedToId),
+        ne(meetingActionItemsTable.status, "done"),
+      ));
+
+    for (const item of overdueItems) {
+      if (!item.assignedToId) continue;
+      const [existing] = await db
+        .select({ id: notificationsTable.id })
+        .from(notificationsTable)
+        .where(and(
+          eq(notificationsTable.userId, item.assignedToId),
+          eq(notificationsTable.type, "task_overdue"),
+          eq(notificationsTable.entityType, "action_item"),
+          eq(notificationsTable.entityId, item.id),
+          sql`${notificationsTable.createdAt} > ${yesterday}`,
+        ))
+        .limit(1);
+      if (existing) continue;
+      await db.insert(notificationsTable).values({
+        userId: item.assignedToId,
+        type: "task_overdue",
+        title: "Action item overdue",
+        message: `Meeting action item "${item.title}" is past its due date.`,
+        projectId: item.projectId ?? undefined,
+        entityType: "action_item",
+        entityId: item.id,
+        actionUrl: `/meetings`,
+      });
+    }
+
+    logger.info("Due-date reminder job completed");
+  } catch (err) {
+    logger.error({ err }, "Due-date reminder job failed");
+  }
+}
+
+// Run once at startup (after 30s to let DB settle) then every hour
+setTimeout(() => {
+  sendDueDateReminders();
+  setInterval(sendDueDateReminders, 60 * 60 * 1000);
+}, 30_000);
 
 export default app;

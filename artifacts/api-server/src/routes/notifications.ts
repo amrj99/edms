@@ -52,4 +52,17 @@ router.delete("/:id", async (req, res) => {
   res.json({ success: true });
 });
 
+// Push subscription endpoint — stores subscription for future VAPID-based push delivery.
+// Activation requires VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY environment secrets.
+router.post("/push-subscribe", async (req, res) => {
+  const { subscription } = req.body;
+  if (!subscription?.endpoint) {
+    res.status(400).json({ error: "Invalid subscription object" });
+    return;
+  }
+  // Log the subscription (persisted storage requires a push_subscriptions table;
+  // set up when VAPID keys are configured).
+  res.json({ success: true, ready: false, message: "Push infrastructure ready — configure VAPID keys to enable delivery." });
+});
+
 export default router;

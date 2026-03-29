@@ -4,7 +4,7 @@ import {
   meetingsTable, meetingAttendeesTable, meetingActionItemsTable,
   meetingAttachmentsTable, usersTable, projectsTable, notificationsTable,
 } from "@workspace/db";
-import { eq, desc, and, or, ilike, inArray, lt, ne } from "drizzle-orm";
+import { eq, desc, and, or, ilike, inArray, lt, ne, count } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
@@ -219,6 +219,10 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   const id = parseInt(req.params.id);
   const { title, projectId, meetingDate, duration, location, agenda, minutes, status } = req.body;
 
+  // Fetch old state for transition detection
+  const [before] = await db.select({ status: meetingsTable.status, minutes: meetingsTable.minutes })
+    .from(meetingsTable).where(eq(meetingsTable.id, id));
+
   const [meeting] = await db.update(meetingsTable).set({
     ...(title       !== undefined && { title: title.trim() }),
     ...(projectId   !== undefined && { projectId: projectId || null }),
@@ -232,6 +236,45 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   }).where(eq(meetingsTable.id, id)).returning();
 
   if (!meeting) return res.status(404).json({ error: "Meeting not found" });
+
+  // Auto-parse action items from minutes when meeting is first marked completed
+  const becomingCompleted = status === "completed" && before?.status !== "completed";
+  const minutesText = minutes ?? before?.minutes ?? "";
+  if (becomingCompleted && minutesText) {
+    try {
+      // Count existing action items to avoid duplicates
+      const [{ value: existingCount }] = await db
+        .select({ value: count() })
+        .from(meetingActionItemsTable)
+        .where(eq(meetingActionItemsTable.meetingId, id));
+
+      if (Number(existingCount) === 0) {
+        const actionLines: string[] = [];
+        for (const line of minutesText.split("\n")) {
+          const trimmed = line.trim();
+          // Match patterns: "Action: ...", "ACTION: ...", "Action Item: ...", "- [ ] ..."
+          const matchAction = trimmed.match(/^(?:action(?:\s+item)?|ai)\s*:\s*(.+)/i);
+          const matchCheckbox = trimmed.match(/^[-*]\s*\[\s*\]\s*(.+)/i);
+          const extracted = matchAction?.[1] ?? matchCheckbox?.[1];
+          if (extracted?.trim()) actionLines.push(extracted.trim());
+        }
+        if (actionLines.length > 0) {
+          const defaultDue = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+          await db.insert(meetingActionItemsTable).values(
+            actionLines.map(title => ({
+              meetingId: id,
+              title,
+              status: "open" as const,
+              dueDate: defaultDue,
+            }))
+          );
+        }
+      }
+    } catch (e) {
+      // never block response
+    }
+  }
+
   res.json({ meeting });
 });
 

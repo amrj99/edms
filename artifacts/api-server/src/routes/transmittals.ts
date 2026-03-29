@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
-  transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable
+  transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable,
+  tasksTable, projectMembersTable, notificationsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
@@ -140,6 +141,46 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
     userId: req.user!.id, action: "update", entityType: "transmittal",
     entityId: id, details: { action: "sent" },
   });
+
+  // Auto-create review task when purpose is "for_review"
+  if (transmittal?.purpose === "for_review" && transmittal.projectId) {
+    try {
+      const dueDate = transmittal.dueDate ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      // Find the project manager for this project
+      const [pm] = await db
+        .select({ userId: projectMembersTable.userId })
+        .from(projectMembersTable)
+        .where(and(eq(projectMembersTable.projectId, transmittal.projectId), eq(projectMembersTable.role, "project_manager")))
+        .limit(1);
+      const assigneeId = pm?.userId ?? req.user!.id;
+      const [task] = await db.insert(tasksTable).values({
+        title: `Review transmittal: ${transmittal.transmittalNumber}`,
+        description: transmittal.subject ?? undefined,
+        priority: "high",
+        status: "pending",
+        projectId: transmittal.projectId,
+        createdById: req.user!.id,
+        assigneeId,
+        dueDate,
+      }).returning();
+      // Notify assignee if different from sender
+      if (assigneeId !== req.user!.id) {
+        await db.insert(notificationsTable).values({
+          userId: assigneeId,
+          type: "task_assigned",
+          title: "Review task assigned",
+          message: `Please review transmittal ${transmittal.transmittalNumber}: ${transmittal.subject}`,
+          projectId: transmittal.projectId,
+          entityType: "task",
+          entityId: task.id,
+          actionUrl: `/tasks`,
+        });
+      }
+    } catch (e) {
+      // never block send response
+    }
+  }
+
   res.json(transmittal);
 });
 

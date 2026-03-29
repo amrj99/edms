@@ -12,6 +12,7 @@ import {
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
   CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
+  ExternalLink, Menu,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -51,17 +52,31 @@ function getRecentProjects(): { id: number; code: string; name: string }[] {
 }
 
 // ─── Notification Bell ────────────────────────────────────────────────────────
+const NOTIF_FILTER_GROUPS = [
+  { key: "all", label: "All" },
+  { key: "documents", label: "Docs", types: ["document_uploaded","document_approved","document_rejected","workflow_action_required","rfi_opened","rfi_responded","submittal_returned"] },
+  { key: "tasks", label: "Tasks", types: ["task_assigned","task_overdue"] },
+  { key: "correspondence", label: "Mail", types: ["correspondence_received","transmittal_received","transmittal_acknowledged"] },
+  { key: "meetings", label: "Meetings", types: ["meeting_assigned"] },
+  { key: "chat", label: "Chat", types: ["chat_message","mention"] },
+] as const;
+
 function NotificationIcon(type: string) {
-  if (type.startsWith("task")) return <CheckSquare className="h-4 w-4 text-blue-500" />;
-  if (type.startsWith("document")) return <FolderKanban className="h-4 w-4 text-green-500" />;
+  if (type === "task_assigned" || type === "task_overdue") return <CheckSquare className="h-4 w-4 text-blue-500" />;
+  if (type.startsWith("document") || type.startsWith("rfi") || type.startsWith("submittal") || type === "workflow_action_required") return <FolderKanban className="h-4 w-4 text-green-500" />;
   if (type.startsWith("transmittal")) return <Send className="h-4 w-4 text-purple-500" />;
+  if (type === "correspondence_received") return <Mail className="h-4 w-4 text-orange-500" />;
+  if (type === "meeting_assigned") return <CalendarDays className="h-4 w-4 text-indigo-500" />;
+  if (type === "chat_message" || type === "mention") return <MessageSquare className="h-4 w-4 text-cyan-500" />;
   return <Bell className="h-4 w-4 text-muted-foreground" />;
 }
 
 function NotificationBell() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
+  const [filterType, setFilterType] = useState("all");
 
   const { data } = useQuery({
     queryKey: ["notifications"],
@@ -79,8 +94,18 @@ function NotificationBell() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["notifications"] }); toast({ title: "All notifications marked as read" }); },
   });
 
-  const notifications = data?.notifications ?? [];
-  const unreadCount = data?.unreadCount ?? 0;
+  const notifications: any[] = data?.notifications ?? [];
+  const unreadCount: number = data?.unreadCount ?? 0;
+
+  const activeGroup = NOTIF_FILTER_GROUPS.find(g => g.key === filterType);
+  const filtered = activeGroup && "types" in activeGroup
+    ? notifications.filter(n => (activeGroup.types as readonly string[]).includes(n.type))
+    : notifications;
+
+  const handleNotificationClick = (n: any) => {
+    if (!n.isRead) markRead.mutate(n.id);
+    if (n.actionUrl) { navigate(n.actionUrl); setOpen(false); }
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -95,7 +120,7 @@ function NotificationBell() {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-96 p-0">
-        <div className="flex items-center justify-between p-4 border-b">
+        <div className="flex items-center justify-between px-4 pt-4 pb-2">
           <div className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
             <span className="font-semibold">Notifications</span>
@@ -107,19 +132,31 @@ function NotificationBell() {
             </Button>
           )}
         </div>
-        <ScrollArea className="h-[400px]">
-          {notifications.length === 0 ? (
+        <div className="flex gap-1 px-4 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+          {NOTIF_FILTER_GROUPS.map(g => (
+            <button
+              key={g.key}
+              onClick={() => setFilterType(g.key)}
+              className={`shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${filterType === g.key ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div className="border-t" />
+        <ScrollArea className="h-[360px]">
+          {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
               <Bell className="h-8 w-8 mb-2 opacity-30" />
               <p className="text-sm">No notifications</p>
             </div>
           ) : (
             <div className="divide-y">
-              {notifications.map((n: any) => (
+              {filtered.map((n: any) => (
                 <div
                   key={n.id}
                   className={`flex items-start gap-3 p-4 hover:bg-accent/50 transition-colors cursor-pointer ${!n.isRead ? "bg-primary/5" : ""}`}
-                  onClick={() => !n.isRead && markRead.mutate(n.id)}
+                  onClick={() => handleNotificationClick(n)}
                 >
                   <div className="mt-0.5 shrink-0">{NotificationIcon(n.type)}</div>
                   <div className="flex-1 min-w-0">
@@ -127,7 +164,10 @@ function NotificationBell() {
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
                     <p className="text-xs text-muted-foreground/70 mt-1">{formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}</p>
                   </div>
-                  {!n.isRead && <div className="h-2 w-2 rounded-full bg-primary mt-1.5 shrink-0" />}
+                  <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+                    {n.actionUrl && <ExternalLink className="h-3 w-3 text-muted-foreground/40" />}
+                    {!n.isRead && <div className="h-2 w-2 rounded-full bg-primary" />}
+                  </div>
                 </div>
               ))}
             </div>

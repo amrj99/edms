@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, isPast, parseISO } from "date-fns";
 import {
@@ -6,7 +6,7 @@ import {
   RefreshCw, Filter, ChevronDown, ArrowUp, ArrowDown, Clock, AlertCircle,
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
-  Trash2, Square, CheckCheck,
+  Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +60,7 @@ export default function CorrespondencePage() {
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selected, setSelected] = useState<any>(null);
+  const [mobilePanel, setMobilePanel] = useState<"list" | "detail">("list");
   const [flagged, setFlagged] = useState<Set<number>>(new Set());
   const [starred, setStarred] = useState<Set<number>>(new Set());
   const [localReadIds, setLocalReadIds] = useState<Set<number>>(new Set());
@@ -342,6 +343,7 @@ export default function CorrespondencePage() {
 
   const handleSelectItem = useCallback((item: any) => {
     setSelected(item);
+    setMobilePanel("detail");
     markAsRead(item);
   }, [markAsRead]);
 
@@ -407,8 +409,8 @@ export default function CorrespondencePage() {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] -m-4 md:-m-6 lg:-m-8 rounded-xl overflow-hidden border bg-card shadow-sm">
-      {/* LEFT: Folder Panel */}
-      <div className="w-52 shrink-0 border-r bg-muted/30 flex flex-col">
+      {/* LEFT: Folder Panel — hidden on mobile */}
+      <div className="hidden md:flex w-52 shrink-0 border-r bg-muted/30 flex-col">
         <div className="p-3 border-b">
           <Button size="sm" className="w-full gap-2" onClick={() => setComposeOpen(true)}>
             <Plus className="h-4 w-4" /> Compose
@@ -481,8 +483,8 @@ export default function CorrespondencePage() {
         </ScrollArea>
       </div>
 
-      {/* MIDDLE: List Panel */}
-      <div className="w-80 shrink-0 border-r flex flex-col">
+      {/* MIDDLE: List Panel — full width on mobile, fixed on desktop; hidden on mobile when detail open */}
+      <div className={`${mobilePanel === "detail" ? "hidden" : "flex"} md:flex w-full md:w-80 md:shrink-0 border-r flex-col`}>
         {/* Bulk action toolbar */}
         {bulkSelected.size > 0 && (
           <div className="px-3 py-2 border-b bg-primary/5 flex items-center gap-2 flex-wrap">
@@ -620,8 +622,8 @@ export default function CorrespondencePage() {
         </div>
       </div>
 
-      {/* RIGHT: Preview Panel */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* RIGHT: Preview Panel — full width on mobile when detail open */}
+      <div className={`${mobilePanel === "list" ? "hidden" : "flex"} md:flex flex-1 flex-col min-w-0`}>
         {!selected ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
             <Mail className="h-16 w-16 mb-4 opacity-20" />
@@ -632,6 +634,13 @@ export default function CorrespondencePage() {
           <>
             {/* Header */}
             <div className="p-4 border-b">
+              {/* Mobile: back button row */}
+              <button
+                className="md:hidden flex items-center gap-1 text-xs text-muted-foreground mb-3 hover:text-foreground"
+                onClick={() => setMobilePanel("list")}
+              >
+                <ChevronLeft className="h-4 w-4" /> Back to list
+              </button>
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -668,7 +677,7 @@ export default function CorrespondencePage() {
                   <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
                     <Send className="h-3.5 w-3.5" /> Forward
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelected(null)}>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setSelected(null); setMobilePanel("list"); }}>
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
