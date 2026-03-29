@@ -29,6 +29,7 @@ import notificationSummaryRouter from "./notification-summary.js";
 import modulesRouter from "./modules.js";
 import profileRouter from "./profile.js";
 import meetingsRouter from "./meetings.js";
+import chatRouter from "./chat.js";
 import devRouter from "./dev.js";
 
 const router: IRouter = Router();
@@ -61,6 +62,7 @@ router.use("/projects/:projectId", deliverablesRouter);
 router.use("/user", preferencesRouter);
 router.use("/profile", profileRouter);
 router.use("/meetings", meetingsRouter);
+router.use("/chat", chatRouter);
 router.use("/modules", modulesRouter);
 router.use("/dev", devRouter);
 router.use("/", notificationSummaryRouter);

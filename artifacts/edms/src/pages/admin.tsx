@@ -2110,6 +2110,7 @@ const MODULE_DEFS: { key: keyof OrgModules; labelKey: TranslationKeys; descKey: 
   { key: "deliverables",  labelKey: "module_deliverables",  descKey: "moduleDesc_deliverables",  icon: ClipboardList },
   { key: "registers",     labelKey: "module_registers",     descKey: "moduleDesc_registers",     icon: Database },
   { key: "notifications", labelKey: "module_notifications", descKey: "moduleDesc_notifications", icon: Bell },
+  { key: "chat",          labelKey: "module_chat",          descKey: "moduleDesc_chat",          icon: ToggleRight },
 ];
 
 function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, isPast, parseISO } from "date-fns";
 import {
@@ -61,6 +61,7 @@ export default function CorrespondencePage() {
   const [selected, setSelected] = useState<any>(null);
   const [flagged, setFlagged] = useState<Set<number>>(new Set());
   const [starred, setStarred] = useState<Set<number>>(new Set());
+  const [localReadIds, setLocalReadIds] = useState<Set<number>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [replyingToId, setReplyingToId] = useState<number | null>(null);
@@ -259,6 +260,26 @@ export default function CorrespondencePage() {
   });
   const threadReplies: any[] = threadData?.items ?? [];
 
+  const markAsRead = useCallback(async (item: any) => {
+    if (item.isRead || localReadIds.has(item.id)) return;
+    setLocalReadIds(s => { const n = new Set(s); n.add(item.id); return n; });
+    try {
+      const endpoint = item._source === "general"
+        ? `/api/general/correspondence/${item.id}/read`
+        : `/api/projects/${item.projectId}/correspondence/${item.id}/read`;
+      await fetch(endpoint, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isRead: true }),
+      });
+    } catch { /* silent */ }
+  }, [localReadIds]);
+
+  const handleSelectItem = useCallback((item: any) => {
+    setSelected(item);
+    markAsRead(item);
+  }, [markAsRead]);
+
   const handleForward = () => {
     if (!selected) return;
     setCompose({
@@ -430,13 +451,13 @@ export default function CorrespondencePage() {
                 return (
                   <div
                     key={`${item._source}-${item.id}`}
-                    onClick={() => setSelected(item)}
+                    onClick={() => handleSelectItem(item)}
                     className={`p-3 cursor-pointer transition-colors relative ${isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-muted/50"} ${isOverdue ? "bg-red-50/50 dark:bg-red-950/5" : ""}`}
                   >
                     <div className="flex items-start gap-2">
                       <div className="mt-0.5 shrink-0 relative">
                         <PriorityIcon priority={item.priority ?? "medium"} />
-                        {!item.isRead && (
+                        {!item.isRead && !localReadIds.has(item.id) && (
                           <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-blue-500 ring-1 ring-background" title="Unread" />
                         )}
                       </div>
@@ -449,7 +470,7 @@ export default function CorrespondencePage() {
                             {formatDistanceToNow(new Date(item.createdAt), { addSuffix: true })}
                           </span>
                         </div>
-                        <p className={`text-sm mt-1 line-clamp-1 ${!item.isRead ? "font-semibold" : "font-medium"}`}>{item.subject}</p>
+                        <p className={`text-sm mt-1 line-clamp-1 ${!item.isRead && !localReadIds.has(item.id) ? "font-semibold" : "font-medium"}`}>{item.subject}</p>
                         {item.referenceNumber && (
                           <p className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</p>
                         )}

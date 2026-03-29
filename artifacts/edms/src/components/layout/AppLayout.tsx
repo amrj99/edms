@@ -11,7 +11,7 @@ import {
   Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send,
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
-  CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp,
+  CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -217,6 +217,7 @@ export function AppSidebar() {
     ...(modules.deliverables ? [{ title: "Deliverables", url: "/deliverables", icon: ClipboardList }] : []),
     { title: "Reports Dashboard", url: "/reports-dashboard", icon: TrendingUp },
     ...(modules.registers ? [{ title: "Registers", url: "/reports", icon: BarChart3 }] : []),
+    ...(modules.chat ? [{ title: "Chat", url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: "Activity Log", url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: "Search", url: "/search", icon: Search },
   ];

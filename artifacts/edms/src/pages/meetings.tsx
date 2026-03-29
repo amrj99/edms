@@ -4,7 +4,7 @@ import { format, isPast, parseISO } from "date-fns";
 import {
   CalendarDays, Plus, X, ChevronRight, Clock, MapPin, Users, CheckSquare,
   FileText, Loader2, Check, Pencil, Trash2, User, AlertCircle, CheckCheck,
-  CalendarClock, Paperclip,
+  CalendarClock, Paperclip, Mail, Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,60 @@ const ACTION_STATUS_COLORS: Record<string, string> = {
 const BLANK_FORM = {
   title: "", projectId: "", meetingDate: "", duration: "", location: "", agenda: "", status: "scheduled",
 };
+
+// ─── Linked Correspondence mini-component ─────────────────────────────────────
+function LinkedCorrespondence({ projectId }: { meetingId: number; projectId: number }) {
+  const { data } = useQuery({
+    queryKey: ["linked-correspondence", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/correspondence`);
+      return r.json();
+    },
+  });
+  const items: any[] = (data?.items ?? []).slice(0, 5);
+  if (items.length === 0) return <p className="text-sm text-muted-foreground italic">No correspondence in this project.</p>;
+  return (
+    <div className="space-y-1.5">
+      {items.map((item: any) => (
+        <div key={item.id} className="flex items-center gap-2 p-2 border rounded text-xs">
+          <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-medium truncate">{item.subject}</p>
+            <p className="text-muted-foreground">{item.referenceNumber} · {item.type?.toUpperCase()}</p>
+          </div>
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${item.status === "sent" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"}`}>{item.status}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Linked Documents mini-component ─────────────────────────────────────────
+function LinkedDocuments({ projectId }: { meetingId: number; projectId: number }) {
+  const { data } = useQuery({
+    queryKey: ["linked-documents", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/documents`);
+      return r.json();
+    },
+  });
+  const docs: any[] = (data?.documents ?? []).slice(0, 5);
+  if (docs.length === 0) return <p className="text-sm text-muted-foreground italic">No documents in this project.</p>;
+  return (
+    <div className="space-y-1.5">
+      {docs.map((doc: any) => (
+        <div key={doc.id} className="flex items-center gap-2 p-2 border rounded text-xs">
+          <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-medium truncate">{doc.title}</p>
+            <p className="text-muted-foreground">{doc.documentNumber} · {doc.discipline}</p>
+          </div>
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${doc.status === "approved" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>{doc.status}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function MeetingsPage() {
   const qc = useQueryClient();
@@ -284,8 +338,15 @@ export default function MeetingsPage() {
                           <Clock className="h-3 w-3" />
                           {format(new Date(m.meetingDate), "dd MMM yyyy, HH:mm")}
                         </span>
-                        {m.project && <span className="truncate">{m.project.code}</span>}
                       </div>
+                      {m.project && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center gap-0.5 text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded font-medium">
+                            <FileText className="h-2.5 w-2.5" />
+                            {m.project.code} — {m.project.name}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-1" />
                   </div>
@@ -369,6 +430,7 @@ export default function MeetingsPage() {
                     Action Items {actionItems.length > 0 && <Badge variant="secondary" className="ml-1 text-xs h-4">{actionItems.length}</Badge>}
                   </TabsTrigger>
                   {detail.minutes && <TabsTrigger value="minutes" className="text-xs">Minutes</TabsTrigger>}
+                  <TabsTrigger value="linked" className="text-xs">Linked</TabsTrigger>
                 </TabsList>
               </div>
 
@@ -515,6 +577,30 @@ export default function MeetingsPage() {
                       <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{detail.minutes}</div>
                     </TabsContent>
                   )}
+
+                  {/* Linked Tab */}
+                  <TabsContent value="linked" className="mt-0 space-y-5">
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Mail className="h-3.5 w-3.5" /> Linked Correspondence
+                      </p>
+                      {detail.projectId ? (
+                        <LinkedCorrespondence meetingId={detail.id} projectId={detail.projectId} />
+                      ) : (
+                        <p className="text-sm text-muted-foreground italic">Assign a project to view linked correspondence.</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <FileText className="h-3.5 w-3.5" /> Linked Documents
+                      </p>
+                      {detail.projectId ? (
+                        <LinkedDocuments meetingId={detail.id} projectId={detail.projectId} />
+                      ) : (
+                        <p className="text-sm text-muted-foreground italic">Assign a project to view linked documents.</p>
+                      )}
+                    </div>
+                  </TabsContent>
                 </div>
               </ScrollArea>
             </Tabs>

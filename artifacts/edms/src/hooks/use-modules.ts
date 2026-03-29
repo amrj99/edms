@@ -5,6 +5,7 @@ export interface OrgModules {
   deliverables: boolean;
   registers: boolean;
   notifications: boolean;
+  chat: boolean;
 }
 
 const DEFAULT_MODULES: OrgModules = {
@@ -12,6 +13,7 @@ const DEFAULT_MODULES: OrgModules = {
   deliverables: true,
   registers: true,
   notifications: true,
+  chat: true,
 };
 
 export function useModules(orgId?: number | string | null): {

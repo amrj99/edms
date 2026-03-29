@@ -38,6 +38,7 @@ import ProfilePage from "@/pages/profile";
 import MeetingsPage from "@/pages/meetings";
 import ActionItemsPage from "@/pages/action-items";
 import ReportsDashboard from "@/pages/reports-dashboard";
+import ChatPage from "@/pages/chat";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -172,6 +173,9 @@ function Router() {
       </Route>
       <Route path="/reports-dashboard">
         <ProtectedRoute component={ReportsDashboard} />
+      </Route>
+      <Route path="/chat">
+        <ProtectedRoute component={ChatPage} />
       </Route>
 
       <Route component={NotFound} />

@@ -12,6 +12,7 @@ export interface OrgModules {
   deliverables: boolean;
   registers: boolean;
   notifications: boolean;
+  chat: boolean;
 }
 
 const DEFAULT_MODULES: OrgModules = {
@@ -19,6 +20,7 @@ const DEFAULT_MODULES: OrgModules = {
   deliverables: true,
   registers: true,
   notifications: true,
+  chat: true,
 };
 
 function mergeModules(raw: unknown): OrgModules {
@@ -29,6 +31,7 @@ function mergeModules(raw: unknown): OrgModules {
     deliverables: obj.deliverables !== false,
     registers: obj.registers !== false,
     notifications: obj.notifications !== false,
+    chat: obj.chat !== false,
   };
 }
 

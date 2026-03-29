@@ -1,27 +1,56 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
+import path from "path";
+import { eq } from "drizzle-orm";
+import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
+import { requestUpload, streamOnPremFile } from "../lib/orgStorage.js";
+import { requireAuth } from "../lib/auth.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
 
 /**
- * POST /storage/uploads/request-url
- * Client sends JSON metadata (name, size, contentType) — NOT the file.
- * Then uploads the file directly to the returned presigned URL.
+ * POST /uploads/request-url  (mounted at /api/storage → /api/storage/uploads/request-url)
+ * Org-aware: routes to cloud (Replit Object Storage) or on-prem based on org config.
  */
-router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
-  const { name, size, contentType } = req.body ?? {};
+router.post("/uploads/request-url", requireAuth, async (req: Request, res: Response) => {
+  const { name, size, contentType, projectId, fileType } = req.body ?? {};
   if (!name || typeof name !== "string") {
     res.status(400).json({ error: "Missing required field: name" });
     return;
   }
 
-  try {
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+  const orgId = req.user!.organizationId;
+  if (!orgId) {
+    // System-level admin — fall back to cloud storage
+    try {
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      res.json({ uploadURL, objectPath, metadata: { name, size, contentType }, mode: "cloud" });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to generate upload URL" });
+    }
+    return;
+  }
 
-    res.json({ uploadURL, objectPath, metadata: { name, size, contentType } });
+  try {
+    const result = await requestUpload({
+      organizationId: orgId,
+      projectId: projectId ? parseInt(projectId) : undefined,
+      fileType: fileType ?? "general",
+      name,
+      size,
+      contentType,
+    });
+
+    res.json({
+      uploadURL: result.uploadURL,
+      objectPath: result.objectPath,
+      serveUrl: result.serveUrl,
+      mode: result.mode,
+      metadata: { name, size, contentType },
+    });
   } catch (error: any) {
     console.error("Error generating upload URL:", error);
     res.status(500).json({ error: "Failed to generate upload URL" });
@@ -29,10 +58,10 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
 });
 
 /**
- * GET /storage/public-objects/*
+ * GET /public-objects/*  (→ /api/storage/public-objects/*)
  * Serve public assets — unconditionally public, no auth checks.
  */
-router.get("/storage/public-objects/*filePath", async (req: Request, res: Response) => {
+router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
   try {
     const raw = req.params.filePath;
     const filePath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -57,10 +86,10 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
 });
 
 /**
- * GET /storage/objects/*
- * Serve private object entities.
+ * GET /objects/*  (→ /api/storage/objects/*)
+ * Serve private object entities from cloud storage.
  */
-router.get("/storage/objects/*path", async (req: Request, res: Response) => {
+router.get("/objects/*path", async (req: Request, res: Response) => {
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -83,6 +112,31 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
     console.error("Error serving object:", error);
     res.status(500).json({ error: "Failed to serve object" });
   }
+});
+
+/**
+ * GET /onpremise/:orgId/:projectId/:fileType/:filename  (→ /api/storage/onpremise/...)
+ * Serve on-premise files stored on the local filesystem.
+ */
+router.get("/onpremise/:orgId/:projectId/:fileType/:filename", requireAuth, async (req: Request, res: Response) => {
+  const { orgId, projectId, fileType, filename } = req.params;
+
+  const [cfg] = await db.select().from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, parseInt(orgId)));
+
+  if (!cfg?.storagePath) {
+    res.status(404).json({ error: "On-premise storage not configured" });
+    return;
+  }
+
+  const absPath = path.join(cfg.storagePath, orgId, projectId, fileType, filename);
+  const stream = streamOnPremFile(absPath);
+  if (!stream) {
+    res.status(404).json({ error: "File not found" });
+    return;
+  }
+  res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+  stream.pipe(res);
 });
 
 export default router;

@@ -221,6 +221,37 @@ router.post("/correspondence/:id/reply", async (req, res) => {
   res.status(201).json(reply);
 });
 
+// ─── PUT /general/correspondence/:id/read ────────────────────────────────────
+router.put("/correspondence/:id/read", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { isRead } = req.body;
+  const [corr] = await db.update(correspondenceTable)
+    .set({ isRead: !!isRead, updatedAt: new Date() })
+    .where(eq(correspondenceTable.id, id))
+    .returning();
+  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ id: corr.id, isRead: corr.isRead });
+});
+
+// ─── GET /general/correspondence/:id/share ────────────────────────────────────
+router.get("/correspondence/:id/share", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const [corr] = await db.select().from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ shareUrl: corr.shareToken ? `/share/correspondence/${corr.shareToken}` : null, expiresAt: corr.shareExpiresAt });
+});
+
+// ─── POST /general/correspondence/:id/share ───────────────────────────────────
+router.post("/correspondence/:id/share", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const token = Math.random().toString(36).substring(2, 12);
+  const [corr] = await db.update(correspondenceTable)
+    .set({ shareToken: token, shareExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) })
+    .where(eq(correspondenceTable.id, id)).returning();
+  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ shareUrl: `/share/correspondence/${token}`, expiresAt: corr.shareExpiresAt });
+});
+
 // ─── List user's projects (for move-to-project selector) ─────────────────────
 
 router.get("/my-projects", async (req, res) => {

@@ -5,6 +5,7 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, gt } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { openai } from "@workspace/integrations-openai-ai-server";
 import {
   analyzeDocument,
   analyzeCorrespondence,
