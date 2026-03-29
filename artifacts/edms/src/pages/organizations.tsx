@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Building2, Plus, MoreHorizontal, Loader2, Trash2, Pencil, Users, FolderKanban, Mail, Phone, MapPin, X } from "lucide-react";
+import { Building2, Plus, MoreHorizontal, Loader2, Trash2, Pencil, Users, FolderKanban, Mail, Phone, MapPin, X, UserPlus, UserMinus } from "lucide-react";
 import { format } from "date-fns";
 
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,72 @@ function getAuthHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+interface OrgFormFieldsProps {
+  form: OrgForm;
+  setForm: React.Dispatch<React.SetStateAction<OrgForm>>;
+}
+
+function OrgFormFields({ form, setForm }: OrgFormFieldsProps) {
+  const { t } = useI18n();
+  return (
+    <div className="space-y-4 pt-2">
+      <div>
+        <Label className="text-xs font-medium">{t("orgName")} *</Label>
+        <Input
+          value={form.name}
+          onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          placeholder="Acme Corp"
+          className="mt-1"
+          autoFocus
+        />
+      </div>
+      <div>
+        <Label className="text-xs font-medium">{t("orgType")} *</Label>
+        <Select value={form.type} onValueChange={v => setForm(f => ({ ...f, type: v as OrgType }))}>
+          <SelectTrigger className="mt-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="client">{t("orgTypeClient")}</SelectItem>
+            <SelectItem value="consultant">{t("orgTypeConsultant")}</SelectItem>
+            <SelectItem value="contractor">{t("orgTypeContractor")}</SelectItem>
+            <SelectItem value="subcontractor">{t("orgTypeSubcontractor")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label className="text-xs font-medium">{t("orgContactEmail")}</Label>
+        <Input
+          type="email"
+          value={form.contactEmail}
+          onChange={e => setForm(f => ({ ...f, contactEmail: e.target.value }))}
+          placeholder="info@company.com"
+          className="mt-1"
+        />
+      </div>
+      <div>
+        <Label className="text-xs font-medium">{t("orgContactPhone")}</Label>
+        <Input
+          value={form.contactPhone}
+          onChange={e => setForm(f => ({ ...f, contactPhone: e.target.value }))}
+          placeholder="+1 555 000 0000"
+          className="mt-1"
+        />
+      </div>
+      <div>
+        <Label className="text-xs font-medium">{t("orgAddress")}</Label>
+        <Textarea
+          value={form.address}
+          onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+          placeholder="123 Main St, City, Country"
+          rows={2}
+          className="mt-1 text-sm resize-none"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function Organizations() {
   const { toast } = useToast();
   const { t, isRtl } = useI18n();
@@ -58,8 +124,11 @@ export default function Organizations() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOrg, setEditOrg] = useState<any | null>(null);
   const [deleteOrg, setDeleteOrg] = useState<any | null>(null);
+  const [membersOrg, setMembersOrg] = useState<any | null>(null);
   const [form, setForm] = useState<OrgForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [addUserSearch, setAddUserSearch] = useState("");
 
   const { data, isLoading } = useQuery({
     queryKey: ["organizations"],
@@ -70,6 +139,44 @@ export default function Organizations() {
     },
   });
   const orgs: any[] = data?.organizations ?? [];
+
+  const { data: allUsersData } = useQuery({
+    queryKey: ["all-users"],
+    queryFn: async () => {
+      const r = await fetch("/api/users", { headers: getAuthHeader() });
+      if (!r.ok) throw new Error("Failed to load users");
+      return r.json();
+    },
+    enabled: !!membersOrg,
+  });
+  const allUsers: any[] = allUsersData?.users ?? allUsersData ?? [];
+
+  const orgMembers = allUsers.filter((u: any) => u.organizationId === membersOrg?.id);
+  const nonOrgUsers = allUsers.filter((u: any) => u.organizationId !== membersOrg?.id);
+
+  const filteredMembers = orgMembers.filter((u: any) =>
+    !memberSearch || `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(memberSearch.toLowerCase())
+  );
+  const filteredNonOrg = nonOrgUsers.filter((u: any) =>
+    !addUserSearch || `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(addUserSearch.toLowerCase())
+  );
+
+  const assignUserMutation = useMutation({
+    mutationFn: async ({ userId, orgId }: { userId: number; orgId: number | null }) => {
+      const r = await fetch(`/api/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...getAuthHeader() },
+        body: JSON.stringify({ organizationId: orgId }),
+      });
+      if (!r.ok) throw new Error("Failed to update user");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["all-users"] });
+      qc.invalidateQueries({ queryKey: ["organizations"] });
+    },
+    onError: () => toast({ variant: "destructive", title: "Failed to update user organization" }),
+  });
 
   function openCreate() {
     setForm(EMPTY_FORM);
@@ -144,65 +251,6 @@ export default function Organizations() {
     } finally {
       setSaving(false);
     }
-  }
-
-  function OrgFormFields() {
-    return (
-      <div className="space-y-4 pt-2">
-        <div>
-          <Label className="text-xs font-medium">{t("orgName")} *</Label>
-          <Input
-            value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            placeholder="Acme Corp"
-            className="mt-1"
-          />
-        </div>
-        <div>
-          <Label className="text-xs font-medium">{t("orgType")} *</Label>
-          <Select value={form.type} onValueChange={v => setForm(f => ({ ...f, type: v as OrgType }))}>
-            <SelectTrigger className="mt-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="client">{t("orgTypeClient")}</SelectItem>
-              <SelectItem value="consultant">{t("orgTypeConsultant")}</SelectItem>
-              <SelectItem value="contractor">{t("orgTypeContractor")}</SelectItem>
-              <SelectItem value="subcontractor">{t("orgTypeSubcontractor")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label className="text-xs font-medium">{t("orgContactEmail")}</Label>
-          <Input
-            type="email"
-            value={form.contactEmail}
-            onChange={e => setForm(f => ({ ...f, contactEmail: e.target.value }))}
-            placeholder="info@company.com"
-            className="mt-1"
-          />
-        </div>
-        <div>
-          <Label className="text-xs font-medium">{t("orgContactPhone")}</Label>
-          <Input
-            value={form.contactPhone}
-            onChange={e => setForm(f => ({ ...f, contactPhone: e.target.value }))}
-            placeholder="+1 555 000 0000"
-            className="mt-1"
-          />
-        </div>
-        <div>
-          <Label className="text-xs font-medium">{t("orgAddress")}</Label>
-          <Textarea
-            value={form.address}
-            onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
-            placeholder="123 Main St, City, Country"
-            rows={2}
-            className="mt-1 text-sm resize-none"
-          />
-        </div>
-      </div>
-    );
   }
 
   const typeLabel: Record<OrgType, string> = {
@@ -300,10 +348,13 @@ export default function Organizations() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1.5 text-sm">
+                    <button
+                      className="flex items-center gap-1.5 text-sm hover:text-primary transition-colors"
+                      onClick={() => { setMembersOrg(org); setMemberSearch(""); setAddUserSearch(""); }}
+                    >
                       <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>{org.userCount ?? 0}</span>
-                    </div>
+                      <span className="underline-offset-2 hover:underline">{org.userCount ?? 0}</span>
+                    </button>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5 text-sm">
@@ -333,6 +384,9 @@ export default function Organizations() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuLabel className="text-xs">{t("orgActions")}</DropdownMenuLabel>
                           <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => { setMembersOrg(org); setMemberSearch(""); setAddUserSearch(""); }} className="cursor-pointer gap-2">
+                            <Users className="h-4 w-4" /> Manage Members
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => openEdit(org)} className="cursor-pointer gap-2">
                             <Pencil className="h-4 w-4" /> {t("editOrganization")}
                           </DropdownMenuItem>
@@ -360,7 +414,7 @@ export default function Organizations() {
             <DialogTitle>{t("addOrganization")}</DialogTitle>
             <DialogDescription>{t("organizationsDesc")}</DialogDescription>
           </DialogHeader>
-          <OrgFormFields />
+          <OrgFormFields form={form} setForm={setForm} />
           <DialogFooter className="pt-2">
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>{t("cancel")}</Button>
             <Button onClick={handleCreate} disabled={saving || !form.name.trim()}>
@@ -377,12 +431,114 @@ export default function Organizations() {
             <DialogTitle>{t("editOrganization")}</DialogTitle>
             <DialogDescription>{editOrg?.name}</DialogDescription>
           </DialogHeader>
-          <OrgFormFields />
+          <OrgFormFields form={form} setForm={setForm} />
           <DialogFooter className="pt-2">
             <Button variant="outline" onClick={() => setEditOrg(null)} disabled={saving}>{t("cancel")}</Button>
             <Button onClick={handleUpdate} disabled={saving || !form.name.trim()}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("confirm")}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Members dialog */}
+      <Dialog open={!!membersOrg} onOpenChange={v => { if (!v) setMembersOrg(null); }}>
+        <DialogContent className="sm:max-w-[560px] max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" /> Members — {membersOrg?.name}
+            </DialogTitle>
+            <DialogDescription>
+              {orgMembers.length} member{orgMembers.length !== 1 ? "s" : ""} in this organization
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-4 py-1">
+            {/* Current members */}
+            <div>
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Current Members</Label>
+              <div className="mt-2 space-y-1">
+                <Input
+                  placeholder="Search members..."
+                  value={memberSearch}
+                  onChange={e => setMemberSearch(e.target.value)}
+                  className="h-8 text-sm mb-2"
+                />
+                {filteredMembers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-3">No members found</p>
+                ) : (
+                  <div className="border rounded-lg divide-y max-h-44 overflow-y-auto">
+                    {filteredMembers.map((u: any) => (
+                      <div key={u.id} className="flex items-center justify-between px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium">{u.firstName} {u.lastName}</p>
+                          <p className="text-xs text-muted-foreground">{u.email} · <span className="capitalize">{u.role?.replace(/_/g, " ")}</span></p>
+                        </div>
+                        {isSysAdmin && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                            onClick={() => assignUserMutation.mutate({ userId: u.id, orgId: null })}
+                            disabled={assignUserMutation.isPending}
+                            title="Remove from organization"
+                          >
+                            <UserMinus className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Add user section */}
+            {isSysAdmin && (
+              <div>
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Add User to Organization</Label>
+                <div className="mt-2">
+                  <Input
+                    placeholder="Search users not in this org..."
+                    value={addUserSearch}
+                    onChange={e => setAddUserSearch(e.target.value)}
+                    className="h-8 text-sm mb-2"
+                  />
+                  {addUserSearch && (
+                    <div className="border rounded-lg divide-y max-h-44 overflow-y-auto">
+                      {filteredNonOrg.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-3">No users found</p>
+                      ) : (
+                        filteredNonOrg.map((u: any) => (
+                          <div key={u.id} className="flex items-center justify-between px-3 py-2">
+                            <div>
+                              <p className="text-sm font-medium">{u.firstName} {u.lastName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {u.email} · <span className="capitalize">{u.role?.replace(/_/g, " ")}</span>
+                                {u.organizationId && <span className="text-orange-600"> (currently in another org)</span>}
+                              </p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 gap-1 text-xs"
+                              onClick={() => assignUserMutation.mutate({ userId: u.id, orgId: membersOrg.id })}
+                              disabled={assignUserMutation.isPending}
+                            >
+                              <UserPlus className="h-3 w-3" /> Add
+                            </Button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMembersOrg(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

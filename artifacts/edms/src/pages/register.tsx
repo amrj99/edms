@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useRegister } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Building2, Loader2, Eye, EyeOff, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Building2, Loader2, Eye, EyeOff, AlertCircle, CheckCircle2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -67,6 +68,14 @@ export default function Register() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
+  const { data: systemSettings, isLoading: settingsLoading } = useQuery({
+    queryKey: ["system-settings-public"],
+    queryFn: async () => {
+      const r = await fetch("/api/config/system-settings");
+      return r.json();
+    },
+  });
+
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
@@ -101,6 +110,8 @@ export default function Register() {
     }
   };
 
+  const registrationEnabled = settingsLoading ? null : (systemSettings?.registrationEnabled ?? true);
+
   return (
     <div className="min-h-screen w-full flex bg-background">
       {/* Left panel */}
@@ -119,6 +130,25 @@ export default function Register() {
               Join ArcScale Engineering Document Management System
             </p>
           </div>
+
+          {registrationEnabled === false ? (
+            <div className="bg-card px-6 py-10 shadow-xl shadow-black/5 rounded-2xl border border-border/50 text-center space-y-4">
+              <div className="flex justify-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted">
+                  <Lock className="h-7 w-7 text-muted-foreground" />
+                </div>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold">Registration Disabled</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Public registration is currently disabled. Please contact your administrator to create an account.
+                </p>
+              </div>
+              <Link href="/login" className="block">
+                <Button className="w-full">Back to Login</Button>
+              </Link>
+            </div>
+          ) : (
 
           <div className="bg-card px-6 py-8 shadow-xl shadow-black/5 rounded-2xl border border-border/50">
             {serverError && (
@@ -281,6 +311,7 @@ export default function Register() {
               </p>
             </div>
           </div>
+          )}
         </div>
       </div>
 

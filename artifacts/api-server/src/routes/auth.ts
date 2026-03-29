@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable } from "@workspace/db";
+import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
 import {
   signToken,
@@ -87,6 +87,18 @@ router.post("/login", async (req, res) => {
 router.post("/register", async (req, res) => {
   const { email, password, firstName, lastName, organizationId } = req.body ?? {};
 
+  const [regSetting] = await db.select().from(systemSettingsTable)
+    .where(eq(systemSettingsTable.key, "registrationEnabled"));
+  const registrationEnabled = regSetting?.value !== "false";
+
+  const allExisting = await db.select().from(usersTable).limit(1);
+  const isFirstEver = allExisting.length === 0;
+
+  if (!registrationEnabled && !isFirstEver) {
+    res.status(403).json({ error: "Forbidden", message: "Public registration is currently disabled. Please contact your administrator." });
+    return;
+  }
+
   if (!email || !password || !firstName || !lastName) {
     res.status(400).json({ error: "Bad Request", message: "All fields are required" });
     return;
@@ -103,9 +115,6 @@ router.post("/register", async (req, res) => {
     return;
   }
 
-  const allUsers = await db.select().from(usersTable).limit(1);
-  const isFirstUser = allUsers.length === 0;
-
   const passwordHash = await hashPassword(password);
 
   const [user] = await db.insert(usersTable).values({
@@ -113,7 +122,7 @@ router.post("/register", async (req, res) => {
     passwordHash,
     firstName: firstName.trim(),
     lastName: lastName.trim(),
-    role: isFirstUser ? "admin" : "viewer",
+    role: isFirstEver ? "admin" : "viewer",
     organizationId: organizationId || null,
     isActive: true,
   }).returning();

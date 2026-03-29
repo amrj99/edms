@@ -1578,6 +1578,28 @@ function SystemTab() {
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
+
+  const { data: systemSettings, refetch: refetchSystemSettings } = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: async () => {
+      const r = await fetch("/api/config/system-settings");
+      return r.json();
+    },
+  });
+
+  const updateSystemSettings = useMutation({
+    mutationFn: async (settings: { registrationEnabled: boolean }) => {
+      const r = await fetch("/api/config/system-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (!r.ok) throw new Error("Failed to update settings");
+      return r.json();
+    },
+    onSuccess: () => { refetchSystemSettings(); toast({ title: "System settings updated" }); },
+    onError: () => toast({ variant: "destructive", title: "Failed to update system settings" }),
+  });
   const [restoreResult, setRestoreResult] = useState<any>(null);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [restoreParsed, setRestoreParsed] = useState<any>(null);
@@ -1762,6 +1784,39 @@ function SystemTab() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Access Control */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><ShieldCheck className="h-4 w-4" />Access Control</CardTitle>
+          <CardDescription>Control how users can access and register in the system</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Public Self-Registration</p>
+              <p className="text-xs text-muted-foreground">
+                When enabled, anyone can create an account at /register. When disabled, only admins can create user accounts.
+              </p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={systemSettings?.registrationEnabled ?? true}
+              onClick={() => updateSystemSettings.mutate({ registrationEnabled: !(systemSettings?.registrationEnabled ?? true) })}
+              disabled={updateSystemSettings.isPending}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${(systemSettings?.registrationEnabled ?? true) ? "bg-primary" : "bg-input"}`}
+            >
+              <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-0 transition-transform ${(systemSettings?.registrationEnabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+          </div>
+          {!(systemSettings?.registrationEnabled ?? true) && (
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>Public registration is disabled. New users can only be created by administrators from the Users tab above.</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Test Data Seed */}
       <Card>

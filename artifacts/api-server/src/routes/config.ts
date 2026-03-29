@@ -1,10 +1,46 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { orgConfigTable } from "@workspace/db";
+import { orgConfigTable, systemSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
+
+const SYSTEM_DEFAULTS: Record<string, string> = {
+  registrationEnabled: "true",
+};
+
+async function getSystemSetting(key: string): Promise<string> {
+  const [row] = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+  return row?.value ?? SYSTEM_DEFAULTS[key] ?? "true";
+}
+
+router.get("/system-settings", async (_req, res) => {
+  const registrationEnabled = await getSystemSetting("registrationEnabled");
+  res.json({ registrationEnabled: registrationEnabled === "true" });
+});
+
+router.put("/system-settings", requireAuth, async (req, res) => {
+  const user = (req as any).user;
+  if (!isSysAdmin(user)) {
+    res.status(403).json({ error: "System admin only" });
+    return;
+  }
+  const { registrationEnabled } = req.body ?? {};
+  if (typeof registrationEnabled === "boolean") {
+    const value = registrationEnabled ? "true" : "false";
+    const existing = await db.select().from(systemSettingsTable)
+      .where(eq(systemSettingsTable.key, "registrationEnabled"));
+    if (existing.length > 0) {
+      await db.update(systemSettingsTable).set({ value, updatedAt: new Date() })
+        .where(eq(systemSettingsTable.key, "registrationEnabled"));
+    } else {
+      await db.insert(systemSettingsTable).values({ key: "registrationEnabled", value });
+    }
+  }
+  res.json({ registrationEnabled: (await getSystemSetting("registrationEnabled")) === "true" });
+});
+
 router.use(requireAuth);
 
 router.get("/", async (req, res) => {

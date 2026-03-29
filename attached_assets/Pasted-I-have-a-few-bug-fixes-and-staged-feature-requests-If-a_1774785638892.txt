@@ -1,0 +1,115 @@
+I have a few bug fixes and staged feature requests.
+If any item is already implemented, no need to rebuild — just confirm.
+
+---
+
+## Phase 1 — Bug Fixes (High Priority)
+
+1. Transmittal Auto-Attach Bug
+   Documents are automatically attached when creating a transmittal and cannot be removed.
+   Please:
+
+* Start with empty document list
+* Allow manual selection
+* Allow removing selected documents before save
+
+2. Global Documents Search
+   Search works inside a project but not in the global Documents view.
+   Please:
+
+* Enable cross-project search
+* Search by number, title, filename, description
+* Do not require projectId
+* Respect org permissions
+
+3. Organization Name Input Bug
+   Typing in organization name field loses focus after each character.
+   Fix input re-render / focus issue.
+
+4. User ↔ Organization Assignment
+   There is no visible UI to assign users to organizations.
+   Please add:
+
+* Members tab in Organization edit
+* Organization selector in user edit
+* Users must belong to an organization
+
+---
+
+## Phase 2 — User & Access Improvements
+
+5. Self Registration Control (if not already implemented)
+
+* Option to disable public registration
+* Or require admin approval
+* Or invite-only per organization
+
+6. Project-Level Membership
+
+* Assign users to specific projects
+* Not all org users should see all projects
+
+---
+
+## Phase 3 — Mobile & Notifications
+
+7. Mobile Push Notifications (if not already implemented)
+
+* Chat messages
+* Correspondence
+* Document approvals
+* NCR / ITR
+* Meetings
+* Action items
+* Deliverables
+* Mentions
+
+Requirements:
+
+* Tap opens record
+* User preferences supported
+
+---
+
+## Phase 4 — Core Productivity Features
+
+8. External Document Sharing
+
+* Secure link
+* Expiry date
+* Optional password
+* Download tracking
+
+9. Email Integration
+
+* Send correspondence via email
+* Receive email into system
+* Attachments included
+
+10. Bulk Upload
+
+* Multi-file upload
+* Drag & drop
+* Bulk metadata edit
+
+---
+
+## Phase 5 — Usability Enhancements
+
+11. Calendar View
+
+* Meetings
+* Deliverables
+* Action items
+* Deadlines
+
+12. Smart Numbering
+    Auto numbering for:
+
+* Documents
+* Transmittals
+* NCR
+* RFI
+* Correspondence
+
+These phases will significantly improve usability and bring the system closer to production readiness.

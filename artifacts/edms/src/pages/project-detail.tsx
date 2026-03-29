@@ -517,16 +517,34 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {/* Selected doc list */}
-            <div className="bg-muted/40 rounded-lg p-3 space-y-1 max-h-32 overflow-y-auto">
-              {selectedDocs.map((d: any) => (
-                <div key={d.id} className="flex items-center gap-2 text-xs">
-                  <FileText className="h-3.5 w-3.5 text-primary shrink-0" />
-                  <span className="font-mono text-muted-foreground">{d.documentNumber}</span>
-                  <span className="truncate">{d.title}</span>
-                  <span className="font-mono text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                </div>
-              ))}
+            {/* Selected doc list — with remove buttons */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label className="text-xs text-muted-foreground">Attached Documents ({selectedDocs.length})</Label>
+                {selectedDocs.length === 0 && (
+                  <span className="text-xs text-destructive">At least one document required</span>
+                )}
+              </div>
+              <div className="border rounded-lg divide-y max-h-36 overflow-y-auto">
+                {selectedDocs.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground text-center">No documents selected</div>
+                ) : selectedDocs.map((d: any) => (
+                  <div key={d.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                    <FileText className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span className="font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
+                    <span className="truncate flex-1">{d.title}</span>
+                    <span className="font-mono text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds(prev => { const next = new Set(prev); next.delete(d.id); return next; })}
+                      className="ml-1 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                      title="Remove from transmittal"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
             <div>
               <Label>Subject *</Label>
@@ -562,7 +580,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsBulkTransOpen(false)}>Cancel</Button>
-            <Button onClick={() => createBulkTransmittal.mutate()} disabled={createBulkTransmittal.isPending || !bulkTrsForm.subject}>
+            <Button onClick={() => createBulkTransmittal.mutate()} disabled={createBulkTransmittal.isPending || !bulkTrsForm.subject || selectedDocs.length === 0}>
               {createBulkTransmittal.isPending ? "Creating..." : "Create Transmittal"}
             </Button>
           </DialogFooter>

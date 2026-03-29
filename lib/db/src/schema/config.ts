@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
@@ -67,3 +67,9 @@ export const insertOrgConfigSchema = createInsertSchema(orgConfigTable).omit({
 
 export type OrgConfig = typeof orgConfigTable.$inferSelect;
 export type InsertOrgConfig = z.infer<typeof insertOrgConfigSchema>;
+
+export const systemSettingsTable = pgTable("system_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
