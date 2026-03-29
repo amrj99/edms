@@ -15,3 +15,4 @@ export * from "./config";
 export * from "./registers";
 export * from "./deliverables";
 export * from "./preferences";
+export * from "./meetings";

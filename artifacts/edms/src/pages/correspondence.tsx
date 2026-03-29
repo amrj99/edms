@@ -63,10 +63,11 @@ export default function CorrespondencePage() {
   const [starred, setStarred] = useState<Set<number>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
+  const [replyingToId, setReplyingToId] = useState<number | null>(null);
   const [compose, setCompose] = useState<{
     subject: string; type: string; body: string; priority: string; dueDate: string;
-    projectId: string; toUserIds: number[]; cc: string; taskToId: string;
-  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
+    projectId: string; toUserIds: number[]; cc: string; bcc: string; taskToId: string;
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
   const [toPickUser, setToPickUser] = useState("");
   const [composeAttachments, setComposeAttachments] = useState<{ url: string; name: string; size: number }[]>([]);
   const [corrShareOpen, setCorrShareOpen] = useState(false);
@@ -172,6 +173,7 @@ export default function CorrespondencePage() {
         dueDate: data.dueDate || undefined,
         toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
         cc: data.cc || undefined,
+        bcc: data.bcc || undefined,
         taskToId: data.taskToId && data.taskToId !== "_none" ? data.taskToId : undefined,
         attachments: composeAttachments.length > 0 ? composeAttachments.map(a => ({ fileName: a.name, fileUrl: a.url, fileSize: a.size })) : undefined,
         sendNow,
@@ -184,7 +186,7 @@ export default function CorrespondencePage() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", taskToId: "" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
       setToPickUser("");
       setComposeAttachments([]);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
@@ -218,6 +220,62 @@ export default function CorrespondencePage() {
     },
     onSuccess: () => { setCorrShareResult(null); toast({ title: "Share link revoked" }); },
   });
+
+  const sendReply = useMutation({
+    mutationFn: async ({ id, source, projectId, body }: { id: number; source: string; projectId?: number | null; body: string }) => {
+      const url = source === "general"
+        ? `/api/general/correspondence/${id}/reply`
+        : `/api/projects/${projectId}/correspondence/${id}/reply`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      if (!r.ok) throw new Error("Failed to send reply");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      qc.invalidateQueries({ queryKey: ["corr-thread", selected?.id] });
+      setReplyText("");
+      setReplyingToId(null);
+      toast({ title: "Reply sent" });
+    },
+    onError: () => toast({ title: "Failed to send reply", variant: "destructive" }),
+  });
+
+  const { data: threadData } = useQuery({
+    queryKey: ["corr-thread", selected?.id, selected?._source],
+    queryFn: async () => {
+      if (!selected) return { items: [] };
+      const url = selected._source === "general"
+        ? `/api/general/correspondence?parentId=${selected.id}`
+        : `/api/projects/${selected.projectId}/correspondence?parentId=${selected.id}`;
+      const r = await fetch(url);
+      if (!r.ok) return { items: [] };
+      return r.json();
+    },
+    enabled: !!selected,
+  });
+  const threadReplies: any[] = threadData?.items ?? [];
+
+  const handleForward = () => {
+    if (!selected) return;
+    setCompose({
+      subject: `Fwd: ${selected.subject}`,
+      type: selected.type ?? "rfi",
+      body: `\n\n---------- Forwarded message ----------\nFrom: ${selected.fromName || "Unknown"}\nSubject: ${selected.subject}\n\n${selected.body || ""}`,
+      priority: selected.priority ?? "medium",
+      dueDate: "",
+      projectId: selected.projectId ? String(selected.projectId) : "_none",
+      toUserIds: [],
+      cc: "",
+      bcc: "",
+      taskToId: "",
+    });
+    setComposeAttachments([]);
+    setComposeOpen(true);
+  };
 
   const overdueCount = allItems.filter((i: any) => i.dueDate && isPast(new Date(i.dueDate)) && i.status !== "closed").length;
   const flaggedCount = flagged.size;
@@ -434,8 +492,11 @@ export default function CorrespondencePage() {
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8">
+                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => { setReplyingToId(selected.id); setTimeout(() => document.getElementById("quick-reply-ta")?.focus(), 50); }}>
                     <Reply className="h-3.5 w-3.5" /> Reply
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
+                    <Send className="h-3.5 w-3.5" /> Forward
                   </Button>
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelected(null)}>
                     <X className="h-4 w-4" />
@@ -510,22 +571,45 @@ export default function CorrespondencePage() {
                   )}
                 </div>
 
-                {/* Thread placeholder */}
+                {/* Conversation Thread */}
                 <div className="mt-6 pt-4 border-t">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1">
                     <MessageSquare className="h-3.5 w-3.5" /> Conversation Thread
+                    {threadReplies.length > 0 && <span className="ml-1 bg-primary/10 text-primary rounded-full px-1.5 py-0.5 text-xs">{threadReplies.length}</span>}
                   </p>
-                  <div className="text-sm text-muted-foreground italic text-center py-4 border rounded-lg border-dashed">
-                    No replies yet
-                  </div>
+                  {threadReplies.length === 0 ? (
+                    <div className="text-sm text-muted-foreground italic text-center py-4 border rounded-lg border-dashed">
+                      No replies yet
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {threadReplies.map((reply: any) => (
+                        <div key={reply.id} className="border rounded-lg p-3 bg-muted/30">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="text-xs font-semibold">{reply.fromName || "User"}</span>
+                            <span className="text-xs text-muted-foreground">{format(new Date(reply.createdAt), "dd MMM yyyy HH:mm")}</span>
+                            {reply.status && <span className="text-xs capitalize px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">{reply.status}</span>}
+                          </div>
+                          <div className="text-sm whitespace-pre-wrap leading-relaxed">{reply.body || <span className="italic text-muted-foreground">No content</span>}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </ScrollArea>
 
             {/* Quick Reply */}
             <div className="p-4 border-t bg-muted/20">
+              {replyingToId && (
+                <div className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
+                  <Reply className="h-3 w-3" /> Replying to this message
+                  <button onClick={() => setReplyingToId(null)} className="ml-1 hover:text-foreground"><X className="h-3 w-3" /></button>
+                </div>
+              )}
               <div className="flex gap-2">
                 <Textarea
+                  id="quick-reply-ta"
                   rows={2}
                   placeholder="Write a quick reply..."
                   className="flex-1 text-sm resize-none"
@@ -533,8 +617,21 @@ export default function CorrespondencePage() {
                   onChange={e => setReplyText(e.target.value)}
                 />
                 <div className="flex flex-col gap-2">
-                  <Button size="sm" className="gap-1.5 h-8" disabled={!replyText.trim()}>
-                    <Send className="h-3.5 w-3.5" /> Send
+                  <Button
+                    size="sm"
+                    className="gap-1.5 h-8"
+                    disabled={!replyText.trim() || sendReply.isPending}
+                    onClick={() => {
+                      if (!selected || !replyText.trim()) return;
+                      sendReply.mutate({
+                        id: selected.id,
+                        source: selected._source,
+                        projectId: selected.projectId,
+                        body: replyText,
+                      });
+                    }}
+                  >
+                    {sendReply.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send
                   </Button>
                   <Button variant="ghost" size="sm" className="h-8 text-xs gap-1">
                     <Archive className="h-3.5 w-3.5" /> Archive
@@ -594,16 +691,28 @@ export default function CorrespondencePage() {
                 className="mt-1"
               />
             </div>
-            {/* CC */}
-            <div>
-              <Label>CC (email addresses)</Label>
-              <CCAutocomplete
-                users={allUsers as RecipientUser[]}
-                value={compose.cc}
-                onChange={v => setCompose(f => ({ ...f, cc: v }))}
-                placeholder="cc@example.com, another@example.com"
-                className="mt-1"
-              />
+            {/* CC / BCC */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>CC (email addresses)</Label>
+                <CCAutocomplete
+                  users={allUsers as RecipientUser[]}
+                  value={compose.cc}
+                  onChange={v => setCompose(f => ({ ...f, cc: v }))}
+                  placeholder="cc@example.com"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label>BCC (email addresses)</Label>
+                <CCAutocomplete
+                  users={allUsers as RecipientUser[]}
+                  value={compose.bcc}
+                  onChange={v => setCompose(f => ({ ...f, bcc: v }))}
+                  placeholder="bcc@example.com"
+                  className="mt-1"
+                />
+              </div>
             </div>
             {/* Subject */}
             <div>

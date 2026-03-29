@@ -28,6 +28,7 @@ import preferencesRouter from "./preferences.js";
 import notificationSummaryRouter from "./notification-summary.js";
 import modulesRouter from "./modules.js";
 import profileRouter from "./profile.js";
+import meetingsRouter from "./meetings.js";
 
 const router: IRouter = Router();
 
@@ -58,6 +59,7 @@ router.use("/projects/:projectId", registersRouter);
 router.use("/projects/:projectId", deliverablesRouter);
 router.use("/user", preferencesRouter);
 router.use("/profile", profileRouter);
+router.use("/meetings", meetingsRouter);
 router.use("/modules", modulesRouter);
 router.use("/", notificationSummaryRouter);
 

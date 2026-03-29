@@ -10,6 +10,7 @@ import {
   Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send,
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
+  CalendarDays, FileSearch, Hash, Loader2,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -209,7 +210,7 @@ export function AppSidebar() {
     { title: "Correspondence", url: "/correspondence", icon: Mail },
     { title: "Projects", url: "/projects", icon: FolderKanban },
     { title: "Documents", url: "/documents", icon: FileText },
-    { title: "General Inbox", url: "/general", icon: Inbox },
+    { title: "Meetings", url: "/meetings", icon: CalendarDays },
     { title: "My Tasks", url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: "Deliverables", url: "/deliverables", icon: ClipboardList }] : []),
     ...(modules.registers ? [{ title: "Reports", url: "/reports", icon: BarChart3 }] : []),
@@ -426,6 +427,119 @@ function LanguageToggle() {
   );
 }
 
+// ─── Global Search ────────────────────────────────────────────────────────────
+function GlobalSearch() {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [, navigate] = useLocation();
+
+  const { data, isFetching } = useQuery({
+    queryKey: ["global-search", q],
+    queryFn: async () => {
+      if (!q.trim()) return { results: [] };
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      return r.json();
+    },
+    enabled: q.trim().length >= 2,
+  });
+  const results: any[] = data?.results ?? [];
+
+  const typeIcon: Record<string, any> = {
+    document: FileText,
+    project: FolderKanban,
+    correspondence: Mail,
+    task: CheckSquare,
+    deliverable: ClipboardList,
+    ncr: AlertCircle,
+    meeting: CalendarDays,
+  };
+
+  const typeUrl: Record<string, (r: any) => string> = {
+    document: r => r.projectId ? `/projects/${r.projectId}?tab=documents` : "/documents",
+    project: r => `/projects/${r.id}`,
+    correspondence: _r => "/correspondence",
+    task: _r => "/tasks",
+    deliverable: r => r.projectId ? `/projects/${r.projectId}?tab=deliverables` : "/deliverables",
+    ncr: r => r.projectId ? `/projects/${r.projectId}?tab=ncr` : "/reports",
+    meeting: _r => "/meetings",
+  };
+
+  const handleSelect = (result: any) => {
+    setOpen(false);
+    setQ("");
+    const getUrl = typeUrl[result.type];
+    if (getUrl) navigate(getUrl(result));
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-2 h-8 px-3 rounded-md border bg-muted/40 hover:bg-muted text-muted-foreground text-xs transition-colors"
+        title="Search (Ctrl+K)"
+      >
+        <Search className="h-3.5 w-3.5 shrink-0" />
+        <span className="hidden sm:block w-32 text-left">Search...</span>
+        <kbd className="hidden sm:block ml-auto font-mono text-xs bg-background/80 border rounded px-1 py-0.5">⌘K</kbd>
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4" onClick={() => setOpen(false)}>
+          <div className="w-full max-w-xl bg-popover border shadow-xl rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center border-b px-3 gap-2">
+              <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+              <input
+                autoFocus
+                className="flex-1 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                placeholder="Search documents, projects, correspondence, meetings..."
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                onKeyDown={e => e.key === "Escape" && setOpen(false)}
+              />
+              {isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
+              <button onClick={() => setOpen(false)} className="shrink-0 text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="max-h-96 overflow-y-auto">
+              {q.trim().length < 2 ? (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">Type at least 2 characters to search...</div>
+              ) : results.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{isFetching ? "Searching..." : "No results found"}</div>
+              ) : (
+                <div className="py-1">
+                  {results.map((r: any, i: number) => {
+                    const Icon = typeIcon[r.type] ?? Hash;
+                    return (
+                      <button
+                        key={i}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-accent text-left transition-colors"
+                        onClick={() => handleSelect(r)}
+                      >
+                        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{r.title || r.name || r.referenceNumber || "Untitled"}</p>
+                          {(r.description || r.projectCode) && (
+                            <p className="text-xs text-muted-foreground truncate">{r.projectCode ? `${r.projectCode} · ` : ""}{r.description || ""}</p>
+                          )}
+                        </div>
+                        <span className="text-xs text-muted-foreground capitalize shrink-0">{r.type}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="border-t px-4 py-2 flex items-center gap-3 text-xs text-muted-foreground">
+              <span>↵ Open</span>
+              <span>ESC Close</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── App Layout ───────────────────────────────────────────────────────────────
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -451,7 +565,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <div className="flex flex-col flex-1 w-full overflow-hidden">
           <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-card px-6 shadow-sm z-10 sticky top-0">
             <SidebarTrigger className="hover:bg-accent" />
-            <div className="flex-1" />
+            <div className="hidden sm:block flex-1">
+              <GlobalSearch />
+            </div>
+            <div className="flex-1 sm:flex-none" />
             <div className="flex items-center gap-2">
               <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
               <LanguageToggle />

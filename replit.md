@@ -37,7 +37,11 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 **Key Features and Implementations:**
 
 - **Document Management:** Tracks documents with revision history, robust review workflows, and AI-powered validation. Supports multiple files per document.
-- **Correspondence Management:** Supports various correspondence types, threading, priorities, and attachments.
+- **Correspondence Management:** Full two-pane layout with folder/project/type/priority filters. Reply (wired to POST `/:id/reply` API), Forward (pre-fills compose with quoted content), BCC field (schema column + compose form). Conversation Thread shows all child replies in real time. Quick Reply sends inline. Draft save vs. Send distinction. Thread count badge.
+- **Meetings Module:** Full meetings lifecycle — scheduled/in_progress/completed/cancelled. DB tables: `meetingsTable`, `meetingAttendeesTable`, `meetingActionItemsTable`, `meetingAttachmentsTable`. API: `GET/POST /api/meetings`, `GET/PUT /api/meetings/:id`, `PUT /api/meetings/:id/attendees/:attId`, `POST/PUT /api/meetings/:id/action-items`, `DELETE /api/meetings/:id`. Frontend at `/meetings`: two-pane list+detail, tabs for Agenda/Attendees/Action Items/Minutes, create/edit dialog, minutes editor. Action items trackable as open/in_progress/done.
+- **Global Search Bar:** Persistent header search widget (Search... button with ⌘K hint). Opens full-screen modal with debounced search against `/api/search`. Results show type icon, title, and navigate to the relevant section. Results categorized by type (document, project, correspondence, meeting, etc.).
+- **Test Data Seed:** `POST /api/admin/seed-test-data` (admin/system_owner only). Creates: 6 documents (3 reports + 3 drawings), 3 correspondence with 1 reply each, 3 transmittals, 3 NCR, 3 ITR, 3 NOC, 3 deliverables, 3 meetings. All with realistic engineering content and varied statuses. "Seed Test Data" card in the Admin → System tab with status display grid.
+- **General Inbox removed:** `/general` route and "General Inbox" sidebar nav entry removed. Replaced by the Meetings entry in the sidebar.
 - **Workflow Engine:** Automates document lifecycle steps and task creation.
 - **Task Management:** Tracks tasks from various sources with priority and assignment.
 - **Global Search:** Full-text search with advanced filtering across documents and correspondence.

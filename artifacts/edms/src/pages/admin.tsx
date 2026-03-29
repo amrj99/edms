@@ -1137,6 +1137,8 @@ function EmailConfigTab() {
   const { toast } = useToast();
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedResult, setSeedResult] = useState<{ success: boolean; message: string; created?: Record<string, number> } | null>(null);
 
   const { data: sysInfo } = useQuery({
     queryKey: ["admin-system-info"],
@@ -1154,6 +1156,24 @@ function EmailConfigTab() {
       setSmtpResult({ success: false, message: "Request failed — check API server logs" });
     } finally {
       setSmtpTesting(false);
+    }
+  };
+
+  const handleSeedData = async () => {
+    setSeedLoading(true);
+    setSeedResult(null);
+    try {
+      const r = await fetch("/api/admin/seed-test-data", { method: "POST" });
+      const d = await r.json();
+      if (r.ok) {
+        setSeedResult({ success: true, message: d.message, created: d.created });
+      } else {
+        setSeedResult({ success: false, message: d.error || d.message || "Seeding failed" });
+      }
+    } catch {
+      setSeedResult({ success: false, message: "Request failed — check API server logs" });
+    } finally {
+      setSeedLoading(false);
     }
   };
 
@@ -1659,6 +1679,37 @@ function SystemTab() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Test Data Seed */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Database className="h-4 w-4" />Seed Test Data</CardTitle>
+          <CardDescription>Populate the system with realistic sample documents, correspondence, meetings, NCR, ITR, NOC, transmittals, and deliverables for testing and demos.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Creates 6 documents (3 reports + 3 drawings), 3 correspondence with replies, 3 transmittals, 3 NCR, 3 ITR, 3 NOC, 3 deliverables, and 3 meetings in your first available project. Safe to run multiple times.
+          </p>
+          <Button onClick={handleSeedData} disabled={seedLoading} className="gap-2 w-full" variant="outline">
+            {seedLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Seeding…</> : <><Database className="h-4 w-4" /> Seed Test Data</>}
+          </Button>
+          {seedResult && (
+            <div className={`p-3 rounded-lg text-sm border space-y-2 ${seedResult.success ? "bg-green-50 text-green-800 border-green-200 dark:bg-green-950 dark:border-green-800 dark:text-green-200" : "bg-red-50 text-red-800 border-red-200 dark:bg-red-950 dark:border-red-800 dark:text-red-200"}`}>
+              <p className="font-medium">{seedResult.message}</p>
+              {seedResult.created && (
+                <div className="grid grid-cols-3 gap-1 mt-2">
+                  {Object.entries(seedResult.created).map(([k, v]) => (
+                    <div key={k} className="flex justify-between text-xs bg-white/50 dark:bg-black/20 rounded px-2 py-1">
+                      <span className="capitalize">{k}</span>
+                      <span className="font-bold">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Backup & Restore */}
       <Card>

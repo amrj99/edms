@@ -35,6 +35,7 @@ import DocumentsPage from "@/pages/documents";
 import DeliverablesPage from "@/pages/deliverables";
 import ActivityLogPage from "@/pages/activity-log";
 import ProfilePage from "@/pages/profile";
+import MeetingsPage from "@/pages/meetings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -160,6 +161,9 @@ function Router() {
       </Route>
       <Route path="/profile">
         <ProtectedRoute component={ProfilePage} />
+      </Route>
+      <Route path="/meetings">
+        <ProtectedRoute component={MeetingsPage} />
       </Route>
 
       <Route component={NotFound} />
