@@ -36,6 +36,8 @@ import DeliverablesPage from "@/pages/deliverables";
 import ActivityLogPage from "@/pages/activity-log";
 import ProfilePage from "@/pages/profile";
 import MeetingsPage from "@/pages/meetings";
+import ActionItemsPage from "@/pages/action-items";
+import ReportsDashboard from "@/pages/reports-dashboard";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -164,6 +166,12 @@ function Router() {
       </Route>
       <Route path="/meetings">
         <ProtectedRoute component={MeetingsPage} />
+      </Route>
+      <Route path="/action-items">
+        <ProtectedRoute component={ActionItemsPage} />
+      </Route>
+      <Route path="/reports-dashboard">
+        <ProtectedRoute component={ReportsDashboard} />
       </Route>
 
       <Route component={NotFound} />

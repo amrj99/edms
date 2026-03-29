@@ -4,7 +4,7 @@ import {
   meetingsTable, meetingAttendeesTable, meetingActionItemsTable,
   meetingAttachmentsTable, usersTable, projectsTable,
 } from "@workspace/db";
-import { eq, desc, and, or, ilike, inArray } from "drizzle-orm";
+import { eq, desc, and, or, ilike, inArray, lt, ne } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
@@ -221,10 +221,64 @@ router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "doc
   res.json({ attendee: updated });
 });
 
+// ─── Cross-project action items list ──────────────────────────────────────────
+router.get("/action-items", async (req: Request, res: Response) => {
+  const userId    = req.user!.id;
+  const orgId     = req.user!.organizationId;
+  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+  const status    = req.query.status as string | undefined;
+  const overdue   = req.query.overdue === "true";
+  const assignee  = req.query.assignee ? parseInt(req.query.assignee as string) : undefined;
+
+  // Resolve visible projects
+  let allowedProjectIds: number[] | undefined;
+  if (projectId) {
+    allowedProjectIds = [projectId];
+  } else if (orgId) {
+    const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
+    allowedProjectIds = projs.map(p => p.id);
+  }
+
+  const rows = await db.select({
+    item: meetingActionItemsTable,
+    meeting: { id: meetingsTable.id, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber, projectId: meetingsTable.projectId },
+    assignedTo: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName },
+    project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
+  })
+    .from(meetingActionItemsTable)
+    .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
+    .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
+    .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+    .orderBy(desc(meetingActionItemsTable.createdAt));
+
+  const now = new Date();
+  const filtered = rows.filter(r => {
+    if (allowedProjectIds && r.meeting.projectId && !allowedProjectIds.includes(r.meeting.projectId)) return false;
+    if (status && r.item.status !== status) return false;
+    if (overdue && !(r.item.dueDate && r.item.dueDate < now && r.item.status !== "done")) return false;
+    if (assignee && r.item.assignedToId !== assignee) return false;
+    return true;
+  });
+
+  res.json({
+    actionItems: filtered.map(r => ({
+      ...r.item,
+      meetingTitle: r.meeting.title,
+      meetingRef: r.meeting.referenceNumber,
+      meetingId: r.meeting.id,
+      projectId: r.meeting.projectId,
+      projectName: r.project?.name,
+      projectCode: r.project?.code,
+      assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
+      isOverdue: r.item.dueDate ? r.item.dueDate < now && r.item.status !== "done" : false,
+    })),
+  });
+});
+
 // ─── Add / update action item ──────────────────────────────────────────────────
 router.post("/:id/action-items", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
   const meetingId = parseInt(req.params.id);
-  const { title, assignedToId, assignedToName, dueDate, status, notes } = req.body;
+  const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: "title required" });
 
   const [item] = await db.insert(meetingActionItemsTable).values({
@@ -234,6 +288,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
     assignedToName: assignedToName?.trim() || null,
     dueDate: dueDate ? new Date(dueDate) : null,
     status: status || "open",
+    priority: priority || "medium",
     notes: notes?.trim() || null,
   }).returning();
 
@@ -242,16 +297,25 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
 
 router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
   const itemId = parseInt(req.params.itemId);
-  const { title, assignedToId, assignedToName, dueDate, status, notes } = req.body;
+  const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   const [item] = await db.update(meetingActionItemsTable).set({
     ...(title          !== undefined && { title: title.trim() }),
     ...(assignedToId   !== undefined && { assignedToId }),
     ...(assignedToName !== undefined && { assignedToName }),
     ...(dueDate        !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
     ...(status         !== undefined && { status }),
+    ...(priority       !== undefined && { priority }),
     ...(notes          !== undefined && { notes }),
+    updatedAt: new Date(),
   }).where(eq(meetingActionItemsTable.id, itemId)).returning();
   res.json({ actionItem: item });
+});
+
+// ─── Delete action item ────────────────────────────────────────────────────────
+router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+  const itemId = parseInt(req.params.itemId);
+  await db.delete(meetingActionItemsTable).where(eq(meetingActionItemsTable.id, itemId));
+  res.json({ message: "Deleted" });
 });
 
 // ─── Delete meeting ────────────────────────────────────────────────────────────

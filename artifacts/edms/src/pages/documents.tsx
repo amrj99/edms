@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import {
   FileText, Search, Send, Download, Eye, ExternalLink,
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
-  Plus, RefreshCw,
+  Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,10 @@ import {
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
+} from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { RecipientAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
 
@@ -46,6 +50,19 @@ export default function DocumentsPage() {
   const [filterStatus, setFilterStatus] = useState("_all");
   const [filterSource, setFilterSource] = useState("_all");
   const [filterIssuedBy, setFilterIssuedBy] = useState("");
+
+  // Version history sheet
+  const [historyDoc, setHistoryDoc] = useState<any>(null);
+
+  const { data: revisionData, isLoading: revisionLoading } = useQuery({
+    queryKey: ["doc-revisions", historyDoc?.id],
+    enabled: !!historyDoc?.id,
+    queryFn: async () => {
+      const r = await fetch(`/api/documents/${historyDoc.id}/revisions`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
 
   // Send for Workflow dialog
   const [workflowDoc, setWorkflowDoc] = useState<any>(null);
@@ -344,6 +361,15 @@ export default function DocumentsPage() {
                         </a>
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Version history"
+                      onClick={() => setHistoryDoc(doc)}
+                    >
+                      <History className="h-3.5 w-3.5" />
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
                       <Link href={`/projects/${doc.projectId}?tab=documents`}>
                         <Eye className="h-3.5 w-3.5" />
@@ -457,6 +483,100 @@ export default function DocumentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Version History Sheet */}
+      <Sheet open={!!historyDoc} onOpenChange={v => { if (!v) setHistoryDoc(null); }}>
+        <SheetContent className="w-full sm:max-w-lg flex flex-col">
+          <SheetHeader className="shrink-0">
+            <SheetTitle className="flex items-center gap-2">
+              <History className="h-4 w-4 text-primary" />
+              Version History
+            </SheetTitle>
+            {historyDoc && (
+              <div className="bg-muted/40 rounded-lg px-3 py-2 mt-2">
+                <p className="text-sm font-medium">{historyDoc.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {historyDoc.documentNumber} · Current Rev: <span className="font-mono font-semibold">{historyDoc.revision ?? "A"}</span>
+                  {historyDoc.status && <> · <span className="capitalize">{historyDoc.status.replace(/_/g, " ")}</span></>}
+                </p>
+              </div>
+            )}
+          </SheetHeader>
+
+          <ScrollArea className="flex-1 mt-4">
+            {revisionLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : !revisionData?.revisions?.length ? (
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-3">
+                <History className="h-10 w-10 opacity-30" />
+                <p className="text-sm">No version history recorded</p>
+                <p className="text-xs text-center max-w-56">
+                  Version history is created when documents are revised through the workflow process.
+                </p>
+              </div>
+            ) : (
+              <div className="relative pl-6 pr-2 pb-4">
+                {/* Timeline line */}
+                <div className="absolute left-[22px] top-0 bottom-0 w-px bg-border" />
+
+                {revisionData.revisions.map((rev: any, idx: number) => {
+                  const isLatest = idx === 0;
+                  return (
+                    <div key={rev.id} className="relative mb-4">
+                      {/* Timeline dot */}
+                      <div className={`absolute -left-4 top-3 h-3 w-3 rounded-full border-2 border-background ${isLatest ? "bg-primary" : "bg-muted-foreground/40"}`} />
+
+                      <div className={`rounded-lg border p-3 ml-2 ${isLatest ? "border-primary/30 bg-primary/5" : "bg-muted/20"}`}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-bold">Rev {rev.revision ?? "—"}</span>
+                            {isLatest && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground">
+                                <Star className="h-2.5 w-2.5" /> Latest
+                              </span>
+                            )}
+                            {rev.status && (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted capitalize">
+                                {rev.status.replace(/_/g, " ")}
+                              </span>
+                            )}
+                          </div>
+                          {rev.fileUrl && (
+                            <Button variant="ghost" size="sm" className="h-6 gap-1 text-xs" asChild>
+                              <a href={`/api/storage/objects/${encodeURIComponent(rev.fileUrl)}`} target="_blank" rel="noopener noreferrer">
+                                <Download className="h-3 w-3" /> Download
+                              </a>
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {rev.createdAt ? format(new Date(rev.createdAt), "dd MMM yyyy HH:mm") : "—"}
+                          </span>
+                          {rev.createdByName && (
+                            <span className="flex items-center gap-1">
+                              <User className="h-3 w-3" />
+                              {rev.createdByName}
+                            </span>
+                          )}
+                        </div>
+                        {rev.changeNote && (
+                          <p className="text-xs mt-2 text-muted-foreground border-t pt-2 italic">
+                            {rev.changeNote}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

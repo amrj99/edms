@@ -605,26 +605,86 @@ export default function CorrespondencePage() {
 
                 {/* Conversation Thread */}
                 <div className="mt-6 pt-4 border-t">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-1">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-4 flex items-center gap-1.5">
                     <MessageSquare className="h-3.5 w-3.5" /> Conversation Thread
-                    {threadReplies.length > 0 && <span className="ml-1 bg-primary/10 text-primary rounded-full px-1.5 py-0.5 text-xs">{threadReplies.length}</span>}
+                    {threadReplies.length > 0 && (
+                      <span className="bg-primary text-primary-foreground rounded-full px-1.5 py-0.5 text-[10px] font-bold">{threadReplies.length}</span>
+                    )}
                   </p>
+
+                  {/* Original message as first item in thread */}
+                  <div className="relative pl-8 mb-4">
+                    <div className="absolute left-0 top-1 h-7 w-7 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-[11px] font-bold shrink-0">
+                      {(selected.fromName || selected.subject || "?").charAt(0).toUpperCase()}
+                    </div>
+                    <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold">{selected.fromName || "Sender"}</span>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">Original</span>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{format(new Date(selected.createdAt), "dd MMM yyyy · HH:mm")}</span>
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap leading-relaxed text-foreground/90 line-clamp-4">
+                        {selected.body || <span className="italic text-muted-foreground">No content</span>}
+                      </div>
+                    </div>
+                  </div>
+
                   {threadReplies.length === 0 ? (
                     <div className="text-sm text-muted-foreground italic text-center py-4 border rounded-lg border-dashed">
-                      No replies yet
+                      No replies yet — be the first to reply
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {threadReplies.map((reply: any) => (
-                        <div key={reply.id} className="border rounded-lg p-3 bg-muted/30">
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <span className="text-xs font-semibold">{reply.fromName || "User"}</span>
-                            <span className="text-xs text-muted-foreground">{format(new Date(reply.createdAt), "dd MMM yyyy HH:mm")}</span>
-                            {reply.status && <span className="text-xs capitalize px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">{reply.status}</span>}
+                    <div className="relative pl-8 space-y-3">
+                      {/* Timeline line */}
+                      <div className="absolute left-3 top-0 bottom-4 w-px bg-border" />
+                      {threadReplies.map((reply: any, idx: number) => {
+                        const initials = (reply.fromName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+                        const colors = ["bg-blue-500","bg-emerald-500","bg-amber-500","bg-violet-500","bg-rose-500","bg-cyan-500"];
+                        const color = colors[idx % colors.length];
+                        return (
+                          <div key={reply.id} className="relative">
+                            <div className={`absolute -left-5 top-1 h-7 w-7 rounded-full ${color} flex items-center justify-center text-white text-[10px] font-bold shrink-0 ring-2 ring-background`}>
+                              {initials}
+                            </div>
+                            <div className="rounded-xl border bg-muted/20 p-3 hover:bg-muted/30 transition-colors">
+                              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold">{reply.fromName || "User"}</span>
+                                  {reply.status && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">
+                                      {reply.status.replace(/_/g, " ")}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[11px] text-muted-foreground">
+                                  {format(new Date(reply.createdAt), "dd MMM yyyy · HH:mm")}
+                                </span>
+                              </div>
+                              <div className="text-sm whitespace-pre-wrap leading-relaxed">
+                                {reply.body || <span className="italic text-muted-foreground">No content</span>}
+                              </div>
+                              {reply.attachments?.length > 0 && (
+                                <div className="mt-2 pt-2 border-t flex flex-wrap gap-1">
+                                  {reply.attachments.map((att: any, ai: number) => (
+                                    <a
+                                      key={ai}
+                                      href={att.fileUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 text-[10px] bg-background border rounded px-1.5 py-0.5 text-muted-foreground hover:text-primary"
+                                    >
+                                      <Paperclip className="h-2.5 w-2.5" />
+                                      {att.fileName || "Attachment"}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-sm whitespace-pre-wrap leading-relaxed">{reply.body || <span className="italic text-muted-foreground">No content</span>}</div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

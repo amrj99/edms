@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, workflowsTable, tasksTable, correspondenceTable, correspondenceRecipientsTable, usersTable, foldersTable, projectsTable } from "@workspace/db";
-import { eq, and, count, desc, gte, inArray } from "drizzle-orm";
+import { documentsTable, workflowsTable, tasksTable, correspondenceTable, correspondenceRecipientsTable, usersTable, foldersTable, projectsTable, meetingsTable, meetingActionItemsTable, ncrRecordsTable, deliverablesTable } from "@workspace/db";
+import { eq, and, count, desc, gte, lt, lte, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
@@ -144,6 +144,137 @@ router.get("/", requireAuth, async (req, res) => {
       createdByName: undefined,
     })),
     unreadCorrespondence: unreadCorrItems,
+  });
+});
+
+// ─── Reports Summary endpoint ──────────────────────────────────────────────────
+router.get("/reports", requireAuth, async (req, res) => {
+  const orgId     = req.user!.organizationId;
+  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+
+  let projectIds: number[] | undefined;
+  if (projectId) {
+    projectIds = [projectId];
+  } else if (orgId) {
+    const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
+    projectIds = projs.map(p => p.id);
+  }
+
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
+
+  const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(now.getDate() - 7);
+
+  const buildFilter = (col: any) => {
+    if (projectId) return eq(col, projectId);
+    if (projectIds && projectIds.length > 0) return inArray(col, projectIds);
+    return undefined;
+  };
+
+  // Documents by status
+  const docsByStatus = await db
+    .select({ status: documentsTable.status, cnt: count() })
+    .from(documentsTable)
+    .where(buildFilter(documentsTable.projectId))
+    .groupBy(documentsTable.status);
+
+  // Open NCRs (status = open or in_progress)
+  const openNcrs = await db.select().from(ncrRecordsTable)
+    .where(and(buildFilter(ncrRecordsTable.projectId), sql`${ncrRecordsTable.status} IN ('open','in_progress')`))
+    .orderBy(desc(ncrRecordsTable.createdAt)).limit(20);
+
+  // Meeting action items — overdue
+  const allActionItems = await db.select({
+    item: meetingActionItemsTable,
+    meeting: { projectId: meetingsTable.projectId, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber },
+    assignedTo: { firstName: usersTable.firstName, lastName: usersTable.lastName },
+  })
+    .from(meetingActionItemsTable)
+    .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
+    .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
+    .orderBy(meetingActionItemsTable.dueDate);
+
+  const filteredItems = allActionItems.filter(r => {
+    if (!projectIds || !orgId) return true;
+    return r.meeting.projectId ? projectIds.includes(r.meeting.projectId) : true;
+  });
+
+  const overdueActionItems = filteredItems.filter(r =>
+    r.item.dueDate && r.item.dueDate < now && r.item.status !== "done"
+  ).map(r => ({
+    ...r.item,
+    meetingTitle: r.meeting.title,
+    meetingRef: r.meeting.referenceNumber,
+    assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
+  }));
+
+  // Meetings this week
+  const meetingsThisWeek = await db.select({
+    meeting: meetingsTable,
+    project: { name: projectsTable.name, code: projectsTable.code },
+  })
+    .from(meetingsTable)
+    .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+    .where(and(
+      buildFilter(meetingsTable.projectId),
+      gte(meetingsTable.meetingDate, weekStart),
+      lt(meetingsTable.meetingDate, weekEnd),
+    ))
+    .orderBy(meetingsTable.meetingDate);
+
+  // Correspondence volume last 7 days (by day)
+  const recentCorr = await db.select({
+    id: correspondenceTable.id,
+    createdAt: correspondenceTable.createdAt,
+    status: correspondenceTable.status,
+  })
+    .from(correspondenceTable)
+    .where(gte(correspondenceTable.createdAt, sevenDaysAgo))
+    .orderBy(correspondenceTable.createdAt);
+
+  // Group by date
+  const corrByDay: Record<string, number> = {};
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0, 0, 0, 0);
+    corrByDay[d.toISOString().split("T")[0]] = 0;
+  }
+  recentCorr.forEach(c => {
+    const day = c.createdAt.toISOString().split("T")[0];
+    if (corrByDay[day] !== undefined) corrByDay[day]++;
+  });
+
+  // Deliverables progress
+  const deliverables = await db.select()
+    .from(deliverablesTable)
+    .where(buildFilter(deliverablesTable.projectId));
+
+  const delByStatus = deliverables.reduce((acc: Record<string, number>, d) => {
+    acc[d.status] = (acc[d.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  res.json({
+    documentsByStatus: docsByStatus,
+    openNcrs,
+    overdueActionItems,
+    meetingsThisWeek: meetingsThisWeek.map(r => ({
+      ...r.meeting,
+      projectName: r.project?.name,
+      projectCode: r.project?.code,
+    })),
+    correspondenceVolume: Object.entries(corrByDay).map(([date, count]) => ({ date, count })),
+    deliverablesProgress: delByStatus,
+    totalDeliverables: deliverables.length,
+    summary: {
+      totalDocuments: docsByStatus.reduce((s, r) => s + Number(r.cnt), 0),
+      openNcrCount: openNcrs.length,
+      overdueActionItemCount: overdueActionItems.length,
+      meetingsThisWeekCount: meetingsThisWeek.length,
+      totalDeliverables: deliverables.length,
+      completedDeliverables: deliverables.filter(d => d.status === "approved" || d.status === "closed").length,
+    },
   });
 });
 

@@ -44,8 +44,10 @@ export const meetingActionItemsTable = pgTable("meeting_action_items", {
   assignedToName: text("assigned_to_name"), // for external attendees
   dueDate: timestamp("due_date"),
   status: text("status").notNull().default("open"), // open, in_progress, done
+  priority: text("priority").notNull().default("medium"), // low, medium, high, critical
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const meetingAttachmentsTable = pgTable("meeting_attachments", {

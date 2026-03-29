@@ -77,7 +77,7 @@ const ALLOWED_ROLES = ["system_owner", "admin", "project_manager", "document_con
 
 const ENTITY_TYPES = [
   "document", "correspondence", "transmittal", "ncr", "itr", "noc",
-  "deliverable", "project", "user", "task", "workflow",
+  "deliverable", "project", "user", "task", "workflow", "meeting", "action_item",
 ] as const;
 
 const ACTIONS = [
@@ -116,6 +116,8 @@ const ENTITY_I18N: Record<EntityTypeKey, TranslationKeys> = {
   user: "entity_user",
   task: "entity_task",
   workflow: "entity_workflow",
+  meeting: "entity_meeting",
+  action_item: "entity_action_item",
 };
 
 const ACTION_COLORS: Record<ActionKey | string, string> = {
@@ -145,6 +147,8 @@ const ENTITY_COLORS: Record<EntityTypeKey | string, string> = {
   user: "bg-slate-50 text-slate-700",
   task: "bg-rose-50 text-rose-600",
   workflow: "bg-violet-50 text-violet-700",
+  meeting: "bg-teal-50 text-teal-700",
+  action_item: "bg-amber-50 text-amber-700",
 };
 
 const DEFAULT_FILTERS: LogFilters = {

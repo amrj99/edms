@@ -182,6 +182,8 @@ const translations = {
     entity_user: "User",
     entity_task: "Task",
     entity_workflow: "Workflow",
+    entity_meeting: "Meeting",
+    entity_action_item: "Action Item",
 
     // Module Licensing
     modules: "Modules",
@@ -458,6 +460,8 @@ const translations = {
     entity_user: "مستخدم",
     entity_task: "مهمة",
     entity_workflow: "سير عمل",
+    entity_meeting: "اجتماع",
+    entity_action_item: "بند العمل",
 
     // Module Licensing
     modules: "الوحدات",
