@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Plus, Search, Send, Paperclip, CornerDownRight, Hash, Building2,
   FolderKanban, Users, MoreVertical, Trash2, Edit2, LogOut, UserPlus,
-  X, ChevronLeft, CheckCheck,
+  X, ChevronLeft, CheckCheck, AlertCircle, Mail,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -632,6 +632,7 @@ export default function ChatPage() {
   );
 
   const totalUnread = groups.reduce((sum, g) => sum + g.unreadCount, 0);
+  const hasOrg = !!(user as any)?.organizationId;
 
   if (!modules.chat) {
     return <ModuleDisabledView />;
@@ -652,7 +653,13 @@ export default function ChatPage() {
                 <Badge variant="destructive" className="text-xs px-1.5 py-0.5 rounded-full">{totalUnread}</Badge>
               )}
             </div>
-            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setCreateOpen(true)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={() => hasOrg ? setCreateOpen(true) : toast({ title: "Organization required", description: "You must belong to an organization to create chat groups. Contact your admin to be assigned.", variant: "destructive" })}
+              title={hasOrg ? "New group" : "Organization required to create groups"}
+            >
               <Plus className="h-4 w-4" />
             </Button>
           </div>
@@ -662,6 +669,27 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {/* No-org warning banner */}
+        {!hasOrg && (
+          <div className="mx-3 mt-3 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <div className="flex gap-2">
+              <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <p className="font-semibold text-amber-800 dark:text-amber-300 mb-1">No organization assigned</p>
+                <p className="text-amber-700 dark:text-amber-400 leading-relaxed">
+                  You need to be assigned to an organization to create or join chat groups. Contact your system administrator.
+                </p>
+                <a
+                  href="mailto:admin@arcscale.com"
+                  className="inline-flex items-center gap-1 mt-2 text-amber-700 dark:text-amber-400 underline hover:no-underline font-medium"
+                >
+                  <Mail className="h-3 w-3" /> Contact Admin
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Group List */}
         <ScrollArea className="flex-1">
           {filteredGroups.length === 0 ? (
@@ -669,10 +697,16 @@ export default function ChatPage() {
               <Hash className="h-10 w-10 text-muted-foreground mb-3" />
               <p className="font-medium text-sm">{t("noGroups")}</p>
               <p className="text-xs text-muted-foreground mt-1">{t("noGroupsDesc")}</p>
-              <Button size="sm" className="mt-4" onClick={() => setCreateOpen(true)}>
-                <Plus className="h-3 w-3 mr-1" />
-                {t("newGroup")}
-              </Button>
+              {hasOrg ? (
+                <Button size="sm" className="mt-4" onClick={() => setCreateOpen(true)}>
+                  <Plus className="h-3 w-3 mr-1" />
+                  {t("newGroup")}
+                </Button>
+              ) : (
+                <p className="mt-3 text-xs text-amber-600 dark:text-amber-400 font-medium">
+                  Assign an organization to your account to get started.
+                </p>
+              )}
             </div>
           ) : (
             <div className="p-2 space-y-0.5">

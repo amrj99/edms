@@ -6,6 +6,7 @@ import {
   FileText, Search, Send, Download, Eye, ExternalLink,
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
   Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
+  ArrowUp, ArrowDown, ChevronsUpDown, Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,16 @@ const STATUS_COLORS: Record<string, string> = {
 
 const SOURCE_OPTIONS = ["internal", "external", "client", "contractor", "consultant", "supplier"];
 
+type SortKey = "documentNumber" | "title" | "projectName" | "discipline" | "source" | "issuedBy" | "revision" | "status" | "updatedAt";
+type SortDir = "asc" | "desc";
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+  if (col !== sortKey) return <ChevronsUpDown className="h-3 w-3 ml-1 text-muted-foreground/50 inline" />;
+  return sortDir === "asc"
+    ? <ArrowUp className="h-3 w-3 ml-1 text-primary inline" />
+    : <ArrowDown className="h-3 w-3 ml-1 text-primary inline" />;
+}
+
 export default function DocumentsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -50,6 +61,19 @@ export default function DocumentsPage() {
   const [filterStatus, setFilterStatus] = useState("_all");
   const [filterSource, setFilterSource] = useState("_all");
   const [filterIssuedBy, setFilterIssuedBy] = useState("");
+
+  // Sorting
+  const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const toggleSort = (col: SortKey) => {
+    if (sortKey === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(col);
+      setSortDir("asc");
+    }
+  };
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
@@ -66,6 +90,7 @@ export default function DocumentsPage() {
 
   // Send for Workflow dialog
   const [workflowDoc, setWorkflowDoc] = useState<any>(null);
+  const [wfAttachIds, setWfAttachIds] = useState<number[]>([]);
   const [wfForm, setWfForm] = useState({
     subject: "",
     purpose: "for_review",
@@ -114,9 +139,9 @@ export default function DocumentsPage() {
     [allDocs]
   );
 
-  // Client-side filtering
+  // Client-side filtering + sorting
   const filtered = useMemo(() => {
-    return allDocs.filter((d: any) => {
+    let docs = allDocs.filter((d: any) => {
       if (filterProject !== "_all" && d.projectId !== parseInt(filterProject)) return false;
       if (filterDiscipline !== "_all" && d.discipline !== filterDiscipline) return false;
       if (filterStatus !== "_all" && d.status !== filterStatus) return false;
@@ -136,7 +161,24 @@ export default function DocumentsPage() {
       }
       return true;
     });
-  }, [allDocs, filterProject, filterDiscipline, filterStatus, filterSource, filterIssuedBy, search]);
+
+    docs = [...docs].sort((a, b) => {
+      let av = a[sortKey] ?? "";
+      let bv = b[sortKey] ?? "";
+      if (sortKey === "updatedAt") {
+        av = new Date(av).getTime();
+        bv = new Date(bv).getTime();
+      } else {
+        av = String(av).toLowerCase();
+        bv = String(bv).toLowerCase();
+      }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return docs;
+  }, [allDocs, filterProject, filterDiscipline, filterStatus, filterSource, filterIssuedBy, search, sortKey, sortDir]);
 
   const hasFilters = filterProject !== "_all" || filterDiscipline !== "_all" || filterStatus !== "_all" ||
     filterSource !== "_all" || filterIssuedBy || search;
@@ -146,6 +188,12 @@ export default function DocumentsPage() {
     setFilterStatus("_all"); setFilterSource("_all");
     setFilterIssuedBy(""); setSearch("");
   };
+
+  // Project docs for the workflow attachment picker
+  const projectDocs = useMemo(() =>
+    workflowDoc ? allDocs.filter(d => d.projectId === workflowDoc.projectId) : [],
+    [allDocs, workflowDoc]
+  );
 
   const sendForWorkflow = useMutation({
     mutationFn: async () => {
@@ -159,16 +207,17 @@ export default function DocumentsPage() {
           toUserIds: wfForm.toUserIds,
           externalEmails: wfForm.externalEmails,
           description: wfForm.description,
-          documentIds: [workflowDoc.id],
+          documentIds: wfAttachIds,
         }),
       });
       if (!r.ok) throw new Error("Failed to create transmittal");
       return r.json();
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast({ title: `Transmittal created for ${workflowDoc?.documentNumber}` });
       qc.invalidateQueries({ queryKey: ["global-documents"] });
       setWorkflowDoc(null);
+      setWfAttachIds([]);
       setWfForm({ subject: "", purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
     },
     onError: () => toast({ title: "Failed to send document for workflow", variant: "destructive" }),
@@ -176,6 +225,7 @@ export default function DocumentsPage() {
 
   const openWorkflow = (doc: any) => {
     setWorkflowDoc(doc);
+    setWfAttachIds([doc.id]);
     setWfForm({
       subject: `For Review: ${doc.documentNumber} — ${doc.title}`,
       purpose: "for_review",
@@ -184,6 +234,18 @@ export default function DocumentsPage() {
       description: "",
     });
   };
+
+  const COLS: { key: SortKey; label: string; className?: string }[] = [
+    { key: "documentNumber", label: "Doc No.", className: "w-[110px]" },
+    { key: "title", label: "Title" },
+    { key: "projectName", label: "Project" },
+    { key: "discipline", label: "Discipline" },
+    { key: "source", label: "Source" },
+    { key: "issuedBy", label: "Issued By" },
+    { key: "revision", label: "Rev" },
+    { key: "status", label: "Status" },
+    { key: "updatedAt", label: "Updated" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -286,102 +348,76 @@ export default function DocumentsPage() {
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
-              <TableHead className="w-[110px]">Doc No.</TableHead>
-              <TableHead>Title</TableHead>
-              <TableHead>Project</TableHead>
-              <TableHead>Discipline</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead>Issued By</TableHead>
-              <TableHead>Rev</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Updated</TableHead>
+              {COLS.map(col => (
+                <TableHead
+                  key={col.key}
+                  className={`cursor-pointer select-none hover:bg-muted/60 transition-colors text-xs ${col.className ?? ""}`}
+                  onClick={() => toggleSort(col.key)}
+                >
+                  {col.label}
+                  <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
+                </TableHead>
+              ))}
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={10} className="py-16 text-center">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+                <TableCell colSpan={COLS.length + 1} className="py-12 text-center">
+                  <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
                 </TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="py-16 text-center">
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                    <FileText className="h-10 w-10 opacity-20" />
-                    <p className="font-medium">{hasFilters ? "No documents match your filters" : "No documents yet"}</p>
-                    {!hasFilters && (
-                      <p className="text-xs">Upload documents from within a project.</p>
-                    )}
-                  </div>
+                <TableCell colSpan={COLS.length + 1} className="py-12 text-center text-muted-foreground">
+                  <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                  No documents match the current filters.
                 </TableCell>
               </TableRow>
             ) : filtered.map((doc: any) => (
-              <TableRow key={doc.id} className="hover:bg-muted/30 transition-colors">
-                <TableCell className="font-mono text-xs text-muted-foreground">{doc.documentNumber}</TableCell>
+              <TableRow key={doc.id} className="hover:bg-muted/20 group">
+                <TableCell className="font-mono text-xs font-semibold text-primary">{doc.documentNumber}</TableCell>
                 <TableCell>
-                  <div className="font-medium text-sm leading-none">{doc.title}</div>
-                  {doc.description && (
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-[260px]">{doc.description}</p>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-sm font-medium max-w-[220px] truncate" title={doc.title}>{doc.title}</span>
+                  </div>
                 </TableCell>
+                <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{doc.projectName || "—"}</TableCell>
+                <TableCell className="text-xs">{doc.discipline || "—"}</TableCell>
+                <TableCell className="text-xs capitalize">{doc.source || "—"}</TableCell>
+                <TableCell className="text-xs max-w-[100px] truncate">{doc.issuedBy || "—"}</TableCell>
+                <TableCell className="text-xs font-mono">{doc.revision || "—"}</TableCell>
                 <TableCell>
-                  {doc.projectCode ? (
-                    <Link href={`/projects/${doc.projectId}`} className="flex items-center gap-1 text-xs hover:text-primary">
-                      <span className="font-mono font-bold text-[10px] bg-muted px-1 py-0.5 rounded">{doc.projectCode}</span>
-                      <span className="text-muted-foreground truncate max-w-[80px]">{doc.projectName}</span>
-                    </Link>
-                  ) : "—"}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">{doc.discipline || "—"}</TableCell>
-                <TableCell>
-                  {doc.source ? (
-                    <span className="inline-flex items-center text-xs bg-muted/60 px-2 py-0.5 rounded-full capitalize">
-                      {doc.source}
-                    </span>
-                  ) : "—"}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground max-w-[100px] truncate">{doc.issuedBy || "—"}</TableCell>
-                <TableCell className="font-mono text-xs">{doc.revision ?? "A"}</TableCell>
-                <TableCell>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${STATUS_COLORS[doc.status] ?? "bg-muted text-muted-foreground"}`}>
-                    {doc.status?.replace(/_/g, " ")}
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold capitalize ${STATUS_COLORS[doc.status] || "bg-muted text-muted-foreground"}`}>
+                    {doc.status?.replace(/_/g, " ") || "—"}
                   </span>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                  {doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yy") : "—"}
+                  {doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yyyy") : "—"}
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {doc.fileUrl && (
-                      <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                        <a href={`/api/storage/objects/${encodeURIComponent(doc.fileUrl)}`} target="_blank" rel="noopener noreferrer">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" asChild title="Download">
+                        <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
                           <Download className="h-3.5 w-3.5" />
                         </a>
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      title="Version history"
-                      onClick={() => setHistoryDoc(doc)}
-                    >
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Version History"
+                      onClick={() => setHistoryDoc(doc)}>
                       <History className="h-3.5 w-3.5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                      <Link href={`/projects/${doc.projectId}?tab=documents`}>
-                        <Eye className="h-3.5 w-3.5" />
-                      </Link>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Send for Review"
+                      onClick={() => openWorkflow(doc)}>
+                      <Send className="h-3.5 w-3.5" />
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 gap-1 text-xs"
-                      onClick={() => openWorkflow(doc)}
-                    >
-                      <Send className="h-3 w-3" /> Send
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Open Project" asChild>
+                      <Link href={`/projects/${doc.projectId}`}>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </Link>
                     </Button>
                   </div>
                 </TableCell>
@@ -391,192 +427,172 @@ export default function DocumentsPage() {
         </Table>
       </div>
 
-      {/* Send for Workflow Dialog */}
-      <Dialog open={!!workflowDoc} onOpenChange={v => { if (!v) setWorkflowDoc(null); }}>
-        <DialogContent className="sm:max-w-[540px] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Send className="h-4 w-4" /> Send for Workflow
-            </DialogTitle>
-          </DialogHeader>
-          {workflowDoc && (
-            <div className="space-y-4 py-2">
-              {/* Document summary */}
-              <div className="bg-muted/40 rounded-lg px-3 py-2 flex items-center gap-3">
-                <FileText className="h-5 w-5 text-primary shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium leading-none truncate">{workflowDoc.title}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {workflowDoc.documentNumber} · Rev {workflowDoc.revision ?? "A"} ·{" "}
-                    <span className="capitalize">{workflowDoc.status?.replace(/_/g, " ")}</span>
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>Purpose</Label>
-                  <Select value={wfForm.purpose} onValueChange={v => setWfForm(f => ({ ...f, purpose: v }))}>
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {[["for_review","For Review"],["for_approval","For Approval"],["for_information","For Information"],["for_construction","For Construction"],["as_built","As Built"]].map(([v,l]) => (
-                        <SelectItem key={v} value={v}>{l}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <Label>Subject</Label>
-                <Input
-                  value={wfForm.subject}
-                  onChange={e => setWfForm(f => ({ ...f, subject: e.target.value }))}
-                  className="mt-1"
-                  placeholder="Transmittal subject…"
-                />
-              </div>
-
-              <div>
-                <Label>To (Internal Recipients)</Label>
-                <RecipientAutocomplete
-                  users={allUsers}
-                  selectedIds={wfForm.toUserIds}
-                  onChange={ids => setWfForm(f => ({ ...f, toUserIds: ids }))}
-                  placeholder="Search by name or email…"
-                  className="mt-1"
-                />
-              </div>
-
-              <div>
-                <Label>External Recipients (email addresses)</Label>
-                <Input
-                  value={wfForm.externalEmails}
-                  onChange={e => setWfForm(f => ({ ...f, externalEmails: e.target.value }))}
-                  placeholder="alice@firm.com, bob@client.com"
-                  className="mt-1 text-sm"
-                />
-                <p className="text-xs text-muted-foreground mt-1">Separate multiple emails with commas.</p>
-              </div>
-
-              <div>
-                <Label>Cover Note / Instructions</Label>
-                <Textarea
-                  value={wfForm.description}
-                  onChange={e => setWfForm(f => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                  className="mt-1"
-                  placeholder="Optional instructions for reviewers…"
-                />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWorkflowDoc(null)}>Cancel</Button>
-            <Button
-              onClick={() => sendForWorkflow.mutate()}
-              disabled={sendForWorkflow.isPending || (!wfForm.toUserIds.length && !wfForm.externalEmails)}
-              className="gap-1.5"
-            >
-              {sendForWorkflow.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</> : <><Send className="h-3.5 w-3.5" /> Send for Workflow</>}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Version History Sheet */}
-      <Sheet open={!!historyDoc} onOpenChange={v => { if (!v) setHistoryDoc(null); }}>
-        <SheetContent className="w-full sm:max-w-lg flex flex-col">
-          <SheetHeader className="shrink-0">
+      <Sheet open={!!historyDoc} onOpenChange={open => !open && setHistoryDoc(null)}>
+        <SheetContent className="w-[440px]">
+          <SheetHeader>
             <SheetTitle className="flex items-center gap-2">
-              <History className="h-4 w-4 text-primary" />
-              Version History
+              <History className="h-4 w-4" />
+              Version History — {historyDoc?.documentNumber}
             </SheetTitle>
-            {historyDoc && (
-              <div className="bg-muted/40 rounded-lg px-3 py-2 mt-2">
-                <p className="text-sm font-medium">{historyDoc.title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {historyDoc.documentNumber} · Current Rev: <span className="font-mono font-semibold">{historyDoc.revision ?? "A"}</span>
-                  {historyDoc.status && <> · <span className="capitalize">{historyDoc.status.replace(/_/g, " ")}</span></>}
-                </p>
-              </div>
-            )}
           </SheetHeader>
-
-          <ScrollArea className="flex-1 mt-4">
+          <ScrollArea className="h-[calc(100vh-100px)] mt-4">
             {revisionLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
+              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin" /></div>
             ) : !revisionData?.revisions?.length ? (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-3">
-                <History className="h-10 w-10 opacity-30" />
-                <p className="text-sm">No version history recorded</p>
-                <p className="text-xs text-center max-w-56">
-                  Version history is created when documents are revised through the workflow process.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground text-center py-8">No revision history found.</p>
             ) : (
-              <div className="relative pl-6 pr-2 pb-4">
-                {/* Timeline line */}
-                <div className="absolute left-[22px] top-0 bottom-0 w-px bg-border" />
-
-                {revisionData.revisions.map((rev: any, idx: number) => {
-                  const isLatest = idx === 0;
-                  return (
-                    <div key={rev.id} className="relative mb-4">
-                      {/* Timeline dot */}
-                      <div className={`absolute -left-4 top-3 h-3 w-3 rounded-full border-2 border-background ${isLatest ? "bg-primary" : "bg-muted-foreground/40"}`} />
-
-                      <div className={`rounded-lg border p-3 ml-2 ${isLatest ? "border-primary/30 bg-primary/5" : "bg-muted/20"}`}>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm font-bold">Rev {rev.revision ?? "—"}</span>
-                            {isLatest && (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground">
-                                <Star className="h-2.5 w-2.5" /> Latest
-                              </span>
-                            )}
-                            {rev.status && (
-                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-muted capitalize">
-                                {rev.status.replace(/_/g, " ")}
-                              </span>
-                            )}
-                          </div>
-                          {rev.fileUrl && (
-                            <Button variant="ghost" size="sm" className="h-6 gap-1 text-xs" asChild>
-                              <a href={`/api/storage/objects/${encodeURIComponent(rev.fileUrl)}`} target="_blank" rel="noopener noreferrer">
-                                <Download className="h-3 w-3" /> Download
-                              </a>
-                            </Button>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            {rev.createdAt ? format(new Date(rev.createdAt), "dd MMM yyyy HH:mm") : "—"}
-                          </span>
-                          {rev.createdByName && (
-                            <span className="flex items-center gap-1">
-                              <User className="h-3 w-3" />
-                              {rev.createdByName}
-                            </span>
-                          )}
-                        </div>
-                        {rev.changeNote && (
-                          <p className="text-xs mt-2 text-muted-foreground border-t pt-2 italic">
-                            {rev.changeNote}
-                          </p>
-                        )}
-                      </div>
+              <div className="space-y-3">
+                {revisionData.revisions.map((rev: any, i: number) => (
+                  <div key={rev.id} className="border rounded-lg p-3 text-sm">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono font-semibold text-primary">Rev {rev.revision}</span>
+                      {i === 0 && <Badge variant="secondary" className="text-[10px]">Latest</Badge>}
                     </div>
-                  );
-                })}
+                    <p className="text-xs text-muted-foreground">{rev.changeDescription || "No description"}</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {rev.createdAt ? format(new Date(rev.createdAt), "dd MMM yyyy HH:mm") : ""}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
           </ScrollArea>
         </SheetContent>
       </Sheet>
+
+      {/* Send for Workflow Dialog */}
+      <Dialog open={!!workflowDoc} onOpenChange={open => { if (!open) { setWorkflowDoc(null); setWfAttachIds([]); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-4 w-4" />
+              Send for Review / Workflow
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="bg-muted/40 rounded-lg p-3 text-sm">
+              <p className="font-medium">{workflowDoc?.documentNumber}</p>
+              <p className="text-muted-foreground text-xs mt-0.5">{workflowDoc?.title}</p>
+            </div>
+
+            {/* Attachments */}
+            <div>
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 block">
+                Attached Documents
+              </Label>
+              <div className="space-y-1.5 mb-2">
+                {wfAttachIds.map(id => {
+                  const doc = allDocs.find(d => d.id === id);
+                  if (!doc) return null;
+                  return (
+                    <div key={id} className="flex items-center justify-between bg-muted/30 rounded px-3 py-1.5 text-sm">
+                      <span className="font-mono text-xs text-primary font-semibold">{doc.documentNumber}</span>
+                      <span className="text-xs text-muted-foreground truncate mx-2 flex-1">{doc.title}</span>
+                      <Button
+                        variant="ghost" size="icon" className="h-5 w-5 shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => setWfAttachIds(prev => prev.filter(x => x !== id))}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  );
+                })}
+                {wfAttachIds.length === 0 && (
+                  <p className="text-xs text-muted-foreground italic px-1">No documents attached. Add at least one below.</p>
+                )}
+              </div>
+              {/* Add more docs from same project */}
+              {projectDocs.filter(d => !wfAttachIds.includes(d.id)).length > 0 && (
+                <Select
+                  value="_none"
+                  onValueChange={val => {
+                    if (val !== "_none") setWfAttachIds(prev => [...prev, parseInt(val)]);
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="+ Add another document from this project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">+ Add another document…</SelectItem>
+                    {projectDocs.filter(d => !wfAttachIds.includes(d.id)).map(d => (
+                      <SelectItem key={d.id} value={String(d.id)}>
+                        {d.documentNumber} — {d.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            <div>
+              <Label htmlFor="wf-subject" className="text-xs">Subject</Label>
+              <Input
+                id="wf-subject"
+                value={wfForm.subject}
+                onChange={e => setWfForm(f => ({ ...f, subject: e.target.value }))}
+                className="mt-1 h-9 text-sm"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="wf-purpose" className="text-xs">Purpose</Label>
+              <Select value={wfForm.purpose} onValueChange={v => setWfForm(f => ({ ...f, purpose: v }))}>
+                <SelectTrigger className="mt-1 h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="for_review">For Review</SelectItem>
+                  <SelectItem value="for_approval">For Approval</SelectItem>
+                  <SelectItem value="for_information">For Information</SelectItem>
+                  <SelectItem value="for_construction">For Construction</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className="text-xs">Recipients</Label>
+              <div className="mt-1">
+                <RecipientAutocomplete
+                  users={allUsers}
+                  selectedIds={wfForm.toUserIds}
+                  onChange={ids => setWfForm(f => ({ ...f, toUserIds: ids }))}
+                  placeholder="Select team members…"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="wf-emails" className="text-xs">External Emails (comma-separated)</Label>
+              <Input
+                id="wf-emails"
+                value={wfForm.externalEmails}
+                onChange={e => setWfForm(f => ({ ...f, externalEmails: e.target.value }))}
+                placeholder="user@external.com"
+                className="mt-1 h-9 text-sm"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="wf-desc" className="text-xs">Notes</Label>
+              <Textarea
+                id="wf-desc"
+                value={wfForm.description}
+                onChange={e => setWfForm(f => ({ ...f, description: e.target.value }))}
+                rows={3}
+                className="mt-1 text-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setWorkflowDoc(null); setWfAttachIds([]); }}>Cancel</Button>
+            <Button
+              onClick={() => sendForWorkflow.mutate()}
+              disabled={sendForWorkflow.isPending || wfAttachIds.length === 0}
+            >
+              {sendForWorkflow.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</> : "Create Transmittal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

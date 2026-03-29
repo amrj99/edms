@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { tasksTable, usersTable, projectsTable } from "@workspace/db";
+import { tasksTable, usersTable, projectsTable, notificationsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
@@ -53,6 +53,26 @@ router.post("/", requireAuth, async (req, res) => {
     dueDate: dueDate ? new Date(dueDate) : undefined,
     sourceType: "manual",
   }).returning();
+
+  // Notify the assignee (if assigned to someone other than the creator)
+  if (assignedToId && assignedToId !== req.user!.id) {
+    try {
+      const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, req.user!.id));
+      const creatorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone";
+      await db.insert(notificationsTable).values({
+        userId: assignedToId,
+        type: "task_assigned" as const,
+        title: `Task assigned: ${title}`,
+        message: `${creatorName} assigned you a task: "${title}"${dueDate ? ` (due ${new Date(dueDate).toLocaleDateString()})` : ""}`,
+        projectId: projectId || null,
+        entityType: "task",
+        entityId: task.id,
+        actionUrl: `/tasks`,
+      });
+    } catch (_) {}
+  }
+
   const enriched = await enrichTasks([task]);
   res.status(201).json(enriched[0]);
 });

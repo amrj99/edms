@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { db } from "@workspace/db";
 import {
   meetingsTable, meetingAttendeesTable, meetingActionItemsTable,
-  meetingAttachmentsTable, usersTable, projectsTable,
+  meetingAttachmentsTable, usersTable, projectsTable, notificationsTable,
 } from "@workspace/db";
 import { eq, desc, and, or, ilike, inArray, lt, ne } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
@@ -185,6 +185,31 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     organizationId: req.user!.organizationId,
     details: { title: meeting.title, referenceNumber: ref },
   });
+
+  // Notify attendees who are registered users (userId not null, not the organizer)
+  if (attendees?.length) {
+    const userAttendees = (attendees as any[]).filter(a => a.userId && a.userId !== req.user!.id);
+    if (userAttendees.length > 0) {
+      try {
+        const [organizer] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable).where(eq(usersTable.id, req.user!.id));
+        const organizerName = organizer ? `${organizer.firstName} ${organizer.lastName}`.trim() : "Someone";
+        const meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+        await db.insert(notificationsTable).values(
+          userAttendees.map((a: any) => ({
+            userId: a.userId as number,
+            type: "meeting_assigned" as const,
+            title: `Meeting invitation: ${title}`,
+            message: `${organizerName} invited you to "${title}" on ${meetDate}`,
+            projectId: projectId || null,
+            entityType: "meeting",
+            entityId: meeting.id,
+            actionUrl: `/meetings`,
+          }))
+        );
+      } catch (_) {}
+    }
+  }
 
   res.status(201).json({ meeting });
 });

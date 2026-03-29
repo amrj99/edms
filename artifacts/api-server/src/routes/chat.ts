@@ -405,7 +405,7 @@ router.post("/groups/:id/messages", async (req, res) => {
         await db.insert(notificationsTable).values(
           notifMembers.map((m) => ({
             userId: m.userId,
-            type: "task_assigned" as const,
+            type: "chat_message" as const,
             title: `New message in ${grp?.name ?? "Chat"}`,
             message: `${sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone"}: ${(content ?? "").substring(0, 80)}`,
             entityType: "chat_group",

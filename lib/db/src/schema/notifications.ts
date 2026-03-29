@@ -18,6 +18,8 @@ export const notificationTypeEnum = pgEnum("notification_type", [
   "rfi_responded",
   "submittal_returned",
   "mention",
+  "chat_message",
+  "meeting_assigned",
   "system",
 ]);
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable } from "@workspace/db";
+import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable } from "@workspace/db";
 import { eq, and, count, desc, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -119,6 +119,32 @@ router.post("/", requireAuth, async (req, res) => {
   });
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "document", entityId: doc.id, entityTitle: doc.title, projectId });
+
+  // Notify project members about the new document upload (excluding the uploader)
+  try {
+    const members = await db.select({ userId: projectMembersTable.userId })
+      .from(projectMembersTable)
+      .where(eq(projectMembersTable.projectId, projectId));
+    const memberIds = members.map(m => m.userId).filter(uid => uid !== req.user!.id);
+    if (memberIds.length > 0) {
+      const [uploader] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, req.user!.id));
+      const uploaderName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : "Someone";
+      await db.insert(notificationsTable).values(
+        memberIds.map(uid => ({
+          userId: uid,
+          type: "document_uploaded" as const,
+          title: `New document: ${doc.documentNumber}`,
+          message: `${uploaderName} uploaded "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})`,
+          projectId,
+          entityType: "document",
+          entityId: doc.id,
+          actionUrl: `/projects/${projectId}`,
+        }))
+      );
+    }
+  } catch (_) {}
+
   res.status(201).json({ ...doc, createdByName: undefined, folderName: undefined });
 });
 

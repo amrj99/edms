@@ -1,12 +1,15 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useListTasks } from "@workspace/api-client-react";
-import { CheckSquare, Clock, AlertCircle, Loader2, Brain } from "lucide-react";
+import { CheckSquare, Clock, AlertCircle, Loader2, Brain, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { format } from "date-fns";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AITaskInsights } from "@/components/ai/AITaskInsights";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 
 interface AIPriorityInsight {
   taskId: number;
@@ -16,10 +19,23 @@ interface AIPriorityInsight {
   isBottleneck: boolean;
 }
 
+type SortKey = "dueDate" | "priority" | "status" | "title" | "projectName";
+type SortDir = "asc" | "desc";
+
+const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+const STATUS_ORDER: Record<string, number> = { pending: 0, in_progress: 1, completed: 2, cancelled: 3 };
+
 export default function Tasks() {
   const { data, isLoading } = useListTasks({ assignedToMe: true });
   const [showAI, setShowAI] = useState(false);
   const [aiInsights, setAiInsights] = useState<Record<number, AIPriorityInsight>>({});
+  const [sortKey, setSortKey] = useState<SortKey>("dueDate");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("asc"); }
+  };
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -43,7 +59,43 @@ export default function Tasks() {
     setAiInsights((prev) => ({ ...prev, [taskId]: insight }));
   };
 
-  const taskIds = data?.tasks?.map((t) => t.id) ?? [];
+  const tasks = data?.tasks ?? [];
+  const taskIds = tasks.map((t) => t.id);
+
+  const sorted = useMemo(() => {
+    return [...tasks].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "dueDate": {
+          const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+          const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+          cmp = ad - bd;
+          break;
+        }
+        case "priority":
+          cmp = (PRIORITY_ORDER[a.priority] ?? 99) - (PRIORITY_ORDER[b.priority] ?? 99);
+          break;
+        case "status":
+          cmp = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+          break;
+        case "title":
+          cmp = (a.title ?? "").localeCompare(b.title ?? "");
+          break;
+        case "projectName":
+          cmp = (a.projectName ?? "").localeCompare(b.projectName ?? "");
+          break;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [tasks, sortKey, sortDir]);
+
+  const SORT_OPTS: { key: SortKey; label: string }[] = [
+    { key: "dueDate", label: "Due Date" },
+    { key: "priority", label: "Priority" },
+    { key: "status", label: "Status" },
+    { key: "title", label: "Title" },
+    { key: "projectName", label: "Project" },
+  ];
 
   return (
     <div className="space-y-6 animate-in fade-in">
@@ -71,15 +123,39 @@ export default function Tasks() {
         />
       )}
 
-      <div className="flex gap-4 border-b pb-4">
+      {/* Filter / Sort bar */}
+      <div className="flex items-center gap-3 border-b pb-4">
         <Badge variant="secondary" className="px-4 py-1 text-sm bg-primary text-primary-foreground hover:bg-primary">All Active</Badge>
         <Badge variant="outline" className="px-4 py-1 text-sm">Pending Review</Badge>
         <Badge variant="outline" className="px-4 py-1 text-sm">Action Required</Badge>
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Sort by</span>
+          <Select value={sortKey} onValueChange={v => setSortKey(v as SortKey)}>
+            <SelectTrigger className="h-8 w-[130px] text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTS.map(o => (
+                <SelectItem key={o.key} value={o.key} className="text-xs">{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => setSortDir(d => d === "asc" ? "desc" : "asc")}
+            title={sortDir === "asc" ? "Ascending" : "Descending"}
+          >
+            {sortDir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="flex justify-center p-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-      ) : !data?.tasks?.length ? (
+      ) : !sorted.length ? (
         <div className="text-center py-24 bg-card border rounded-xl">
           <CheckSquare className="mx-auto h-12 w-12 text-muted-foreground" />
           <h3 className="mt-4 text-lg font-medium">You're all caught up!</h3>
@@ -87,7 +163,7 @@ export default function Tasks() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {data.tasks.map(task => {
+          {sorted.map(task => {
             const aiInsight = aiInsights[task.id];
             return (
               <Card key={task.id} className="hover:shadow-md transition-shadow cursor-pointer">
@@ -117,6 +193,9 @@ export default function Tasks() {
                   </div>
                   <div className="flex flex-col items-end gap-2 shrink-0">
                     <Badge variant="outline" className="capitalize">{task.status.replace("_", " ")}</Badge>
+                    <Badge variant="outline" className={`capitalize text-[10px] ${getPriorityColor(task.priority)}`}>
+                      {task.priority}
+                    </Badge>
                     {aiInsight && (
                       <Badge className={`text-[10px] capitalize ${getAIPriorityBadge(aiInsight.aiPriority)}`}>
                         AI: {aiInsight.aiPriority}

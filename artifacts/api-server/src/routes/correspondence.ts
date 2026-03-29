@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { correspondenceTable, correspondenceRecipientsTable, correspondenceAttachmentsTable, usersTable } from "@workspace/db";
+import { correspondenceTable, correspondenceRecipientsTable, correspondenceAttachmentsTable, usersTable, notificationsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -129,6 +129,28 @@ router.post("/", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "correspondence", entityId: corr.id, entityTitle: corr.subject, projectId });
+
+  // Notify recipients when correspondence is sent (not a draft)
+  if (sendNow && toUserIds?.length > 0) {
+    const [sender] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+      .from(usersTable).where(eq(usersTable.id, req.user!.id));
+    const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone";
+    try {
+      await db.insert(notificationsTable).values(
+        (toUserIds as number[]).map((uid: number) => ({
+          userId: uid,
+          type: "correspondence_received" as const,
+          title: `New correspondence: ${corr.subject}`,
+          message: `${senderName} sent you a ${corr.type} — ${corr.subject}`,
+          projectId,
+          entityType: "correspondence",
+          entityId: corr.id,
+          actionUrl: `/correspondence`,
+        }))
+      );
+    } catch (_) {}
+  }
+
   const enriched = await enrichCorrespondence([corr]);
   res.status(201).json(enriched[0]);
 });
