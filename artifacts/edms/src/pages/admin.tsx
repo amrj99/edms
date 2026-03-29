@@ -1583,6 +1583,26 @@ function SystemTab() {
   const [restoreParsed, setRestoreParsed] = useState<any>(null);
   const [confirmRestoreOpen, setConfirmRestoreOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedResult, setSeedResult] = useState<{ success: boolean; message: string; created?: Record<string, number> } | null>(null);
+
+  const handleSeedData = async () => {
+    setSeedLoading(true);
+    setSeedResult(null);
+    try {
+      const r = await fetch("/api/dev/seed-full", { method: "POST" });
+      const d = await r.json();
+      if (r.ok) {
+        setSeedResult({ success: true, message: d.message || "Test data seeded successfully", created: d.summary });
+      } else {
+        setSeedResult({ success: false, message: d.error || d.message || "Seeding failed" });
+      }
+    } catch {
+      setSeedResult({ success: false, message: "Request failed — check API server logs" });
+    } finally {
+      setSeedLoading(false);
+    }
+  };
 
   const { data: sysInfo, isLoading: sysLoading, refetch: refetchSys } = useQuery({
     queryKey: ["admin-system-info"],
@@ -1751,7 +1771,7 @@ function SystemTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Creates 6 documents (3 reports + 3 drawings), 3 correspondence with replies, 3 transmittals, 3 NCR, 3 ITR, 3 NOC, 3 deliverables, and 3 meetings in your first available project. Safe to run multiple times.
+            Creates 3 organizations (Cloud/S3/On-Premise storage), 9 users, 9 projects, 54 documents + drawings, 54 correspondence threads with replies, 27 meetings, 9 NCR, 9 ITR, 9 NOC, 9 transmittals, and 27 deliverables. Use <code className="text-xs font-mono bg-muted px-1 rounded">?force=1</code> to re-seed.
           </p>
           <Button onClick={handleSeedData} disabled={seedLoading} className="gap-2 w-full" variant="outline">
             {seedLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Seeding…</> : <><Database className="h-4 w-4" /> Seed Test Data</>}

@@ -17,9 +17,9 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
     res.status(404).json({ error: "Project not found" });
     return false;
   }
-  // system_owner with no org restriction (no override active): allow all projects
-  if (req.user!.role === "system_owner" && !req.user!.organizationId) return true;
-  // All others (including system_owner with active org override): enforce org match
+  // system_owner or admin with no org restriction: allow all projects
+  if (!req.user!.organizationId && (req.user!.role === "system_owner" || req.user!.role === "admin")) return true;
+  // All others: enforce org match
   if (project.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden", message: "Project does not belong to your organization" });
     return false;
