@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { orgConfigTable, systemSettingsTable } from "@workspace/db";
+import { orgConfigTable, systemSettingsTable, organizationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
@@ -18,6 +18,15 @@ async function getSystemSetting(key: string): Promise<string> {
 router.get("/system-settings", async (_req, res) => {
   const registrationEnabled = await getSystemSetting("registrationEnabled");
   res.json({ registrationEnabled: registrationEnabled === "true" });
+});
+
+// Public: list organizations for the registration form
+router.get("/organizations-public", async (_req, res) => {
+  const orgs = await db.select({
+    id: organizationsTable.id,
+    name: organizationsTable.name,
+  }).from(organizationsTable).orderBy(organizationsTable.name);
+  res.json({ organizations: orgs });
 });
 
 router.put("/system-settings", requireAuth, async (req, res) => {

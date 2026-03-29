@@ -233,6 +233,18 @@ router.delete("/:id/attachments/:attId", requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+router.delete("/:id", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
+  await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
+  const [deleted] = await db.delete(correspondenceTable)
+    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
+    .returning();
+  if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ success: true });
+});
+
 // ─── Share link ───────────────────────────────────────────────────────────────
 router.post("/:id/share", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);

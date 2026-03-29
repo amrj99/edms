@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   ClipboardList, Plus, Search, Filter, X, FileSpreadsheet, FileText as FileTextIcon,
-  Printer, Loader2, Edit2, Trash2, Link as LinkIcon, Calendar, User,
+  Printer, Loader2, Edit2, Trash2, Link as LinkIcon, Calendar, User, ArrowUp, ArrowDown,
 } from "lucide-react";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -71,6 +71,9 @@ export default function DeliverablesPage() {
   const [deleteItem, setDeleteItem] = useState<any>(null);
   const [detailItem, setDetailItem] = useState<any>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [sortKey, setSortKey] = useState<string>("plannedDate");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects", activeOrgId],
@@ -113,8 +116,21 @@ export default function DeliverablesPage() {
         x.responsible?.toLowerCase().includes(q)
       );
     }
-    return d;
-  }, [all, statusFilter, typeFilter, search]);
+    return [...d].sort((a, b) => {
+      let av: any = a[sortKey as keyof typeof a] ?? "";
+      let bv: any = b[sortKey as keyof typeof b] ?? "";
+      if (sortKey === "plannedDate" || sortKey === "actualDate") {
+        av = av ? new Date(av).getTime() : 0;
+        bv = bv ? new Date(bv).getTime() : 0;
+      } else {
+        av = String(av).toLowerCase();
+        bv = String(bv).toLowerCase();
+      }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [all, statusFilter, typeFilter, search, sortKey, sortDir]);
 
   const openAdd = () => { setForm({ ...EMPTY_FORM }); setAddOpen(true); };
   const openEdit = (item: any) => {
@@ -298,13 +314,18 @@ export default function DeliverablesPage() {
           <Table>
             <TableHeader className="bg-muted/40">
               <TableRow>
-                <TableHead className="text-xs">ID</TableHead>
-                <TableHead className="text-xs">Title</TableHead>
-                <TableHead className="text-xs">Type</TableHead>
-                <TableHead className="text-xs">Planned</TableHead>
-                <TableHead className="text-xs">Actual</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
-                <TableHead className="text-xs">Responsible</TableHead>
+                {([
+                  ["deliverableId", "ID"], ["title", "Title"], ["type", "Type"],
+                  ["plannedDate", "Planned"], ["actualDate", "Actual"], ["status", "Status"],
+                  ["responsible", "Responsible"],
+                ] as [string, string][]).map(([key, label]) => (
+                  <TableHead key={key} className="text-xs cursor-pointer select-none hover:text-foreground" onClick={() => toggleSort(key)}>
+                    <span className="flex items-center gap-1">
+                      {label}
+                      {sortKey === key ? (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUp className="h-3 w-3 opacity-20" />}
+                    </span>
+                  </TableHead>
+                ))}
                 <TableHead className="text-xs">Linked Doc</TableHead>
                 <TableHead className="text-xs w-[80px]"></TableHead>
               </TableRow>

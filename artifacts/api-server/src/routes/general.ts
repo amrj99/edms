@@ -7,6 +7,7 @@ import { db } from "@workspace/db";
 import {
   correspondenceTable,
   correspondenceRecipientsTable,
+  correspondenceAttachmentsTable,
   usersTable,
   projectsTable,
   projectMembersTable,
@@ -250,6 +251,16 @@ router.post("/correspondence/:id/share", async (req, res) => {
     .where(eq(correspondenceTable.id, id)).returning();
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ shareUrl: `/share/correspondence/${token}`, expiresAt: corr.shareExpiresAt });
+});
+
+// ─── DELETE /general/correspondence/:id ──────────────────────────────────────
+router.delete("/correspondence/:id", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
+  await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
+  const [deleted] = await db.delete(correspondenceTable).where(eq(correspondenceTable.id, id)).returning();
+  if (!deleted) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ success: true });
 });
 
 // ─── List user's projects (for move-to-project selector) ─────────────────────

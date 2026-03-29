@@ -27,8 +27,46 @@ import {
   BarChart3, FileSpreadsheet, FileText, Printer, RefreshCw, Loader2,
   Mail, Send, PenLine, ClipboardList, ShieldAlert, FileCheck, Plus, Filter, X,
   Eye, EyeOff, Columns3, Save, BookOpen, ChevronDown, Trash2,
-  CheckCircle2, XCircle, Clock, CircleDot,
+  CheckCircle2, XCircle, Clock, CircleDot, ArrowUp, ArrowDown,
 } from "lucide-react";
+
+function SortableHead({ label, colKey, sortKey, sortDir, onSort, className = "" }: {
+  label: string; colKey: string; sortKey: string; sortDir: "asc" | "desc";
+  onSort: (key: string) => void; className?: string;
+}) {
+  const active = sortKey === colKey;
+  return (
+    <TableHead
+      className={`text-xs cursor-pointer select-none hover:text-foreground whitespace-nowrap ${className}`}
+      onClick={() => onSort(colKey)}
+    >
+      <span className="flex items-center gap-1">
+        {label}
+        {active
+          ? (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)
+          : <ArrowUp className="h-3 w-3 opacity-20" />}
+      </span>
+    </TableHead>
+  );
+}
+
+function sortItems<T extends Record<string, any>>(items: T[], key: string, dir: "asc" | "desc"): T[] {
+  return [...items].sort((a, b) => {
+    let av: any = a[key] ?? "";
+    let bv: any = b[key] ?? "";
+    const dateKeys = ["date", "closeDate", "createdAt", "updatedAt", "sentAt", "acknowledgedAt"];
+    if (dateKeys.some(k => key.endsWith(k) || key === k)) {
+      av = av ? new Date(av).getTime() : 0;
+      bv = bv ? new Date(bv).getTime() : 0;
+    } else {
+      av = String(av).toLowerCase();
+      bv = String(bv).toLowerCase();
+    }
+    if (av < bv) return dir === "asc" ? -1 : 1;
+    if (av > bv) return dir === "asc" ? 1 : -1;
+    return 0;
+  });
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(d: string | null | undefined) {
@@ -1128,6 +1166,9 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
   const ITR_COLS = [
     { key: "requestNumber", label: t("requestNo") },
     { key: "type", label: t("requestType") },
@@ -1173,8 +1214,8 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
     d = applyDateFilter(d, "date", filters.dateFrom, filters.dateTo);
     d = applyTextFilter(d, filters.search, ["requestNumber", "description", "location", "contractor"]);
-    return d;
-  }, [allItems, filters]);
+    return sortItems(d, sortKey, sortDir);
+  }, [allItems, filters, sortKey, sortDir]);
 
   const addRecord = useMutation({
     mutationFn: async () => {
@@ -1221,7 +1262,11 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
           <Table>
             <TableHeader className="bg-muted/40">
-              <TableRow>{ITR_COLS.filter(c => visibleCols.has(c.key)).map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+              <TableRow>
+                {ITR_COLS.filter(c => visibleCols.has(c.key)).map(c => (
+                  <SortableHead key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                ))}
+              </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
@@ -1349,6 +1394,9 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
   const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
+  const [sortKey, setSortKey] = useState("createdAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
   const NCR_COLS = [
     { key: "reportNumber", label: t("reportNo") },
     { key: "type", label: t("type") },
@@ -1394,8 +1442,8 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
     d = applyDateFilter(d, "createdAt", filters.dateFrom, filters.dateTo);
     d = applyTextFilter(d, filters.search, ["reportNumber", "description", "location", "raisedBy"]);
-    return d;
-  }, [allItems, filters]);
+    return sortItems(d, sortKey, sortDir);
+  }, [allItems, filters, sortKey, sortDir]);
 
   const addRecord = useMutation({
     mutationFn: async () => {
@@ -1442,7 +1490,11 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
           <Table>
             <TableHeader className="bg-muted/40">
-              <TableRow>{NCR_COLS.filter(c => visibleCols.has(c.key)).map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+              <TableRow>
+                {NCR_COLS.filter(c => visibleCols.has(c.key)).map(c => (
+                  <SortableHead key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                ))}
+              </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
@@ -1571,6 +1623,9 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
   const isCrossOrg = user?.role === "system_owner" && filters.projectId === "_all";
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<any>(null);
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
   const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
 
   const { data, isLoading } = useQuery({
@@ -1603,8 +1658,8 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
     d = applyDateFilter(d, "date", filters.dateFrom, filters.dateTo);
     d = applyTextFilter(d, filters.search, ["nocNumber", "authority", "remarks"]);
-    return d;
-  }, [allItems, filters]);
+    return sortItems(d, sortKey, sortDir);
+  }, [allItems, filters, sortKey, sortDir]);
 
   const addRecord = useMutation({
     mutationFn: async () => {
@@ -1663,7 +1718,11 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
         <div className="bg-card border rounded-xl overflow-hidden shadow-sm">
           <Table>
             <TableHeader className="bg-muted/40">
-              <TableRow>{COLS.map(c => <TableHead key={c.key} className="text-xs">{c.label}</TableHead>)}</TableRow>
+              <TableRow>
+                {COLS.map(c => (
+                  <SortableHead key={c.key} label={c.label} colKey={c.key} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                ))}
+              </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (

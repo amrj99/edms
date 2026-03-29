@@ -18,11 +18,13 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const registerSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(50),
   lastName: z.string().min(1, "Last name is required").max(50),
   email: z.string().email("Please enter a valid email address"),
+  organizationId: z.string().optional(),
   password: z
     .string()
     .min(8, "Password must be at least 8 characters")
@@ -76,12 +78,22 @@ export default function Register() {
     },
   });
 
+  const { data: orgsData } = useQuery({
+    queryKey: ["organizations-public"],
+    queryFn: async () => {
+      const r = await fetch("/api/config/organizations-public");
+      return r.json();
+    },
+  });
+  const organizations: { id: number; name: string }[] = orgsData?.organizations ?? [];
+
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
       firstName: "",
       lastName: "",
       email: "",
+      organizationId: "_none",
       password: "",
       confirmPassword: "",
     },
@@ -92,13 +104,17 @@ export default function Register() {
   const onSubmit = async (data: RegisterFormValues) => {
     setServerError(null);
     try {
+      const orgId = data.organizationId && data.organizationId !== "_none"
+        ? Number(data.organizationId)
+        : undefined;
       const response = await registerMutation.mutateAsync({
         data: {
           email: data.email,
           password: data.password,
           firstName: data.firstName,
           lastName: data.lastName,
-        },
+          ...(orgId !== undefined && { organizationId: orgId }),
+        } as any,
       });
       if ((response as any).refreshToken) {
         localStorage.setItem("edms_refresh_token", (response as any).refreshToken);
@@ -221,6 +237,34 @@ export default function Register() {
                     </FormItem>
                   )}
                 />
+
+                {organizations.length > 0 && (
+                  <FormField
+                    control={form.control}
+                    name="organizationId"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Organization <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? "_none"} disabled={registerMutation.isPending}>
+                          <FormControl>
+                            <SelectTrigger className="h-11">
+                              <SelectValue placeholder="Select your organization" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="_none">No organization / join later</SelectItem>
+                            {organizations.map(org => (
+                              <SelectItem key={org.id} value={String(org.id)}>
+                                {org.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
 
                 <FormField
                   control={form.control}

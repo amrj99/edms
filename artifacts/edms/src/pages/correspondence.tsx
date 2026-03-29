@@ -6,6 +6,7 @@ import {
   RefreshCw, Filter, ChevronDown, ArrowUp, ArrowDown, Clock, AlertCircle,
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
+  Trash2, Square, CheckCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,6 +75,7 @@ export default function CorrespondencePage() {
   const [corrShareOpen, setCorrShareOpen] = useState(false);
   const [corrShareForm, setCorrShareForm] = useState({ expiresInDays: "30", password: "" });
   const [corrShareResult, setCorrShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
 
   // Fetch projects
   const { data: projectsData } = useQuery({
@@ -121,7 +123,11 @@ export default function CorrespondencePage() {
     let items = allItems;
 
     // Folder filter
-    if (selectedFolder === "general") items = items.filter((i: any) => i._source === "general");
+    if (selectedFolder === "inbox")   items = items.filter((i: any) => i.folder === "inbox");
+    else if (selectedFolder === "sent")    items = items.filter((i: any) => i.folder === "sent");
+    else if (selectedFolder === "draft")   items = items.filter((i: any) => i.folder === "draft");
+    else if (selectedFolder === "archive") items = items.filter((i: any) => i.folder === "archive");
+    else if (selectedFolder === "general") items = items.filter((i: any) => i._source === "general");
     else if (selectedFolder === "projects") items = items.filter((i: any) => i._source === "project");
     else if (selectedFolder === "flagged") items = items.filter((i: any) => flagged.has(i.id));
     else if (selectedFolder === "starred") items = items.filter((i: any) => starred.has(i.id));
@@ -245,6 +251,65 @@ export default function CorrespondencePage() {
     onError: () => toast({ title: "Failed to send reply", variant: "destructive" }),
   });
 
+  const bulkKey = (item: any) => `${item._source}-${item.id}`;
+
+  const bulkMarkRead = useMutation({
+    mutationFn: async ({ isRead }: { isRead: boolean }) => {
+      const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
+      await Promise.all(targets.map((item: any) => {
+        const endpoint = item._source === "general"
+          ? `/api/general/correspondence/${item.id}/read`
+          : `/api/projects/${item.projectId}/correspondence/${item.id}/read`;
+        return fetch(endpoint, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isRead }) });
+      }));
+    },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      setBulkSelected(new Set());
+      setLocalReadIds(s => { const n = new Set(s); filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i))).forEach((i: any) => vars.isRead ? n.add(i.id) : n.delete(i.id)); return n; });
+      toast({ title: vars.isRead ? "Marked as read" : "Marked as unread" });
+    },
+  });
+
+  const bulkArchive = useMutation({
+    mutationFn: async () => {
+      const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
+      await Promise.all(targets.map((item: any) => {
+        if (item._source === "general") {
+          return fetch(`/api/general/correspondence/${item.id}/move`, {
+            method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder: "archive" }),
+          });
+        }
+        return fetch(`/api/projects/${item.projectId}/correspondence/${item.id}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder: "archive" }),
+        });
+      }));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      setBulkSelected(new Set());
+      toast({ title: "Archived" });
+    },
+  });
+
+  const bulkDelete = useMutation({
+    mutationFn: async () => {
+      const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
+      await Promise.all(targets.map((item: any) => {
+        if (item._source === "general") {
+          return fetch(`/api/general/correspondence/${item.id}`, { method: "DELETE" });
+        }
+        return fetch(`/api/projects/${item.projectId}/correspondence/${item.id}`, { method: "DELETE" });
+      }));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      setBulkSelected(new Set());
+      if (selected && bulkSelected.has(bulkKey(selected))) setSelected(null);
+      toast({ title: "Deleted" });
+    },
+  });
+
   const { data: threadData } = useQuery({
     queryKey: ["corr-thread", selected?.id, selected?._source],
     queryFn: async () => {
@@ -325,13 +390,19 @@ export default function CorrespondencePage() {
   const overdueCount = allItems.filter((i: any) => i.dueDate && isPast(new Date(i.dueDate)) && i.status !== "closed").length;
   const flaggedCount = flagged.size;
 
-  const FOLDERS = [
-    { id: "all", label: "All Correspondence", icon: Mail, count: allItems.length },
-    { id: "general", label: "General Inbox", icon: Inbox, count: generalItems.length },
+  const MAIL_FOLDERS = [
+    { id: "all",     label: "All Mail",  icon: Mail,    count: allItems.length },
+    { id: "inbox",   label: "Inbox",     icon: Inbox,   count: allItems.filter((i: any) => i.folder === "inbox").length },
+    { id: "sent",    label: "Sent",      icon: Send,    count: allItems.filter((i: any) => i.folder === "sent").length },
+    { id: "draft",   label: "Drafts",    icon: Folder,  count: allItems.filter((i: any) => i.folder === "draft").length },
+    { id: "archive", label: "Archive",   icon: Archive, count: allItems.filter((i: any) => i.folder === "archive").length },
+  ];
+  const SMART_FOLDERS = [
+    { id: "flagged",  label: "Flagged",  icon: Flag,        count: flaggedCount },
+    { id: "starred",  label: "Starred",  icon: Star,        count: starred.size },
+    { id: "overdue",  label: "Overdue",  icon: AlertCircle, count: overdueCount },
     { id: "projects", label: "Projects", icon: FolderKanban, count: projectItems.length },
-    { id: "flagged", label: "Flagged", icon: Flag, count: flaggedCount },
-    { id: "starred", label: "Starred", icon: Star, count: starred.size },
-    { id: "overdue", label: "Overdue", icon: AlertCircle, count: overdueCount },
+    { id: "general",  label: "General",  icon: Globe,       count: generalItems.length },
   ];
 
   return (
@@ -346,10 +417,24 @@ export default function CorrespondencePage() {
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-0.5">
             <p className="text-[10px] font-semibold uppercase text-muted-foreground px-2 py-1 mt-1">Folders</p>
-            {FOLDERS.map(({ id, label, icon: Icon, count }) => (
+            {MAIL_FOLDERS.map(({ id, label, icon: Icon, count }) => (
               <button
                 key={id}
-                onClick={() => { setSelectedFolder(id); setSelectedProjectId(null); }}
+                onClick={() => { setSelectedFolder(id); setSelectedProjectId(null); setBulkSelected(new Set()); }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${selectedFolder === id && !selectedProjectId ? "bg-primary text-white" : "hover:bg-accent text-foreground"}`}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Icon className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{label}</span>
+                </span>
+                {count > 0 && <span className={`text-xs px-1.5 py-0.5 rounded-full ${selectedFolder === id && !selectedProjectId ? "bg-white/20" : "bg-muted-foreground/20"}`}>{count}</span>}
+              </button>
+            ))}
+            <p className="text-[10px] font-semibold uppercase text-muted-foreground px-2 py-1 mt-3">Smart Views</p>
+            {SMART_FOLDERS.map(({ id, label, icon: Icon, count }) => (
+              <button
+                key={id}
+                onClick={() => { setSelectedFolder(id); setSelectedProjectId(null); setBulkSelected(new Set()); }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${selectedFolder === id && !selectedProjectId ? "bg-primary text-white" : "hover:bg-accent text-foreground"}`}
               >
                 <span className="flex items-center gap-2 min-w-0">
@@ -398,6 +483,32 @@ export default function CorrespondencePage() {
 
       {/* MIDDLE: List Panel */}
       <div className="w-80 shrink-0 border-r flex flex-col">
+        {/* Bulk action toolbar */}
+        {bulkSelected.size > 0 && (
+          <div className="px-3 py-2 border-b bg-primary/5 flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setBulkSelected(bulkSelected.size === filteredItems.length ? new Set() : new Set(filteredItems.map(bulkKey)))}
+              className="text-xs text-primary font-medium hover:underline"
+            >
+              {bulkSelected.size === filteredItems.length ? "Deselect all" : "Select all"}
+            </button>
+            <span className="text-xs text-muted-foreground">{bulkSelected.size} selected</span>
+            <div className="flex gap-1 ml-auto">
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkMarkRead.mutate({ isRead: true })} disabled={bulkMarkRead.isPending}>
+                <CheckCheck className="h-3 w-3" /> Read
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkMarkRead.mutate({ isRead: false })} disabled={bulkMarkRead.isPending}>
+                <Square className="h-3 w-3" /> Unread
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkArchive.mutate()} disabled={bulkArchive.isPending}>
+                <Archive className="h-3 w-3" /> Archive
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2 text-destructive hover:text-destructive" onClick={() => bulkDelete.mutate()} disabled={bulkDelete.isPending}>
+                <Trash2 className="h-3 w-3" /> Delete
+              </Button>
+            </div>
+          </div>
+        )}
         {/* Search + Sort bar */}
         <div className="p-3 border-b space-y-2">
           <div className="relative">
@@ -455,6 +566,12 @@ export default function CorrespondencePage() {
                     className={`p-3 cursor-pointer transition-colors relative ${isSelected ? "bg-primary/10 border-l-2 border-l-primary" : "hover:bg-muted/50"} ${isOverdue ? "bg-red-50/50 dark:bg-red-950/5" : ""}`}
                   >
                     <div className="flex items-start gap-2">
+                      <button
+                        onClick={e => { e.stopPropagation(); const k = bulkKey(item); setBulkSelected(s => { const ns = new Set(s); ns.has(k) ? ns.delete(k) : ns.add(k); return ns; }); }}
+                        className={`mt-0.5 shrink-0 h-4 w-4 rounded border flex items-center justify-center transition-colors ${bulkSelected.has(bulkKey(item)) ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/30 hover:border-primary/50"}`}
+                      >
+                        {bulkSelected.has(bulkKey(item)) && <CheckSquare className="h-3 w-3" />}
+                      </button>
                       <div className="mt-0.5 shrink-0 relative">
                         <PriorityIcon priority={item.priority ?? "medium"} />
                         {!item.isRead && !localReadIds.has(item.id) && (
