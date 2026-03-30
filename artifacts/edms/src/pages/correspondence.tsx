@@ -39,7 +39,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "text-gray-400", medium: "text-blue-500", high: "text-orange-500", urgent: "text-red-500",
 };
 
-type SortKey = "date" | "priority" | "subject" | "type";
+type SortKey = "date" | "priority" | "subject" | "type" | "from" | "status" | "updatedAt";
 type SortDir = "asc" | "desc";
 
 function PriorityIcon({ priority }: { priority: string }) {
@@ -116,10 +116,17 @@ export default function CorrespondencePage() {
   const projectItems = projectCorrData?.items ?? [];
 
   const allItems = useMemo(() => {
-    const combined = [...generalItems.map((i: any) => ({ ...i, _source: "general" })),
-                      ...projectItems.map((i: any) => ({ ...i, _source: "project" }))];
+    const projectMap = new Map(projects.map((p: any) => [p.id, p.name ?? p.code]));
+    const normalize = (i: any, source: string) => ({
+      ...i,
+      _source: source,
+      fromName: i.fromName ?? i.fromUserName,
+      projectName: i.projectId ? (projectMap.get(i.projectId) ?? null) : null,
+    });
+    const combined = [...generalItems.map((i: any) => normalize(i, "general")),
+                      ...projectItems.map((i: any) => normalize(i, "project"))];
     return combined;
-  }, [generalItems, projectItems]);
+  }, [generalItems, projectItems, projects]);
 
   // Handle ?openCorr=<id> URL param — auto-selects a specific correspondence item
   useEffect(() => {
@@ -159,11 +166,14 @@ export default function CorrespondencePage() {
     items = [...items].sort((a: any, b: any) => {
       let av: any, bv: any;
       if (sortKey === "date") { av = new Date(a.createdAt).getTime(); bv = new Date(b.createdAt).getTime(); }
+      else if (sortKey === "updatedAt") { av = new Date(a.updatedAt ?? a.createdAt).getTime(); bv = new Date(b.updatedAt ?? b.createdAt).getTime(); }
       else if (sortKey === "priority") {
         const order = ["urgent", "high", "medium", "low"];
         av = order.indexOf(a.priority ?? "low"); bv = order.indexOf(b.priority ?? "low");
       } else if (sortKey === "subject") { av = a.subject ?? ""; bv = b.subject ?? ""; }
       else if (sortKey === "type") { av = a.type ?? ""; bv = b.type ?? ""; }
+      else if (sortKey === "from") { av = (a.fromName ?? "").toLowerCase(); bv = (b.fromName ?? "").toLowerCase(); }
+      else if (sortKey === "status") { av = a.status ?? ""; bv = b.status ?? ""; }
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
@@ -553,14 +563,22 @@ export default function CorrespondencePage() {
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 flex-1">
                   <Filter className="h-3 w-3" />
-                  Sort: {sortKey.charAt(0).toUpperCase() + sortKey.slice(1)}
+                  Sort: {sortKey === "updatedAt" ? "Updated" : sortKey.charAt(0).toUpperCase() + sortKey.slice(1)}
                   {sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-40">
-                {(["date", "priority", "subject", "type"] as SortKey[]).map(k => (
-                  <DropdownMenuItem key={k} onClick={() => toggleSort(k)} className="capitalize">
-                    {k} {sortKey === k && (sortDir === "asc" ? "↑" : "↓")}
+              <DropdownMenuContent align="start" className="w-44">
+                {([
+                  ["date", "Date Created"],
+                  ["updatedAt", "Last Updated"],
+                  ["priority", "Priority"],
+                  ["subject", "Subject"],
+                  ["type", "Type"],
+                  ["from", "From"],
+                  ["status", "Status"],
+                ] as [SortKey, string][]).map(([k, label]) => (
+                  <DropdownMenuItem key={k} onClick={() => toggleSort(k)}>
+                    {label} {sortKey === k && (sortDir === "asc" ? "↑" : "↓")}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -621,9 +639,17 @@ export default function CorrespondencePage() {
                           </span>
                         </div>
                         <p className={`text-sm mt-1 line-clamp-1 ${!item.isRead && !localReadIds.has(item.id) ? "font-semibold" : "font-medium"}`}>{item.subject}</p>
-                        {item.referenceNumber && (
-                          <p className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</p>
-                        )}
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                          {item.fromName && (
+                            <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={`From: ${item.fromName}`}>↩ {item.fromName}</span>
+                          )}
+                          {item.projectName && (
+                            <span className="text-[10px] text-muted-foreground truncate max-w-[100px]" title={`Project: ${item.projectName}`}>📁 {item.projectName}</span>
+                          )}
+                          {item.referenceNumber && (
+                            <span className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 mt-1">
                           {isOverdue && <span className="text-[10px] text-red-500 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />Overdue</span>}
                           {isFlagged && <Flag className="h-3 w-3 text-orange-500" />}

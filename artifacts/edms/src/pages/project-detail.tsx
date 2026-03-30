@@ -174,6 +174,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [filterDocType, setFilterDocType] = useState("_all");
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
+  const [docPreview, setDocPreview] = useState<any>(null);
   const [validateOpen, setValidateOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<any>(null);
   const [validating, setValidating] = useState(false);
@@ -663,8 +664,8 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             ) : filtered.map((doc: any) => {
               const isSelected = selectedIds.has(doc.id);
               return (
-                <TableRow key={doc.id} className={`hover:bg-muted/30 group cursor-pointer ${isSelected ? "bg-primary/5" : ""}`} onClick={() => toggleSelect(doc.id)}>
-                  <TableCell onClick={e => e.stopPropagation()}>
+                <TableRow key={doc.id} className={`hover:bg-muted/30 group ${isSelected ? "bg-primary/5" : ""}`}>
+                  <TableCell>
                     <button onClick={() => toggleSelect(doc.id)} className="p-0.5 rounded hover:bg-accent">
                       {isSelected
                         ? <CheckSquare className="h-4 w-4 text-primary" />
@@ -672,11 +673,19 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       }
                     </button>
                   </TableCell>
-                  <TableCell className="font-mono text-xs font-medium">{doc.documentNumber}</TableCell>
-                  <TableCell className="font-medium">
+                  <TableCell
+                    className="font-mono text-xs font-medium cursor-pointer hover:text-primary hover:underline underline-offset-2"
+                    onClick={() => setDocPreview(doc)}
+                    title="Click to preview document"
+                  >{doc.documentNumber}</TableCell>
+                  <TableCell
+                    className="font-medium cursor-pointer hover:text-primary"
+                    onClick={() => setDocPreview(doc)}
+                    title="Click to preview document"
+                  >
                     <div className="flex items-center gap-2">
                       <FileText className="h-4 w-4 text-primary/70 shrink-0" />
-                      <span className="line-clamp-1">{doc.title}</span>
+                      <span className="line-clamp-1 hover:underline underline-offset-2">{doc.title}</span>
                     </div>
                   </TableCell>
                   <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>
@@ -836,7 +845,85 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
         </DialogContent>
       </Dialog>
 
-      {/* Share Document Dialog */}
+      {/* Document Preview Dialog */}
+      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) setDocPreview(null); }}>
+        <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-4 py-3 border-b shrink-0 flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <FileText className="h-5 w-5 text-primary shrink-0" />
+              <div className="min-w-0">
+                <DialogTitle className="text-sm font-semibold truncate">{docPreview?.title}</DialogTitle>
+                <p className="text-xs text-muted-foreground font-mono">{docPreview?.documentNumber} · Rev {docPreview?.revision ?? "01"}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {docPreview?.fileUrl && (
+                <>
+                  <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
+                    <a href={docPreview.fileUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
+                    </a>
+                  </Button>
+                  <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
+                    <a href={docPreview.fileUrl} download={docPreview.fileName || docPreview.title}>
+                      <FileDown className="h-3.5 w-3.5" /> Download
+                    </a>
+                  </Button>
+                </>
+              )}
+            </div>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden bg-muted/30">
+            {docPreview?.fileUrl ? (() => {
+              const url: string = docPreview.fileUrl;
+              const ext = (docPreview.fileName || url).split(".").pop()?.toLowerCase() ?? "";
+              const isPdf = ext === "pdf" || url.includes(".pdf");
+              const isImg = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
+              if (isPdf) {
+                return (
+                  <iframe
+                    src={url}
+                    className="w-full h-full border-0"
+                    title={docPreview.title}
+                  />
+                );
+              } else if (isImg) {
+                return (
+                  <div className="w-full h-full flex items-center justify-center p-4">
+                    <img src={url} alt={docPreview.title} className="max-w-full max-h-full object-contain rounded shadow" />
+                  </div>
+                );
+              } else {
+                return (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+                    <FileText className="h-16 w-16 opacity-30" />
+                    <p className="text-sm">No in-browser preview available for this file type.</p>
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4 mr-2" />Open File</a>
+                    </Button>
+                  </div>
+                );
+              }
+            })() : (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+                <FileText className="h-16 w-16 opacity-30" />
+                <div className="text-center">
+                  <p className="text-sm font-medium">{docPreview?.title}</p>
+                  <p className="text-xs mt-1">No file attached to this document.</p>
+                </div>
+                <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
+                  <p><span className="font-medium">Number:</span> {docPreview?.documentNumber}</p>
+                  <p><span className="font-medium">Revision:</span> {docPreview?.revision ?? "01"}</p>
+                  <p><span className="font-medium">Discipline:</span> {docPreview?.discipline || "—"}</p>
+                  <p><span className="font-medium">Status:</span> {docPreview?.status || "—"}</p>
+                  <p><span className="font-medium">Issued by:</span> {docPreview?.issuedBy || "—"}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!shareDoc} onOpenChange={v => { if (!v) { setShareDoc(null); setDocShareResult(null); } }}>
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Share Document</DialogTitle></DialogHeader>
@@ -1905,7 +1992,13 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
             ) : filtered.map((c: any) => {
               const isOverdue = c.dueDate && new Date(c.dueDate) < new Date() && c.status !== "closed";
               return (
-                <TableRow key={c.id} className={`hover:bg-muted/30 cursor-pointer ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`} onDoubleClick={() => setCorrDetail(c)} title="Double-click to view details">
+                <TableRow
+                  key={c.id}
+                  className={`hover:bg-muted/30 cursor-pointer ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}
+                  onClick={() => setCorrDetail(c)}
+                  onDoubleClick={() => window.open(`/correspondence?openCorr=${c.id}`, "_blank", "width=1200,height=800,menubar=no,toolbar=no")}
+                  title="Click to view — double-click to open in new window"
+                >
                   <TableCell className="font-mono text-xs">{c.referenceNumber || `#${c.id}`}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className="text-xs">{CORR_TYPE_LABELS[c.type] || c.type}</Badge>
