@@ -6,7 +6,7 @@ import {
   Clock, RefreshCw, Check, X, Square,
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
-  UserPlus, Diff, Pencil, Link2, Paperclip, Building2,
+  UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1673,6 +1673,7 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 function CorrespondenceTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { data: project } = useGetProject(projectId);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState("all");
   const [searchQ, setSearchQ] = useState("");
@@ -1794,7 +1795,16 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               )}
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => window.open(`/correspondence?openCorr=${corrDetail?.id}`, "_blank", "width=1200,height=800,menubar=no,toolbar=no")}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Open in New Window
+            </Button>
             <Button variant="outline" onClick={() => setCorrDetail(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
@@ -1804,6 +1814,14 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
         <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>New Correspondence</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
+            {/* Project auto-fill indicator */}
+            <div className="flex items-center gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2">
+              <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">Project</p>
+                <p className="text-sm font-medium truncate">{project?.name} <span className="font-mono text-xs text-muted-foreground">({project?.code})</span></p>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Type *</Label>

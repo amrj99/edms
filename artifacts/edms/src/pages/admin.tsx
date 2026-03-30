@@ -22,7 +22,7 @@ import {
   CheckCircle2, AlertCircle, Loader2, Activity, Database,
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
-  LayoutDashboard, ClipboardList, Bell,
+  LayoutDashboard, ClipboardList, Bell, Link2,
 } from "lucide-react";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
@@ -1612,6 +1612,8 @@ function SystemTab() {
   const [restoring, setRestoring] = useState(false);
   const [seedLoading, setSeedLoading] = useState(false);
   const [seedResult, setSeedResult] = useState<{ success: boolean; message: string; created?: Record<string, number> } | null>(null);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [scenarioResult, setScenarioResult] = useState<{ success: boolean; message: string; scenario?: any } | null>(null);
 
   const handleSeedData = async () => {
     setSeedLoading(true);
@@ -1628,6 +1630,24 @@ function SystemTab() {
       setSeedResult({ success: false, message: "Request failed — check API server logs" });
     } finally {
       setSeedLoading(false);
+    }
+  };
+
+  const handleSeedScenario = async () => {
+    setScenarioLoading(true);
+    setScenarioResult(null);
+    try {
+      const r = await fetch("/api/dev/seed-linked-scenario", { method: "POST" });
+      const d = await r.json();
+      if (r.ok) {
+        setScenarioResult({ success: true, message: d.message || "Linked scenario created", scenario: d.scenario });
+      } else {
+        setScenarioResult({ success: false, message: d.error || "Failed to create scenario" });
+      }
+    } catch {
+      setScenarioResult({ success: false, message: "Request failed — check API server logs" });
+    } finally {
+      setScenarioLoading(false);
     }
   };
 
@@ -1833,9 +1853,17 @@ function SystemTab() {
           <p className="text-sm text-muted-foreground">
             Creates 3 organizations (Cloud/S3/On-Premise storage), 9 users, 9 projects, 54 documents + drawings, 54 correspondence threads with replies, 27 meetings, 9 NCR, 9 ITR, 9 NOC, 9 transmittals, and 27 deliverables. Use <code className="text-xs font-mono bg-muted px-1 rounded">?force=1</code> to re-seed.
           </p>
-          <Button onClick={handleSeedData} disabled={seedLoading} className="gap-2 w-full" variant="outline">
-            {seedLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Seeding…</> : <><Database className="h-4 w-4" /> Seed Test Data</>}
-          </Button>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Button onClick={handleSeedData} disabled={seedLoading || scenarioLoading} className="gap-2" variant="outline">
+              {seedLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Seeding…</> : <><Database className="h-4 w-4" /> Seed Test Data</>}
+            </Button>
+            <Button onClick={handleSeedScenario} disabled={seedLoading || scenarioLoading} className="gap-2" variant="outline">
+              {scenarioLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating…</> : <><Link2 className="h-4 w-4" /> Seed Linked Scenario</>}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            <strong>Seed Linked Scenario</strong> creates one end-to-end demo chain: Project → Document → Transmittal → Correspondence thread (cover letter + RFI + response) → Meeting → 4 Action Items. Requires seed data to exist first.
+          </p>
           {seedResult && (
             <div className={`p-3 rounded-lg text-sm border space-y-2 ${seedResult.success ? "bg-green-50 text-green-800 border-green-200 dark:bg-green-950 dark:border-green-800 dark:text-green-200" : "bg-red-50 text-red-800 border-red-200 dark:bg-red-950 dark:border-red-800 dark:text-red-200"}`}>
               <p className="font-medium">{seedResult.message}</p>
@@ -1847,6 +1875,20 @@ function SystemTab() {
                       <span className="font-bold">{v}</span>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+          {scenarioResult && (
+            <div className={`p-3 rounded-lg text-sm border ${scenarioResult.success ? "bg-green-50 text-green-800 border-green-200 dark:bg-green-950 dark:border-green-800 dark:text-green-200" : "bg-red-50 text-red-800 border-red-200 dark:bg-red-950 dark:border-red-800 dark:text-red-200"}`}>
+              <p className="font-medium">{scenarioResult.message}</p>
+              {scenarioResult.scenario && (
+                <div className="mt-2 space-y-1 text-xs">
+                  <p>Project: <strong>{scenarioResult.scenario.project?.name}</strong> ({scenarioResult.scenario.project?.code})</p>
+                  <p>Document: <strong>{scenarioResult.scenario.document?.number}</strong> — {scenarioResult.scenario.document?.title}</p>
+                  <p>Transmittal: <strong>{scenarioResult.scenario.transmittal?.number}</strong></p>
+                  <p>Correspondence: {scenarioResult.scenario.correspondence?.length} items (cover letter → RFI → response)</p>
+                  <p>Meeting: <strong>{scenarioResult.scenario.meeting?.ref}</strong> with {scenarioResult.scenario.actionItems} action items</p>
                 </div>
               )}
             </div>

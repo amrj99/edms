@@ -120,7 +120,7 @@ async function sendDueDateReminders() {
         isNotNull(tasksTable.dueDate),
         lt(tasksTable.dueDate, now),
         isNotNull(tasksTable.assignedToId),
-        ne(tasksTable.status, "done"),
+        ne(tasksTable.status, "completed"),
       ));
 
     for (const task of overdueTasks) {

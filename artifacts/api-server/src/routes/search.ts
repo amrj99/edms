@@ -38,9 +38,11 @@ router.get("/", requireAuth, async (req, res) => {
       doc: documentsTable,
       createdBy: usersTable,
       folder: foldersTable,
+      project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
     }).from(documentsTable)
       .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
       .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
       .where(docFilter)
       .orderBy(desc(documentsTable.updatedAt))
       .limit(20);
@@ -49,10 +51,11 @@ router.get("/", requireAuth, async (req, res) => {
     if (discipline) filteredDocs = filteredDocs.filter(d => d.doc.discipline === discipline);
     if (status) filteredDocs = filteredDocs.filter(d => d.doc.status === status);
 
-    documents = filteredDocs.map(({ doc, createdBy, folder }) => ({
+    documents = filteredDocs.map(({ doc, createdBy, folder, project }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName: folder?.name,
+      project: project?.id ? project : undefined,
       resultType: "document",
     }));
   }
@@ -67,13 +70,18 @@ router.get("/", requireAuth, async (req, res) => {
       )
     );
 
-    const corrItems = await db.select().from(correspondenceTable)
+    const corrRows = await db.select({
+      corr: correspondenceTable,
+      project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
+    }).from(correspondenceTable)
+      .leftJoin(projectsTable, eq(correspondenceTable.projectId, projectsTable.id))
       .where(corrFilter)
       .orderBy(desc(correspondenceTable.updatedAt))
       .limit(20);
 
-    correspondence = corrItems.map(c => ({
-      ...c,
+    correspondence = corrRows.map(({ corr, project }) => ({
+      ...corr,
+      project: project?.id ? project : undefined,
       toUserIds: [],
       toUserNames: [],
       attachments: [],

@@ -472,6 +472,22 @@ function LanguageToggle() {
 }
 
 // ─── Global Search ────────────────────────────────────────────────────────────
+const TYPE_META: Record<string, { icon: any; label: string; color: string; bg: string }> = {
+  project:        { icon: FolderKanban, label: "Project",        color: "text-violet-600", bg: "bg-violet-100 dark:bg-violet-900/30" },
+  document:       { icon: FileText,     label: "Document",       color: "text-blue-600",   bg: "bg-blue-100 dark:bg-blue-900/30" },
+  correspondence: { icon: Mail,         label: "Correspondence", color: "text-amber-600",  bg: "bg-amber-100 dark:bg-amber-900/30" },
+  meeting:        { icon: CalendarDays, label: "Meeting",        color: "text-green-600",  bg: "bg-green-100 dark:bg-green-900/30" },
+  task:           { icon: CheckSquare,  label: "Task",           color: "text-rose-600",   bg: "bg-rose-100 dark:bg-rose-900/30" },
+};
+
+const TYPE_URL: Record<string, (r: any) => string> = {
+  document:       r => r.projectId ? `/projects/${r.projectId}?tab=documents` : "/documents",
+  project:        r => `/projects/${r.id}`,
+  correspondence: r => r.projectId ? `/projects/${r.projectId}?tab=correspondence&openCorr=${r.id}` : `/correspondence?openCorr=${r.id}`,
+  meeting:        _r => "/meetings",
+  task:           _r => "/tasks",
+};
+
 function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -487,40 +503,37 @@ function GlobalSearch() {
     enabled: q.trim().length >= 2,
   });
 
-  // Merge all result types into a unified list
   const results: any[] = [
-    ...(data?.projects ?? []).map((p: any) => ({ ...p, type: "project", _label: p.name, _sub: p.code })),
-    ...(data?.documents ?? []).map((d: any) => ({ ...d, type: "document", _label: d.title || d.documentNumber, _sub: d.documentNumber })),
-    ...(data?.correspondence ?? []).map((c: any) => ({ ...c, type: "correspondence", _label: c.subject || c.referenceNumber, _sub: c.referenceNumber })),
-    ...(data?.meetings ?? []).map((m: any) => ({ ...m, type: "meeting", _label: m.title || m.referenceNumber, _sub: m.referenceNumber })),
+    ...(data?.projects ?? []).map((p: any) => ({ ...p, _type: "project", _label: p.name, _sub: p.code })),
+    ...(data?.documents ?? []).map((d: any) => ({ ...d, _type: "document", _label: d.title || d.documentNumber, _sub: d.documentNumber, _projectName: d.project?.name })),
+    ...(data?.correspondence ?? []).map((c: any) => ({ ...c, _type: "correspondence", _label: c.subject || c.referenceNumber, _sub: c.referenceNumber, _projectName: c.project?.name })),
+    ...(data?.meetings ?? []).map((m: any) => ({ ...m, _type: "meeting", _label: m.title || m.referenceNumber, _sub: m.referenceNumber, _projectName: m.project?.name })),
   ];
 
-  const typeIcon: Record<string, any> = {
-    document: FileText,
-    project: FolderKanban,
-    correspondence: Mail,
-    task: CheckSquare,
-    deliverable: ClipboardList,
-    ncr: AlertCircle,
-    meeting: CalendarDays,
-  };
-
-  const typeUrl: Record<string, (r: any) => string> = {
-    document: r => r.projectId ? `/projects/${r.projectId}?tab=documents` : "/documents",
-    project: r => `/projects/${r.id}`,
-    correspondence: _r => "/correspondence",
-    task: _r => "/tasks",
-    deliverable: r => r.projectId ? `/projects/${r.projectId}?tab=deliverables` : "/deliverables",
-    ncr: r => r.projectId ? `/projects/${r.projectId}?tab=ncr` : "/reports",
-    meeting: _r => "/meetings",
-  };
+  // Group results by type
+  const grouped = Object.entries(
+    results.reduce((acc: Record<string, any[]>, r) => {
+      acc[r._type] = acc[r._type] ?? [];
+      acc[r._type].push(r);
+      return acc;
+    }, {})
+  );
 
   const handleSelect = (result: any) => {
     setOpen(false);
     setQ("");
-    const getUrl = typeUrl[result.type];
+    const getUrl = TYPE_URL[result._type];
     if (getUrl) navigate(getUrl(result));
   };
+
+  // Ctrl+K / Cmd+K shortcut
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); setOpen(o => !o); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <>
@@ -541,48 +554,65 @@ function GlobalSearch() {
               <input
                 autoFocus
                 className="flex-1 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
-                placeholder="Search documents, projects, correspondence, meetings..."
+                placeholder="Search projects, documents, correspondence, meetings..."
                 value={q}
                 onChange={e => setQ(e.target.value)}
                 onKeyDown={e => e.key === "Escape" && setOpen(false)}
               />
               {isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
-              <button onClick={() => setOpen(false)} className="shrink-0 text-muted-foreground hover:text-foreground">
+              <button onClick={() => setOpen(false)} className="shrink-0 text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent">
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="max-h-96 overflow-y-auto">
+            <div className="max-h-[28rem] overflow-y-auto">
               {q.trim().length < 2 ? (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">Type at least 2 characters to search...</div>
               ) : results.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">{isFetching ? "Searching..." : "No results found"}</div>
               ) : (
                 <div className="py-1">
-                  {results.map((r: any, i: number) => {
-                    const Icon = typeIcon[r.type] ?? Hash;
+                  {grouped.map(([type, items]) => {
+                    const meta = TYPE_META[type] ?? { icon: Hash, label: type, color: "text-muted-foreground", bg: "bg-muted" };
+                    const Icon = meta.icon;
                     return (
-                      <button
-                        key={i}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-accent text-left transition-colors"
-                        onClick={() => handleSelect(r)}
-                      >
-                        <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{r._label || r.title || r.name || r.referenceNumber || "Untitled"}</p>
-                          {(r._sub || r.description) && (
-                            <p className="text-xs text-muted-foreground truncate">{r._sub ? `${r._sub}` : ""}{r._sub && r.description ? " · " : ""}{r.description || ""}</p>
-                          )}
+                      <div key={type}>
+                        <div className="px-4 pt-2.5 pb-1 flex items-center gap-2">
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${meta.bg} ${meta.color}`}>
+                            <Icon className="h-3 w-3" />
+                            {meta.label}s
+                          </span>
+                          <span className="text-xs text-muted-foreground">{items.length} result{items.length !== 1 ? "s" : ""}</span>
                         </div>
-                        <span className="text-xs text-muted-foreground capitalize shrink-0">{r.type}</span>
-                      </button>
+                        {items.map((r: any, i: number) => (
+                          <button
+                            key={i}
+                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-accent text-left transition-colors group"
+                            onClick={() => handleSelect(r)}
+                          >
+                            <div className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 ${meta.bg}`}>
+                              <Icon className={`h-3.5 w-3.5 ${meta.color}`} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{r._label || r.name || "Untitled"}</p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {r._sub && <span className="font-mono">{r._sub}</span>}
+                                {r._sub && r._projectName && <span className="mx-1">·</span>}
+                                {r._projectName && <span className="text-muted-foreground">{r._projectName}</span>}
+                              </p>
+                            </div>
+                            <ExternalLink className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                          </button>
+                        ))}
+                      </div>
                     );
                   })}
                 </div>
               )}
             </div>
             <div className="border-t px-4 py-2 flex items-center gap-3 text-xs text-muted-foreground">
-              <span>↵ Open</span>
-              <span>ESC Close</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↵</kbd> Open</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">Esc</kbd> Close</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">⌘K</kbd> Toggle</span>
             </div>
           </div>
         </div>

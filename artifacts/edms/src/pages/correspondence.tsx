@@ -6,7 +6,7 @@ import {
   RefreshCw, Filter, ChevronDown, ArrowUp, ArrowDown, Clock, AlertCircle,
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
-  Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen,
+  Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +120,18 @@ export default function CorrespondencePage() {
                       ...projectItems.map((i: any) => ({ ...i, _source: "project" }))];
     return combined;
   }, [generalItems, projectItems]);
+
+  // Handle ?openCorr=<id> URL param — auto-selects a specific correspondence item
+  useEffect(() => {
+    if (allItems.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get("openCorr");
+    if (!openId) return;
+    const found = allItems.find((i: any) => String(i.id) === openId);
+    if (found && !selected) {
+      setSelected(found);
+    }
+  }, [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredItems = useMemo(() => {
     let items = allItems;
@@ -326,6 +338,24 @@ export default function CorrespondencePage() {
     enabled: !!selected,
   });
   const threadReplies: any[] = threadData?.items ?? [];
+
+  // Resolve the parent item when this correspondence has a parentId
+  // First look in the already-loaded list; if not found, fetch from API
+  const parentItemFromList = selected?.parentId
+    ? allItems.find((i: any) => i.id === selected.parentId) ?? null
+    : null;
+  const { data: parentItemFetched } = useQuery({
+    queryKey: ["corr-parent", selected?.parentId, selected?.projectId],
+    queryFn: async () => {
+      if (!selected?.parentId) return null;
+      const url = `/api/projects/${selected.projectId}/correspondence/${selected.parentId}`;
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      return r.json();
+    },
+    enabled: !!selected?.parentId && !parentItemFromList,
+  });
+  const parentItem: any = parentItemFromList ?? parentItemFetched ?? null;
 
   const markAsRead = useCallback(async (item: any) => {
     if (item.isRead || localReadIds.has(item.id)) return;
@@ -750,6 +780,36 @@ export default function CorrespondencePage() {
                     </div>
                   )}
                 </div>
+
+                {/* In Reply To — shows when this item has a parent */}
+                {selected.parentId && (
+                  <div className="mt-4 pt-4 border-t">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Link2 className="h-3.5 w-3.5" /> In Reply To
+                    </p>
+                    {parentItem ? (
+                      <button
+                        className="w-full text-left rounded-lg border bg-muted/30 hover:bg-muted/50 transition-colors p-3 group"
+                        onClick={() => setSelected(parentItem)}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-foreground truncate">{parentItem.subject}</p>
+                            {parentItem.referenceNumber && (
+                              <p className="text-[11px] text-muted-foreground font-mono">{parentItem.referenceNumber}</p>
+                            )}
+                            <p className="text-[11px] text-muted-foreground mt-0.5">{format(new Date(parentItem.createdAt), "dd MMM yyyy")}</p>
+                          </div>
+                          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5" />
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="text-xs text-muted-foreground italic py-2 px-3 rounded-lg border border-dashed">
+                        Parent item #{selected.parentId} (not in current view)
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Conversation Thread */}
                 <div className="mt-6 pt-4 border-t">

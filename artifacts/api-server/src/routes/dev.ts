@@ -593,4 +593,211 @@ router.post("/clear-seed", async (req, res) => {
   }
 });
 
+// ─── POST /api/dev/seed-linked-scenario ────────────────────────────────────────
+// Creates one fully-linked end-to-end demo scenario:
+//   Project → Document → Transmittal → Correspondence (chain) → Meeting → Action Items
+router.post("/seed-linked-scenario", async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  try {
+    // Find the primary seed organisation and its admin user
+    const [seedOrg] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.name, "ArcScale Infrastructure Ltd"))
+      .limit(1);
+    if (!seedOrg) { res.status(400).json({ error: "Run seed data first — ArcScale Infrastructure Ltd not found" }); return; }
+
+    const [adminUser] = await db.select().from(usersTable)
+      .where(eq(usersTable.organizationId, seedOrg.id))
+      .limit(1);
+    if (!adminUser) { res.status(400).json({ error: "No users found in ArcScale Infrastructure Ltd" }); return; }
+
+    // Grab a second user if available for realistic assignments
+    const orgUsers = await db.select().from(usersTable)
+      .where(eq(usersTable.organizationId, seedOrg.id));
+    const secondUser = orgUsers.length > 1 ? orgUsers[1] : adminUser;
+
+    // 1. Project — use a timestamped code to avoid collisions on repeat runs
+    const codeTag = Date.now().toString(36).toUpperCase().slice(-4);
+    const [project] = await db.insert(projectsTable).values({
+      name: "Meridian Tower — Structural Refurbishment",
+      code: `MTR-${codeTag}`,
+      status: "active",
+      organizationId: seedOrg.id,
+      description: "Full structural assessment and remediation of the Meridian Tower, including facade works, slab strengthening, and MEP upgrade. Client: Meridian Holdings Group, Sydney CBD.",
+      startDate: new Date("2025-02-01"),
+      endDate: new Date("2026-06-30"),
+    }).returning();
+
+    // 2. Project Member
+    await db.insert(projectMembersTable).values([
+      { projectId: project.id, userId: adminUser.id, role: "project_manager" },
+      ...(secondUser.id !== adminUser.id ? [{ projectId: project.id, userId: secondUser.id, role: "document_controller" }] : []),
+    ]);
+
+    // 3. Document
+    const [doc] = await db.insert(documentsTable).values({
+      documentNumber: "MTR-STR-001",
+      title: "Structural Assessment Report — Meridian Tower",
+      documentType: "Structural Report",
+      discipline: "Structural",
+      revision: "B",
+      status: "approved",
+      description: "Comprehensive structural assessment identifying critical remediation zones, load capacity analysis, and recommended intervention strategies.",
+      projectId: project.id,
+      createdById: adminUser.id,
+      issuedBy: "ArcScale Infrastructure Ltd",
+    }).returning();
+
+    // 4. Transmittal
+    const [transmittal] = await db.insert(transmittalsTable).values({
+      transmittalNumber: "TRS-MTR-0001",
+      subject: "Transmittal: Structural Assessment Report for Client Review",
+      description: "Please find enclosed the Structural Assessment Report (Rev B) for your review and approval. Comments required within 10 business days.",
+      status: "sent",
+      projectId: project.id,
+      createdById: adminUser.id,
+      toExternal: "Meridian Holdings Group — Project Director",
+      purpose: "for_review",
+      sentAt: new Date("2025-03-10T09:00:00Z"),
+      dueDate: new Date("2025-03-24T17:00:00Z"),
+    }).returning();
+
+    // 4a. Link document to transmittal
+    await db.insert(transmittalItemsTable).values({
+      transmittalId: transmittal.id,
+      documentId: doc.id,
+      revision: "B",
+      copies: 1,
+      purpose: "For Review and Comment",
+    });
+
+    // 5. Initial Correspondence — cover letter sent with transmittal
+    const [corrLetter] = await db.insert(correspondenceTable).values({
+      subject: `Cover Letter — ${transmittal.transmittalNumber}: Structural Assessment Report`,
+      type: "letter",
+      folder: "sent",
+      body: `Dear Project Director,\n\nPlease find enclosed our Structural Assessment Report (Document No. MTR-STR-001, Rev B) for the Meridian Tower Structural Refurbishment project.\n\nThe report identifies three critical remediation zones and outlines our recommended intervention strategies, including slab strengthening at Levels 14–17 and facade anchor replacement on the eastern elevation.\n\nWe kindly request your review and formal approval within 10 business days (by 24 March 2025). Please direct any comments to the undersigned.\n\nKind regards,\n${adminUser.firstName ?? "Project"} ${adminUser.lastName ?? "Manager"}\nArcScale Infrastructure Ltd`,
+      fromUserId: adminUser.id,
+      projectId: project.id,
+      referenceNumber: "CORR-MTR-001",
+      status: "sent",
+      priority: "high",
+      linkedDocumentId: doc.id,
+      sentAt: new Date("2025-03-10T09:30:00Z"),
+    }).returning();
+
+    // 6. Client Reply — RFI raised in response
+    const [corrRfi] = await db.insert(correspondenceTable).values({
+      subject: `RE: ${corrLetter.subject} — Request for Information`,
+      type: "rfi",
+      folder: "inbox",
+      body: `Dear ${adminUser.firstName ?? "Project"} ${adminUser.lastName ?? "Manager"},\n\nThank you for submitting the Structural Assessment Report. Following our internal review, we require clarification on the following:\n\n1. The load capacity analysis assumptions at Level 15 appear to use 2018 code values — please confirm compliance with AS 1170.1:2022.\n2. Can you provide the raw deflection data referenced in Section 4.3?\n3. The eastern facade anchor replacement scope — are spandrel panels included?\n\nWe request your response by 28 March 2025.\n\nRegards,\nMeridian Holdings Group`,
+      fromUserId: secondUser.id,
+      projectId: project.id,
+      referenceNumber: "CORR-MTR-002",
+      status: "sent",
+      priority: "urgent",
+      parentId: corrLetter.id,
+      sentAt: new Date("2025-03-18T14:15:00Z"),
+      dueDate: new Date("2025-03-28T17:00:00Z"),
+    }).returning();
+
+    // 7. Response to RFI
+    const [corrResponse] = await db.insert(correspondenceTable).values({
+      subject: `RE: CORR-MTR-002 — Response to RFI on Structural Assessment`,
+      type: "letter",
+      folder: "sent",
+      body: `Dear Project Director,\n\nThank you for your queries regarding the Structural Assessment Report. Please find our responses below:\n\n1. **AS 1170.1:2022 compliance**: Confirmed. The analysis was performed under AS 1170.1:2022 — the 2018 values noted in Appendix C are historical comparators only and do not affect design loads.\n\n2. **Raw deflection data (Section 4.3)**: Full dataset is appended to this correspondence as Addendum A.\n\n3. **Spandrel panels**: Yes, the eastern facade scope includes full spandrel panel replacement at Levels 6–22, as detailed in our updated schedule of works.\n\nWe trust these responses are satisfactory. Please advise if further information is required.\n\nKind regards,\n${adminUser.firstName ?? "Project"} ${adminUser.lastName ?? "Manager"}\nArcScale Infrastructure Ltd`,
+      fromUserId: adminUser.id,
+      projectId: project.id,
+      referenceNumber: "CORR-MTR-003",
+      status: "responded",
+      priority: "high",
+      parentId: corrRfi.id,
+      sentAt: new Date("2025-03-26T11:00:00Z"),
+    }).returning();
+
+    // 8. Meeting
+    const [meeting] = await db.insert(meetingsTable).values({
+      title: "Meridian Tower — Structural Assessment Review Meeting",
+      projectId: project.id,
+      organizedById: adminUser.id,
+      status: "completed",
+      location: "ArcScale Board Room, Level 12, 333 George St, Sydney",
+      meetingDate: new Date("2025-03-28T10:00:00Z"),
+      duration: 90,
+      referenceNumber: "MTG-MTR-001",
+      agenda: "1. Review of Structural Assessment Report (MTR-STR-001 Rev B)\n2. Client RFI responses (CORR-MTR-002 / CORR-MTR-003)\n3. Revised remediation programme and key milestones\n4. Risk register review — Level 15 slab works\n5. Action items and next steps",
+      minutes: "Meeting opened at 10:00 AM. All attendees confirmed receipt of the Structural Assessment Report and RFI responses.\n\nItem 1: The report was accepted with minor comments. Client requested an updated executive summary by 4 April.\n\nItem 2: RFI responses were reviewed and accepted. No further technical queries outstanding.\n\nItem 3: Revised programme presented — slab strengthening commences 15 April, targeted completion 30 June 2025.\n\nItem 4: Level 15 slab risk rated HIGH due to construction sequencing. Risk to be reviewed at next meeting.\n\nItem 5: Action items allocated — see below.\n\nMeeting closed at 11:35 AM.",
+    }).returning();
+
+    // 9. Meeting Attendees
+    await db.insert(meetingAttendeesTable).values([
+      { meetingId: meeting.id, userId: adminUser.id, attended: true },
+      { meetingId: meeting.id, userId: secondUser.id, attended: true },
+      { meetingId: meeting.id, name: "David Chen", email: "d.chen@meridian-holdings.com.au", attended: true },
+      { meetingId: meeting.id, name: "Sarah Nguyễn", email: "s.nguyen@meridian-holdings.com.au", attended: true },
+    ]);
+
+    // 10. Meeting Action Items
+    await db.insert(meetingActionItemsTable).values([
+      {
+        meetingId: meeting.id,
+        title: "Issue updated Executive Summary for Structural Assessment Report (Rev B)",
+        assignedToId: adminUser.id,
+        dueDate: new Date("2025-04-04T17:00:00Z"),
+        status: "done",
+        priority: "high",
+        notes: "Include revised risk matrix and updated remediation programme overview.",
+      },
+      {
+        meetingId: meeting.id,
+        title: "Submit Addendum A (Level 15 deflection dataset) to client via transmittal",
+        assignedToId: secondUser.id,
+        dueDate: new Date("2025-03-31T17:00:00Z"),
+        status: "done",
+        priority: "high",
+        notes: "Reference CORR-MTR-003. Use standard transmittal format TRS-MTR-XXXX.",
+      },
+      {
+        meetingId: meeting.id,
+        title: "Update risk register — Level 15 slab works rated HIGH",
+        assignedToId: adminUser.id,
+        dueDate: new Date("2025-04-07T17:00:00Z"),
+        status: "in_progress",
+        priority: "high",
+        notes: "Escalate to steering committee if risk cannot be mitigated below MEDIUM by 7 April.",
+      },
+      {
+        meetingId: meeting.id,
+        title: "Confirm eastern facade spandrel panel contractor and issue LOA",
+        assignedToId: secondUser.id,
+        dueDate: new Date("2025-04-10T17:00:00Z"),
+        status: "open",
+        priority: "medium",
+        notes: "Three quotes received — pending procurement approval.",
+      },
+    ]);
+
+    res.json({
+      success: true,
+      message: "Linked scenario created successfully",
+      scenario: {
+        project: { id: project.id, name: project.name, code: project.code },
+        document: { id: doc.id, number: doc.documentNumber, title: doc.title },
+        transmittal: { id: transmittal.id, number: transmittal.transmittalNumber },
+        correspondence: [
+          { id: corrLetter.id, ref: corrLetter.referenceNumber, type: "Cover Letter" },
+          { id: corrRfi.id, ref: corrRfi.referenceNumber, type: "RFI (reply)", parentId: corrRfi.parentId },
+          { id: corrResponse.id, ref: corrResponse.referenceNumber, type: "Response to RFI", parentId: corrResponse.parentId },
+        ],
+        meeting: { id: meeting.id, ref: meeting.referenceNumber, title: meeting.title },
+        actionItems: 4,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Seed failed", details: err?.message });
+  }
+});
+
 export default router;
