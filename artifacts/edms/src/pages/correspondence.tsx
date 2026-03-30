@@ -435,10 +435,10 @@ export default function CorrespondencePage() {
 
   const MAIL_FOLDERS = [
     { id: "all",     label: "All Mail",  icon: Mail,    count: allItems.length },
-    { id: "inbox",   label: "Inbox",     icon: Inbox,   count: allItems.filter((i: any) => i.folder === "inbox").length },
-    { id: "sent",    label: "Sent",      icon: Send,    count: allItems.filter((i: any) => i.folder === "sent").length },
-    { id: "draft",   label: "Drafts",    icon: Folder,  count: allItems.filter((i: any) => i.folder === "draft").length },
-    { id: "archive", label: "Archive",   icon: Archive, count: allItems.filter((i: any) => i.folder === "archive").length },
+    { id: "inbox",   label: "Incoming",   icon: Inbox,   count: allItems.filter((i: any) => i.folder === "inbox").length },
+    { id: "sent",    label: "Outgoing",   icon: Send,    count: allItems.filter((i: any) => i.folder === "sent").length },
+    { id: "draft",   label: "Drafts",     icon: Folder,  count: allItems.filter((i: any) => i.folder === "draft").length },
+    { id: "archive", label: "Archive",    icon: Archive, count: allItems.filter((i: any) => i.folder === "archive").length },
   ];
   const SMART_FOLDERS = [
     { id: "flagged",  label: "Flagged",  icon: Flag,        count: flaggedCount },

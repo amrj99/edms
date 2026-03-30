@@ -235,6 +235,7 @@ export function AppSidebar() {
   const [recentProjects, setRecentProjects] = useState<{ id: number; code: string; name: string }[]>([]);
   const [recentOpen, setRecentOpen] = useState(true);
   const { modules } = useModules();
+  const { t } = useI18n();
 
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
@@ -247,28 +248,29 @@ export function AppSidebar() {
   }, [location]);
 
   const navigation = [
-    { title: "Dashboard", url: "/", icon: Home },
-    { title: "Correspondence", url: "/correspondence", icon: Mail },
-    { title: "Projects", url: "/projects", icon: FolderKanban },
-    { title: "Documents", url: "/documents", icon: FileText },
-    { title: "Meetings", url: "/meetings", icon: CalendarDays },
-    { title: "Action Items", url: "/action-items", icon: ListTodo },
-    { title: "My Tasks", url: "/tasks", icon: CheckSquare },
-    ...(modules.deliverables ? [{ title: "Deliverables", url: "/deliverables", icon: ClipboardList }] : []),
-    { title: "Reports Dashboard", url: "/reports-dashboard", icon: TrendingUp },
-    ...(modules.registers ? [{ title: "Registers", url: "/reports", icon: BarChart3 }] : []),
-    ...(modules.chat ? [{ title: "Chat", url: "/chat", icon: MessageSquare }] : []),
-    ...(canSeeActivityLog ? [{ title: "Activity Log", url: "/activity-log", icon: ClipboardCheck }] : []),
-    { title: "Search", url: "/search", icon: Search },
+    { title: t("navDashboard"), url: "/", icon: Home },
+    { title: t("navCorrespondence"), url: "/correspondence", icon: Mail },
+    { title: t("navProjects"), url: "/projects", icon: FolderKanban },
+    { title: t("navDocuments"), url: "/documents", icon: FileText },
+    { title: t("navCalendar"), url: "/calendar", icon: CalendarDays },
+    { title: t("navMeetings"), url: "/meetings", icon: CalendarDays },
+    { title: t("navActionItems"), url: "/action-items", icon: ListTodo },
+    { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
+    ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
+    { title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp },
+    ...(modules.registers ? [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] : []),
+    ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
+    ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
+    { title: t("navSearch"), url: "/search", icon: Search },
   ];
 
   const adminNav = [
-    { title: "Organizations", url: "/organizations", icon: Building2 },
-    { title: "Users & Roles", url: "/users", icon: Users },
-    { title: "Configuration", url: "/config", icon: SlidersHorizontal },
-    { title: "System Admin", url: "/admin", icon: ShieldCheck },
-    { title: "Settings", url: "/settings", icon: Settings },
-    { title: "AI Settings", url: "/ai-settings", icon: Brain },
+    { title: t("navOrganizations"), url: "/organizations", icon: Building2 },
+    { title: t("navUsersRoles"), url: "/users", icon: Users },
+    { title: t("navConfig"), url: "/config", icon: SlidersHorizontal },
+    { title: t("navAdmin"), url: "/admin", icon: ShieldCheck },
+    { title: t("navSettings"), url: "/settings", icon: Settings },
+    { title: t("navAISettings"), url: "/ai-settings", icon: Brain },
   ];
 
   return (
@@ -284,7 +286,7 @@ export function AppSidebar() {
 
       <SidebarContent className="px-2 py-4">
         <SidebarGroup>
-          <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase font-semibold tracking-wider">Main Menu</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase font-semibold tracking-wider">{t("mainMenu")}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navigation.map((item) => (
@@ -308,7 +310,7 @@ export function AppSidebar() {
               className="text-sidebar-foreground/50 text-xs uppercase font-semibold tracking-wider flex items-center justify-between cursor-pointer"
               onClick={() => setRecentOpen(o => !o)}
             >
-              <span className="flex items-center gap-1"><History className="h-3 w-3" /> Recent Projects</span>
+              <span className="flex items-center gap-1"><History className="h-3 w-3" /> {t("recentProjects")}</span>
               {recentOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             </SidebarGroupLabel>
             {recentOpen && (
@@ -332,7 +334,7 @@ export function AppSidebar() {
 
         {isAdmin && (
           <SidebarGroup className="mt-4">
-            <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase font-semibold tracking-wider">Administration</SidebarGroupLabel>
+            <SidebarGroupLabel className="text-sidebar-foreground/50 text-xs uppercase font-semibold tracking-wider">{t("adminMenu")}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {adminNav.map((item) => (

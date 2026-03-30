@@ -31,6 +31,7 @@ import profileRouter from "./profile.js";
 import meetingsRouter from "./meetings.js";
 import chatRouter from "./chat.js";
 import devRouter from "./dev.js";
+import calendarRouter from "./calendar.js";
 
 const router: IRouter = Router();
 
@@ -65,6 +66,7 @@ router.use("/meetings", meetingsRouter);
 router.use("/chat", chatRouter);
 router.use("/modules", modulesRouter);
 router.use("/dev", devRouter);
+router.use("/calendar", calendarRouter);
 router.use("/", notificationSummaryRouter);
 
 export default router;
