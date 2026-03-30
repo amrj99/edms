@@ -108,16 +108,26 @@ router.post("/documents/suggest-procedure", async (req, res) => {
     existingNumbers, organizationName,
   } = req.body ?? {};
 
-  if (!await isModuleEnabled("documents", req.user!.organizationId)) {
-    res.status(403).json({ error: "AI is disabled for the Documents module" });
-    return;
-  }
+  try {
+    if (!await isModuleEnabled("documents", req.user!.organizationId)) {
+      res.status(403).json({ error: "AI is disabled for the Documents module" });
+      return;
+    }
 
-  const suggestion = await suggestDocumentProcedure(
-    { projectCode, projectName, discipline, documentType, partialTitle, existingNumbers, organizationName },
-    req.user!.id,
-  );
-  res.json(suggestion);
+    const suggestion = await suggestDocumentProcedure(
+      { projectCode, projectName, discipline, documentType, partialTitle, existingNumbers, organizationName },
+      req.user!.id,
+    );
+    res.json(suggestion);
+  } catch (err: any) {
+    const msg = err?.message || "AI service unavailable";
+    const isCredentialError = msg.includes("API key") || msg.includes("auth") || msg.includes("401") || msg.includes("Unauthorized");
+    res.status(503).json({
+      error: isCredentialError
+        ? "AI service is not configured. Please check your API key settings."
+        : `AI suggestion failed: ${msg}`,
+    });
+  }
 });
 
 // ─── Natural Language Search ─────────────────────────────────────────────────

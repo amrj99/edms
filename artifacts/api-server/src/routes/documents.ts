@@ -89,15 +89,20 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy } = req.body;
-
-  if (!documentNumber || !title) {
-    res.status(400).json({ error: "documentNumber and title are required" });
+  if (!req.body || typeof req.body !== "object") {
+    res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
     return;
   }
+  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy } = req.body;
+
+  if (!title?.trim()) {
+    res.status(400).json({ error: "title is required" });
+    return;
+  }
+  const resolvedDocNumber = documentNumber || `DOC-${projectId}-${Date.now().toString().slice(-6)}`;
 
   const [doc] = await db.insert(documentsTable).values({
-    documentNumber, title, documentType, discipline,
+    documentNumber: resolvedDocNumber, title: title.trim(), documentType, discipline,
     revision: revision || "A",
     status: status || "draft",
     description, folderId,
