@@ -70,13 +70,21 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
-  const { firstName, lastName, role, isActive } = req.body;
+  const { firstName, lastName, role, isActive, organizationId, department } = req.body;
+  const updateSet: Record<string, any> = { updatedAt: new Date() };
+  if (firstName !== undefined) updateSet.firstName = firstName;
+  if (lastName !== undefined) updateSet.lastName = lastName;
+  if (role !== undefined) updateSet.role = role;
+  if (isActive !== undefined) updateSet.isActive = isActive;
+  if ("organizationId" in req.body) updateSet.organizationId = organizationId ?? null;
+  if (department !== undefined) updateSet.department = department || null;
   const [user] = await db.update(usersTable)
-    .set({ firstName, lastName, role, isActive, updatedAt: new Date() })
+    .set(updateSet)
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, isActive: user.isActive, createdAt: user.createdAt });
+  await createAuditLog({ userId: req.user!.id, action: "update", entityType: "user", entityId: id, entityTitle: `${user.firstName} ${user.lastName}` });
+  res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, department: user.department, isActive: user.isActive, createdAt: user.createdAt });
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {

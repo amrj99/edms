@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled: "bg-blue-100 text-blue-700",
@@ -33,7 +34,7 @@ const ACTION_STATUS_COLORS: Record<string, string> = {
 };
 
 const BLANK_FORM = {
-  title: "", projectId: "", meetingDate: "", duration: "", location: "", agenda: "", status: "scheduled",
+  title: "", projectId: "", meetingDate: "", duration: "", location: "", meetingLink: "", agenda: "", status: "scheduled",
 };
 
 // ─── Linked Correspondence mini-component ─────────────────────────────────────
@@ -150,6 +151,7 @@ export default function MeetingsPage() {
           meetingDate: data.meetingDate,
           duration: data.duration ? parseInt(data.duration) : undefined,
           location: data.location || undefined,
+          meetingLink: data.meetingLink || undefined,
           agenda: data.agenda || undefined,
           status: data.status,
         }),
@@ -244,6 +246,7 @@ export default function MeetingsPage() {
       meetingDate: detail.meetingDate ? detail.meetingDate.slice(0, 16) : "",
       duration: detail.duration ? String(detail.duration) : "",
       location: detail.location || "",
+      meetingLink: detail.meetingLink || "",
       agenda: detail.agenda || "",
       status: detail.status,
     });
@@ -394,6 +397,16 @@ export default function MeetingsPage() {
                       <span className="flex items-center gap-1">
                         <MapPin className="h-4 w-4" /> {detail.location}
                       </span>
+                    )}
+                    {detail.meetingLink && (
+                      <a
+                        href={detail.meetingLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-primary hover:underline"
+                      >
+                        <Link2 className="h-4 w-4" /> Join Meeting
+                      </a>
                     )}
                     {detail.project && (
                       <span className="flex items-center gap-1">
@@ -661,15 +674,16 @@ export default function MeetingsPage() {
               </div>
               <div>
                 <Label>Project <span className="text-red-500">*</span></Label>
-                <Select value={form.projectId || "_none"} onValueChange={v => setForm(f => ({ ...f, projectId: v === "_none" ? "" : v }))}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select project..." /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_none" disabled>Select a project...</SelectItem>
-                    {projects.map((p: any) => (
-                      <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="mt-1">
+                  <SearchableSelect
+                    options={projects.map((p: any) => ({ value: String(p.id), label: p.code, sublabel: p.name }))}
+                    value={form.projectId || ""}
+                    onValueChange={v => setForm(f => ({ ...f, projectId: v }))}
+                    placeholder="Select project..."
+                    searchPlaceholder="Search projects..."
+                    emptyText="No projects found."
+                  />
+                </div>
               </div>
             </div>
             <div>
@@ -677,8 +691,18 @@ export default function MeetingsPage() {
               <Input
                 value={form.location}
                 onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
-                placeholder="Conference Room A / Teams link..."
+                placeholder="Conference Room A, Building 2..."
                 className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5" /> Meeting Link (Teams / Zoom / Google Meet)</Label>
+              <Input
+                value={form.meetingLink}
+                onChange={e => setForm(f => ({ ...f, meetingLink: e.target.value }))}
+                placeholder="https://teams.microsoft.com/l/meetup-join/..."
+                className="mt-1"
+                type="url"
               />
             </div>
             <div>

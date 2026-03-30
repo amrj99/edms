@@ -489,9 +489,10 @@ function GlobalSearch() {
 
   // Merge all result types into a unified list
   const results: any[] = [
-    ...(data?.documents ?? []).map((d: any) => ({ ...d, type: "document", _label: d.title || d.documentNumber })),
-    ...(data?.correspondence ?? []).map((c: any) => ({ ...c, type: "correspondence", _label: c.subject || c.referenceNumber })),
-    ...(data?.meetings ?? []).map((m: any) => ({ ...m, type: "meeting", _label: m.title || m.referenceNumber })),
+    ...(data?.projects ?? []).map((p: any) => ({ ...p, type: "project", _label: p.name, _sub: p.code })),
+    ...(data?.documents ?? []).map((d: any) => ({ ...d, type: "document", _label: d.title || d.documentNumber, _sub: d.documentNumber })),
+    ...(data?.correspondence ?? []).map((c: any) => ({ ...c, type: "correspondence", _label: c.subject || c.referenceNumber, _sub: c.referenceNumber })),
+    ...(data?.meetings ?? []).map((m: any) => ({ ...m, type: "meeting", _label: m.title || m.referenceNumber, _sub: m.referenceNumber })),
   ];
 
   const typeIcon: Record<string, any> = {
@@ -568,8 +569,8 @@ function GlobalSearch() {
                         <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{r._label || r.title || r.name || r.referenceNumber || "Untitled"}</p>
-                          {(r.description || r.projectCode) && (
-                            <p className="text-xs text-muted-foreground truncate">{r.projectCode ? `${r.projectCode} · ` : ""}{r.description || ""}</p>
+                          {(r._sub || r.description) && (
+                            <p className="text-xs text-muted-foreground truncate">{r._sub ? `${r._sub}` : ""}{r._sub && r.description ? " · " : ""}{r.description || ""}</p>
                           )}
                         </div>
                         <span className="text-xs text-muted-foreground capitalize shrink-0">{r.type}</span>

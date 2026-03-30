@@ -140,7 +140,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 
 // ─── Create meeting ────────────────────────────────────────────────────────────
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const { title, projectId, meetingDate, duration, location, agenda, status, attendees } = req.body;
+  const { title, projectId, meetingDate, duration, location, meetingLink, agenda, status, attendees } = req.body;
 
   if (!title?.trim() || !meetingDate) {
     return res.status(400).json({ error: "Bad Request", message: "Title and meeting date are required" });
@@ -160,6 +160,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     meetingDate: new Date(meetingDate),
     duration: duration || null,
     location: location?.trim() || null,
+    meetingLink: meetingLink?.trim() || null,
     agenda: agenda?.trim() || null,
     status: status || "scheduled",
     referenceNumber: ref,
@@ -217,21 +218,22 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 // ─── Update meeting ────────────────────────────────────────────────────────────
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
   const id = parseInt(req.params.id);
-  const { title, projectId, meetingDate, duration, location, agenda, minutes, status } = req.body;
+  const { title, projectId, meetingDate, duration, location, meetingLink, agenda, minutes, status } = req.body;
 
   // Fetch old state for transition detection
   const [before] = await db.select({ status: meetingsTable.status, minutes: meetingsTable.minutes })
     .from(meetingsTable).where(eq(meetingsTable.id, id));
 
   const [meeting] = await db.update(meetingsTable).set({
-    ...(title       !== undefined && { title: title.trim() }),
-    ...(projectId   !== undefined && { projectId: projectId || null }),
-    ...(meetingDate !== undefined && { meetingDate: new Date(meetingDate) }),
-    ...(duration    !== undefined && { duration }),
-    ...(location    !== undefined && { location: location?.trim() || null }),
-    ...(agenda      !== undefined && { agenda: agenda?.trim() || null }),
-    ...(minutes     !== undefined && { minutes: minutes?.trim() || null }),
-    ...(status      !== undefined && { status }),
+    ...(title        !== undefined && { title: title.trim() }),
+    ...(projectId    !== undefined && { projectId: projectId || null }),
+    ...(meetingDate  !== undefined && { meetingDate: new Date(meetingDate) }),
+    ...(duration     !== undefined && { duration }),
+    ...(location     !== undefined && { location: location?.trim() || null }),
+    ...(meetingLink  !== undefined && { meetingLink: meetingLink?.trim() || null }),
+    ...(agenda       !== undefined && { agenda: agenda?.trim() || null }),
+    ...(minutes      !== undefined && { minutes: minutes?.trim() || null }),
+    ...(status       !== undefined && { status }),
     updatedAt: new Date(),
   }).where(eq(meetingsTable.id, id)).returning();
 

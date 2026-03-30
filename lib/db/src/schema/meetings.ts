@@ -18,6 +18,7 @@ export const meetingsTable = pgTable("meetings", {
   organizedById: integer("organized_by_id").references(() => usersTable.id).notNull(),
   status: meetingStatusEnum("status").notNull().default("scheduled"),
   location: text("location"),
+  meetingLink: text("meeting_link"),
   meetingDate: timestamp("meeting_date").notNull(),
   duration: integer("duration"), // minutes
   agenda: text("agenda"),

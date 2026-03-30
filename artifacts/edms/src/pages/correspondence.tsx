@@ -20,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { FileDropZone } from "@/components/file-drop-zone";
 import { RecipientAutocomplete, CCAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
@@ -911,13 +912,19 @@ export default function CorrespondencePage() {
             {/* Project */}
             <div>
               <Label>Project (optional)</Label>
-              <Select value={compose.projectId} onValueChange={v => setCompose(f => ({ ...f, projectId: v }))}>
-                <SelectTrigger className="mt-1"><SelectValue placeholder="General (no project)" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_none">General (no project)</SelectItem>
-                  {projects.map((p: any) => <SelectItem key={p.id} value={String(p.id)}>{p.code} — {p.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="mt-1">
+                <SearchableSelect
+                  options={[
+                    { value: "_none", label: "General (no project)" },
+                    ...projects.map((p: any) => ({ value: String(p.id), label: p.code, sublabel: p.name })),
+                  ]}
+                  value={compose.projectId || "_none"}
+                  onValueChange={v => setCompose(f => ({ ...f, projectId: v }))}
+                  placeholder="General (no project)"
+                  searchPlaceholder="Search projects..."
+                  emptyText="No projects found."
+                />
+              </div>
             </div>
             {/* To Recipients */}
             <div>

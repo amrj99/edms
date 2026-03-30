@@ -20,6 +20,7 @@ router.get("/", requireAuth, async (req, res) => {
   let documents: any[] = [];
   let correspondence: any[] = [];
   let meetings: any[] = [];
+  let projects: any[] = [];
 
   if (!type || type === "document" || type === "all") {
     const docFilter = and(
@@ -52,6 +53,7 @@ router.get("/", requireAuth, async (req, res) => {
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName: folder?.name,
+      resultType: "document",
     }));
   }
 
@@ -76,6 +78,7 @@ router.get("/", requireAuth, async (req, res) => {
       toUserNames: [],
       attachments: [],
       fromUserName: undefined,
+      resultType: "correspondence",
     }));
   }
 
@@ -107,15 +110,31 @@ router.get("/", requireAuth, async (req, res) => {
     meetings = mtgRows.map(({ meeting, project }) => ({
       ...meeting,
       project,
-      resultType: "meeting" as const,
+      resultType: "meeting",
     }));
+  }
+
+  if (!type || type === "project" || type === "all") {
+    const projFilter = or(
+      ilike(projectsTable.name, searchPattern),
+      ilike(projectsTable.code, searchPattern),
+      ilike(projectsTable.description, searchPattern),
+    );
+
+    const projRows = await db.select().from(projectsTable)
+      .where(projFilter)
+      .orderBy(desc(projectsTable.updatedAt))
+      .limit(10);
+
+    projects = projRows.map(p => ({ ...p, resultType: "project" }));
   }
 
   res.json({
     documents,
     correspondence,
     meetings,
-    total: documents.length + correspondence.length + meetings.length,
+    projects,
+    total: documents.length + correspondence.length + meetings.length + projects.length,
     query: q,
   });
 });

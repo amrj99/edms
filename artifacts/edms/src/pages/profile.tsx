@@ -107,9 +107,10 @@ function ProfileInfoTab({ profile }: { profile: any }) {
   const qc = useQueryClient();
 
   const [form, setForm] = useState({
-    firstName: profile.user.firstName,
-    lastName:  profile.user.lastName,
-    email:     profile.user.email,
+    firstName:  profile.user.firstName,
+    lastName:   profile.user.lastName,
+    email:      profile.user.email,
+    department: profile.user.department ?? "",
   });
 
   const updateProfile = useMutation({
@@ -135,9 +136,10 @@ function ProfileInfoTab({ profile }: { profile: any }) {
   });
 
   const isDirty =
-    form.firstName !== profile.user.firstName ||
-    form.lastName  !== profile.user.lastName  ||
-    form.email     !== profile.user.email;
+    form.firstName  !== profile.user.firstName  ||
+    form.lastName   !== profile.user.lastName   ||
+    form.email      !== profile.user.email      ||
+    (form.department || "") !== (profile.user.department || "");
 
   return (
     <div className="space-y-6">
@@ -159,6 +161,11 @@ function ProfileInfoTab({ profile }: { profile: any }) {
               <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <Building2 className="h-3 w-3" />
                 {profile.user.organizationName}
+              </span>
+            )}
+            {profile.user.department && (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                · {profile.user.department}
               </span>
             )}
           </div>
@@ -200,6 +207,15 @@ function ProfileInfoTab({ profile }: { profile: any }) {
               onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
             />
           </div>
+        </div>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="department">Department (optional)</Label>
+          <Input
+            id="department"
+            value={form.department}
+            onChange={e => setForm(f => ({ ...f, department: e.target.value }))}
+            placeholder="e.g. Engineering, Contracts, Finance, Planning..."
+          />
         </div>
       </div>
 

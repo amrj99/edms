@@ -20,6 +20,7 @@ router.get("/", async (req: Request, res: Response) => {
       role: usersTable.role,
       organizationId: usersTable.organizationId,
       organizationName: organizationsTable.name,
+      department: usersTable.department,
       createdAt: usersTable.createdAt,
     })
     .from(usersTable)
@@ -57,7 +58,7 @@ router.get("/", async (req: Request, res: Response) => {
 // ─── PUT /api/profile ──────────────────────────────────────────────────────────
 router.put("/", async (req: Request, res: Response) => {
   const userId = req.user!.id;
-  const { firstName, lastName, email } = req.body;
+  const { firstName, lastName, email, department } = req.body;
 
   if (!firstName?.trim() || !lastName?.trim() || !email?.trim()) {
     return res.status(400).json({ error: "Bad Request", message: "First name, last name, and email are required" });
@@ -79,6 +80,7 @@ router.put("/", async (req: Request, res: Response) => {
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       email: email.trim().toLowerCase(),
+      department: department?.trim() || null,
       updatedAt: new Date(),
     })
     .where(eq(usersTable.id, userId))
@@ -88,6 +90,7 @@ router.put("/", async (req: Request, res: Response) => {
       firstName: usersTable.firstName,
       lastName: usersTable.lastName,
       role: usersTable.role,
+      department: usersTable.department,
     });
 
   res.json({ user: updated });

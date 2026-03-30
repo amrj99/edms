@@ -114,12 +114,12 @@ async function sendDueDateReminders() {
 
     // Overdue tasks with an assignee
     const overdueTasks = await db
-      .select({ id: tasksTable.id, title: tasksTable.title, assigneeId: tasksTable.assigneeId, projectId: tasksTable.projectId })
+      .select({ id: tasksTable.id, title: tasksTable.title, assigneeId: tasksTable.assignedToId, projectId: tasksTable.projectId })
       .from(tasksTable)
       .where(and(
         isNotNull(tasksTable.dueDate),
         lt(tasksTable.dueDate, now),
-        isNotNull(tasksTable.assigneeId),
+        isNotNull(tasksTable.assignedToId),
         ne(tasksTable.status, "done"),
       ));
 

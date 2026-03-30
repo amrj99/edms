@@ -1676,9 +1676,10 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState("all");
   const [searchQ, setSearchQ] = useState("");
+  const [corrDetail, setCorrDetail] = useState<any>(null);
   const [form, setForm] = useState({
     subject: "", type: "rfi", body: "", priority: "medium",
-    dueDate: "", referenceNumber: "",
+    dueDate: "", referenceNumber: "", to: "", cc: "", bcc: "",
   });
 
   const { data: corrData, isLoading } = useQuery({
@@ -1695,7 +1696,18 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
       const r = await fetch(`/api/projects/${projectId}/correspondence`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, folder: "inbox", status: "draft" }),
+        body: JSON.stringify({
+          subject: data.subject,
+          type: data.type,
+          priority: data.priority,
+          dueDate: data.dueDate || undefined,
+          referenceNumber: data.referenceNumber || undefined,
+          body: [data.to ? `To: ${data.to}` : "", data.body].filter(Boolean).join("\n\n"),
+          cc: data.cc || undefined,
+          bcc: data.bcc || undefined,
+          folder: "inbox",
+          status: "draft",
+        }),
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -1703,7 +1715,7 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["correspondence", projectId] });
       setIsCreateOpen(false);
-      setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "" });
+      setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "", to: "", cc: "", bcc: "" });
       toast({ title: "Correspondence created" });
     },
     onError: () => toast({ title: "Failed to create", variant: "destructive" }),
@@ -1754,10 +1766,44 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
         })}
       </div>
 
+      {/* Correspondence Detail Popup (double-click) */}
+      <Dialog open={!!corrDetail} onOpenChange={v => !v && setCorrDetail(null)}>
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs">{CORR_TYPE_LABELS[corrDetail?.type] || corrDetail?.type}</Badge>
+              {corrDetail?.subject}
+            </DialogTitle>
+          </DialogHeader>
+          {corrDetail && (
+            <div className="space-y-3 py-1 text-sm">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                <div><span className="text-muted-foreground">Reference:</span> <span className="font-mono font-medium">{corrDetail.referenceNumber || `#${corrDetail.id}`}</span></div>
+                <div><span className="text-muted-foreground">Priority:</span> <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${priorityColor[corrDetail.priority] ?? "bg-muted"}`}>{corrDetail.priority}</span></div>
+                <div><span className="text-muted-foreground">Status:</span> <StatusBadge status={corrDetail.status} /></div>
+                {corrDetail.dueDate && <div><span className="text-muted-foreground">Due:</span> {format(new Date(corrDetail.dueDate), "dd MMM yyyy")}</div>}
+                {corrDetail.cc && <div className="col-span-2"><span className="text-muted-foreground">CC:</span> {corrDetail.cc}</div>}
+                {corrDetail.bcc && <div className="col-span-2"><span className="text-muted-foreground">BCC:</span> {corrDetail.bcc}</div>}
+                <div><span className="text-muted-foreground">Created:</span> {format(new Date(corrDetail.createdAt), "dd MMM yyyy")}</div>
+              </div>
+              {corrDetail.body && (
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase font-medium mb-1.5">Message</p>
+                  <div className="bg-muted/40 rounded-lg p-3 whitespace-pre-wrap leading-relaxed">{corrDetail.body}</div>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrDetail(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent className="sm:max-w-[560px]">
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>New Correspondence</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Type *</Label>
@@ -1782,6 +1828,20 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Enter subject..." className="mt-1" />
             </div>
+            <div>
+              <Label>To <span className="text-muted-foreground font-normal">(email addresses, comma-separated)</span></Label>
+              <Input value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} placeholder="recipient@company.com, another@company.com..." className="mt-1" type="email" multiple />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>CC</Label>
+                <Input value={form.cc} onChange={e => setForm(f => ({ ...f, cc: e.target.value }))} placeholder="cc@company.com" className="mt-1" />
+              </div>
+              <div>
+                <Label>BCC</Label>
+                <Input value={form.bcc} onChange={e => setForm(f => ({ ...f, bcc: e.target.value }))} placeholder="bcc@company.com" className="mt-1" />
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Reference Number</Label>
@@ -1800,7 +1860,7 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
             <Button onClick={() => create.mutate(form)} disabled={create.isPending || !form.subject}>
-              {create.isPending ? "Creating..." : "Create"}
+              {create.isPending ? "Creating..." : "Create as Draft"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1827,7 +1887,7 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
             ) : filtered.map((c: any) => {
               const isOverdue = c.dueDate && new Date(c.dueDate) < new Date() && c.status !== "closed";
               return (
-                <TableRow key={c.id} className={`hover:bg-muted/30 ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
+                <TableRow key={c.id} className={`hover:bg-muted/30 cursor-pointer ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`} onDoubleClick={() => setCorrDetail(c)} title="Double-click to view details">
                   <TableCell className="font-mono text-xs">{c.referenceNumber || `#${c.id}`}</TableCell>
                   <TableCell>
                     <Badge variant="outline" className="text-xs">{CORR_TYPE_LABELS[c.type] || c.type}</Badge>

@@ -84,7 +84,7 @@ export default function Admin() {
   const [resetPwOpen, setResetPwOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [userForm, setUserForm] = useState({ email: "", firstName: "", lastName: "", role: "reviewer", password: "", organizationId: "" });
-  const [editForm, setEditForm] = useState({ firstName: "", lastName: "", role: "reviewer", organizationId: "" });
+  const [editForm, setEditForm] = useState({ firstName: "", lastName: "", role: "reviewer", organizationId: "", department: "" });
   const [newPassword, setNewPassword] = useState("");
   const [userSearch, setUserSearch] = useState("");
 
@@ -541,6 +541,10 @@ export default function Admin() {
                     </Select>
                   </div>
                 </div>
+                <div>
+                  <Label>Department <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+                  <Input value={editForm.department} onChange={e => setEditForm(f => ({ ...f, department: e.target.value }))} placeholder="Engineering, Finance, Contracts..." className="mt-1" />
+                </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setEditUserOpen(false)}>Cancel</Button>
@@ -652,9 +656,10 @@ export default function Admin() {
                               <Button
                                 variant="ghost" size="icon" className="h-7 w-7"
                                 title="Edit user"
+                                aria-label="Edit user"
                                 onClick={() => {
                                   setSelectedUser(u);
-                                  setEditForm({ firstName: u.firstName, lastName: u.lastName, role: u.role, organizationId: u.organizationId ? String(u.organizationId) : "_none" });
+                                  setEditForm({ firstName: u.firstName, lastName: u.lastName, role: u.role, organizationId: u.organizationId ? String(u.organizationId) : "_none", department: u.department ?? "" });
                                   setEditUserOpen(true);
                                 }}
                               >
