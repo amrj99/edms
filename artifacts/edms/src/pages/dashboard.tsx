@@ -7,7 +7,7 @@ import {
   FileText, ClipboardCheck, Mail, CheckSquare, ArrowRight, Loader2, Clock,
   AlertCircle, TrendingUp, Activity, Send, FolderOpen, Upload, CheckCircle2,
   BrainCircuit, Zap, Settings2, GripVertical, X, Plus, ClipboardList,
-  ShieldAlert, FileCheck, PenLine, Bell, RefreshCw, Building2,
+  ShieldAlert, FileCheck, PenLine, Bell, RefreshCw, Building2, CalendarDays,
 } from "lucide-react";
 import { format, isAfter, parseISO } from "date-fns";
 import {
@@ -62,13 +62,14 @@ const ALL_WIDGETS = [
   { id: "my_tasks", label: "My Tasks", icon: CheckSquare },
   { id: "system_activity", label: "System Activity", icon: Activity },
   { id: "cross_org_stats", label: "Cross-Org Overview", icon: Building2 },
+  { id: "upcoming_meetings", label: "Upcoming Meetings", icon: CalendarDays },
 ];
 
 const DEFAULT_LAYOUT = [
   "documents_by_status", "project_portfolio", "overdue_items",
   "open_itr", "open_ncr", "noc_status",
-  "open_correspondence", "recent_documents", "my_tasks", "system_activity",
-  "drawings_by_status",
+  "open_correspondence", "recent_documents", "my_tasks", "upcoming_meetings",
+  "system_activity", "drawings_by_status",
 ];
 
 const STORAGE_KEY = "edms_dashboard_layout";
@@ -409,6 +410,29 @@ function MyTasksWidget({ tasks }: { tasks: any[] }) {
   );
 }
 
+function UpcomingMeetingsWidget({ meetings }: { meetings: any[] }) {
+  const upcoming = meetings.slice(0, 6);
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><CalendarDays className="h-3.5 w-3.5" />Upcoming Meetings</CardTitle></CardHeader>
+      <CardContent>
+        <div className="space-y-1.5 max-h-[200px] overflow-y-auto">
+          {upcoming.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No meetings this week</p> :
+            upcoming.map((m: any) => (
+              <div key={m.id} className="flex items-center gap-2 text-xs">
+                <CalendarDays className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                <span className="flex-1 truncate">{m.title}</span>
+                {m.meetingDate && <span className="shrink-0 text-muted-foreground">{format(new Date(m.meetingDate), "dd MMM")}</span>}
+              </div>
+            ))
+          }
+        </div>
+        <Link href="/calendar"><Button variant="ghost" size="sm" className="w-full mt-2 h-7 text-xs">View calendar <ArrowRight className="ml-1 h-3 w-3" /></Button></Link>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SystemActivityWidget() {
   const { data, isLoading } = useQuery({
     queryKey: ["activity-feed"],
@@ -519,6 +543,7 @@ function WidgetRenderer({ id, data }: { id: string; data: any }) {
     case "overdue_items": return <OverdueItemsWidget tasks={data.myTasks} correspondence={data.unreadCorrespondence} />;
     case "recent_documents": return <RecentDocumentsWidget docs={data.recentDocuments} />;
     case "my_tasks": return <MyTasksWidget tasks={data.myTasks} />;
+    case "upcoming_meetings": return <UpcomingMeetingsWidget meetings={data.meetingsThisWeek ?? []} />;
     case "system_activity": return <SystemActivityWidget />;
     case "cross_org_stats": return data.isSysAdmin ? <CrossOrgStatsWidget /> : null;
     default: return null;

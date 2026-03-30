@@ -68,6 +68,58 @@ const REVIEW_DECISION_OPTIONS = [
   { value: "rejected",              label: "Rejected",              icon: "✗", activeClass: "border-red-500 bg-red-50 text-red-700" },
 ] as const;
 
+// ─── Revision History Sheet ──────────────────────────────────────────────────
+function RevisionHistorySheet({ doc, projectId, open, onClose }: { doc: any; projectId: number; open: boolean; onClose: () => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["revisions", doc?.id],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${doc.id}/revisions`);
+      return r.json();
+    },
+    enabled: open && !!doc,
+  });
+  const revisions: any[] = data?.revisions ?? [];
+
+  return (
+    <Sheet open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <SheetContent className="w-[400px] sm:max-w-[400px] overflow-y-auto">
+        <SheetHeader className="mb-4">
+          <SheetTitle className="flex items-center gap-2"><History className="h-4 w-4" /> Revision History</SheetTitle>
+          {doc && <p className="text-xs text-muted-foreground font-mono">{doc.documentNumber} · {doc.title}</p>}
+        </SheetHeader>
+        {isLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+        ) : revisions.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">No revision history found.</p>
+        ) : (
+          <div className="space-y-3">
+            {revisions.map((rev: any, idx: number) => (
+              <div key={rev.id} className={`rounded-lg border p-3 ${idx === 0 ? "border-primary bg-primary/5" : ""}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-mono font-bold ${idx === 0 ? "text-primary" : ""}`}>Rev {rev.revision}</span>
+                    {idx === 0 && <Badge variant="default" className="text-[10px]">Latest</Badge>}
+                  </div>
+                  {rev.fileUrl && (
+                    <a href={rev.fileUrl} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
+                      <FileDown className="h-3 w-3" /> Download
+                    </a>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {rev.uploadedByName && <span className="mr-1">{rev.uploadedByName} ·</span>}
+                  {rev.createdAt ? format(new Date(rev.createdAt), "dd MMM yyyy, HH:mm") : ""}
+                </p>
+                {rev.comment && <p className="text-xs text-foreground mt-1 italic">"{rev.comment}"</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 export default function ProjectDetail() {
   const params = useParams();
@@ -175,6 +227,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [docPreview, setDocPreview] = useState<any>(null);
+  const [revHistoryDoc, setRevHistoryDoc] = useState<any>(null);
   const [validateOpen, setValidateOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<any>(null);
   const [validating, setValidating] = useState(false);
@@ -857,6 +910,9 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setRevHistoryDoc(docPreview)}>
+                <History className="h-3.5 w-3.5" /> Revision History
+              </Button>
               {docPreview?.fileUrl && (
                 <>
                   <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
@@ -923,6 +979,14 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Revision History Sheet */}
+      <RevisionHistorySheet
+        doc={revHistoryDoc}
+        projectId={projectId}
+        open={!!revHistoryDoc}
+        onClose={() => setRevHistoryDoc(null)}
+      />
 
       <Dialog open={!!shareDoc} onOpenChange={v => { if (!v) { setShareDoc(null); setDocShareResult(null); } }}>
         <DialogContent className="sm:max-w-[480px]">

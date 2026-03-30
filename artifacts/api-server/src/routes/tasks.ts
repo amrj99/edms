@@ -45,9 +45,10 @@ router.get("/", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, async (req, res) => {
   const { title, description, priority, assignedToId, projectId, dueDate } = req.body;
+  const effectiveAssignedToId = assignedToId || req.user!.id;
   const [task] = await db.insert(tasksTable).values({
     title, description, priority,
-    assignedToId: assignedToId || null,
+    assignedToId: effectiveAssignedToId,
     createdById: req.user!.id,
     projectId: projectId || null,
     dueDate: dueDate ? new Date(dueDate) : undefined,
@@ -55,7 +56,7 @@ router.post("/", requireAuth, async (req, res) => {
   }).returning();
 
   // Notify the assignee (if assigned to someone other than the creator)
-  if (assignedToId && assignedToId !== req.user!.id) {
+  if (effectiveAssignedToId && effectiveAssignedToId !== req.user!.id) {
     try {
       const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable).where(eq(usersTable.id, req.user!.id));

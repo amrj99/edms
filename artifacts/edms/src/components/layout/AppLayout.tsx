@@ -290,7 +290,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navigation.map((item) => (
-                <SidebarMenuItem key={item.title}>
+                <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton asChild isActive={location === item.url || (item.url !== "/" && location.startsWith(item.url))}>
                     <Link href={item.url} className="flex items-center gap-3 rounded-lg px-3 py-2 text-sidebar-foreground transition-all hover:bg-sidebar-accent hover:text-white">
                       <item.icon className="h-4 w-4" />
@@ -338,7 +338,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {adminNav.map((item) => (
-                  <SidebarMenuItem key={item.title}>
+                  <SidebarMenuItem key={item.url}>
                     <SidebarMenuButton asChild isActive={location.startsWith(item.url)}>
                       <Link href={item.url} className="flex items-center gap-3 rounded-lg px-3 py-2 text-sidebar-foreground transition-all hover:bg-sidebar-accent hover:text-white">
                         <item.icon className="h-4 w-4" />
@@ -628,6 +628,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
   const { modules } = useModules();
+  const { isRtl } = useI18n();
 
   if (isLoading) {
     return (
@@ -638,12 +639,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   if (!user && location !== "/login") return null;
-
   const style = { "--sidebar-width": "16rem", "--sidebar-width-icon": "4rem" } as React.CSSProperties;
 
   return (
     <SidebarProvider style={style}>
-      <div className="flex min-h-screen w-full bg-background text-foreground">
+      <div className="flex min-h-screen w-full bg-background text-foreground" dir={isRtl ? "rtl" : "ltr"}>
         <AppSidebar />
         <div className="flex flex-col flex-1 w-full overflow-hidden">
           <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-card px-6 shadow-sm z-10 sticky top-0">

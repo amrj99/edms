@@ -3,6 +3,7 @@ import { useSearch } from "@workspace/api-client-react";
 import {
   FileText, Mail, Loader2, Sparkles, Search as SearchIcon,
   Filter, X, SlidersHorizontal, Clock, FolderOpen, Tag, CheckCircle2, Send,
+  CalendarDays,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -83,7 +84,8 @@ export default function Search() {
 
   const filteredDocs = (data?.documents ?? []).filter(filterDoc);
   const filteredCorr = (data?.correspondence ?? []).filter(filterCorr);
-  const total = filteredDocs.length + filteredCorr.length;
+  const filteredMeetings = (data?.meetings ?? []);
+  const total = filteredDocs.length + filteredCorr.length + filteredMeetings.length;
 
   return (
     <div className="space-y-6 animate-in fade-in max-w-4xl mx-auto">
@@ -288,6 +290,38 @@ export default function Search() {
                           )}
                         </div>
                         <Mail className="h-5 w-5 text-muted-foreground shrink-0 ml-3" />
+                      </CardContent>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredMeetings.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-xl font-semibold flex items-center gap-2">
+                <CalendarDays className="h-5 w-5 text-primary" /> Meetings
+                <Badge variant="secondary">{filteredMeetings.length}</Badge>
+              </h2>
+              <div className="grid gap-2">
+                {filteredMeetings.map((meeting: any) => (
+                  <Link key={meeting.id} href={`/projects/${meeting.projectId}/meetings`}>
+                    <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+                      <CardContent className="p-4 flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <Badge variant="secondary" className="text-[10px]">Meeting</Badge>
+                            {meeting.referenceNumber && <span className="text-xs font-mono font-bold bg-muted px-2 py-0.5 rounded">{meeting.referenceNumber}</span>}
+                            {meeting.status && <Badge variant="outline" className="text-[10px] capitalize">{meeting.status.replace(/_/g, " ")}</Badge>}
+                          </div>
+                          <h3 className="font-medium text-foreground truncate">{meeting.title}</h3>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {meeting.projectName && <span className="mr-2">{meeting.projectName}</span>}
+                            {meeting.meetingDate && <span>{format(new Date(meeting.meetingDate), "dd MMM yyyy")}</span>}
+                          </p>
+                        </div>
+                        <CalendarDays className="h-5 w-5 text-muted-foreground shrink-0 ml-3" />
                       </CardContent>
                     </Card>
                   </Link>

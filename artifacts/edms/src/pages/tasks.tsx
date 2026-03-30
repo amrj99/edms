@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useListTasks, useListProjects } from "@workspace/api-client-react";
+import { useListTasks, useListProjects, getListTasksQueryKey } from "@workspace/api-client-react";
 import {
   CheckSquare, Clock, AlertCircle, Loader2, Brain,
   ArrowUp, ArrowDown, Plus, Calendar, FolderKanban,
@@ -100,7 +100,8 @@ export default function Tasks() {
   const createMutation = useMutation({
     mutationFn: createTaskApi,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["listTasks"] });
+      qc.invalidateQueries({ queryKey: getListTasksQueryKey() });
+      qc.invalidateQueries({ queryKey: getListTasksQueryKey({ assignedToMe: true }) });
       toast({ title: t("taskCreated") });
       setCreateOpen(false);
       setNewTitle(""); setNewDesc(""); setNewPriority("medium");
@@ -111,7 +112,10 @@ export default function Tasks() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) => updateTaskStatusApi(id, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["listTasks"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getListTasksQueryKey() });
+      qc.invalidateQueries({ queryKey: getListTasksQueryKey({ assignedToMe: true }) });
+    },
   });
 
   const handleCreateSubmit = (e: React.FormEvent) => {

@@ -6,6 +6,9 @@ import {
   parseISO,
 } from "date-fns";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
   ChevronLeft, ChevronRight, CalendarDays, Loader2,
   CheckSquare, ListTodo, Users, Clock, Tag,
 } from "lucide-react";
@@ -92,7 +95,81 @@ function EventChip({ event, compact = false }: { event: CalEvent; compact?: bool
   );
 }
 
-function MonthView({ events, currentDate }: { events: CalEvent[]; currentDate: Date }) {
+function DayDetailDialog({
+  day, events, open, onClose,
+}: { day: Date | null; events: CalEvent[]; open: boolean; onClose: () => void }) {
+  if (!day) return null;
+  const key = format(day, "yyyy-MM-dd");
+  const dayEvents = events
+    .filter(e => {
+      if (!e.date) return false;
+      const d = e.date instanceof Date ? e.date : parseISO(e.date as string);
+      return format(d, "yyyy-MM-dd") === key;
+    })
+    .sort((a, b) => {
+      const order = { meeting: 0, task: 1, action_item: 2 };
+      return (order[a.type] ?? 3) - (order[b.type] ?? 3);
+    });
+
+  const groupsByType = [
+    { type: "meeting" as EventType, label: "Meetings", items: dayEvents.filter(e => e.type === "meeting") },
+    { type: "task" as EventType, label: "Tasks", items: dayEvents.filter(e => e.type === "task") },
+    { type: "action_item" as EventType, label: "Action Items", items: dayEvents.filter(e => e.type === "action_item") },
+  ].filter(g => g.items.length > 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-primary" />
+            {format(day, "EEEE, MMMM d, yyyy")}
+          </DialogTitle>
+        </DialogHeader>
+        {dayEvents.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">No events on this day.</p>
+        ) : (
+          <div className="space-y-4">
+            {groupsByType.map(({ type, label, items }) => {
+              const colors = EVENT_COLORS[type];
+              const Icon = EVENT_ICONS[type];
+              return (
+                <div key={type}>
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <Icon className="h-3.5 w-3.5" /> {label}
+                  </h4>
+                  <div className="space-y-1.5">
+                    {items.map(event => (
+                      <Link key={event.id} href={event.url ?? "/"} onClick={onClose}>
+                        <div className={cn(
+                          "flex items-start gap-2 p-2.5 rounded-lg border-l-2 cursor-pointer hover:opacity-80 transition-opacity",
+                          colors.bg, colors.text, colors.border,
+                        )}>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{event.title}</p>
+                            {event.projectName && <p className="text-xs opacity-70 mt-0.5">{event.projectName}</p>}
+                            {event.status && <Badge variant="outline" className="text-[10px] mt-1 capitalize">{event.status.replace("_", " ")}</Badge>}
+                            {event.priority && event.priority !== "normal" && (
+                              <Badge variant="outline" className={cn("text-[10px] mt-1 ml-1 capitalize", event.priority === "urgent" && "border-red-500 text-red-600")}>
+                                {event.priority}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MonthView({ events, currentDate, onDayClick }: { events: CalEvent[]; currentDate: Date; onDayClick: (day: Date) => void }) {
   const { t } = useI18n();
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
@@ -141,8 +218,9 @@ function MonthView({ events, currentDate }: { events: CalEvent[]; currentDate: D
           return (
             <div
               key={key}
+              onClick={() => onDayClick(day)}
               className={cn(
-                "border-r border-b p-1 min-h-[90px] flex flex-col gap-0.5",
+                "border-r border-b p-1 min-h-[90px] flex flex-col gap-0.5 cursor-pointer hover:bg-accent/40 transition-colors",
                 !isCurrentMonth && "bg-muted/30 opacity-50",
                 isT && "bg-primary/5",
               )}
@@ -307,6 +385,7 @@ export default function CalendarPage() {
   const [view, setView] = useState<CalView>("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [typeFilter, setTypeFilter] = useState<EventType | "all">("all");
+  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
 
   const rangeStart = useMemo(() => {
     if (view === "month") return startOfMonth(currentDate);
@@ -429,11 +508,18 @@ export default function CalendarPage() {
         </div>
       ) : (
         <>
-          {view === "month" && <MonthView events={events} currentDate={currentDate} />}
+          {view === "month" && <MonthView events={events} currentDate={currentDate} onDayClick={setSelectedDay} />}
           {view === "week" && <WeekView events={events} currentDate={currentDate} />}
           {view === "day"  && <DayView  events={events} currentDate={currentDate} />}
         </>
       )}
+
+      <DayDetailDialog
+        day={selectedDay}
+        events={events}
+        open={!!selectedDay}
+        onClose={() => setSelectedDay(null)}
+      />
     </div>
   );
 }

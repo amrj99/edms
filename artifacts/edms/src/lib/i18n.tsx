@@ -786,7 +786,7 @@ const translations = {
     navCalendar: "التقويم",
     navOrganizations: "المؤسسات",
     navUsersRoles: "المستخدمون والصلاحيات",
-    navConfig: "الإعدادات",
+    navConfig: "التكوين",
     navAdmin: "إدارة النظام",
     navSettings: "الإعدادات",
     navAISettings: "إعدادات الذكاء الاصطناعي",
