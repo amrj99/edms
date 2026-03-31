@@ -8,8 +8,11 @@ export const notificationTypeEnum = pgEnum("notification_type", [
   "document_uploaded",
   "document_approved",
   "document_rejected",
+  "document_approval_request",
   "task_assigned",
   "task_overdue",
+  "task_status_updated",
+  "action_item_assigned",
   "correspondence_received",
   "transmittal_received",
   "transmittal_acknowledged",
@@ -20,6 +23,7 @@ export const notificationTypeEnum = pgEnum("notification_type", [
   "mention",
   "chat_message",
   "meeting_assigned",
+  "meeting_reminder",
   "system",
 ]);
 

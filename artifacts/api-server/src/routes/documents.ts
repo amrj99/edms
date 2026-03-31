@@ -321,6 +321,21 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
         projectId,
       }).catch(() => {});
     }
+    // In-app notification to the document creator
+    if (doc.createdById && doc.createdById !== req.user!.id) {
+      try {
+        await db.insert(notificationsTable).values({
+          userId: doc.createdById,
+          type: "document_approved" as const,
+          title: `Document approved: ${doc.documentNumber}`,
+          message: `${reviewerName} approved "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})${comment ? ` — ${comment}` : ""}`,
+          projectId: projectId || null,
+          entityType: "document",
+          entityId: id,
+          actionUrl: `/projects/${projectId}`,
+        });
+      } catch (_) {}
+    }
   }
 
   res.json({ ...doc });
@@ -377,6 +392,22 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
         projectId,
       }).catch(() => {});
     }
+    // In-app notification to the document creator
+    if (doc.createdById !== req.user!.id) {
+      try {
+        const decisionLabel = decision === "rejected" ? "rejected" : "returned for revision";
+        await db.insert(notificationsTable).values({
+          userId: doc.createdById,
+          type: "document_rejected" as const,
+          title: `Document ${decisionLabel}: ${doc.documentNumber}`,
+          message: `${reviewerName} ${decisionLabel} "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})${comment ? ` — ${comment}` : ""}`,
+          projectId: projectId || null,
+          entityType: "document",
+          entityId: id,
+          actionUrl: `/projects/${projectId}`,
+        });
+      } catch (_) {}
+    }
   }
 
   res.json({ ...doc });
@@ -428,6 +459,26 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "submit_review", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+
+  // In-app notification: notify each reviewer about the approval request
+  if (reviewerIds?.length > 0) {
+    try {
+      const submitter = req.user as any;
+      const submitterName = `${submitter.firstName} ${submitter.lastName}`.trim();
+      await db.insert(notificationsTable).values(
+        reviewerIds.filter((uid: number) => uid !== req.user!.id).map((uid: number) => ({
+          userId: uid,
+          type: "document_approval_request" as const,
+          title: `Document review request: ${doc.documentNumber}`,
+          message: `${submitterName} submitted "${doc.title}" (${doc.documentNumber} Rev ${doc.revision}) for your review`,
+          projectId: projectId || null,
+          entityType: "document",
+          entityId: id,
+          actionUrl: `/projects/${projectId}`,
+        }))
+      );
+    } catch (_) {}
+  }
 
   // Email reviewers that they have a document to review
   if (reviewerIds?.length > 0) {

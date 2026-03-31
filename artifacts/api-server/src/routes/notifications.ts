@@ -1,17 +1,16 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { notificationsTable, tasksTable } from "@workspace/db";
-import { eq, and, desc, count, lt, isNotNull, notInArray } from "drizzle-orm";
+import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, usersTable } from "@workspace/db";
+import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
 router.use(requireAuth);
 
-// Generate overdue-task notifications for the current user (idempotent – skips duplicates from today).
+// ─── Overdue task notification generation ──────────────────────────────────────
 async function generateOverdueTaskNotifications(userId: number): Promise<void> {
   try {
     const now = new Date();
-    // Find overdue, non-terminal tasks assigned to this user
     const overdueTasks = await db
       .select({ id: tasksTable.id, title: tasksTable.title, dueDate: tasksTable.dueDate })
       .from(tasksTable)
@@ -26,7 +25,6 @@ async function generateOverdueTaskNotifications(userId: number): Promise<void> {
 
     if (overdueTasks.length === 0) return;
 
-    // Check which ones already have an unread overdue notification
     const existingOverdue = await db
       .select({ entityId: notificationsTable.entityId })
       .from(notificationsTable)
@@ -55,20 +53,93 @@ async function generateOverdueTaskNotifications(userId: number): Promise<void> {
       await db.insert(notificationsTable).values(toInsert);
     }
   } catch {
-    // Non-fatal: overdue notification generation failure should not break the fetch
+    // Non-fatal
   }
 }
 
+// ─── Upcoming meeting reminder generation ─────────────────────────────────────
+// Reminds users 24 hours before a meeting they are attending.
+async function generateUpcomingMeetingReminders(userId: number): Promise<void> {
+  try {
+    const now = new Date();
+    const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    // Find meetings within next 24 hours where user is an attendee
+    const attendeeRows = await db
+      .select({ meetingId: meetingAttendeesTable.meetingId })
+      .from(meetingAttendeesTable)
+      .where(eq(meetingAttendeesTable.userId, userId));
+
+    if (attendeeRows.length === 0) return;
+    const meetingIds = attendeeRows.map(r => r.meetingId);
+
+    const upcomingMeetings = await db
+      .select({ id: meetingsTable.id, title: meetingsTable.title, meetingDate: meetingsTable.meetingDate })
+      .from(meetingsTable)
+      .where(
+        and(
+          inArray(meetingsTable.id, meetingIds),
+          gte(meetingsTable.meetingDate, now),
+          lte(meetingsTable.meetingDate, in24h),
+          notInArray(meetingsTable.status, ["cancelled", "completed"]),
+        )
+      );
+
+    if (upcomingMeetings.length === 0) return;
+
+    // Deduplicate: skip meetings already reminded about (unread reminder exists)
+    const existingReminders = await db
+      .select({ entityId: notificationsTable.entityId })
+      .from(notificationsTable)
+      .where(
+        and(
+          eq(notificationsTable.userId, userId),
+          eq(notificationsTable.type, "meeting_reminder"),
+          eq(notificationsTable.isRead, false),
+        )
+      );
+    const alreadyReminded = new Set(existingReminders.map(n => n.entityId));
+
+    const toInsert = upcomingMeetings
+      .filter(m => !alreadyReminded.has(m.id))
+      .map(m => {
+        const hoursAway = Math.round((m.meetingDate.getTime() - now.getTime()) / (60 * 60 * 1000));
+        const timeStr = hoursAway <= 1 ? "less than 1 hour" : `${hoursAway} hours`;
+        return {
+          userId,
+          type: "meeting_reminder" as const,
+          title: `Upcoming meeting: ${m.title}`,
+          message: `You have a meeting "${m.title}" starting in ${timeStr} (${m.meetingDate.toLocaleString()})`,
+          entityId: m.id,
+          entityType: "meeting",
+          actionUrl: "/meetings",
+        };
+      });
+
+    if (toInsert.length > 0) {
+      await db.insert(notificationsTable).values(toInsert);
+    }
+  } catch {
+    // Non-fatal
+  }
+}
+
+// ─── GET /api/notifications ────────────────────────────────────────────────────
 router.get("/", async (req, res) => {
   const userId = req.user!.id;
   const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
   const unreadOnly = req.query.unread === "true";
+  const typeFilter = req.query.type as string | undefined;
 
-  // Generate overdue-task notifications on-the-fly
-  await generateOverdueTaskNotifications(userId);
+  // Generate on-the-fly notifications
+  await Promise.all([
+    generateOverdueTaskNotifications(userId),
+    generateUpcomingMeetingReminders(userId),
+  ]);
 
   const conditions = [eq(notificationsTable.userId, userId)];
   if (unreadOnly) conditions.push(eq(notificationsTable.isRead, false));
+  if (typeFilter) conditions.push(eq(notificationsTable.type, typeFilter as any));
 
   const notifications = await db
     .select()
@@ -85,6 +156,7 @@ router.get("/", async (req, res) => {
   res.json({ notifications, unreadCount: Number(total) });
 });
 
+// ─── Mark single notification as read ─────────────────────────────────────────
 router.post("/:id/read", async (req, res) => {
   const id = parseInt(req.params.id);
   await db.update(notificationsTable)
@@ -93,6 +165,16 @@ router.post("/:id/read", async (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Mark single notification as unread ───────────────────────────────────────
+router.post("/:id/unread", async (req, res) => {
+  const id = parseInt(req.params.id);
+  await db.update(notificationsTable)
+    .set({ isRead: false, readAt: null })
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
+  res.json({ success: true });
+});
+
+// ─── Mark all notifications as read ───────────────────────────────────────────
 router.post("/read-all", async (req, res) => {
   await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
@@ -100,6 +182,7 @@ router.post("/read-all", async (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Delete notification ───────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   await db.delete(notificationsTable)
@@ -107,16 +190,13 @@ router.delete("/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-// Push subscription endpoint — stores subscription for future VAPID-based push delivery.
-// Activation requires VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY environment secrets.
+// ─── Push subscription (VAPID) ────────────────────────────────────────────────
 router.post("/push-subscribe", async (req, res) => {
   const { subscription } = req.body;
   if (!subscription?.endpoint) {
     res.status(400).json({ error: "Invalid subscription object" });
     return;
   }
-  // Log the subscription (persisted storage requires a push_subscriptions table;
-  // set up when VAPID keys are configured).
   res.json({ success: true, ready: false, message: "Push infrastructure ready — configure VAPID keys to enable delivery." });
 });
 

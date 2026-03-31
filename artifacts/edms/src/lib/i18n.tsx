@@ -451,6 +451,9 @@ const translations = {
     // Notification bell UI
     notifBell: "Notifications",
     notifMarkAllRead: "Mark all read",
+    notifMarkRead: "Mark as read",
+    notifMarkUnread: "Mark as unread",
+    notifDelete: "Delete",
     notifEmpty: "No notifications",
     notifEmptyDesc: "You're all caught up!",
     notifAll: "All",
@@ -951,6 +954,9 @@ const translations = {
     // Notification bell UI
     notifBell: "الإشعارات",
     notifMarkAllRead: "تعليم الكل كمقروء",
+    notifMarkRead: "تعليم كمقروء",
+    notifMarkUnread: "تعليم كغير مقروء",
+    notifDelete: "حذف",
     notifEmpty: "لا توجد إشعارات",
     notifEmptyDesc: "أنت على اطلاع بكل شيء!",
     notifAll: "الكل",

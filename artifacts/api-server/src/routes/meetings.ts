@@ -362,6 +362,25 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
     notes: notes?.trim() || null,
   }).returning();
 
+  // Notify the assigned user (if a registered user, and not the creator)
+  if (assignedToId && assignedToId !== req.user!.id) {
+    try {
+      const [meeting] = await db.select({ title: meetingsTable.title }).from(meetingsTable).where(eq(meetingsTable.id, meetingId)).limit(1);
+      const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
+      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+      await db.insert(notificationsTable).values({
+        userId: assignedToId,
+        type: "action_item_assigned" as const,
+        title: `Action item assigned: ${title.trim()}`,
+        message: `${actorName} assigned you an action item from meeting "${meeting?.title ?? ""}": "${title.trim()}"${dueDate ? ` (due ${new Date(dueDate).toLocaleDateString()})` : ""}`,
+        entityType: "meeting",
+        entityId: meetingId,
+        actionUrl: `/meetings`,
+      });
+    } catch (_) {}
+  }
+
   res.status(201).json({ actionItem: item });
 });
 

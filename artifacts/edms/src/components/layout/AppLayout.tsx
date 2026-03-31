@@ -12,7 +12,7 @@ import {
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
   CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
-  ExternalLink, Menu,
+  ExternalLink, Menu, MoreHorizontal, Eye, EyeOff, Trash2,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -54,19 +54,24 @@ function getRecentProjects(): { id: number; code: string; name: string }[] {
 // ─── Notification Bell ────────────────────────────────────────────────────────
 const NOTIF_FILTER_GROUPS = [
   { key: "all", labelKey: "notifAll" as const },
-  { key: "documents", labelKey: "notifDocs" as const, types: ["document_uploaded","document_approved","document_rejected","workflow_action_required","rfi_opened","rfi_responded","submittal_returned"] },
-  { key: "tasks", labelKey: "notifTasks" as const, types: ["task_assigned","task_overdue"] },
+  { key: "documents", labelKey: "notifDocs" as const, types: ["document_uploaded","document_approved","document_rejected","document_approval_request","workflow_action_required","rfi_opened","rfi_responded","submittal_returned"] },
+  { key: "tasks", labelKey: "notifTasks" as const, types: ["task_assigned","task_overdue","task_status_updated","action_item_assigned"] },
   { key: "correspondence", labelKey: "notifMail" as const, types: ["correspondence_received","transmittal_received","transmittal_acknowledged"] },
-  { key: "meetings", labelKey: "notifMeetings" as const, types: ["meeting_assigned"] },
+  { key: "meetings", labelKey: "notifMeetings" as const, types: ["meeting_assigned","meeting_reminder"] },
   { key: "chat", labelKey: "notifChat" as const, types: ["chat_message","mention"] },
 ];
 
 function NotificationIcon(type: string) {
-  if (type === "task_assigned" || type === "task_overdue") return <CheckSquare className="h-4 w-4 text-blue-500" />;
+  if (type === "task_assigned" || type === "task_overdue" || type === "task_status_updated") return <CheckSquare className="h-4 w-4 text-blue-500" />;
+  if (type === "action_item_assigned") return <CheckSquare className="h-4 w-4 text-violet-500" />;
+  if (type === "document_approval_request") return <FolderKanban className="h-4 w-4 text-amber-500" />;
+  if (type === "document_approved") return <FolderKanban className="h-4 w-4 text-green-600" />;
+  if (type === "document_rejected") return <FolderKanban className="h-4 w-4 text-red-500" />;
   if (type.startsWith("document") || type.startsWith("rfi") || type.startsWith("submittal") || type === "workflow_action_required") return <FolderKanban className="h-4 w-4 text-green-500" />;
   if (type.startsWith("transmittal")) return <Send className="h-4 w-4 text-purple-500" />;
   if (type === "correspondence_received") return <Mail className="h-4 w-4 text-orange-500" />;
   if (type === "meeting_assigned") return <CalendarDays className="h-4 w-4 text-indigo-500" />;
+  if (type === "meeting_reminder") return <CalendarDays className="h-4 w-4 text-amber-500" />;
   if (type === "chat_message" || type === "mention") return <MessageSquare className="h-4 w-4 text-cyan-500" />;
   return <Bell className="h-4 w-4 text-muted-foreground" />;
 }
@@ -87,6 +92,16 @@ function NotificationBell() {
 
   const markRead = useMutation({
     mutationFn: async (id: number) => { await fetch(`/api/notifications/${id}/read`, { method: "POST" }); },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+
+  const markUnread = useMutation({
+    mutationFn: async (id: number) => { await fetch(`/api/notifications/${id}/unread`, { method: "POST" }); },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+  });
+
+  const deleteNotif = useMutation({
+    mutationFn: async (id: number) => { await fetch(`/api/notifications/${id}`, { method: "DELETE" }); },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
@@ -157,18 +172,58 @@ function NotificationBell() {
               {filtered.map((n: any) => (
                 <div
                   key={n.id}
-                  className={`flex items-start gap-3 p-4 hover:bg-accent/50 transition-colors cursor-pointer ${!n.isRead ? "bg-primary/5" : ""}`}
-                  onClick={() => handleNotificationClick(n)}
+                  className={`group flex items-start gap-3 p-4 hover:bg-accent/50 transition-colors ${!n.isRead ? "bg-primary/5" : ""}`}
                 >
-                  <div className="mt-0.5 shrink-0">{NotificationIcon(n.type)}</div>
-                  <div className="flex-1 min-w-0">
+                  <div
+                    className="mt-0.5 shrink-0 cursor-pointer"
+                    onClick={() => handleNotificationClick(n)}
+                  >
+                    {NotificationIcon(n.type)}
+                  </div>
+                  <div
+                    className="flex-1 min-w-0 cursor-pointer"
+                    onClick={() => handleNotificationClick(n)}
+                  >
                     <p className={`text-sm ${!n.isRead ? "font-medium" : "text-muted-foreground"}`}>{n.title}</p>
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.message}</p>
                     <p className="text-xs text-muted-foreground/70 mt-1">{formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}</p>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                    {n.actionUrl && <ExternalLink className="h-3 w-3 text-muted-foreground/40" />}
                     {!n.isRead && <div className="h-2 w-2 rounded-full bg-primary" />}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44">
+                        {n.isRead
+                          ? <DropdownMenuItem onClick={e => { e.stopPropagation(); markUnread.mutate(n.id); }}>
+                              <EyeOff className="h-3.5 w-3.5 mr-2" /> {t("notifMarkUnread")}
+                            </DropdownMenuItem>
+                          : <DropdownMenuItem onClick={e => { e.stopPropagation(); markRead.mutate(n.id); }}>
+                              <Eye className="h-3.5 w-3.5 mr-2" /> {t("notifMarkRead")}
+                            </DropdownMenuItem>
+                        }
+                        {n.actionUrl && (
+                          <DropdownMenuItem onClick={e => { e.stopPropagation(); navigate(n.actionUrl); setOpen(false); }}>
+                            <ExternalLink className="h-3.5 w-3.5 mr-2" /> {t("globalOpenResult")}
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={e => { e.stopPropagation(); deleteNotif.mutate(n.id); }}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 mr-2" /> {t("notifDelete")}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               ))}

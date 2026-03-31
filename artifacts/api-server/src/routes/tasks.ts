@@ -90,6 +90,9 @@ router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const { title, description, status, priority, assignedToId, dueDate } = req.body;
 
+  // Fetch old state to detect changes
+  const [before] = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
+
   const completedAt = status === "completed" ? new Date() : undefined;
 
   const [task] = await db.update(tasksTable)
@@ -98,6 +101,46 @@ router.put("/:id", requireAuth, async (req, res) => {
     .returning();
 
   if (!task) { res.status(404).json({ error: "Not Found" }); return; }
+
+  try {
+    const actorId = req.user!.id;
+
+    // Notify new assignee when task is reassigned
+    if (assignedToId && before && assignedToId !== before.assignedToId && assignedToId !== actorId) {
+      const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
+      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+      await db.insert(notificationsTable).values({
+        userId: assignedToId,
+        type: "task_assigned" as const,
+        title: `Task assigned: ${task.title}`,
+        message: `${actorName} assigned you a task: "${task.title}"${task.dueDate ? ` (due ${task.dueDate.toLocaleDateString()})` : ""}`,
+        projectId: task.projectId || null,
+        entityType: "task",
+        entityId: task.id,
+        actionUrl: "/tasks",
+      });
+    }
+
+    // Notify task creator when status changes (by someone else)
+    if (status && before && status !== before.status && task.createdById && task.createdById !== actorId) {
+      const statusLabel: Record<string, string> = { completed: "Completed", in_progress: "In Progress", pending: "Pending", cancelled: "Cancelled" };
+      const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
+      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+      await db.insert(notificationsTable).values({
+        userId: task.createdById,
+        type: "task_status_updated" as const,
+        title: `Task status updated: ${task.title}`,
+        message: `${actorName} changed the status of "${task.title}" to ${statusLabel[status] ?? status}`,
+        projectId: task.projectId || null,
+        entityType: "task",
+        entityId: task.id,
+        actionUrl: "/tasks",
+      });
+    }
+  } catch (_) {}
+
   const enriched = await enrichTasks([task]);
   res.json(enriched[0]);
 });
