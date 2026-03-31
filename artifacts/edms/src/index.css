@@ -183,3 +183,33 @@
     @apply tracking-tight font-semibold text-foreground;
   }
 }
+
+/* RTL layout overrides */
+[dir="rtl"] {
+  font-family: var(--font-sans), "Segoe UI", system-ui, sans-serif;
+}
+
+/* Flip horizontal icons/chevrons in RTL */
+[dir="rtl"] .lucide-chevron-right,
+[dir="rtl"] .lucide-chevron-left,
+[dir="rtl"] .lucide-arrow-right,
+[dir="rtl"] .lucide-arrow-left {
+  transform: scaleX(-1);
+}
+
+/* Ensure scroll areas behave in RTL */
+[dir="rtl"] [data-radix-scroll-area-viewport] {
+  direction: rtl;
+}
+
+/* Fix badge/avatar positions in RTL for notification bell */
+[dir="rtl"] .notification-badge {
+  right: auto;
+  left: -4px;
+}
+
+/* Sidebar in RTL: reverse border side */
+[dir="rtl"] [data-sidebar="sidebar"] {
+  border-right: none;
+  border-left: 1px solid hsl(var(--sidebar-border));
+}

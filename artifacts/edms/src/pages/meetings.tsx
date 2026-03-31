@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { useI18n } from "@/lib/i18n";
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled: "bg-blue-100 text-blue-700",
@@ -94,6 +95,7 @@ function LinkedDocuments({ projectId }: { meetingId: number; projectId: number }
 export default function MeetingsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { t } = useI18n();
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [searchQ, setSearchQ] = useState("");
@@ -625,7 +627,7 @@ export default function MeetingsPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingId ? "Edit Meeting" : "New Meeting"}</DialogTitle>
+            <DialogTitle>{editingId ? t("editMeeting") : t("newMeeting")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
@@ -717,14 +719,14 @@ export default function MeetingsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>{t("cancel")}</Button>
             <Button
               onClick={handleSubmit}
               disabled={!form.title.trim() || !form.meetingDate || !form.projectId || form.projectId === "_none" || createMeeting.isPending || updateMeeting.isPending}
               className="gap-1.5"
             >
               {(createMeeting.isPending || updateMeeting.isPending) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-              {editingId ? "Save Changes" : "Create Meeting"}
+              {editingId ? t("saveMeeting") : t("createMeeting")}
             </Button>
           </DialogFooter>
         </DialogContent>

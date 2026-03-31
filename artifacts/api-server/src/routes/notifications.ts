@@ -1,16 +1,71 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { notificationsTable } from "@workspace/db";
-import { eq, and, desc, count } from "drizzle-orm";
+import { notificationsTable, tasksTable } from "@workspace/db";
+import { eq, and, desc, count, lt, isNotNull, notInArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
 router.use(requireAuth);
 
+// Generate overdue-task notifications for the current user (idempotent – skips duplicates from today).
+async function generateOverdueTaskNotifications(userId: number): Promise<void> {
+  try {
+    const now = new Date();
+    // Find overdue, non-terminal tasks assigned to this user
+    const overdueTasks = await db
+      .select({ id: tasksTable.id, title: tasksTable.title, dueDate: tasksTable.dueDate })
+      .from(tasksTable)
+      .where(
+        and(
+          eq(tasksTable.assignedToId, userId),
+          isNotNull(tasksTable.dueDate),
+          lt(tasksTable.dueDate, now),
+          notInArray(tasksTable.status, ["completed", "cancelled"]),
+        )
+      );
+
+    if (overdueTasks.length === 0) return;
+
+    // Check which ones already have an unread overdue notification
+    const existingOverdue = await db
+      .select({ entityId: notificationsTable.entityId })
+      .from(notificationsTable)
+      .where(
+        and(
+          eq(notificationsTable.userId, userId),
+          eq(notificationsTable.type, "task_overdue"),
+          eq(notificationsTable.isRead, false),
+        )
+      );
+    const alreadyNotified = new Set(existingOverdue.map(n => n.entityId));
+
+    const toInsert = overdueTasks
+      .filter(t => !alreadyNotified.has(t.id))
+      .map(t => ({
+        userId,
+        type: "task_overdue" as const,
+        title: "Overdue Task",
+        message: `"${t.title}" was due on ${t.dueDate!.toLocaleDateString()} and is still open.`,
+        entityId: t.id,
+        entityType: "task",
+        actionUrl: "/tasks",
+      }));
+
+    if (toInsert.length > 0) {
+      await db.insert(notificationsTable).values(toInsert);
+    }
+  } catch {
+    // Non-fatal: overdue notification generation failure should not break the fetch
+  }
+}
+
 router.get("/", async (req, res) => {
   const userId = req.user!.id;
   const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
   const unreadOnly = req.query.unread === "true";
+
+  // Generate overdue-task notifications on-the-fly
+  await generateOverdueTaskNotifications(userId);
 
   const conditions = [eq(notificationsTable.userId, userId)];
   if (unreadOnly) conditions.push(eq(notificationsTable.isRead, false));

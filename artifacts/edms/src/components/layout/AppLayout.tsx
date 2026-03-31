@@ -53,13 +53,13 @@ function getRecentProjects(): { id: number; code: string; name: string }[] {
 
 // ─── Notification Bell ────────────────────────────────────────────────────────
 const NOTIF_FILTER_GROUPS = [
-  { key: "all", label: "All" },
-  { key: "documents", label: "Docs", types: ["document_uploaded","document_approved","document_rejected","workflow_action_required","rfi_opened","rfi_responded","submittal_returned"] },
-  { key: "tasks", label: "Tasks", types: ["task_assigned","task_overdue"] },
-  { key: "correspondence", label: "Mail", types: ["correspondence_received","transmittal_received","transmittal_acknowledged"] },
-  { key: "meetings", label: "Meetings", types: ["meeting_assigned"] },
-  { key: "chat", label: "Chat", types: ["chat_message","mention"] },
-] as const;
+  { key: "all", labelKey: "notifAll" as const },
+  { key: "documents", labelKey: "notifDocs" as const, types: ["document_uploaded","document_approved","document_rejected","workflow_action_required","rfi_opened","rfi_responded","submittal_returned"] },
+  { key: "tasks", labelKey: "notifTasks" as const, types: ["task_assigned","task_overdue"] },
+  { key: "correspondence", labelKey: "notifMail" as const, types: ["correspondence_received","transmittal_received","transmittal_acknowledged"] },
+  { key: "meetings", labelKey: "notifMeetings" as const, types: ["meeting_assigned"] },
+  { key: "chat", labelKey: "notifChat" as const, types: ["chat_message","mention"] },
+];
 
 function NotificationIcon(type: string) {
   if (type === "task_assigned" || type === "task_overdue") return <CheckSquare className="h-4 w-4 text-blue-500" />;
@@ -77,6 +77,7 @@ function NotificationBell() {
   const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [filterType, setFilterType] = useState("all");
+  const { t, isRtl } = useI18n();
 
   const { data } = useQuery({
     queryKey: ["notifications"],
@@ -91,7 +92,7 @@ function NotificationBell() {
 
   const markAllRead = useMutation({
     mutationFn: async () => { await fetch("/api/notifications/read-all", { method: "POST" }); },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["notifications"] }); toast({ title: "All notifications marked as read" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["notifications"] }); toast({ title: t("notifMarkAllRead") }); },
   });
 
   const notifications: any[] = data?.notifications ?? [];
@@ -99,7 +100,7 @@ function NotificationBell() {
 
   const activeGroup = NOTIF_FILTER_GROUPS.find(g => g.key === filterType);
   const filtered = activeGroup && "types" in activeGroup
-    ? notifications.filter(n => (activeGroup.types as readonly string[]).includes(n.type))
+    ? notifications.filter(n => (activeGroup.types as string[]).includes(n.type))
     : notifications;
 
   const handleNotificationClick = (n: any) => {
@@ -113,22 +114,22 @@ function NotificationBell() {
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
-            <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center text-[10px]">
+            <Badge className={`absolute -top-1 h-5 w-5 p-0 flex items-center justify-center text-[10px] ${isRtl ? "-left-1" : "-right-1"}`}>
               {unreadCount > 99 ? "99+" : unreadCount}
             </Badge>
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96 p-0">
+      <PopoverContent align="end" className="w-96 p-0" dir={isRtl ? "rtl" : "ltr"}>
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
           <div className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
-            <span className="font-semibold">Notifications</span>
+            <span className="font-semibold">{t("notifBell")}</span>
             {unreadCount > 0 && <Badge variant="secondary">{unreadCount}</Badge>}
           </div>
           {unreadCount > 0 && (
             <Button variant="ghost" size="sm" onClick={() => markAllRead.mutate()} className="h-7 text-xs gap-1">
-              <CheckCheck className="h-3 w-3" /> Mark all read
+              <CheckCheck className="h-3 w-3" /> {t("notifMarkAllRead")}
             </Button>
           )}
         </div>
@@ -139,7 +140,7 @@ function NotificationBell() {
               onClick={() => setFilterType(g.key)}
               className={`shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${filterType === g.key ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent"}`}
             >
-              {g.label}
+              {t(g.labelKey)}
             </button>
           ))}
         </div>
@@ -148,7 +149,8 @@ function NotificationBell() {
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
               <Bell className="h-8 w-8 mb-2 opacity-30" />
-              <p className="text-sm">No notifications</p>
+              <p className="text-sm font-medium">{t("notifEmpty")}</p>
+              <p className="text-xs mt-1">{t("notifEmptyDesc")}</p>
             </div>
           ) : (
             <div className="divide-y">
@@ -182,6 +184,7 @@ function NotificationBell() {
 function ProjectSwitcher() {
   const [open, setOpen] = useState(false);
   const [, navigate] = useLocation();
+  const { t, isRtl } = useI18n();
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects"],
@@ -192,17 +195,17 @@ function ProjectSwitcher() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs max-w-[180px]">
+        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs max-w-[180px] hidden md:flex">
           <FolderKanban className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">Switch Project</span>
+          <span className="truncate">{t("switchProject")}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="end">
+      <PopoverContent className="w-72 p-0" align="end" dir={isRtl ? "rtl" : "ltr"}>
         <Command>
-          <CommandInput placeholder="Search projects..." className="h-9" />
-          <CommandEmpty>No projects found</CommandEmpty>
-          <CommandGroup heading="All Projects">
+          <CommandInput placeholder={t("globalSearchPlaceholder")} className="h-9" />
+          <CommandEmpty>{t("globalNoResults")}</CommandEmpty>
+          <CommandGroup heading={t("navProjects")}>
             <ScrollArea className="max-h-72">
               {projects.map((p: any) => (
                 <CommandItem
@@ -215,7 +218,7 @@ function ProjectSwitcher() {
                   }}
                   className="cursor-pointer"
                 >
-                  <span className="font-mono text-xs text-muted-foreground mr-2">{p.code}</span>
+                  <span className="font-mono text-xs text-muted-foreground me-2">{p.code}</span>
                   <span className="truncate">{p.name}</span>
                 </CommandItem>
               ))}
@@ -235,7 +238,7 @@ export function AppSidebar() {
   const [recentProjects, setRecentProjects] = useState<{ id: number; code: string; name: string }[]>([]);
   const [recentOpen, setRecentOpen] = useState(true);
   const { modules } = useModules();
-  const { t } = useI18n();
+  const { t, isRtl } = useI18n();
 
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
@@ -274,7 +277,7 @@ export function AppSidebar() {
   ];
 
   return (
-    <Sidebar variant="inset" className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <Sidebar variant="inset" side={isRtl ? "right" : "left"} className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <SidebarHeader className="flex h-16 items-center px-4 border-b border-sidebar-border/50">
         <div className="flex items-center gap-2 font-display text-lg font-bold tracking-tight text-white">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
@@ -311,7 +314,7 @@ export function AppSidebar() {
               onClick={() => setRecentOpen(o => !o)}
             >
               <span className="flex items-center gap-1"><History className="h-3 w-3" /> {t("recentProjects")}</span>
-              {recentOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {recentOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className={`h-3 w-3 ${isRtl ? "rotate-180" : ""}`} />}
             </SidebarGroupLabel>
             {recentOpen && (
               <SidebarGroupContent>
@@ -366,23 +369,23 @@ export function AppSidebar() {
               </div>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+          <DropdownMenuContent align="end" className="w-56" dir={isRtl ? "rtl" : "ltr"}>
+            <DropdownMenuLabel>{t("myAccount")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <Link href="/profile">
               <DropdownMenuItem className="cursor-pointer">
-                <User className="mr-2 h-4 w-4" />
-                My Profile
+                <User className="me-2 h-4 w-4" />
+                {t("myProfile")}
               </DropdownMenuItem>
             </Link>
             <DropdownMenuItem onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="cursor-pointer">
-              {theme === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
-              Toggle Theme
+              {theme === "dark" ? <Sun className="me-2 h-4 w-4" /> : <Moon className="me-2 h-4 w-4" />}
+              {t("toggleTheme")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={logout} className="text-destructive cursor-pointer">
-              <LogOut className="mr-2 h-4 w-4" />
-              Log out
+              <LogOut className="me-2 h-4 w-4" />
+              {t("logOut")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -494,6 +497,7 @@ function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [, navigate] = useLocation();
+  const { t, isRtl } = useI18n();
 
   const { data, isFetching } = useQuery({
     queryKey: ["global-search", q],
@@ -545,18 +549,18 @@ function GlobalSearch() {
         title="Search (Ctrl+K)"
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
-        <span className="hidden sm:block w-32 text-left">Search...</span>
-        <kbd className="hidden sm:block ml-auto font-mono text-xs bg-background/80 border rounded px-1 py-0.5">⌘K</kbd>
+        <span className="hidden sm:block w-32 text-start">{t("globalSearchPlaceholder")}</span>
+        <kbd className="hidden sm:block ms-auto font-mono text-xs bg-background/80 border rounded px-1 py-0.5">⌘K</kbd>
       </button>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4" onClick={() => setOpen(false)} dir={isRtl ? "rtl" : "ltr"}>
           <div className="w-full max-w-xl bg-popover border shadow-xl rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center border-b px-3 gap-2">
               <Search className="h-4 w-4 text-muted-foreground shrink-0" />
               <input
                 autoFocus
                 className="flex-1 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
-                placeholder="Search projects, documents, correspondence, meetings..."
+                placeholder={t("globalSearchHint")}
                 value={q}
                 onChange={e => setQ(e.target.value)}
                 onKeyDown={e => e.key === "Escape" && setOpen(false)}
@@ -568,9 +572,9 @@ function GlobalSearch() {
             </div>
             <div className="max-h-[28rem] overflow-y-auto">
               {q.trim().length < 2 ? (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">Type at least 2 characters to search...</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("globalSearchMin")}</div>
               ) : results.length === 0 ? (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{isFetching ? "Searching..." : "No results found"}</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{isFetching ? t("globalSearching") : t("globalNoResults")}</div>
               ) : (
                 <div className="py-1">
                   {grouped.map(([type, items]) => {
@@ -588,7 +592,7 @@ function GlobalSearch() {
                         {items.map((r: any, i: number) => (
                           <button
                             key={i}
-                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-accent text-left transition-colors group"
+                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-accent text-start transition-colors group"
                             onClick={() => handleSelect(r)}
                           >
                             <div className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 ${meta.bg}`}>
@@ -612,8 +616,8 @@ function GlobalSearch() {
               )}
             </div>
             <div className="border-t px-4 py-2 flex items-center gap-3 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↵</kbd> Open</span>
-              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">Esc</kbd> Close</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↵</kbd> {t("globalOpenResult")}</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">Esc</kbd> {t("closeMenu")}</span>
               <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">⌘K</kbd> Toggle</span>
             </div>
           </div>
@@ -643,25 +647,27 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider style={style}>
-      <div className="flex min-h-screen w-full bg-background text-foreground" dir={isRtl ? "rtl" : "ltr"}>
+      <div className="flex min-h-screen w-full bg-background text-foreground">
         <AppSidebar />
-        <div className="flex flex-col flex-1 w-full overflow-hidden">
-          <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-card px-6 shadow-sm z-10 sticky top-0">
-            <SidebarTrigger className="hover:bg-accent" />
-            <div className="hidden sm:block flex-1">
+        <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b bg-card px-3 sm:px-6 shadow-sm z-10 sticky top-0">
+            <SidebarTrigger className="hover:bg-accent shrink-0" />
+            <div className="hidden md:block flex-1 max-w-sm">
               <GlobalSearch />
             </div>
-            <div className="flex-1 sm:flex-none" />
-            <div className="flex items-center gap-2">
-              <AICommandAssistant />
-              <div className="text-sm font-medium text-muted-foreground hidden sm:block">{user?.organizationName}</div>
+            <div className="flex-1 min-w-0" />
+            <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+              <div className="hidden md:block">
+                <AICommandAssistant />
+              </div>
+              <div className="text-sm font-medium text-muted-foreground hidden lg:block max-w-[150px] truncate">{user?.organizationName}</div>
               <LanguageToggle />
               <OrgSwitcher />
               <ProjectSwitcher />
               {modules.notifications && <NotificationBell />}
             </div>
           </header>
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+          <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">
               {children}
             </div>

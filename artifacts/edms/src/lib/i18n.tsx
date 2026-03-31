@@ -447,6 +447,61 @@ const translations = {
     taskBottleneck: "Bottleneck",
     taskDue: "Due",
     taskSourceType: "Source",
+
+    // Notification bell UI
+    notifBell: "Notifications",
+    notifMarkAllRead: "Mark all read",
+    notifEmpty: "No notifications",
+    notifEmptyDesc: "You're all caught up!",
+    notifAll: "All",
+    notifDocs: "Docs",
+    notifTasks: "Tasks",
+    notifMail: "Mail",
+    notifMeetings: "Meetings",
+    notifChat: "Chat",
+
+    // Layout / user menu
+    myAccount: "My Account",
+    myProfile: "My Profile",
+    toggleTheme: "Toggle Theme",
+    logOut: "Log Out",
+    switchProject: "Switch Project",
+
+    // Global search
+    globalSearchPlaceholder: "Search...",
+    globalSearchHint: "Search projects, documents, correspondence, meetings...",
+    globalSearchMin: "Type at least 2 characters to search...",
+    globalSearching: "Searching...",
+    globalNoResults: "No results found",
+    globalOpenResult: "Open",
+
+    // Meetings form
+    editMeeting: "Edit Meeting",
+    newMeeting: "New Meeting",
+    saveMeeting: "Save Changes",
+    createMeeting: "Create Meeting",
+
+    // Action Items
+    editActionItem: "Edit Action Item",
+    newActionItem: "New Action Item",
+    saveActionItem: "Save",
+    createActionItem: "Create",
+    actionItemTitle: "Title",
+    actionItemDesc: "Description",
+    actionItemAssignee: "Assignee",
+    actionItemDueDate: "Due Date",
+    actionItemMeeting: "Meeting",
+    noActionItems: "No action items",
+    noActionItemsDesc: "No action items found. Create one from a meeting.",
+    actionItemsTitle: "Action Items",
+    actionItemsDesc: "Track and manage action items from meetings",
+    actionItemCreated: "Action item created",
+    actionItemUpdated: "Action item updated",
+    actionItemDeleted: "Action item deleted",
+
+    // Responsive / mobile
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
   },
   ar: {
     // Navigation / menu
@@ -892,6 +947,61 @@ const translations = {
     taskBottleneck: "عائق",
     taskDue: "الاستحقاق",
     taskSourceType: "المصدر",
+
+    // Notification bell UI
+    notifBell: "الإشعارات",
+    notifMarkAllRead: "تعليم الكل كمقروء",
+    notifEmpty: "لا توجد إشعارات",
+    notifEmptyDesc: "أنت على اطلاع بكل شيء!",
+    notifAll: "الكل",
+    notifDocs: "مستندات",
+    notifTasks: "مهام",
+    notifMail: "بريد",
+    notifMeetings: "اجتماعات",
+    notifChat: "محادثة",
+
+    // Layout / user menu
+    myAccount: "حسابي",
+    myProfile: "ملفي الشخصي",
+    toggleTheme: "تبديل المظهر",
+    logOut: "تسجيل الخروج",
+    switchProject: "تبديل المشروع",
+
+    // Global search
+    globalSearchPlaceholder: "بحث...",
+    globalSearchHint: "ابحث في المشاريع والمستندات والمراسلات والاجتماعات...",
+    globalSearchMin: "اكتب حرفين على الأقل للبحث...",
+    globalSearching: "جاري البحث...",
+    globalNoResults: "لا توجد نتائج",
+    globalOpenResult: "فتح",
+
+    // Meetings form
+    editMeeting: "تعديل الاجتماع",
+    newMeeting: "اجتماع جديد",
+    saveMeeting: "حفظ التغييرات",
+    createMeeting: "إنشاء الاجتماع",
+
+    // Action Items
+    editActionItem: "تعديل بند العمل",
+    newActionItem: "بند عمل جديد",
+    saveActionItem: "حفظ",
+    createActionItem: "إنشاء",
+    actionItemTitle: "العنوان",
+    actionItemDesc: "الوصف",
+    actionItemAssignee: "المسؤول",
+    actionItemDueDate: "تاريخ الاستحقاق",
+    actionItemMeeting: "الاجتماع",
+    noActionItems: "لا توجد بنود عمل",
+    noActionItemsDesc: "لم يتم العثور على بنود عمل. أنشئ واحداً من اجتماع.",
+    actionItemsTitle: "بنود العمل",
+    actionItemsDesc: "تتبع وإدارة بنود العمل من الاجتماعات",
+    actionItemCreated: "تم إنشاء بند العمل",
+    actionItemUpdated: "تم تحديث بند العمل",
+    actionItemDeleted: "تم حذف بند العمل",
+
+    // Responsive / mobile
+    openMenu: "فتح القائمة",
+    closeMenu: "إغلاق القائمة",
   },
 } as const;
 
