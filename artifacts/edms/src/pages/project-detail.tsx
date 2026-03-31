@@ -11,6 +11,7 @@ import {
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
+import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
 import { RecipientAutocomplete } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
@@ -25,7 +26,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
-import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
 import { useToast } from "@/hooks/use-toast";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
@@ -214,13 +214,6 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const createDoc = useCreateDocument();
-  const [docNumber, setDocNumber] = useState("");
-  const [title, setTitle] = useState("");
-  const [discipline, setDiscipline] = useState("");
-  const [revision, setRevision] = useState("01");
-  const [docType, setDocType] = useState("general");
-  const [uploadSource, setUploadSource] = useState("");
-  const [uploadIssuedBy, setUploadIssuedBy] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const [filterDiscipline, setFilterDiscipline] = useState("_all");
   const [filterDocType, setFilterDocType] = useState("_all");
@@ -236,8 +229,6 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [bulkTrsForm, setBulkTrsForm] = useState({ subject: "", purpose: "for_review", toExternal: "", description: "" });
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [bulkAssignStatus, setBulkAssignStatus] = useState("in_review");
-  // File upload state
-  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   // Document edit state
   const [editDoc, setEditDoc] = useState<any>(null);
   const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
@@ -246,37 +237,35 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   // Send for Workflow state
   const [wfDoc, setWfDoc] = useState<any>(null);
   const [wfForm, setWfForm] = useState({ subject: "", purpose: "for_review", toUserIds: [] as number[], externalEmails: "", description: "" });
-  // Upload form validation
-  const [uploadError, setUploadError] = useState<string | null>(null);
   // Document share state
   const [shareDoc, setShareDoc] = useState<any>(null);
   const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
   const [docShareResult, setDocShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
 
-  const handleUpload = async () => {
-    const resolvedTitle = title.trim() || (uploadedFile ? uploadedFile.name.replace(/\.[^.]+$/, "") : "");
-    if (!resolvedTitle) { setUploadError("Title is required."); return; }
-    setUploadError(null);
-    await createDoc.mutateAsync({
-      projectId,
-      data: {
-        documentNumber: docNumber || `DOC-${Date.now()}`,
-        title: resolvedTitle,
-        revision: revision || "01",
-        status: "draft",
-        discipline: discipline || undefined,
-        documentType: docType || "general",
-        source: uploadSource || undefined,
-        issuedBy: uploadIssuedBy || undefined,
-        fileUrl: uploadedFile?.url,
-        fileName: uploadedFile?.name,
-        fileSize: uploadedFile?.size,
-      } as any
-    });
+  const handleMultiUploadSuccess = async (
+    uploads: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }[]
+  ) => {
+    for (const u of uploads) {
+      try {
+        await createDoc.mutateAsync({
+          projectId,
+          data: {
+            documentNumber: u.meta.docNumber || `DOC-${Date.now()}`,
+            title: u.meta.title || u.fileName.replace(/\.[^.]+$/, ""),
+            revision: u.meta.revision || "01",
+            status: (u.meta.status as any) || "draft",
+            discipline: u.meta.discipline || undefined,
+            documentType: u.meta.docType || "general",
+            source: u.meta.source || undefined,
+            issuedBy: u.meta.issuedBy || undefined,
+            fileUrl: u.fileUrl,
+            fileName: u.fileName,
+            fileSize: u.fileSize,
+          } as any,
+        });
+      } catch (_) {}
+    }
     setIsUploadOpen(false);
-    setDocNumber(""); setTitle(""); setDiscipline(""); setRevision("01"); setDocType("general");
-    setUploadSource(""); setUploadIssuedBy("");
-    setUploadedFile(null);
   };
 
   const updateDoc = useMutation({
@@ -356,13 +345,6 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     organizationName: u.organizationName, role: u.role,
   }));
 
-  const handleAIProcedureApply = (suggestion: any) => {
-    if (suggestion.documentNumber) setDocNumber(suggestion.documentNumber);
-    if (suggestion.discipline) setDiscipline(suggestion.discipline);
-    if (suggestion.documentType) setDocType(suggestion.documentType);
-    if (suggestion.revision) setRevision(suggestion.revision);
-    if (suggestion.title && !title) setTitle(suggestion.title);
-  };
 
   const runValidation = async () => {
     setValidating(true);
@@ -520,62 +502,15 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             <ShieldAlert className="h-3.5 w-3.5" />
             {validating ? "Validating..." : "Validate"}
           </Button>
-          <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-            <Button size="sm" className="h-9" onClick={() => setIsUploadOpen(true)}>
-              <Upload className="mr-2 h-4 w-4" /> Upload Document
-            </Button>
-            <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-              <DialogHeader><DialogTitle>Upload Document</DialogTitle></DialogHeader>
-              <div className="space-y-4 py-2">
-                <AIProcedurePanel projectCode={projectCode} projectName={projectName} discipline={discipline} documentType={docType} partialTitle={title} onApply={handleAIProcedureApply} />
-                <FileDropZone
-                  onUpload={(f) => { setUploadedFile(f); if (!title) setTitle(f.name.replace(/\.[^.]+$/, "")); }}
-                  label="Click to browse or drag file here"
-                />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2">
-                    <label className="text-sm font-medium mb-1 block">Document Number</label>
-                    <Input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="Auto-generated or from AI" className="font-mono" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-sm font-medium mb-1 block">Title *</label>
-                    <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="E.g. Ground Floor Plan" />
-                    {uploadError && <p className="text-xs text-destructive mt-1">{uploadError}</p>}
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Discipline</label>
-                    <Input value={discipline} onChange={e => setDiscipline(e.target.value)} placeholder="E.g. Electrical" />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Revision</label>
-                    <Input value={revision} onChange={e => setRevision(e.target.value)} placeholder="01" className="font-mono" />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Source</label>
-                    <Select value={uploadSource || "_none"} onValueChange={v => setUploadSource(v === "_none" ? "" : v)}>
-                      <SelectTrigger><SelectValue placeholder="Select source…" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">— None —</SelectItem>
-                        {["internal","external","client","contractor","consultant","supplier"].map(s => (
-                          <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium mb-1 block">Issued By</label>
-                    <Input value={uploadIssuedBy} onChange={e => setUploadIssuedBy(e.target.value)} placeholder="E.g. ABC Engineering" />
-                  </div>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsUploadOpen(false)}>Cancel</Button>
-                <Button onClick={handleUpload} disabled={createDoc.isPending}>
-                  {createDoc.isPending ? "Saving..." : "Save Document"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <Button size="sm" className="h-9" onClick={() => setIsUploadOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" /> Upload Document
+          </Button>
+          <UploadDocumentsDialog
+            open={isUploadOpen}
+            onOpenChange={setIsUploadOpen}
+            projectId={projectId}
+            onSuccess={handleMultiUploadSuccess}
+          />
         </div>
       </div>
 

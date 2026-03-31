@@ -27,14 +27,28 @@ interface FileDropZoneProps {
   onMultiUpload?: (files: UploadedFile[]) => void;
 }
 
-async function requestUploadUrl(file: File): Promise<{ uploadUrl: string; objectKey: string }> {
+async function requestUploadUrl(file: File, projectId?: number): Promise<{ uploadURL: string; objectPath: string }> {
   const r = await fetch("/api/storage/uploads/request-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileName: file.name, contentType: file.type, folder: "uploads" }),
+    credentials: "include",
+    body: JSON.stringify({
+      name: file.name,
+      size: file.size,
+      contentType: file.type || "application/octet-stream",
+      fileType: "document",
+      ...(projectId ? { projectId } : {}),
+    }),
   });
   if (!r.ok) throw new Error("Failed to get upload URL");
   return r.json();
+}
+
+/** Public helper for uploading a single file to storage (used by other modules). */
+export async function uploadFileToStorage(file: File, projectId?: number): Promise<UploadedFile> {
+  const { uploadURL, objectPath } = await requestUploadUrl(file, projectId);
+  await uploadWithProgress(file, uploadURL, () => {});
+  return { url: objectPath, name: file.name, size: file.size };
 }
 
 function uploadWithProgress(
@@ -56,9 +70,9 @@ function uploadWithProgress(
 }
 
 export async function uploadToStorage(file: File): Promise<UploadedFile> {
-  const { uploadUrl, objectKey } = await requestUploadUrl(file);
-  await uploadWithProgress(file, uploadUrl, () => {});
-  return { url: objectKey ?? `/api/storage/objects/${encodeURIComponent(file.name)}`, name: file.name, size: file.size };
+  const { uploadURL, objectPath } = await requestUploadUrl(file);
+  await uploadWithProgress(file, uploadURL, () => {});
+  return { url: objectPath, name: file.name, size: file.size };
 }
 
 function formatSize(bytes: number) {
@@ -104,10 +118,10 @@ function FileDropZone({
     const results: UploadedFile[] = [];
     for (const file of valid) {
       try {
-        const { uploadUrl, objectKey } = await requestUploadUrl(file);
-        await uploadWithProgress(file, uploadUrl, pct => updateEntry(file.name, { progress: pct }));
+        const { uploadURL, objectPath } = await requestUploadUrl(file);
+        await uploadWithProgress(file, uploadURL, pct => updateEntry(file.name, { progress: pct }));
         const uploaded: UploadedFile = {
-          url: objectKey ?? `/api/storage/objects/${encodeURIComponent(file.name)}`,
+          url: objectPath,
           name: file.name,
           size: file.size,
         };
