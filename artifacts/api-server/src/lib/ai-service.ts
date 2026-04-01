@@ -1,17 +1,130 @@
 /**
  * EDMS AI Service
- * Modular AI analysis using OpenAI gpt-5-mini (cost-effective) for standard analysis
- * and gpt-5.2 for complex reasoning tasks.
+ * Multi-provider AI analysis with support for OpenAI, Groq, and Ollama.
+ * Provider and models are configurable from the admin AI Settings dashboard.
  */
-import { openai } from "@workspace/integrations-openai-ai-server";
+import OpenAI from "openai";
 import { db } from "@workspace/db";
-import { aiCacheTable, aiLogsTable, aiSettingsTable } from "@workspace/db";
+import { aiCacheTable, aiLogsTable, aiSettingsTable, systemSettingsTable } from "@workspace/db";
 import { and, eq, gt } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-const FAST_MODEL = "gpt-5-mini";
-const SMART_MODEL = "gpt-5.2";
+
+// ─── Provider types ───────────────────────────────────────────────────────────
+
+export type AIProvider = "openai_replit" | "groq" | "ollama";
+
+export interface AIProviderConfig {
+  provider: AIProvider;
+  fastModel: string;
+  smartModel: string;
+}
+
+const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: string }> = {
+  openai_replit: { fastModel: "gpt-4o-mini", smartModel: "gpt-4o" },
+  groq:          { fastModel: "llama-3.1-8b-instant", smartModel: "llama-3.3-70b-versatile" },
+  ollama:        { fastModel: "llama3.2", smartModel: "llama3.1" },
+};
+
+// ─── Dynamic AI client ────────────────────────────────────────────────────────
+
+let _cachedClient: OpenAI | null = null;
+let _cachedProvider: string | null = null;
+
+async function getSystemSettingValue(key: string): Promise<string | null> {
+  const rows = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+  return rows[0]?.value ?? null;
+}
+
+export async function getAIProviderConfig(): Promise<AIProviderConfig> {
+  const provider = (await getSystemSettingValue("ai_provider") ?? "openai_replit") as AIProvider;
+  const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openai_replit;
+  const fastModel  = await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
+  const smartModel = await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
+  return { provider, fastModel, smartModel };
+}
+
+export async function getAIClient(): Promise<OpenAI> {
+  const { provider } = await getAIProviderConfig();
+
+  if (_cachedClient && _cachedProvider === provider) return _cachedClient;
+
+  // Reset cache when provider changes
+  _cachedClient = null;
+  _cachedProvider = provider;
+
+  if (provider === "groq") {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) throw new Error("GROQ_API_KEY is not set. Add it to your environment or .env file.");
+    _cachedClient = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
+  } else if (provider === "ollama") {
+    const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
+    _cachedClient = new OpenAI({ apiKey: "ollama", baseURL });
+  } else {
+    // openai_replit (default)
+    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!baseURL || !apiKey) {
+      throw new Error(
+        "OpenAI not configured. Set AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY " +
+        "(or switch to Groq/Ollama from the AI Settings dashboard).",
+      );
+    }
+    _cachedClient = new OpenAI({ apiKey, baseURL });
+  }
+
+  return _cachedClient;
+}
+
+export async function updateAIProviderConfig(config: Partial<AIProviderConfig>) {
+  const upsert = async (key: string, value: string) => {
+    const existing = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+    if (existing.length > 0) {
+      await db.update(systemSettingsTable).set({ value, updatedAt: new Date() }).where(eq(systemSettingsTable.key, key));
+    } else {
+      await db.insert(systemSettingsTable).values({ key, value });
+    }
+  };
+
+  if (config.provider !== undefined) {
+    await upsert("ai_provider", config.provider);
+    // Reset client cache so next call picks up new provider
+    _cachedClient = null;
+    _cachedProvider = null;
+    // Reset model settings to provider defaults when switching providers
+    const defaults = PROVIDER_DEFAULTS[config.provider];
+    if (defaults) {
+      if (config.fastModel === undefined)  await upsert("ai_fast_model",  defaults.fastModel);
+      if (config.smartModel === undefined) await upsert("ai_smart_model", defaults.smartModel);
+    }
+  }
+  if (config.fastModel  !== undefined) await upsert("ai_fast_model",  config.fastModel);
+  if (config.smartModel !== undefined) await upsert("ai_smart_model", config.smartModel);
+}
+
+export function getProviderStatus() {
+  return {
+    openai_replit: {
+      configured: !!(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+      label: "OpenAI (Replit Integration)",
+      description: "Uses the Replit-managed OpenAI proxy. Recommended for Replit deployments.",
+      envVarsRequired: ["AI_INTEGRATIONS_OPENAI_BASE_URL", "AI_INTEGRATIONS_OPENAI_API_KEY"],
+    },
+    groq: {
+      configured: !!process.env.GROQ_API_KEY,
+      label: "Groq (Free Tier Available)",
+      description: "Fast open-source models via Groq Cloud. Free tier available at console.groq.com.",
+      envVarsRequired: ["GROQ_API_KEY"],
+    },
+    ollama: {
+      configured: true, // Always accessible locally — no key needed
+      label: "Ollama (Local / Self-Hosted)",
+      description: "Run open-source models locally. Requires Ollama running at OLLAMA_BASE_URL.",
+      envVarsRequired: ["OLLAMA_BASE_URL"],
+    },
+  };
+}
 
 // ─── Cache helpers ───────────────────────────────────────────────────────────
 
@@ -67,16 +180,23 @@ async function logAiAction(opts: {
   }).catch(() => {}); // Non-blocking
 }
 
-async function callAI(prompt: string, systemPrompt: string, model = FAST_MODEL, jsonMode = true): Promise<unknown> {
+async function callAI(prompt: string, systemPrompt: string, modelKey: "fast" | "smart" = "fast", jsonMode = true): Promise<unknown> {
   const start = Date.now();
-  const response = await openai.chat.completions.create({
+  const { provider, fastModel, smartModel } = await getAIProviderConfig();
+  const model = modelKey === "smart" ? smartModel : fastModel;
+  const client = await getAIClient();
+
+  // Groq and Ollama don't support json_object response_format reliably
+  const useJsonMode = jsonMode && provider === "openai_replit";
+
+  const response = await client.chat.completions.create({
     model,
     max_completion_tokens: 8192,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: prompt },
     ],
-    ...(jsonMode && model !== SMART_MODEL ? { response_format: { type: "json_object" } } : {}),
+    ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
   });
 
   const rawContent = response.choices[0]?.message?.content;
@@ -198,7 +318,7 @@ Respond ONLY with valid JSON in this exact schema:
 }`,
     ) as DocumentAnalysis;
 
-    await setCache("document", doc.id, "analyze", result, FAST_MODEL);
+    await setCache("document", doc.id, "analyze", result, "fast");
     await logAiAction({
       userId, module: "documents", action: "analyze",
       entityType: "document", entityId: doc.id,
@@ -271,7 +391,7 @@ Respond ONLY with valid JSON in this exact schema:
 }`,
     ) as CorrespondenceAnalysis;
 
-    await setCache("correspondence", corr.id, "analyze", result, FAST_MODEL);
+    await setCache("correspondence", corr.id, "analyze", result, "fast");
     await logAiAction({
       userId, module: "correspondence", action: "analyze",
       entityType: "correspondence", entityId: corr.id,
@@ -355,7 +475,7 @@ Respond ONLY with valid JSON in this exact schema:
   "bottlenecks": ["bottleneck1", "bottleneck2"],
   "topRecommendations": ["action1", "action2", "action3"]
 }`,
-      SMART_MODEL,
+      "smart",
     ) as TaskListInsights;
 
     await logAiAction({
@@ -457,7 +577,7 @@ Document Type: ${input.documentType ?? "Drawing"}
 Partial Title: ${input.partialTitle ?? ""}
 Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
       `You are an engineering document management expert. Respond with valid JSON only.`,
-      FAST_MODEL,
+      "fast",
       false,
     ) as string;
 

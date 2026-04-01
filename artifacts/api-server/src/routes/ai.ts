@@ -4,8 +4,7 @@ import {
   documentsTable, correspondenceTable, tasksTable, aiLogsTable,
 } from "@workspace/db";
 import { eq, and, inArray, gt } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import {
   analyzeDocument,
   analyzeCorrespondence,
@@ -15,6 +14,10 @@ import {
   getAiSettings,
   updateAiSettings,
   isModuleEnabled,
+  getAIProviderConfig,
+  updateAIProviderConfig,
+  getProviderStatus,
+  getAIClient,
 } from "../lib/ai-service.js";
 
 const router = Router();
@@ -301,8 +304,10 @@ If the command is ambiguous or you cannot determine the type, return:
 
 Return ONLY the JSON object, no markdown, no explanation.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+    const { fastModel } = await getAIProviderConfig();
+    const client = await getAIClient();
+    const completion = await client.chat.completions.create({
+      model: fastModel,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: command.trim() },
@@ -324,6 +329,30 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     console.error("AI command error:", err);
     res.status(500).json({ error: "AI service unavailable", message: err.message });
   }
+});
+
+// ─── AI Provider Configuration ────────────────────────────────────────────────
+
+router.get("/provider", async (req, res) => {
+  const [config, status] = await Promise.all([getAIProviderConfig(), Promise.resolve(getProviderStatus())]);
+  res.json({ ...config, providerStatus: status });
+});
+
+router.put("/provider", async (req, res) => {
+  const user = req.user!;
+  if (!isSysAdmin(user)) {
+    res.status(403).json({ error: "System admin only" });
+    return;
+  }
+  const { provider, fastModel, smartModel } = req.body ?? {};
+  const validProviders = ["openai_replit", "groq", "ollama"];
+  if (provider !== undefined && !validProviders.includes(provider)) {
+    res.status(400).json({ error: `Invalid provider. Must be one of: ${validProviders.join(", ")}` });
+    return;
+  }
+  await updateAIProviderConfig({ provider, fastModel, smartModel });
+  const config = await getAIProviderConfig();
+  res.json({ ...config, providerStatus: getProviderStatus() });
 });
 
 // ─── AI Activity Logs ─────────────────────────────────────────────────────────
