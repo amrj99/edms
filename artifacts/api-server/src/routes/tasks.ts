@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { tasksTable, usersTable, projectsTable, notificationsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { sendTaskAssignedEmail } from "../lib/email.js";
+import { emitToUser } from "../lib/socket.js";
 
 const router = Router();
 
@@ -58,10 +60,11 @@ router.post("/", requireAuth, async (req, res) => {
   // Notify the assignee (if assigned to someone other than the creator)
   if (effectiveAssignedToId && effectiveAssignedToId !== req.user!.id) {
     try {
-      const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+      const [creator] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
         .from(usersTable).where(eq(usersTable.id, req.user!.id));
       const creatorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone";
-      await db.insert(notificationsTable).values({
+      const [notification] = await db.insert(notificationsTable).values({
         userId: assignedToId,
         type: "task_assigned" as const,
         title: `Task assigned: ${title}`,
@@ -70,7 +73,29 @@ router.post("/", requireAuth, async (req, res) => {
         entityType: "task",
         entityId: task.id,
         actionUrl: `/tasks`,
-      });
+      }).returning();
+      emitToUser(assignedToId, "notification:new", notification);
+
+      // Email the assignee
+      const [assignee] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+        .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
+      const [project] = projectId
+        ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1)
+        : [null];
+      if (assignee?.email) {
+        sendTaskAssignedEmail({
+          to: assignee.email,
+          assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+          assignerName: creatorName,
+          taskTitle: title,
+          description,
+          priority,
+          dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
+          projectName: project?.name ?? null,
+          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+        }).catch(() => {});
+      }
     } catch (_) {}
   }
 
@@ -107,10 +132,11 @@ router.put("/:id", requireAuth, async (req, res) => {
 
     // Notify new assignee when task is reassigned
     if (assignedToId && before && assignedToId !== before.assignedToId && assignedToId !== actorId) {
-      const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+      const [actor] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
       const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-      await db.insert(notificationsTable).values({
+      const [reassignNotif] = await db.insert(notificationsTable).values({
         userId: assignedToId,
         type: "task_assigned" as const,
         title: `Task assigned: ${task.title}`,
@@ -119,16 +145,37 @@ router.put("/:id", requireAuth, async (req, res) => {
         entityType: "task",
         entityId: task.id,
         actionUrl: "/tasks",
-      });
+      }).returning();
+      emitToUser(assignedToId, "notification:new", reassignNotif);
+
+      const [assignee] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+        .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
+      const [project] = task.projectId
+        ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, task.projectId)).limit(1)
+        : [null];
+      if (assignee?.email) {
+        sendTaskAssignedEmail({
+          to: assignee.email,
+          assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+          assignerName: actorName,
+          taskTitle: task.title,
+          priority: task.priority,
+          dueDate: task.dueDate ? task.dueDate.toLocaleDateString() : null,
+          projectName: project?.name ?? null,
+          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+        }).catch(() => {});
+      }
     }
 
     // Notify task creator when status changes (by someone else)
     if (status && before && status !== before.status && task.createdById && task.createdById !== actorId) {
       const statusLabel: Record<string, string> = { completed: "Completed", in_progress: "In Progress", pending: "Pending", cancelled: "Cancelled" };
-      const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+      const [actor] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
       const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-      await db.insert(notificationsTable).values({
+      const [statusNotif] = await db.insert(notificationsTable).values({
         userId: task.createdById,
         type: "task_status_updated" as const,
         title: `Task status updated: ${task.title}`,
@@ -137,7 +184,8 @@ router.put("/:id", requireAuth, async (req, res) => {
         entityType: "task",
         entityId: task.id,
         actionUrl: "/tasks",
-      });
+      }).returning();
+      emitToUser(task.createdById, "notification:new", statusNotif);
     }
   } catch (_) {}
 

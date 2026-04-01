@@ -6,6 +6,7 @@ import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
+import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 
 const router = Router({ mergeParams: true });
@@ -465,18 +466,23 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
     try {
       const submitter = req.user as any;
       const submitterName = `${submitter.firstName} ${submitter.lastName}`.trim();
-      await db.insert(notificationsTable).values(
-        reviewerIds.filter((uid: number) => uid !== req.user!.id).map((uid: number) => ({
-          userId: uid,
-          type: "document_approval_request" as const,
-          title: `Document review request: ${doc.documentNumber}`,
-          message: `${submitterName} submitted "${doc.title}" (${doc.documentNumber} Rev ${doc.revision}) for your review`,
-          projectId: projectId || null,
-          entityType: "document",
-          entityId: id,
-          actionUrl: `/projects/${projectId}`,
-        }))
-      );
+      const reviewerUserIds = reviewerIds.filter((uid: number) => uid !== req.user!.id);
+      if (reviewerUserIds.length > 0) {
+        const inserted = await db.insert(notificationsTable).values(
+          reviewerUserIds.map((uid: number) => ({
+            userId: uid,
+            type: "document_approval_request" as const,
+            title: `Document review request: ${doc.documentNumber}`,
+            message: `${submitterName} submitted "${doc.title}" (${doc.documentNumber} Rev ${doc.revision}) for your review`,
+            projectId: projectId || null,
+            entityType: "document",
+            entityId: id,
+            actionUrl: `/projects/${projectId}`,
+          }))
+        ).returning();
+        // Real-time: notify each reviewer immediately
+        for (const n of inserted) emitToUser(n.userId, "notification:new", n);
+      }
     } catch (_) {}
   }
 

@@ -226,6 +226,101 @@ export async function sendNotificationEmail(opts: {
   return sendEmail(opts.to, `[EDMS] ${opts.title}`, html);
 }
 
+// ─── Task Assigned Email ──────────────────────────────────────────────────────
+export async function sendTaskAssignedEmail(opts: {
+  to: string;
+  assigneeName: string;
+  assignerName: string;
+  taskTitle: string;
+  taskDescription?: string | null;
+  priority?: string | null;
+  dueDate?: string | null;
+  projectName?: string | null;
+  taskLink: string;
+}) {
+  const priorityBadge: Record<string, string> = {
+    high: '<span class="badge badge-red">High</span>',
+    medium: '<span class="badge badge-blue">Medium</span>',
+    low: '<span class="badge badge-gray">Low</span>',
+  };
+
+  const html = baseLayout(
+    `
+    <h2>You have been assigned a task</h2>
+    <p>Hi ${opts.assigneeName}, <strong>${opts.assignerName}</strong> assigned you a new task.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Task</span><span class="value">${opts.taskTitle}</span></div>
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+      ${opts.priority ? `<div class="info-row"><span class="label">Priority</span><span class="value">${priorityBadge[opts.priority] ?? opts.priority}</span></div>` : ""}
+      ${opts.dueDate ? `<div class="info-row"><span class="label">Due Date</span><span class="value">${opts.dueDate}</span></div>` : ""}
+    </div>
+    ${opts.taskDescription ? `<p style="color:#374151;">${opts.taskDescription}</p>` : ""}
+    <a class="btn" href="${opts.taskLink}">View Task →</a>
+  `,
+    "New Task Assigned",
+  );
+  return sendEmail(opts.to, `[Task] ${opts.taskTitle}`, html);
+}
+
+// ─── Overdue Task Reminder Email ──────────────────────────────────────────────
+export async function sendOverdueTaskEmail(opts: {
+  to: string;
+  userName: string;
+  taskTitle: string;
+  taskType: "task" | "action_item";
+  dueDate: string;
+  projectName?: string | null;
+  taskLink: string;
+}) {
+  const label = opts.taskType === "action_item" ? "Meeting Action Item" : "Task";
+  const html = baseLayout(
+    `
+    <h2>${label} Overdue</h2>
+    <p>Hi ${opts.userName}, the following ${label.toLowerCase()} is past its due date and still open.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">${label}</span><span class="value">${opts.taskTitle}</span></div>
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+      <div class="info-row"><span class="label">Due Date</span><span class="value" style="color:#dc2626;">${opts.dueDate}</span></div>
+    </div>
+    <a class="btn btn-danger" href="${opts.taskLink}">View &amp; Update →</a>
+    <p style="color:#6b7280;font-size:13px;">Please update the status or reach out to your team lead if you need assistance.</p>
+  `,
+    `Overdue ${label}`,
+  );
+  return sendEmail(opts.to, `[Overdue] ${opts.taskTitle}`, html);
+}
+
+// ─── Workflow Approval Request Email ─────────────────────────────────────────
+export async function sendWorkflowApprovalEmail(opts: {
+  to: string | string[];
+  reviewerName: string;
+  submitterName: string;
+  documentNumber: string;
+  documentTitle: string;
+  revision: string;
+  projectName: string;
+  comment?: string | null;
+  reviewLink: string;
+}) {
+  const html = baseLayout(
+    `
+    <h2>Document Approval Required</h2>
+    <p>Hi ${opts.reviewerName}, <strong>${opts.submitterName}</strong> has requested your approval on a document.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Document</span><span class="value">${opts.documentTitle}</span></div>
+      <div class="info-row"><span class="label">Number</span><span class="value">${opts.documentNumber}</span></div>
+      <div class="info-row"><span class="label">Revision</span><span class="value">${opts.revision}</span></div>
+      <div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>
+    </div>
+    ${opts.comment ? `<p style="color:#374151;"><strong>Comment:</strong> ${opts.comment}</p>` : ""}
+    <a class="btn" href="${opts.reviewLink}">Review Document →</a>
+    <p style="color:#6b7280;font-size:13px;">Please review and approve or reject this document at your earliest convenience.</p>
+  `,
+    "Document Approval Required",
+  );
+  return sendEmail(opts.to, `[Approval] ${opts.documentNumber} — ${opts.documentTitle}`, html);
+}
+
 // ─── SMTP Config Test ─────────────────────────────────────────────────────────
 export async function testSmtpConnection(): Promise<{ success: boolean; message: string }> {
   const transport = createTransport();

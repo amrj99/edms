@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { emitToUser } from "../lib/socket.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -50,7 +51,8 @@ async function generateOverdueTaskNotifications(userId: number): Promise<void> {
       }));
 
     if (toInsert.length > 0) {
-      await db.insert(notificationsTable).values(toInsert);
+      const inserted = await db.insert(notificationsTable).values(toInsert).returning();
+      for (const n of inserted) emitToUser(n.userId, "notification:new", n);
     }
   } catch {
     // Non-fatal
@@ -117,7 +119,8 @@ async function generateUpcomingMeetingReminders(userId: number): Promise<void> {
       });
 
     if (toInsert.length > 0) {
-      await db.insert(notificationsTable).values(toInsert);
+      const inserted = await db.insert(notificationsTable).values(toInsert).returning();
+      for (const n of inserted) emitToUser(n.userId, "notification:new", n);
     }
   } catch {
     // Non-fatal

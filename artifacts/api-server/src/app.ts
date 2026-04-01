@@ -8,9 +8,10 @@ import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { db } from "@workspace/db";
 import {
-  tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable,
+  tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable, projectsTable,
 } from "@workspace/db";
 import { and, eq, lt, isNotNull, sql, ne } from "drizzle-orm";
+import { sendOverdueTaskEmail } from "./lib/email.js";
 
 const app: Express = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -148,6 +149,25 @@ async function sendDueDateReminders() {
         entityId: task.id,
         actionUrl: `/tasks`,
       });
+
+      // Send overdue email to assignee (fire-and-forget)
+      const [assignee] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+        .from(usersTable).where(eq(usersTable.id, task.assigneeId)).limit(1);
+      const [project] = task.projectId
+        ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, task.projectId)).limit(1)
+        : [null];
+      if (assignee?.email) {
+        sendOverdueTaskEmail({
+          to: assignee.email,
+          userName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+          taskTitle: task.title,
+          taskType: "task",
+          dueDate: "Overdue",
+          projectName: project?.name ?? null,
+          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+        }).catch(() => {});
+      }
     }
 
     // Overdue meeting action items with an assignee

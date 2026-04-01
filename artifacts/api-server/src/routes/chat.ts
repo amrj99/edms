@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
+import { emitToUser, emitToChatGroup } from "../lib/socket.js";
 import {
   chatGroupsTable,
   chatGroupMembersTable,
@@ -402,7 +403,7 @@ router.post("/groups/:id/messages", async (req, res) => {
         .where(eq(chatGroupsTable.id, groupId));
 
       if (notifMembers.length > 0) {
-        await db.insert(notificationsTable).values(
+        const notifRows = await db.insert(notificationsTable).values(
           notifMembers.map((m) => ({
             userId: m.userId,
             type: "chat_message" as const,
@@ -412,7 +413,9 @@ router.post("/groups/:id/messages", async (req, res) => {
             entityId: groupId,
             actionUrl: `/chat?group=${groupId}`,
           }))
-        );
+        ).returning();
+        // Emit notification badge update to each member
+        for (const n of notifRows) emitToUser(n.userId, "notification:new", n);
       }
     } catch (err) {
       // Notifications should never block message sending
@@ -421,6 +424,10 @@ router.post("/groups/:id/messages", async (req, res) => {
   })();
 
   const [enriched] = await enrichMessages([message], userId);
+
+  // Real-time: broadcast the new message to all clients in the group room
+  emitToChatGroup(groupId, "chat:message", enriched);
+
   res.status(201).json({ message: enriched });
 });
 

@@ -66,6 +66,15 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    proxy: {
+      // Forward all /api requests (REST + socket.io) to the API server.
+      // This covers both HTTP polling and WebSocket upgrade for socket.io.
+      "/api": {
+        target: "http://localhost:8080",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,

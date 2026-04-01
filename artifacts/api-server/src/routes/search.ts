@@ -1,11 +1,13 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { documentsTable, correspondenceTable, usersTable, foldersTable, meetingsTable, projectsTable } from "@workspace/db";
-import { eq, ilike, or, and, desc } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { search } from "../lib/search-service.js";
 
 const router = Router();
 
+/**
+ * GET /api/search?q=...&projectId=...&type=...&discipline=...&status=...
+ * Uses Elasticsearch when ELASTICSEARCH_URL is configured; falls back to SQL.
+ */
 router.get("/", requireAuth, async (req, res) => {
   const { q, projectId, type, discipline, status } = req.query;
 
@@ -14,137 +16,20 @@ router.get("/", requireAuth, async (req, res) => {
     return;
   }
 
-  const searchPattern = `%${q}%`;
-  const pId = projectId ? parseInt(projectId as string) : undefined;
+  try {
+    const results = await search({
+      q,
+      projectId: projectId ? parseInt(projectId as string) : undefined,
+      type: type as any,
+      discipline: discipline as string | undefined,
+      status: status as string | undefined,
+    });
 
-  let documents: any[] = [];
-  let correspondence: any[] = [];
-  let meetings: any[] = [];
-  let projects: any[] = [];
-
-  if (!type || type === "document" || type === "all") {
-    const docFilter = and(
-      pId ? eq(documentsTable.projectId, pId) : undefined,
-      or(
-        ilike(documentsTable.title, searchPattern),
-        ilike(documentsTable.documentNumber, searchPattern),
-        ilike(documentsTable.discipline, searchPattern),
-        ilike(documentsTable.documentType, searchPattern),
-        ilike(documentsTable.description, searchPattern),
-      )
-    );
-
-    const docs = await db.select({
-      doc: documentsTable,
-      createdBy: usersTable,
-      folder: foldersTable,
-      project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
-    }).from(documentsTable)
-      .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-      .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-      .where(docFilter)
-      .orderBy(desc(documentsTable.updatedAt))
-      .limit(20);
-
-    let filteredDocs = docs;
-    if (discipline) filteredDocs = filteredDocs.filter(d => d.doc.discipline === discipline);
-    if (status) filteredDocs = filteredDocs.filter(d => d.doc.status === status);
-
-    documents = filteredDocs.map(({ doc, createdBy, folder, project }) => ({
-      ...doc,
-      createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
-      folderName: folder?.name,
-      project: project?.id ? project : undefined,
-      resultType: "document",
-    }));
+    res.json({ ...results, query: q });
+  } catch (err: any) {
+    console.error("[search] Error:", err.message);
+    res.status(500).json({ error: "Search failed", message: err.message });
   }
-
-  if (!type || type === "correspondence" || type === "all") {
-    const corrFilter = and(
-      pId ? eq(correspondenceTable.projectId, pId) : undefined,
-      or(
-        ilike(correspondenceTable.subject, searchPattern),
-        ilike(correspondenceTable.body, searchPattern),
-        ilike(correspondenceTable.referenceNumber, searchPattern),
-      )
-    );
-
-    const corrRows = await db.select({
-      corr: correspondenceTable,
-      project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
-    }).from(correspondenceTable)
-      .leftJoin(projectsTable, eq(correspondenceTable.projectId, projectsTable.id))
-      .where(corrFilter)
-      .orderBy(desc(correspondenceTable.updatedAt))
-      .limit(20);
-
-    correspondence = corrRows.map(({ corr, project }) => ({
-      ...corr,
-      project: project?.id ? project : undefined,
-      toUserIds: [],
-      toUserNames: [],
-      attachments: [],
-      fromUserName: undefined,
-      resultType: "correspondence",
-    }));
-  }
-
-  if (!type || type === "meeting" || type === "all") {
-    const mtgFilter = and(
-      pId ? eq(meetingsTable.projectId, pId) : undefined,
-      or(
-        ilike(meetingsTable.title, searchPattern),
-        ilike(meetingsTable.agenda, searchPattern),
-        ilike(meetingsTable.location, searchPattern),
-        ilike(meetingsTable.referenceNumber, searchPattern),
-        ilike(meetingsTable.minutes, searchPattern),
-      )
-    );
-
-    const mtgRows = await db.select({
-      meeting: meetingsTable,
-      project: {
-        id: projectsTable.id,
-        name: projectsTable.name,
-        code: projectsTable.code,
-      },
-    }).from(meetingsTable)
-      .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
-      .where(mtgFilter)
-      .orderBy(desc(meetingsTable.meetingDate))
-      .limit(20);
-
-    meetings = mtgRows.map(({ meeting, project }) => ({
-      ...meeting,
-      project,
-      resultType: "meeting",
-    }));
-  }
-
-  if (!type || type === "project" || type === "all") {
-    const projFilter = or(
-      ilike(projectsTable.name, searchPattern),
-      ilike(projectsTable.code, searchPattern),
-      ilike(projectsTable.description, searchPattern),
-    );
-
-    const projRows = await db.select().from(projectsTable)
-      .where(projFilter)
-      .orderBy(desc(projectsTable.updatedAt))
-      .limit(10);
-
-    projects = projRows.map(p => ({ ...p, resultType: "project" }));
-  }
-
-  res.json({
-    documents,
-    correspondence,
-    meetings,
-    projects,
-    total: documents.length + correspondence.length + meetings.length + projects.length,
-    query: q,
-  });
 });
 
 export default router;

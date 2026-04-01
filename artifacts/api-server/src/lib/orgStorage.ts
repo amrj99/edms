@@ -1,6 +1,6 @@
 /**
  * OrgStorageService
- * Routes file storage to cloud (Replit Object Storage) or on-premise
+ * Routes file storage to cloud (Replit/GCS), S3-compatible, or on-premise
  * (local filesystem) based on the organisation's configured storageType.
  */
 import fs from "fs";
@@ -14,14 +14,14 @@ const cloudStorage = new ObjectStorageService();
 
 /** Returns the org config for a given org, or null if not found. */
 async function getOrgConfig(organizationId: number) {
-  const [cfg] = await db.select().from(orgConfigTable)
+  const [cfg] = await db
+    .select()
+    .from(orgConfigTable)
     .where(eq(orgConfigTable.organizationId, organizationId));
   return cfg ?? null;
 }
 
-/**
- * Build on-prem path: {storagePath}/{orgId}/{projectId}/{type}/{filename}
- */
+/** Build on-prem path: {storagePath}/{orgId}/{projectId}/{type}/{filename} */
 function buildOnPremPath(
   basePath: string,
   orgId: number,
@@ -35,42 +35,72 @@ function buildOnPremPath(
   return path.join(...segments);
 }
 
+export type StorageMode = "cloud" | "onpremise" | "s3";
+
 export interface UploadResult {
-  mode: "cloud" | "onpremise";
-  /** For cloud: the object path to pass back to the client for the presigned-URL flow */
+  mode: StorageMode;
+  /** Presigned PUT URL for cloud/S3 modes */
   uploadURL?: string;
+  /** Logical storage path / object key */
   objectPath?: string;
-  /** For on-prem: the absolute file path where the client should POST the binary */
+  /** For on-prem: absolute filesystem path where binary should be POST-ed */
   filePath?: string;
   /** Relative URL to retrieve the file via the API */
   serveUrl?: string;
 }
 
+/** Build an S3Client lazily (avoids startup crash if AWS SDK not installed). */
+async function buildS3Client(cfg: {
+  s3Region?: string | null;
+  s3Endpoint?: string | null;
+  s3AccessKey?: string | null;
+  s3SecretKey?: string | null;
+}) {
+  const { S3Client } = await import("@aws-sdk/client-s3");
+  return new S3Client({
+    region: cfg.s3Region || "us-east-1",
+    ...(cfg.s3Endpoint ? { endpoint: cfg.s3Endpoint } : {}),
+    ...(cfg.s3AccessKey && cfg.s3SecretKey
+      ? {
+          credentials: {
+            accessKeyId: cfg.s3AccessKey,
+            secretAccessKey: cfg.s3SecretKey,
+          },
+          forcePathStyle: !!cfg.s3Endpoint, // MinIO / custom endpoint requires path-style
+        }
+      : {}),
+  });
+}
+
 /**
  * Request an upload slot for a file.
- * For cloud mode, returns a presigned URL.
- * For on-prem mode, returns a local filesystem path + a serve URL.
+ * – cloud:     Replit/GCS presigned PUT URL
+ * – s3:        AWS S3 / MinIO presigned PUT URL
+ * – onpremise: local filesystem path + serve URL
  */
 export async function requestUpload(params: {
   organizationId: number;
   projectId?: number | null;
-  fileType?: string; // e.g. "documents", "correspondence", "ncr"
+  fileType?: string;
   name: string;
   size?: number;
   contentType?: string;
 }): Promise<UploadResult> {
-  const { organizationId, projectId, fileType = "general", name } = params;
-
+  const { organizationId, projectId, fileType = "general", name, contentType } = params;
   const cfg = await getOrgConfig(organizationId);
-  const storageType = cfg?.storageType ?? "cloud";
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? "cloud";
 
+  // ── On-Premise ─────────────────────────────────────────────────────────────
   if (storageType === "onpremise" && cfg?.storagePath) {
     const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    const absPath = buildOnPremPath(cfg.storagePath, organizationId, projectId ?? null, fileType, safeFile);
-
-    // Ensure the directory exists
+    const absPath = buildOnPremPath(
+      cfg.storagePath,
+      organizationId,
+      projectId ?? null,
+      fileType,
+      safeFile,
+    );
     fs.mkdirSync(path.dirname(absPath), { recursive: true });
-
     return {
       mode: "onpremise",
       filePath: absPath,
@@ -79,7 +109,38 @@ export async function requestUpload(params: {
     };
   }
 
-  // Default: cloud storage
+  // ── Amazon S3 / S3-Compatible (MinIO, DigitalOcean Spaces, Backblaze …) ────
+  if (storageType === "s3" && cfg?.s3Bucket) {
+    try {
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+
+      const s3 = await buildS3Client(cfg);
+      const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const objectKey = `${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`;
+
+      const putCommand = new PutObjectCommand({
+        Bucket: cfg.s3Bucket,
+        Key: objectKey,
+        ContentType: contentType,
+      });
+
+      const uploadURL = await getSignedUrl(s3, putCommand, { expiresIn: 3600 });
+
+      return {
+        mode: "s3",
+        uploadURL,
+        objectPath: objectKey,
+        // The serve URL proxies through our API which generates a presigned GET URL
+        serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
+      };
+    } catch (err: any) {
+      console.error("[storage] S3 presigned URL generation failed:", err.message);
+      // fall through to cloud storage
+    }
+  }
+
+  // ── Cloud (Replit / GCS) ───────────────────────────────────────────────────
   const uploadURL = await cloudStorage.getObjectEntityUploadURL();
   const objectPath = cloudStorage.normalizeObjectEntityPath(uploadURL);
   return {
@@ -91,8 +152,30 @@ export async function requestUpload(params: {
 }
 
 /**
- * Stream a file from on-prem storage to the HTTP response.
+ * Generate a presigned GET URL for an S3 object (used by the s3-object serve route).
  */
+export async function getS3PresignedGetUrl(
+  organizationId: number,
+  objectKey: string,
+  expiresIn = 3600,
+): Promise<string | null> {
+  const cfg = await getOrgConfig(organizationId);
+  if (!cfg?.s3Bucket) return null;
+
+  try {
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+    const s3 = await buildS3Client(cfg);
+
+    const command = new GetObjectCommand({ Bucket: cfg.s3Bucket, Key: objectKey });
+    return await getSignedUrl(s3, command, { expiresIn });
+  } catch (err: any) {
+    console.error("[storage] S3 presigned GET URL failed:", err.message);
+    return null;
+  }
+}
+
+/** Stream a file from on-prem storage to the HTTP response. */
 export function streamOnPremFile(filePath: string): fs.ReadStream | null {
   if (!fs.existsSync(filePath)) return null;
   return fs.createReadStream(filePath);

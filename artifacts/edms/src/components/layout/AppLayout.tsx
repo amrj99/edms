@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
+import { useRealtime } from "@/hooks/use-realtime";
 import { AICommandAssistant } from "@/components/AICommandAssistant";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -688,6 +689,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { modules } = useModules();
   const { isRtl } = useI18n();
+
+  // Establish WebSocket connection for real-time updates (notifications, chat)
+  useRealtime();
 
   if (isLoading) {
     return (

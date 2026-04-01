@@ -78,6 +78,7 @@
     "@tanstack/react-table": "^8.21.3",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
+    "socket.io-client": "^4.8.3",
     "xlsx": "^0.18.5"
   }
 }

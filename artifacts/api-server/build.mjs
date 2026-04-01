@@ -17,6 +17,8 @@ const external = [
   "nodemailer", "handlebars", "knex", "typeorm", "protobufjs",
   "onnxruntime-node", "@tensorflow/*", "@prisma/client", "@mikro-orm/*",
   "@grpc/*", "@swc/*", "@aws-sdk/*", "@azure/*", "@opentelemetry/*",
+  "@elastic/elasticsearch", "@elastic/transport",
+  "apache-arrow", "elastic-apm-node",
   "@google-cloud/*", "@google/*", "googleapis", "firebase-admin",
   "@parcel/watcher", "@sentry/profiling-node", "@tree-sitter/*", "aws-sdk",
   "classic-level", "dd-trace", "ffi-napi", "grpc", "hiredis", "kerberos",

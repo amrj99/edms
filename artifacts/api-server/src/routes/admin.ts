@@ -425,4 +425,51 @@ router.post("/seed-test-data", requireRole("admin", "system_owner"), async (req,
   });
 });
 
+// ─── Search / Elasticsearch ────────────────────────────────────────────────────
+router.get("/search/status", async (req, res) => {
+  const esUrl = process.env.ELASTICSEARCH_URL;
+  if (!esUrl) {
+    res.json({
+      engine: "sql",
+      configured: false,
+      message: "ELASTICSEARCH_URL is not set. Using SQL full-text search fallback.",
+      instructions: "Set ELASTICSEARCH_URL (e.g. http://localhost:9200) to enable Elasticsearch.",
+    });
+    return;
+  }
+  try {
+    const { Client } = await import("@elastic/elasticsearch");
+    const es = new Client({ node: esUrl });
+    const info = await es.info();
+    res.json({
+      engine: "elasticsearch",
+      configured: true,
+      version: info.version?.number,
+      url: esUrl,
+      message: "Elasticsearch is active and responding.",
+    });
+  } catch (err: any) {
+    res.status(503).json({
+      engine: "sql",
+      configured: false,
+      url: esUrl,
+      message: `Elasticsearch unreachable: ${err.message}. Falling back to SQL.`,
+    });
+  }
+});
+
+router.post("/search/reindex", requireRole("admin", "system_owner"), async (req, res) => {
+  try {
+    const { reindexAll } = await import("../lib/search-service.js");
+    const result = await reindexAll();
+    if (result.indexed === 0 && result.errors === 0) {
+      res.json({ success: false, message: "Elasticsearch is not configured. Set ELASTICSEARCH_URL to enable indexing." });
+      return;
+    }
+    res.json({ success: true, ...result, message: `Indexed ${result.indexed} documents (${result.errors} errors).` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;
