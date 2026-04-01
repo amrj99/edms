@@ -9,7 +9,6 @@ import {
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
 
@@ -119,7 +118,7 @@ export function UploadWithAIDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[92vh] flex flex-col p-0 gap-0">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -127,7 +126,7 @@ export function UploadWithAIDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 min-h-0">
+        <div className="flex-1 overflow-y-auto min-h-0">
           <div className="px-6 py-4 space-y-4">
             {/* AI Procedure Panel */}
             <AIProcedurePanel
@@ -240,7 +239,7 @@ export function UploadWithAIDialog({
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="px-6 py-3 border-t shrink-0">
           <Button variant="outline" onClick={handleClose} disabled={isSaving}>

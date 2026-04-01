@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 const DOC_TYPES = ["general","drawing","specification","report","certificate","calculation","procedure","manual","datasheet","schedule","correspondence","other"];
@@ -220,7 +219,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[680px] max-h-[92vh] flex flex-col p-0 gap-0">
+      <DialogContent className="sm:max-w-[680px] max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Upload className="h-4 w-4" />
@@ -233,7 +232,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
           </DialogTitle>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 min-h-0">
+        <div className="flex-1 overflow-y-auto min-h-0">
           <div className="px-6 py-4 space-y-4">
             {/* Drop zone */}
             <div
@@ -466,7 +465,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
               </div>
             ))}
           </div>
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="px-6 py-3 border-t shrink-0 flex items-center gap-2 justify-between sm:justify-between">
           <div className="flex items-center gap-2">
