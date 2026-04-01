@@ -12,6 +12,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
+import { UploadWithAIDialog, type AIUploadResult } from "@/components/upload-with-ai-dialog";
 import { RecipientAutocomplete } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
@@ -211,6 +212,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const { toast } = useToast();
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isAIUploadOpen, setIsAIUploadOpen] = useState(false);
   const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const createDoc = useCreateDocument();
@@ -266,6 +268,27 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
       } catch (_) {}
     }
     setIsUploadOpen(false);
+  };
+
+  const handleAIUploadSuccess = async (result: AIUploadResult) => {
+    await createDoc.mutateAsync({
+      projectId,
+      data: {
+        documentNumber: result.docNumber || `DOC-${Date.now()}`,
+        title: result.title || result.fileName.replace(/\.[^.]+$/, ""),
+        revision: result.revision || "01",
+        status: (result.status as any) || "draft",
+        discipline: result.discipline || undefined,
+        documentType: result.docType || "general",
+        source: result.source || undefined,
+        issuedBy: result.issuedBy || undefined,
+        fileUrl: result.fileUrl,
+        fileName: result.fileName,
+        fileSize: result.fileSize,
+      } as any,
+    });
+    toast({ title: "Document saved successfully" });
+    setIsAIUploadOpen(false);
   };
 
   const updateDoc = useMutation({
@@ -502,14 +525,30 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             <ShieldAlert className="h-3.5 w-3.5" />
             {validating ? "Validating..." : "Validate"}
           </Button>
-          <Button size="sm" className="h-9" onClick={() => setIsUploadOpen(true)}>
-            <Upload className="mr-2 h-4 w-4" /> Upload Document
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9 gap-1.5 border-primary/40 text-primary hover:bg-primary/5"
+            onClick={() => setIsAIUploadOpen(true)}
+          >
+            <Sparkles className="h-3.5 w-3.5" /> Upload with AI
+          </Button>
+          <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
+            <Upload className="h-3.5 w-3.5" /> Bulk Upload
           </Button>
           <UploadDocumentsDialog
             open={isUploadOpen}
             onOpenChange={setIsUploadOpen}
             projectId={projectId}
             onSuccess={handleMultiUploadSuccess}
+          />
+          <UploadWithAIDialog
+            open={isAIUploadOpen}
+            onOpenChange={setIsAIUploadOpen}
+            projectId={projectId}
+            projectCode={projectCode}
+            projectName={projectName}
+            onSuccess={handleAIUploadSuccess}
           />
         </div>
       </div>
