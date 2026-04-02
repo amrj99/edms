@@ -180,3 +180,95 @@ export function streamOnPremFile(filePath: string): fs.ReadStream | null {
   if (!fs.existsSync(filePath)) return null;
   return fs.createReadStream(filePath);
 }
+
+export interface UploadBufferResult {
+  mode: StorageMode;
+  serveUrl: string;
+  objectPath: string;
+}
+
+/**
+ * Upload a file buffer directly from the server (no signed URL round-trip).
+ * Supports cloud (GCS), S3-compatible, and on-premise storage.
+ */
+export async function uploadBuffer(params: {
+  organizationId: number | null;
+  projectId?: number | null;
+  fileType?: string;
+  name: string;
+  buffer: Buffer;
+  contentType?: string;
+}): Promise<UploadBufferResult> {
+  const { organizationId, projectId, fileType = "general", name, buffer, contentType } = params;
+
+  const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+
+  if (!organizationId) {
+    // System-level — cloud storage only
+    return uploadToCloud(buffer, safeFile, contentType);
+  }
+
+  const cfg = await getOrgConfig(organizationId);
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? "cloud";
+
+  // ── On-Premise ─────────────────────────────────────────────────────────────
+  if (storageType === "onpremise" && cfg?.storagePath) {
+    const absPath = buildOnPremPath(cfg.storagePath, organizationId, projectId ?? null, fileType, safeFile);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    fs.writeFileSync(absPath, buffer);
+    return {
+      mode: "onpremise",
+      objectPath: absPath,
+      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+    };
+  }
+
+  // ── Amazon S3 / S3-Compatible ───────────────────────────────────────────────
+  if (storageType === "s3" && cfg?.s3Bucket) {
+    try {
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const s3 = await buildS3Client(cfg);
+      const objectKey = `${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`;
+      await s3.send(new PutObjectCommand({
+        Bucket: cfg.s3Bucket,
+        Key: objectKey,
+        Body: buffer,
+        ContentType: contentType,
+      }));
+      return {
+        mode: "s3",
+        objectPath: objectKey,
+        serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
+      };
+    } catch (err: any) {
+      console.error("[storage] S3 upload failed:", err.message);
+      // fall through to cloud
+    }
+  }
+
+  // ── Cloud (Replit / GCS) ───────────────────────────────────────────────────
+  return uploadToCloud(buffer, safeFile, contentType);
+}
+
+async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: string): Promise<UploadBufferResult> {
+  const privateObjectDir = process.env.PRIVATE_OBJECT_DIR;
+  if (!privateObjectDir) throw new Error("PRIVATE_OBJECT_DIR not set");
+
+  const fullPath = `${privateObjectDir}/uploads/${safeFile}`;
+  const parts = fullPath.startsWith("/") ? fullPath.slice(1).split("/") : fullPath.split("/");
+  const bucketName = parts[0];
+  const objectName = parts.slice(1).join("/");
+
+  const { objectStorageClient } = await import("./objectStorage.js");
+  const bucket = objectStorageClient.bucket(bucketName);
+  const file = bucket.file(objectName);
+
+  await file.save(buffer, { contentType: contentType ?? "application/octet-stream", resumable: false });
+
+  const objectPath = `/objects/${safeFile}`;
+  return {
+    mode: "cloud",
+    objectPath,
+    serveUrl: `/api/storage/objects/uploads/${safeFile}`,
+  };
+}

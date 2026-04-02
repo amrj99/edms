@@ -1,4 +1,5 @@
 import { Router } from "express";
+import multer from "multer";
 import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable } from "@workspace/db";
 import { eq, and, count, desc, sql } from "drizzle-orm";
@@ -10,6 +11,9 @@ import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
+import { uploadBuffer } from "../lib/orgStorage.js";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 const router = Router({ mergeParams: true });
 
@@ -630,8 +634,10 @@ router.get("/:id/files", requireAuth, async (req, res) => {
   });
 });
 
-// POST /api/projects/:projectId/documents/:id/files — add a file to a document
-router.post("/:id/files", requireAuth, async (req, res) => {
+// POST /api/projects/:projectId/documents/:id/files — add files to a document
+// Accepts multipart/form-data with field "files" (one or many).
+// Optional form fields: documentId (ignored, taken from URL), metadata (JSON string).
+router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const docId = parseInt(req.params.id);
 
@@ -639,35 +645,50 @@ router.post("/:id/files", requireAuth, async (req, res) => {
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
-  const { fileUrl, fileName, fileSize, fileType } = req.body;
-  if (!fileUrl || !fileName) return res.status(400).json({ error: "fileUrl and fileName are required" });
+  const uploadedFiles = req.files as Express.Multer.File[] | undefined;
+  if (!uploadedFiles || uploadedFiles.length === 0) {
+    return res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." });
+  }
 
-  const [file] = await db.insert(documentFilesTable).values({
-    documentId: docId,
-    fileUrl,
-    fileName,
-    fileSize: fileSize ?? null,
-    fileType: fileType ?? null,
-    uploadedById: req.user!.id,
-  }).returning();
+  const orgId = req.user!.organizationId ?? null;
+  const uploader = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).then(r => r[0]);
+  const uploadedByName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined;
 
-  await createAuditLog({
-    userId: req.user!.id,
-    action: "update",
-    entityType: "document",
-    entityId: docId,
-    entityTitle: `${doc.title} — added file: ${fileName}`,
-    projectId,
-  });
+  const results = [];
+  for (const multerFile of uploadedFiles) {
+    // Upload buffer to org-aware storage backend
+    const stored = await uploadBuffer({
+      organizationId: orgId,
+      projectId,
+      fileType: "document",
+      name: multerFile.originalname,
+      buffer: multerFile.buffer,
+      contentType: multerFile.mimetype,
+    });
 
-  // Emit real-time update
+    const [dbFile] = await db.insert(documentFilesTable).values({
+      documentId: docId,
+      fileUrl: stored.serveUrl,
+      fileName: multerFile.originalname,
+      fileSize: multerFile.size,
+      fileType: multerFile.mimetype,
+      uploadedById: req.user!.id,
+    }).returning();
+
+    await createAuditLog({
+      userId: req.user!.id,
+      action: "update",
+      entityType: "document",
+      entityId: docId,
+      entityTitle: `${doc.title} — added file: ${multerFile.originalname}`,
+      projectId,
+    });
+
+    results.push({ ...dbFile, uploadedByName });
+  }
+
   emitToUser(req.user!.id, "document:updated", { documentId: docId });
-
-  const [uploader] = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id));
-  res.status(201).json({
-    ...file,
-    uploadedByName: uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined,
-  });
+  res.status(201).json({ files: results });
 });
 
 // DELETE /api/projects/:projectId/documents/:id/files/:fileId

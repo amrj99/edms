@@ -90,53 +90,31 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
   });
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const selected = e.target.files;
+    if (!selected || selected.length === 0) return;
+
     setUploading(true);
     try {
-      // Step 1: request a signed upload URL
-      const urlRes = await fetch("/api/storage/uploads/request-url", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: file.name,
-          size: file.size,
-          contentType: file.type,
-          fileType: "document",
-          projectId,
-        }),
-      });
-      if (!urlRes.ok) throw new Error("Upload URL request failed");
-      const { uploadURL, objectPath, serveUrl } = await urlRes.json();
+      const formData = new FormData();
+      formData.append("documentId", String(documentId));
+      for (const file of Array.from(selected)) {
+        formData.append("files", file);
+      }
 
-      // Step 2: upload directly to storage
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        body: file,
-        headers: { "Content-Type": file.type },
-      });
-      if (!uploadRes.ok) throw new Error("File upload failed");
-
-      // Step 3: register with the document
-      const addRes = await fetch(
+      // POST multipart/form-data — browser sets Content-Type + boundary automatically
+      const res = await fetch(
         `/api/projects/${projectId}/documents/${documentId}/files`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileUrl: serveUrl ?? objectPath,
-            fileName: file.name,
-            fileSize: file.size,
-            fileType: file.type,
-          }),
-        },
+        { method: "POST", credentials: "include", body: formData },
       );
-      if (!addRes.ok) throw new Error("File registration failed");
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Upload failed (${res.status})`);
+      }
 
       qc.invalidateQueries({ queryKey: ["document-files", documentId] });
-      toast({ title: "File added successfully" });
+      const count = selected.length;
+      toast({ title: count === 1 ? "File added successfully" : `${count} files added successfully` });
     } catch (err: any) {
       toast({ title: err.message ?? "Upload failed", variant: "destructive" });
     } finally {
@@ -172,6 +150,7 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               className="hidden"
               onChange={handleFileChange}
             />
