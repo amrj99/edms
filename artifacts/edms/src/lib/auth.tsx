@@ -11,21 +11,24 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// Apply fetch interceptor to attach JWT token globally
+// Apply fetch interceptor to attach JWT token globally.
+// IMPORTANT: headers may be a Headers instance (not a plain object), so we
+// must use `new Headers(config?.headers)` to safely merge them — spreading
+// a Headers instance via `{ ...headersInstance }` produces {} and silently
+// drops every existing header (including Content-Type), which breaks JSON body parsing.
 const originalFetch = window.fetch;
 window.fetch = async (...args) => {
   const [resource, config] = args;
   const token = localStorage.getItem("edms_token");
-  
+
   if (token) {
-    const newConfig = { ...config } as RequestInit;
-    newConfig.headers = {
-      ...newConfig.headers,
-      Authorization: `Bearer ${token}`,
-    };
-    return originalFetch(resource, newConfig);
+    const headers = new Headers(config?.headers);
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+    return originalFetch(resource, { ...config, headers });
   }
-  
+
   return originalFetch(resource, config);
 };
 
