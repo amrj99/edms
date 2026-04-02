@@ -54,7 +54,7 @@ export default function CorrespondencePage() {
   const qc = useQueryClient();
   const { toast } = useToast();
 
-  const [selectedFolder, setSelectedFolder] = useState<string>("all");
+  const [selectedFolder, setSelectedFolder] = useState<string>("inbox");
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>("all");
   const [searchQ, setSearchQ] = useState("");
@@ -434,7 +434,6 @@ export default function CorrespondencePage() {
   const flaggedCount = flagged.size;
 
   const MAIL_FOLDERS = [
-    { id: "all",     label: "All Mail",  icon: Mail,    count: allItems.length },
     { id: "inbox",   label: "Incoming",   icon: Inbox,   count: allItems.filter((i: any) => i.folder === "inbox").length },
     { id: "sent",    label: "Outgoing",   icon: Send,    count: allItems.filter((i: any) => i.folder === "sent").length },
     { id: "draft",   label: "Drafts",     icon: Folder,  count: allItems.filter((i: any) => i.folder === "draft").length },
