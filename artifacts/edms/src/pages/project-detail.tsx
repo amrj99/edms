@@ -1,4 +1,5 @@
 import { useParams, Link } from "wouter";
+import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/api-client-react";
 import {
   FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2,
@@ -27,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
+import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { useToast } from "@/hooks/use-toast";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
@@ -207,9 +209,21 @@ export default function ProjectDetail() {
 }
 
 // ─── Document Tab ─────────────────────────────────────────────────────────────
+const PROJECT_DOC_COLS = [
+  { key: "docNum",       defaultWidth: 120, minWidth: 80 },
+  { key: "title",        defaultWidth: 220, minWidth: 100 },
+  { key: "discipline",   defaultWidth: 100, minWidth: 70 },
+  { key: "source",       defaultWidth: 100, minWidth: 70 },
+  { key: "issuedBy",     defaultWidth: 110, minWidth: 70 },
+  { key: "revision",     defaultWidth: 60,  minWidth: 50 },
+  { key: "status",       defaultWidth: 120, minWidth: 80 },
+  { key: "updatedAt",    defaultWidth: 110, minWidth: 90 },
+];
+
 function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isAIUploadOpen, setIsAIUploadOpen] = useState(false);
@@ -659,7 +673,15 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
 
       {/* Documents Table */}
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-        <Table>
+        <div className="flex items-center justify-end px-3 py-1 border-b bg-muted/20">
+          <button
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
+            onClick={resetDocWidths}
+            title="Reset column widths"
+          >Reset columns</button>
+        </div>
+        <div className="overflow-x-auto">
+        <Table style={{ tableLayout: "fixed", minWidth: 850 }}>
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="w-10">
@@ -672,15 +694,39 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                   }
                 </button>
               </TableHead>
-              <TableHead>Document No.</TableHead>
-              <TableHead className="w-1/4">Title</TableHead>
-              <TableHead>Discipline</TableHead>
-              <TableHead>Source</TableHead>
-              <TableHead>Issued By</TableHead>
-              <TableHead>Rev</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Updated</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead style={getDocThStyle("docNum")} className="overflow-hidden">
+                <span className="truncate">Document No.</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("docNum", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("title")} className="overflow-hidden">
+                <span className="truncate">Title</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("title", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("discipline")} className="overflow-hidden">
+                <span className="truncate">Discipline</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("discipline", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("source")} className="overflow-hidden">
+                <span className="truncate">Source</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("source", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("issuedBy")} className="overflow-hidden">
+                <span className="truncate">Issued By</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("issuedBy", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("revision")} className="overflow-hidden">
+                <span className="truncate">Rev</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("revision", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("status")} className="overflow-hidden">
+                <span className="truncate">Status</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("status", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead style={getDocThStyle("updatedAt")} className="overflow-hidden">
+                <span className="truncate">Updated</span>
+                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("updatedAt", e)} onClick={e => e.stopPropagation()} />
+              </TableHead>
+              <TableHead className="text-right w-[150px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -767,6 +813,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             })}
           </TableBody>
         </Table>
+        </div>
       </div>
 
       {/* Edit Document Dialog */}
@@ -903,51 +950,64 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               )}
             </div>
           </DialogHeader>
-          <div className="flex-1 overflow-hidden bg-muted/30">
-            {docPreview?.fileUrl ? (() => {
-              const url: string = docPreview.fileUrl;
-              const ext = (docPreview.fileName || url).split(".").pop()?.toLowerCase() ?? "";
-              const isPdf = ext === "pdf" || url.includes(".pdf");
-              const isImg = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
-              if (isPdf) {
-                return (
-                  <iframe
-                    src={url}
-                    className="w-full h-full border-0"
-                    title={docPreview.title}
-                  />
-                );
-              } else if (isImg) {
-                return (
-                  <div className="w-full h-full flex items-center justify-center p-4">
-                    <img src={url} alt={docPreview.title} className="max-w-full max-h-full object-contain rounded shadow" />
+          <div className="flex-1 overflow-hidden flex flex-row">
+            {/* Main preview area */}
+            <div className="flex-1 overflow-hidden bg-muted/30">
+              {docPreview?.fileUrl ? (() => {
+                const url: string = docPreview.fileUrl;
+                const ext = (docPreview.fileName || url).split(".").pop()?.toLowerCase() ?? "";
+                const isPdf = ext === "pdf" || url.includes(".pdf");
+                const isImg = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
+                if (isPdf) {
+                  return (
+                    <iframe
+                      src={url}
+                      className="w-full h-full border-0"
+                      title={docPreview.title}
+                    />
+                  );
+                } else if (isImg) {
+                  return (
+                    <div className="w-full h-full flex items-center justify-center p-4">
+                      <img src={url} alt={docPreview.title} className="max-w-full max-h-full object-contain rounded shadow" />
+                    </div>
+                  );
+                } else {
+                  return (
+                    <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+                      <FileText className="h-16 w-16 opacity-30" />
+                      <p className="text-sm">No in-browser preview available for this file type.</p>
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4 mr-2" />Open File</a>
+                      </Button>
+                    </div>
+                  );
+                }
+              })() : (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+                  <FileText className="h-16 w-16 opacity-30" />
+                  <div className="text-center">
+                    <p className="text-sm font-medium">{docPreview?.title}</p>
+                    <p className="text-xs mt-1">No file attached to this document.</p>
                   </div>
-                );
-              } else {
-                return (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-                    <FileText className="h-16 w-16 opacity-30" />
-                    <p className="text-sm">No in-browser preview available for this file type.</p>
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4 mr-2" />Open File</a>
-                    </Button>
+                  <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
+                    <p><span className="font-medium">Number:</span> {docPreview?.documentNumber}</p>
+                    <p><span className="font-medium">Revision:</span> {docPreview?.revision ?? "01"}</p>
+                    <p><span className="font-medium">Discipline:</span> {docPreview?.discipline || "—"}</p>
+                    <p><span className="font-medium">Status:</span> {docPreview?.status || "—"}</p>
+                    <p><span className="font-medium">Issued by:</span> {docPreview?.issuedBy || "—"}</p>
                   </div>
-                );
-              }
-            })() : (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-                <FileText className="h-16 w-16 opacity-30" />
-                <div className="text-center">
-                  <p className="text-sm font-medium">{docPreview?.title}</p>
-                  <p className="text-xs mt-1">No file attached to this document.</p>
                 </div>
-                <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
-                  <p><span className="font-medium">Number:</span> {docPreview?.documentNumber}</p>
-                  <p><span className="font-medium">Revision:</span> {docPreview?.revision ?? "01"}</p>
-                  <p><span className="font-medium">Discipline:</span> {docPreview?.discipline || "—"}</p>
-                  <p><span className="font-medium">Status:</span> {docPreview?.status || "—"}</p>
-                  <p><span className="font-medium">Issued by:</span> {docPreview?.issuedBy || "—"}</p>
-                </div>
+              )}
+            </div>
+            {/* Attachments side panel */}
+            {docPreview && (
+              <div className="w-72 border-l bg-card overflow-y-auto p-3 shrink-0 flex flex-col gap-3">
+                <DocumentFilesPanel
+                  documentId={docPreview.id}
+                  projectId={projectId}
+                  canEdit={true}
+                />
               </div>
             )}
           </div>
@@ -2289,7 +2349,10 @@ function MembersTab({ projectId }: { projectId: number }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: parseInt(addUserId), role: addRole }),
       });
-      if (!r.ok) throw new Error("Failed");
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to add member");
+      }
       return r.json();
     },
     onSuccess: () => {
@@ -2298,7 +2361,7 @@ function MembersTab({ projectId }: { projectId: number }) {
       setAddUserId("");
       toast({ title: "Member added to project" });
     },
-    onError: () => toast({ title: "Failed to add member", variant: "destructive" }),
+    onError: (err: any) => toast({ title: "Failed to add member", description: err?.message, variant: "destructive" }),
   });
 
   const removeMember = useMutation({

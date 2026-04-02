@@ -403,7 +403,7 @@ export function RulesTab({ orgId }: { orgId?: number | null }) {
   const toggleMutation = useMutation({
     mutationFn: async (rule: Rule) => {
       const r = await fetch(`/api/rules/${rule.id}/toggle`, {
-        method: "POST",
+        method: "PATCH",
         credentials: "include",
       });
       if (!r.ok) throw new Error("Toggle failed");

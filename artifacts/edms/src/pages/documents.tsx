@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -51,9 +52,23 @@ function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; s
     : <ArrowDown className="h-3 w-3 ml-1 text-primary inline" />;
 }
 
+// ─── Column definitions for resizable table ───────────────────────────────────
+const DOC_COLS = [
+  { key: "documentNumber", defaultWidth: 120, minWidth: 80 },
+  { key: "title",          defaultWidth: 240, minWidth: 120 },
+  { key: "projectName",    defaultWidth: 140, minWidth: 80 },
+  { key: "discipline",     defaultWidth: 110, minWidth: 70 },
+  { key: "source",         defaultWidth: 100, minWidth: 70 },
+  { key: "issuedBy",       defaultWidth: 120, minWidth: 70 },
+  { key: "revision",       defaultWidth: 65,  minWidth: 50 },
+  { key: "status",         defaultWidth: 110, minWidth: 80 },
+  { key: "updatedAt",      defaultWidth: 110, minWidth: 90 },
+];
+
 export default function DocumentsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
 
   // Filters
   const [search, setSearch] = useState("");
@@ -239,16 +254,18 @@ export default function DocumentsPage() {
     });
   };
 
-  const COLS: { key: SortKey; label: string; className?: string }[] = [
-    { key: "documentNumber", label: "Doc No.", className: "w-[110px]" },
-    { key: "title", label: "Title" },
-    { key: "projectName", label: "Project" },
-    { key: "discipline", label: "Discipline" },
-    { key: "source", label: "Source" },
-    { key: "issuedBy", label: "Issued By" },
-    { key: "revision", label: "Rev" },
-    { key: "status", label: "Status" },
-    { key: "updatedAt", label: "Updated" },
+  const { getThStyle, startResize, resetWidths } = useResizableColumns("global-documents", DOC_COLS);
+
+  const COLS: { key: SortKey; label: string }[] = [
+    { key: "documentNumber", label: "Doc No." },
+    { key: "title",          label: "Title" },
+    { key: "projectName",    label: "Project" },
+    { key: "discipline",     label: "Discipline" },
+    { key: "source",         label: "Source" },
+    { key: "issuedBy",       label: "Issued By" },
+    { key: "revision",       label: "Rev" },
+    { key: "status",         label: "Status" },
+    { key: "updatedAt",      label: "Updated" },
   ];
 
   return (
@@ -349,90 +366,118 @@ export default function DocumentsPage() {
 
       {/* Table */}
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-        <Table>
-          <TableHeader className="bg-muted/40">
-            <TableRow>
-              {COLS.map(col => (
-                <TableHead
-                  key={col.key}
-                  className={`cursor-pointer select-none hover:bg-muted/60 transition-colors text-xs ${col.className ?? ""}`}
-                  onClick={() => toggleSort(col.key)}
+        <div className="flex items-center justify-end px-3 py-1.5 border-b bg-muted/20">
+          <button
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
+            onClick={resetWidths}
+            title="Reset column widths to default"
+          >
+            Reset columns
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <Table style={{ tableLayout: "fixed", minWidth: 900 }}>
+            <TableHeader className="bg-muted/40">
+              <TableRow>
+                {COLS.map(col => (
+                  <TableHead
+                    key={col.key}
+                    style={getThStyle(col.key)}
+                    className="cursor-pointer select-none hover:bg-muted/60 transition-colors text-xs overflow-hidden"
+                    onClick={() => toggleSort(col.key)}
+                  >
+                    <span className="truncate inline-flex items-center">
+                      {col.label}
+                      <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
+                    </span>
+                    {/* Resize handle — stops sort click from firing */}
+                    <div
+                      className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50 active:bg-primary"
+                      onMouseDown={e => startResize(col.key, e)}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  </TableHead>
+                ))}
+                <TableHead className="text-right w-[140px]">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={COLS.length + 1} className="py-12 text-center">
+                    <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
+                  </TableCell>
+                </TableRow>
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={COLS.length + 1} className="py-12 text-center text-muted-foreground">
+                    <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                    No documents match the current filters.
+                  </TableCell>
+                </TableRow>
+              ) : filtered.map((doc: any) => (
+                <TableRow
+                  key={doc.id}
+                  className="hover:bg-muted/20 group cursor-pointer"
+                  onClick={() => navigate(`/documents/${doc.id}`)}
                 >
-                  {col.label}
-                  <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
-                </TableHead>
-              ))}
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={COLS.length + 1} className="py-12 text-center">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
-                </TableCell>
-              </TableRow>
-            ) : filtered.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={COLS.length + 1} className="py-12 text-center text-muted-foreground">
-                  <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                  No documents match the current filters.
-                </TableCell>
-              </TableRow>
-            ) : filtered.map((doc: any) => (
-              <TableRow key={doc.id} className="hover:bg-muted/20 group">
-                <TableCell className="font-mono text-xs font-semibold text-primary">{doc.documentNumber}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="text-sm font-medium max-w-[220px] truncate" title={doc.title}>{doc.title}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{doc.projectName || "—"}</TableCell>
-                <TableCell className="text-xs">{doc.discipline || "—"}</TableCell>
-                <TableCell className="text-xs capitalize">{doc.source || "—"}</TableCell>
-                <TableCell className="text-xs max-w-[100px] truncate">{doc.issuedBy || "—"}</TableCell>
-                <TableCell className="text-xs font-mono">{doc.revision || "—"}</TableCell>
-                <TableCell>
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold capitalize ${STATUS_COLORS[doc.status] || "bg-muted text-muted-foreground"}`}>
-                    {doc.status?.replace(/_/g, " ") || "—"}
-                  </span>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                  {doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yyyy") : "—"}
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {doc.fileUrl && (
-                      <Button variant="ghost" size="icon" className="h-7 w-7" asChild title="Download">
-                        <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
-                          <Download className="h-3.5 w-3.5" />
-                        </a>
+                  <TableCell className="font-mono text-xs font-semibold text-primary truncate">{doc.documentNumber}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="text-sm font-medium truncate" title={doc.title}>{doc.title}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground truncate">{doc.projectName || "—"}</TableCell>
+                  <TableCell className="text-xs truncate">{doc.discipline || "—"}</TableCell>
+                  <TableCell className="text-xs capitalize truncate">{doc.source || "—"}</TableCell>
+                  <TableCell className="text-xs truncate">{doc.issuedBy || "—"}</TableCell>
+                  <TableCell className="text-xs font-mono">{doc.revision || "—"}</TableCell>
+                  <TableCell>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold capitalize ${STATUS_COLORS[doc.status] || "bg-muted text-muted-foreground"}`}>
+                      {doc.status?.replace(/_/g, " ") || "—"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                    {doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yyyy") : "—"}
+                  </TableCell>
+                  <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {doc.fileUrl && (
+                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild title="Download">
+                          <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
+                            <Download className="h-3.5 w-3.5" />
+                          </a>
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Open Document"
+                        onClick={() => navigate(`/documents/${doc.id}`)}>
+                        <Eye className="h-3.5 w-3.5" />
                       </Button>
-                    )}
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Files"
-                      onClick={() => setFilesDoc(doc)}>
-                      <Paperclip className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Version History"
-                      onClick={() => setHistoryDoc(doc)}>
-                      <History className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Send for Review"
-                      onClick={() => openWorkflow(doc)}>
-                      <Send className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Open Project" asChild>
-                      <Link href={`/projects/${doc.projectId}`}>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </Link>
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Files"
+                        onClick={() => setFilesDoc(doc)}>
+                        <Paperclip className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Version History"
+                        onClick={() => setHistoryDoc(doc)}>
+                        <History className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Send for Review"
+                        onClick={() => openWorkflow(doc)}>
+                        <Send className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Open Project" asChild>
+                        <Link href={`/projects/${doc.projectId}`}>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </div>
 
       {/* Files Panel Sheet */}

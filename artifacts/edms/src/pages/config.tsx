@@ -19,7 +19,7 @@ export default function Config() {
   const { user } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.role === "admin" || user?.role === "system_owner";
 
   const { data: config, isLoading } = useQuery({
     queryKey: ["config"],

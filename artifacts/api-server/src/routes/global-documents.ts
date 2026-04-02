@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, foldersTable, usersTable, projectsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
 
@@ -74,6 +74,55 @@ router.get("/", requireAuth, async (req, res) => {
     totalPages,
     limit: lim,
     hasMore: pg < totalPages,
+  });
+});
+
+// GET /api/documents/:id — single document detail (org-scoped)
+router.get("/:id", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid document ID" }); return; }
+
+  const user = req.user!;
+
+  const [result] = await db.select({
+    doc: documentsTable,
+    project: projectsTable,
+    createdBy: usersTable,
+    folder: foldersTable,
+  })
+    .from(documentsTable)
+    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
+    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+    .where(eq(documentsTable.id, id))
+    .limit(1);
+
+  if (!result) { res.status(404).json({ error: "Document not found" }); return; }
+
+  // Enforce org scope (sys admins bypass)
+  if (!isSysAdmin(user) && result.project?.organizationId !== user.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
+
+  // Fetch attached files
+  const files = await db.select({ file: documentFilesTable, uploader: usersTable })
+    .from(documentFilesTable)
+    .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
+    .where(eq(documentFilesTable.documentId, id))
+    .orderBy(desc(documentFilesTable.uploadedAt));
+
+  res.json({
+    ...result.doc,
+    projectName: result.project?.name,
+    projectCode: result.project?.code,
+    folderName: result.folder?.name,
+    createdByName: result.createdBy
+      ? `${result.createdBy.firstName} ${result.createdBy.lastName}`
+      : undefined,
+    files: files.map(({ file, uploader }) => ({
+      ...file,
+      uploaderName: uploader ? `${uploader.firstName} ${uploader.lastName}` : undefined,
+    })),
   });
 });
 

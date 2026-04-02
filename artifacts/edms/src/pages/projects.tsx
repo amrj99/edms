@@ -1,12 +1,12 @@
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
-import { useListProjects, useCreateProject } from "@workspace/api-client-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useListProjects, useCreateProject, getListProjectsQueryKey } from "@workspace/api-client-react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format } from "date-fns";
-import { FolderKanban, Plus, Users, FileText, Calendar, Loader2, Building2, Filter, AlertCircle } from "lucide-react";
+import { FolderKanban, Plus, Users, FileText, Calendar, Loader2, Building2, Filter, AlertCircle, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +47,7 @@ const projectSchema = z.object({
 type ProjectFormValues = z.infer<typeof projectSchema>;
 
 export default function Projects() {
+  const qc = useQueryClient();
   const { data, isLoading, refetch } = useListProjects();
   const createMutation = useCreateProject();
   const { toast } = useToast();
@@ -81,6 +82,12 @@ export default function Projects() {
     },
   });
 
+  const refreshProjects = () => {
+    // Invalidate both the Orval-generated query and the AppLayout sidebar query
+    qc.invalidateQueries({ queryKey: getListProjectsQueryKey() });
+    qc.invalidateQueries({ queryKey: ["projects"] });
+  };
+
   const onSubmit = async (values: ProjectFormValues) => {
     setFormError(null);
     try {
@@ -88,7 +95,7 @@ export default function Projects() {
       toast({ title: "Project created successfully" });
       setIsCreateOpen(false);
       form.reset({ name: "", code: "", description: "", status: "active", organizationId: user?.organizationId ?? 1 });
-      refetch();
+      refreshProjects();
     } catch (error: any) {
       // Extract structured field errors from the API response
       const apiData = error?.data ?? {};
@@ -139,6 +146,15 @@ export default function Projects() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 gap-1.5"
+            onClick={refreshProjects}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </Button>
           {isSysAdmin && organizations.length > 1 && (
             <Select value={orgFilter} onValueChange={setOrgFilter}>
               <SelectTrigger className="h-9 w-[200px] text-sm">

@@ -346,8 +346,48 @@ router.get("/:id/members", requireAuth, async (req, res) => {
 router.post("/:id/members", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const { userId, role } = req.body;
-  const [member] = await db.insert(projectMembersTable).values({ projectId: id, userId, role }).returning();
-  res.status(201).json({ ...member });
+
+  if (!userId || isNaN(parseInt(String(userId)))) {
+    res.status(400).json({ error: "Validation failed", message: "A valid user is required" });
+    return;
+  }
+
+  // Verify project exists
+  const [project] = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
+  if (!project) {
+    res.status(404).json({ error: "Not Found", message: "Project not found" });
+    return;
+  }
+
+  // Verify user exists
+  const [targetUser] = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.id, parseInt(String(userId)))).limit(1);
+  if (!targetUser) {
+    res.status(400).json({ error: "Validation failed", message: "User not found" });
+    return;
+  }
+
+  // Check if already a member
+  const [existing] = await db.select({ id: projectMembersTable.id })
+    .from(projectMembersTable)
+    .where(and(eq(projectMembersTable.projectId, id), eq(projectMembersTable.userId, parseInt(String(userId)))))
+    .limit(1);
+  if (existing) {
+    res.status(400).json({ error: "Validation failed", message: "User is already a member of this project" });
+    return;
+  }
+
+  try {
+    const [member] = await db.insert(projectMembersTable).values({ projectId: id, userId: parseInt(String(userId)), role: role || "viewer" }).returning();
+    res.status(201).json({ ...member });
+  } catch (err: unknown) {
+    logger.error({ err }, "Add project member failed");
+    const errCode = pgErrCode(err);
+    if (errCode === "23503") {
+      res.status(400).json({ error: "Validation failed", message: "User or project not found" });
+      return;
+    }
+    res.status(500).json({ error: "Internal server error", message: "Failed to add member" });
+  }
 });
 
 router.delete("/:id/members/:userId", requireAuth, async (req, res) => {

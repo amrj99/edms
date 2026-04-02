@@ -32,6 +32,7 @@ import Reports from "@/pages/reports";
 import Admin from "@/pages/admin";
 import CorrespondencePage from "@/pages/correspondence";
 import DocumentsPage from "@/pages/documents";
+import DocumentDetailPage from "@/pages/document-detail";
 import DeliverablesPage from "@/pages/deliverables";
 import ActivityLogPage from "@/pages/activity-log";
 import ProfilePage from "@/pages/profile";
@@ -156,6 +157,9 @@ function Router() {
       </Route>
       <Route path="/documents">
         <ProtectedRoute component={DocumentsPage} />
+      </Route>
+      <Route path="/documents/:id">
+        <ProtectedRoute component={DocumentDetailPage} />
       </Route>
       <Route path="/deliverables">
         <ModuleGuard moduleKey="deliverables" component={DeliverablesPage} />
