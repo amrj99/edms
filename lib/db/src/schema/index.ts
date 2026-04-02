@@ -17,3 +17,4 @@ export * from "./deliverables";
 export * from "./preferences";
 export * from "./meetings";
 export * from "./chat";
+export * from "./rules";

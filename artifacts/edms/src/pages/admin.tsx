@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { RulesTab } from "@/components/admin/RulesTab";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +23,7 @@ import {
   CheckCircle2, AlertCircle, Loader2, Activity, Database,
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
-  LayoutDashboard, ClipboardList, Bell, Link2,
+  LayoutDashboard, ClipboardList, Bell, Link2, Zap,
 } from "lucide-react";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
@@ -307,6 +308,7 @@ export default function Admin() {
             { value: "corrtypes", label: "Corr. Types", icon: FileType },
             { value: "numbering", label: "Numbering", icon: Hash },
             { value: "workflows", label: "Workflows", icon: GitBranch },
+            { value: "rules", label: "Rules", icon: Zap },
             { value: "ai", label: "AI Config", icon: Brain },
             { value: "email", label: "Email", icon: Mail },
             { value: "storage", label: "Storage", icon: HardDrive },
@@ -1129,6 +1131,11 @@ export default function Admin() {
 
         {/* Branding */}
         <BrandingTab />
+
+        {/* Automation Rules */}
+        <TabsContent value="rules" className="mt-4 space-y-4">
+          <RulesTab orgId={user?.organizationId ?? null} />
+        </TabsContent>
 
         {/* Module Licensing */}
         <ModulesTab orgs={orgs} isSysOwner={user?.role === "system_owner"} />

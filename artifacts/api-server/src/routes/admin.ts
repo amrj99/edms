@@ -5,7 +5,7 @@ import {
   usersTable, projectsTable, organizationsTable, documentsTable,
   correspondenceTable, transmittalsTable, tasksTable, orgConfigTable,
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
-  deliverablesTable, meetingsTable,
+  deliverablesTable, meetingsTable, systemSettingsTable,
 } from "@workspace/db";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 import { testSmtpConnection } from "../lib/email.js";
@@ -469,6 +469,39 @@ router.post("/search/reindex", requireRole("admin", "system_owner"), async (req,
     res.json({ success: true, ...result, message: `Indexed ${result.indexed} documents (${result.errors} errors).` });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── AI Classification toggle ──────────────────────────────────────────────────
+
+router.get("/ai-classification", requireAuth, async (req, res) => {
+  try {
+    const [row] = await db.select().from(systemSettingsTable)
+      .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+    const enabled = row ? row.value !== "false" : true;
+    res.json({ enabled });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put("/ai-classification", requireRole("admin", "system_owner"), async (req, res) => {
+  try {
+    const { enabled } = req.body as { enabled: boolean };
+    const value = enabled ? "true" : "false";
+    const existing = await db.select().from(systemSettingsTable)
+      .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+    if (existing.length > 0) {
+      await db.update(systemSettingsTable)
+        .set({ value, updatedAt: new Date() })
+        .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+    } else {
+      await db.insert(systemSettingsTable)
+        .values({ key: "ai_classification_enabled", value });
+    }
+    res.json({ enabled });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

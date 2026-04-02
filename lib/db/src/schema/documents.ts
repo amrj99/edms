@@ -64,6 +64,29 @@ export const documentRevisionsTable = pgTable("document_revisions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// ─── Document Files (one-to-many file attachments per document) ───────────────
+
+export const documentFilesTable = pgTable("document_files", {
+  id: serial("id").primaryKey(),
+  documentId: integer("document_id").references(() => documentsTable.id).notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileName: text("file_name").notNull(),
+  fileSize: integer("file_size"),
+  fileType: text("file_type"), // MIME type
+  uploadedById: integer("uploaded_by_id").references(() => usersTable.id).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertDocumentFileSchema = createInsertSchema(documentFilesTable).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type DocumentFile = typeof documentFilesTable.$inferSelect;
+export type InsertDocumentFile = z.infer<typeof insertDocumentFileSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const insertDocumentSchema = createInsertSchema(documentsTable).omit({
   id: true,
   createdAt: true,

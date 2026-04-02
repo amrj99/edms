@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   Brain, FileText, Mail, CheckSquare, Search, Bell, Users, Clipboard,
   Loader2, Save, Sparkles, Info, Check, AlertTriangle, Server, Zap,
-  ChevronDown, ChevronUp, Settings2,
+  ChevronDown, ChevronUp, Settings2, Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -73,7 +73,7 @@ const AI_MODULES: AiModuleConfig[] = [
   },
 ];
 
-type AIProvider = "openai_replit" | "groq" | "ollama";
+type AIProvider = "openai_replit" | "groq" | "ollama" | "none";
 
 interface ProviderInfo {
   configured: boolean;
@@ -93,12 +93,14 @@ const PROVIDER_ICONS: Record<AIProvider, React.ComponentType<{ className?: strin
   openai_replit: Sparkles,
   groq: Zap,
   ollama: Server,
+  none: Ban,
 };
 
 const PROVIDER_COLORS: Record<AIProvider, string> = {
   openai_replit: "text-violet-600",
   groq: "text-orange-500",
   ollama: "text-green-600",
+  none: "text-muted-foreground",
 };
 
 export default function AISettings() {
@@ -114,6 +116,9 @@ export default function AISettings() {
   const [fastModel, setFastModel] = useState("");
   const [smartModel, setSmartModel] = useState("");
   const [showModels, setShowModels] = useState(false);
+  const [classificationEnabled, setClassificationEnabled] = useState(true);
+  const [classificationLoading, setClassificationLoading] = useState(true);
+  const [classificationSaving, setClassificationSaving] = useState(false);
 
   const isSysAdmin = (user as any)?.isSysAdmin === true || (user as any)?.role === "sysadmin";
 
@@ -133,7 +138,31 @@ export default function AISettings() {
         setProviderLoading(false);
       })
       .catch(() => setProviderLoading(false));
+
+    fetch("/api/admin/ai-classification", { credentials: "include" })
+      .then((r) => r.ok ? r.json() : { enabled: true })
+      .then((d) => { setClassificationEnabled(d.enabled ?? true); setClassificationLoading(false); })
+      .catch(() => setClassificationLoading(false));
   }, []);
+
+  const handleSaveClassification = async (val: boolean) => {
+    setClassificationSaving(true);
+    try {
+      const res = await fetch("/api/admin/ai-classification", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: val }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      setClassificationEnabled(val);
+      toast({ title: val ? "Classification enabled" : "Classification disabled" });
+    } catch {
+      toast({ variant: "destructive", title: "Failed to save classification setting" });
+    } finally {
+      setClassificationSaving(false);
+    }
+  };
 
   const handleToggle = (module: string, enabled: boolean) => {
     setSettings((prev) => ({ ...prev, [module]: enabled }));
@@ -185,15 +214,15 @@ export default function AISettings() {
   const handleSelectProvider = (p: AIProvider) => {
     setSelectedProvider(p);
     if (providerData) {
-      const status = providerData.providerStatus[p];
       const defaults: Record<AIProvider, { fast: string; smart: string }> = {
         openai_replit: { fast: "gpt-4o-mini", smart: "gpt-4o" },
         groq:          { fast: "llama-3.1-8b-instant", smart: "llama-3.3-70b-versatile" },
         ollama:        { fast: "llama3.2", smart: "llama3.1" },
+        none:          { fast: "", smart: "" },
       };
       if (p !== providerData.provider) {
-        setFastModel(defaults[p].fast);
-        setSmartModel(defaults[p].smart);
+        setFastModel(defaults[p]?.fast ?? "");
+        setSmartModel(defaults[p]?.smart ?? "");
       } else {
         setFastModel(providerData.fastModel);
         setSmartModel(providerData.smartModel);
@@ -374,6 +403,71 @@ export default function AISettings() {
             )}
           </div>
         )}
+      </div>
+
+      {/* ── AI Classification Section ───────────────────────────────── */}
+      <div className="rounded-xl border bg-card overflow-hidden">
+        <div className="px-5 py-4 border-b bg-muted/30">
+          <div className="flex items-center gap-2">
+            <Brain className="h-4 w-4 text-primary" />
+            <h2 className="font-semibold text-sm">AI Classification</h2>
+            {!classificationLoading && (
+              <Badge
+                variant="outline"
+                className={`ml-auto text-xs ${classificationEnabled ? "border-green-500 text-green-600" : "border-muted text-muted-foreground"}`}
+              >
+                {classificationEnabled ? "Enabled" : "Disabled"}
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            When enabled, new documents and correspondence are automatically classified with a category, tags, and priority before any automation rules run.
+          </p>
+        </div>
+        <div className="p-5">
+          {classificationLoading ? (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2 flex-1">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={classificationEnabled}
+                    onCheckedChange={handleSaveClassification}
+                    disabled={classificationSaving}
+                  />
+                  <Label className="text-sm">
+                    {classificationEnabled ? "Classification active" : "Classification disabled (rules-only mode)"}
+                  </Label>
+                  {classificationSaving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  {[
+                    { label: "Category", desc: "Document or correspondence type" },
+                    { label: "Tags", desc: "Keywords for search & filtering" },
+                    { label: "Priority", desc: "Urgency level (low/medium/high)" },
+                  ].map(({ label, desc }) => (
+                    <div
+                      key={label}
+                      className={`rounded-lg border p-3 text-xs transition-opacity ${classificationEnabled ? "" : "opacity-40"}`}
+                    >
+                      <p className="font-semibold">{label}</p>
+                      <p className="text-muted-foreground mt-0.5">{desc}</p>
+                    </div>
+                  ))}
+                </div>
+                {!classificationEnabled && (
+                  <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    Rules will still execute, but without AI-suggested categories or tags as conditions.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Module Settings Section ─────────────────────────────────── */}

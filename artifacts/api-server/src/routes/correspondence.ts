@@ -5,6 +5,8 @@ import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
+import { evaluateRules } from "../lib/rule-engine.js";
+import { classifyItem } from "../lib/ai-service.js";
 
 const router = Router({ mergeParams: true });
 
@@ -129,6 +131,26 @@ router.post("/", requireAuth, async (req, res) => {
   }
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "correspondence", entityId: corr.id, entityTitle: corr.subject, projectId });
+
+  // AI classification (non-blocking)
+  try { await classifyItem({ type: "correspondence", subject: corr.subject, body: corr.body }); } catch (_) {}
+
+  // Rules engine (non-blocking)
+  try {
+    const orgId = req.user!.organizationId;
+    if (orgId) {
+      await evaluateRules({
+        type: "correspondence",
+        orgId,
+        projectId,
+        subject: corr.subject,
+        senderUserId: req.user!.id,
+        entityId: corr.id,
+        entityTitle: corr.subject,
+        triggeredByUserId: req.user!.id,
+      });
+    }
+  } catch (_) {}
 
   // Notify recipients when correspondence is sent (not a draft)
   if (sendNow && toUserIds?.length > 0) {

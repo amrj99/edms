@@ -1,12 +1,13 @@
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
+import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   FileText, Search, Send, Download, Eye, ExternalLink,
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
   Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
-  ArrowUp, ArrowDown, ChevronsUpDown, Trash2,
+  ArrowUp, ArrowDown, ChevronsUpDown, Trash2, Paperclip,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,9 @@ export default function DocumentsPage() {
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
+
+  // Files panel sheet
+  const [filesDoc, setFilesDoc] = useState<any>(null);
 
   const { data: revisionData, isLoading: revisionLoading } = useQuery({
     queryKey: ["doc-revisions", historyDoc?.id],
@@ -406,6 +410,10 @@ export default function DocumentsPage() {
                         </a>
                       </Button>
                     )}
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Files"
+                      onClick={() => setFilesDoc(doc)}>
+                      <Paperclip className="h-3.5 w-3.5" />
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7" title="Version History"
                       onClick={() => setHistoryDoc(doc)}>
                       <History className="h-3.5 w-3.5" />
@@ -426,6 +434,27 @@ export default function DocumentsPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* Files Panel Sheet */}
+      <Sheet open={!!filesDoc} onOpenChange={open => !open && setFilesDoc(null)}>
+        <SheetContent className="w-[440px]">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <Paperclip className="h-4 w-4" />
+              Files — {filesDoc?.documentNumber}
+            </SheetTitle>
+          </SheetHeader>
+          <ScrollArea className="h-[calc(100vh-100px)] mt-4">
+            {filesDoc && (
+              <DocumentFilesPanel
+                documentId={filesDoc.id}
+                projectId={filesDoc.projectId}
+                canEdit={true}
+              />
+            )}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
 
       {/* Version History Sheet */}
       <Sheet open={!!historyDoc} onOpenChange={open => !open && setHistoryDoc(null)}>

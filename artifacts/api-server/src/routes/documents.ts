@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable } from "@workspace/db";
 import { eq, and, count, desc, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -8,6 +8,8 @@ import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
 import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
+import { evaluateRules } from "../lib/rule-engine.js";
+import { classifyItem } from "../lib/ai-service.js";
 
 const router = Router({ mergeParams: true });
 
@@ -127,6 +129,50 @@ router.post("/", requireAuth, async (req, res) => {
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "document", entityId: doc.id, entityTitle: doc.title, projectId });
 
+  // Create document_files entry for the primary file (one-to-many support)
+  if (fileUrl && fileName) {
+    try {
+      await db.insert(documentFilesTable).values({
+        documentId: doc.id,
+        fileUrl,
+        fileName,
+        fileSize: fileSize ?? null,
+        fileType: req.body.fileType ?? null,
+        uploadedById: req.user!.id,
+      });
+    } catch (_) {}
+  }
+
+  // AI classification (non-blocking — enhances metadata for rules engine)
+  let aiClassification: { category?: string; tags?: string[]; priority?: string } = {};
+  try {
+    aiClassification = await classifyItem({
+      type: "document",
+      title: doc.title,
+      documentType: doc.documentType,
+      discipline: doc.discipline,
+    }) ?? {};
+  } catch (_) {}
+
+  // Rules engine — evaluate and execute matching automation rules
+  try {
+    const orgId = req.user!.organizationId;
+    if (orgId) {
+      await evaluateRules({
+        type: "document",
+        orgId,
+        projectId,
+        documentType: doc.documentType,
+        discipline: doc.discipline,
+        subject: doc.title,
+        senderUserId: req.user!.id,
+        entityId: doc.id,
+        entityTitle: doc.title,
+        triggeredByUserId: req.user!.id,
+      });
+    }
+  } catch (_) {}
+
   // Notify project members about the new document upload (excluding the uploader)
   try {
     const members = await db.select({ userId: projectMembersTable.userId })
@@ -152,7 +198,7 @@ router.post("/", requireAuth, async (req, res) => {
     }
   } catch (_) {}
 
-  res.status(201).json({ ...doc, createdByName: undefined, folderName: undefined });
+  res.status(201).json({ ...doc, aiClassification, createdByName: undefined, folderName: undefined });
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
@@ -555,6 +601,101 @@ router.delete("/:id/share", requireAuth, async (req, res) => {
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
   res.json({ success: true });
+});
+
+// ─── Document Files (one-to-many attachments) ─────────────────────────────────
+
+// GET /api/projects/:projectId/documents/:id/files
+router.get("/:id/files", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const docId = parseInt(req.params.id);
+
+  // Verify document belongs to project
+  const [doc] = await db.select().from(documentsTable)
+    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+
+  const files = await db.select({
+    file: documentFilesTable,
+    uploader: usersTable,
+  }).from(documentFilesTable)
+    .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
+    .where(eq(documentFilesTable.documentId, docId));
+
+  res.json({
+    files: files.map(({ file, uploader }) => ({
+      ...file,
+      uploadedByName: uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined,
+    })),
+  });
+});
+
+// POST /api/projects/:projectId/documents/:id/files — add a file to a document
+router.post("/:id/files", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const docId = parseInt(req.params.id);
+
+  const [doc] = await db.select().from(documentsTable)
+    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+
+  const { fileUrl, fileName, fileSize, fileType } = req.body;
+  if (!fileUrl || !fileName) return res.status(400).json({ error: "fileUrl and fileName are required" });
+
+  const [file] = await db.insert(documentFilesTable).values({
+    documentId: docId,
+    fileUrl,
+    fileName,
+    fileSize: fileSize ?? null,
+    fileType: fileType ?? null,
+    uploadedById: req.user!.id,
+  }).returning();
+
+  await createAuditLog({
+    userId: req.user!.id,
+    action: "update",
+    entityType: "document",
+    entityId: docId,
+    entityTitle: `${doc.title} — added file: ${fileName}`,
+    projectId,
+  });
+
+  // Emit real-time update
+  emitToUser(req.user!.id, "document:updated", { documentId: docId });
+
+  const [uploader] = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id));
+  res.status(201).json({
+    ...file,
+    uploadedByName: uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined,
+  });
+});
+
+// DELETE /api/projects/:projectId/documents/:id/files/:fileId
+router.delete("/:id/files/:fileId", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const docId = parseInt(req.params.id);
+  const fileId = parseInt(req.params.fileId);
+
+  const [doc] = await db.select().from(documentsTable)
+    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+
+  const [file] = await db.select().from(documentFilesTable)
+    .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)));
+  if (!file) return res.status(404).json({ error: "File not found" });
+
+  await db.delete(documentFilesTable).where(eq(documentFilesTable.id, fileId));
+
+  await createAuditLog({
+    userId: req.user!.id,
+    action: "update",
+    entityType: "document",
+    entityId: docId,
+    entityTitle: `${doc.title} — removed file: ${file.fileName}`,
+    projectId,
+  });
+
+  res.status(204).end();
 });
 
 export default router;

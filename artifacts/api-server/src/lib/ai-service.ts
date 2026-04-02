@@ -13,7 +13,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // ─── Provider types ───────────────────────────────────────────────────────────
 
-export type AIProvider = "openai_replit" | "groq" | "ollama";
+export type AIProvider = "openai_replit" | "groq" | "ollama" | "none";
 
 export interface AIProviderConfig {
   provider: AIProvider;
@@ -25,6 +25,7 @@ const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: str
   openai_replit: { fastModel: "gpt-4o-mini", smartModel: "gpt-4o" },
   groq:          { fastModel: "llama-3.1-8b-instant", smartModel: "llama-3.3-70b-versatile" },
   ollama:        { fastModel: "llama3.2", smartModel: "llama3.1" },
+  none:          { fastModel: "", smartModel: "" },
 };
 
 // ─── Dynamic AI client ────────────────────────────────────────────────────────
@@ -54,7 +55,9 @@ export async function getAIClient(): Promise<OpenAI> {
   _cachedClient = null;
   _cachedProvider = provider;
 
-  if (provider === "groq") {
+  if (provider === "none") {
+    throw new Error("AI provider is set to 'none'. Enable an AI provider in Admin → AI Settings.");
+  } else if (provider === "groq") {
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set. Add it to your environment or .env file.");
     _cachedClient = new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
@@ -122,6 +125,12 @@ export function getProviderStatus() {
       label: "Ollama (Local / Self-Hosted)",
       description: "Run open-source models locally. Requires Ollama running at OLLAMA_BASE_URL.",
       envVarsRequired: ["OLLAMA_BASE_URL"],
+    },
+    none: {
+      configured: true, // No configuration needed — AI is simply disabled
+      label: "None (Disable AI)",
+      description: "Disables all AI features. Rules engine and manual workflows still operate normally.",
+      envVarsRequired: [],
     },
   };
 }
@@ -640,4 +649,51 @@ Respond ONLY with JSON: {"scores": [{"id": <id>, "urgency": <0-100>, "reason": "
   ) as { scores: Array<{ id: number | string; urgency: number; reason: string }> };
 
   return result.scores ?? [];
+}
+
+// ─── Classification (used by rules engine pipeline) ───────────────────────────
+
+export interface ClassificationResult {
+  category: string;
+  tags: string[];
+  priority: "low" | "medium" | "high" | "critical";
+}
+
+/**
+ * AI-powered classification for documents and correspondence.
+ * Returns a best-effort classification even when AI is unavailable (returns nulls).
+ * The caller should always wrap in try/catch.
+ *
+ * AI runs BEFORE the rules engine so rules can leverage AI-assigned tags/priority.
+ */
+export async function classifyItem(input: {
+  type: "document" | "correspondence";
+  title?: string | null;
+  documentType?: string | null;
+  discipline?: string | null;
+  subject?: string | null;
+  body?: string | null;
+}): Promise<ClassificationResult | null> {
+  // Check if AI is globally enabled and classification is on
+  const classificationEnabled = await getSystemSettingValue("ai_classification_enabled");
+  if (classificationEnabled === "false") return null;
+
+  const { provider } = await getAIProviderConfig();
+  if (provider === "none") return null;
+
+  const context = input.type === "document"
+    ? `Document: "${input.title ?? ""}" | Type: ${input.documentType ?? "unknown"} | Discipline: ${input.discipline ?? "unknown"}`
+    : `Correspondence subject: "${input.subject ?? ""}" | Body preview: ${(input.body ?? "").slice(0, 200)}`;
+
+  const result = await callAI(
+    `Classify this engineering document/correspondence for an EDMS system.
+${context}
+
+Respond with JSON only: {"category": "<one of: Drawing|Report|Procedure|Specification|Letter|Memo|RFI|NCR|Other>", "tags": ["<tag1>","<tag2>"], "priority": "<low|medium|high|critical>"}`,
+    "You are an engineering document classification AI. Classify documents concisely.",
+    "fast",
+    true,
+  ) as ClassificationResult | null;
+
+  return result ?? null;
 }

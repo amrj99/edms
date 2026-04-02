@@ -345,7 +345,7 @@ router.put("/provider", async (req, res) => {
     return;
   }
   const { provider, fastModel, smartModel } = req.body ?? {};
-  const validProviders = ["openai_replit", "groq", "ollama"];
+  const validProviders = ["openai_replit", "groq", "ollama", "none"];
   if (provider !== undefined && !validProviders.includes(provider)) {
     res.status(400).json({ error: `Invalid provider. Must be one of: ${validProviders.join(", ")}` });
     return;
