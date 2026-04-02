@@ -4,9 +4,24 @@ import { projectsTable, projectMembersTable, organizationsTable, usersTable, doc
 import { eq, count, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
 
+// ─── Validation constants (derived from DB schema) ────────────────────────────
+// status is a pgEnum — values must match exactly
+const VALID_STATUSES = ["active", "on_hold", "completed", "cancelled"] as const;
+type ProjectStatus = typeof VALID_STATUSES[number];
+
+// code: alphanumeric, hyphens, underscores — consistent with engineering project codes
+const CODE_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+// ─── Helper: map DB error codes to user-friendly field errors ─────────────────
+function pgErrCode(err: unknown): string | undefined {
+  return (err as any)?.code ?? (err as any)?.cause?.code;
+}
+
+// ─── GET / ────────────────────────────────────────────────────────────────────
 router.get("/", requireAuth, async (req, res) => {
   const user = req.user!;
   const effectiveOrgId = isSysAdmin(user) && req.query.organizationId
@@ -39,29 +54,164 @@ router.get("/", requireAuth, async (req, res) => {
   });
 });
 
+// ─── POST / ───────────────────────────────────────────────────────────────────
 router.post("/", requireAuth, async (req, res) => {
   const user = req.user!;
   const { name, code, description, status, startDate, endDate } = req.body;
   const organizationId = isSysAdmin(user) && req.body.organizationId
-    ? req.body.organizationId
+    ? parseInt(String(req.body.organizationId))
     : user.organizationId;
 
-  if (!name || !code || !organizationId) {
-    res.status(400).json({ error: "Bad Request", message: "name, code, and an organization are required" });
+  // ── Field validation (schema-based, no hardcoded business limits) ──────────
+  const fieldErrors: Record<string, string> = {};
+
+  if (!name || typeof name !== "string" || !name.trim()) {
+    fieldErrors.name = "Project name is required";
+  } else if (name.trim().length < 2) {
+    fieldErrors.name = "Project name must be at least 2 characters";
+  }
+
+  if (!code || typeof code !== "string" || !code.trim()) {
+    fieldErrors.code = "Project code is required";
+  } else if (!CODE_PATTERN.test(code.trim())) {
+    fieldErrors.code = "Code may only contain letters, numbers, hyphens, and underscores";
+  }
+
+  if (!organizationId || isNaN(organizationId)) {
+    fieldErrors.organizationId = "Organization is required";
+  }
+
+  const resolvedStatus: ProjectStatus = (VALID_STATUSES as readonly string[]).includes(status)
+    ? status
+    : "active";
+
+  if (status && !(VALID_STATUSES as readonly string[]).includes(status)) {
+    fieldErrors.status = `Status must be one of: ${VALID_STATUSES.join(", ")}`;
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    res.status(400).json({
+      error: "Validation failed",
+      message: "One or more fields are invalid",
+      fields: fieldErrors,
+    });
     return;
   }
-  const [project] = await db.insert(projectsTable).values({
-    name, code, description, status: status || "active",
-    startDate: startDate ? new Date(startDate) : undefined,
-    endDate: endDate ? new Date(endDate) : undefined,
-    organizationId,
-  }).returning();
 
-  await db.insert(projectMembersTable).values({ projectId: project.id, userId: user.id, role: "admin" });
-  await createAuditLog({ userId: user.id, action: "create", entityType: "project", entityId: project.id, entityTitle: project.name, projectId: project.id });
-  res.status(201).json({ ...project, memberCount: 1, documentCount: 0 });
+  // ── Pre-insert business checks ─────────────────────────────────────────────
+  // 1. Verify the organization exists
+  const [org] = await db
+    .select({ id: organizationsTable.id })
+    .from(organizationsTable)
+    .where(eq(organizationsTable.id, organizationId!))
+    .limit(1);
+
+  if (!org) {
+    res.status(400).json({
+      error: "Validation failed",
+      message: "The selected organization does not exist",
+      fields: { organizationId: "Organization not found" },
+    });
+    return;
+  }
+
+  // 2. Enforce per-organization code uniqueness (more granular than the DB unique index)
+  const [duplicate] = await db
+    .select({ id: projectsTable.id })
+    .from(projectsTable)
+    .where(and(
+      eq(projectsTable.code, code.trim().toUpperCase()),
+      eq(projectsTable.organizationId, organizationId!),
+    ))
+    .limit(1);
+
+  // Also check case-insensitively (codes are stored as-entered but checked case-insensitively)
+  const [duplicateCi] = !duplicate
+    ? await db
+        .select({ id: projectsTable.id, code: projectsTable.code })
+        .from(projectsTable)
+        .where(and(
+          eq(projectsTable.organizationId, organizationId!),
+        ))
+        .then(rows => rows.filter(r => r.code.toUpperCase() === code.trim().toUpperCase()))
+    : [undefined];
+
+  if (duplicate || duplicateCi) {
+    res.status(400).json({
+      error: "Validation failed",
+      message: "Project code already in use",
+      fields: { code: `A project with code "${code.trim()}" already exists in this organization` },
+    });
+    return;
+  }
+
+  // ── Insert ─────────────────────────────────────────────────────────────────
+  try {
+    const [project] = await db.insert(projectsTable).values({
+      name: name.trim(),
+      code: code.trim(),
+      description: description?.trim() || null,
+      status: resolvedStatus,
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+      organizationId: organizationId!,
+    }).returning();
+
+    await db.insert(projectMembersTable).values({ projectId: project.id, userId: user.id, role: "admin" });
+    await createAuditLog({
+      userId: user.id,
+      action: "create",
+      entityType: "project",
+      entityId: project.id,
+      entityTitle: project.name,
+      projectId: project.id,
+    });
+
+    res.status(201).json({ ...project, memberCount: 1, documentCount: 0 });
+  } catch (err: unknown) {
+    logger.error({ err }, "Project insert failed");
+
+    const code_ = pgErrCode(err);
+    if (code_ === "23505") {
+      // Unique constraint — code already taken globally
+      res.status(400).json({
+        error: "Validation failed",
+        message: "Project code already in use",
+        fields: { code: "This project code is already taken. Please choose a different code." },
+      });
+      return;
+    }
+    if (code_ === "23503") {
+      // Foreign key — org doesn't exist
+      res.status(400).json({
+        error: "Validation failed",
+        message: "Organization not found",
+        fields: { organizationId: "The selected organization does not exist" },
+      });
+      return;
+    }
+    if (code_ === "23502") {
+      // Not-null violation
+      res.status(400).json({
+        error: "Validation failed",
+        message: "A required field is missing",
+      });
+      return;
+    }
+    if (code_ === "22P02") {
+      // Invalid enum or type cast
+      res.status(400).json({
+        error: "Validation failed",
+        message: "One or more field values are invalid",
+      });
+      return;
+    }
+
+    res.status(500).json({ error: "Internal server error", message: "Failed to create project. Please try again." });
+  }
 });
 
+// ─── GET /:id ─────────────────────────────────────────────────────────────────
 router.get("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const user = req.user!;
@@ -82,6 +232,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   res.json({ ...results[0].project, organizationName: results[0].orgName, memberCount: Number(mc[0]?.cnt ?? 0), documentCount: Number(dc[0]?.cnt ?? 0) });
 });
 
+// ─── PUT /:id ─────────────────────────────────────────────────────────────────
 router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const user = req.user!;
@@ -94,13 +245,66 @@ router.put("/:id", requireAuth, async (req, res) => {
   const { name, code, description, status, startDate, endDate } = req.body;
   const organizationId = isSysAdmin(user) && req.body.organizationId ? req.body.organizationId : existing.organizationId;
 
-  const [project] = await db.update(projectsTable)
-    .set({ name, code, description, status, startDate: startDate ? new Date(startDate) : undefined, endDate: endDate ? new Date(endDate) : undefined, organizationId, updatedAt: new Date() })
-    .where(eq(projectsTable.id, id))
-    .returning();
-  res.json({ ...project, memberCount: 0, documentCount: 0 });
+  // Validate status
+  if (status && !(VALID_STATUSES as readonly string[]).includes(status)) {
+    res.status(400).json({
+      error: "Validation failed",
+      fields: { status: `Status must be one of: ${VALID_STATUSES.join(", ")}` },
+    });
+    return;
+  }
+
+  // Validate code if changed
+  if (code && code !== existing.code) {
+    if (!CODE_PATTERN.test(code.trim())) {
+      res.status(400).json({
+        error: "Validation failed",
+        fields: { code: "Code may only contain letters, numbers, hyphens, and underscores" },
+      });
+      return;
+    }
+    // Check uniqueness in org (excluding self)
+    const rows = await db
+      .select({ id: projectsTable.id, code: projectsTable.code })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, organizationId));
+    const conflict = rows.find(r => r.code.toUpperCase() === code.trim().toUpperCase() && r.id !== id);
+    if (conflict) {
+      res.status(400).json({
+        error: "Validation failed",
+        fields: { code: `A project with code "${code.trim()}" already exists in this organization` },
+      });
+      return;
+    }
+  }
+
+  try {
+    const [project] = await db.update(projectsTable)
+      .set({
+        name: name?.trim() ?? existing.name,
+        code: code?.trim() ?? existing.code,
+        description: description !== undefined ? (description?.trim() || null) : existing.description,
+        status: status ?? existing.status,
+        startDate: startDate ? new Date(startDate) : existing.startDate,
+        endDate: endDate ? new Date(endDate) : existing.endDate,
+        organizationId,
+        updatedAt: new Date(),
+      })
+      .where(eq(projectsTable.id, id))
+      .returning();
+    res.json({ ...project, memberCount: 0, documentCount: 0 });
+  } catch (err: unknown) {
+    logger.error({ err }, "Project update failed");
+    const errCode = pgErrCode(err);
+    if (errCode === "23505") {
+      res.status(400).json({ error: "Validation failed", fields: { code: "This project code is already taken" } });
+      return;
+    }
+    res.status(500).json({ error: "Internal server error", message: "Failed to update project" });
+  }
 });
 
+// ─── DELETE /:id ──────────────────────────────────────────────────────────────
 router.delete("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const user = req.user!;
@@ -114,7 +318,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
   res.status(204).send();
 });
 
-// Members
+// ─── GET /:id/members ─────────────────────────────────────────────────────────
 router.get("/:id/members", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const members = await db.select({

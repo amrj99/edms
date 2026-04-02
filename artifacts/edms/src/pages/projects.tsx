@@ -6,22 +6,40 @@ import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { format } from "date-fns";
-import { FolderKanban, Plus, Users, FileText, Calendar, Loader2, Building2, Filter } from "lucide-react";
+import { FolderKanban, Plus, Users, FileText, Calendar, Loader2, Building2, Filter, AlertCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 
+// ─── Validation schema (limits match DB schema) ───────────────────────────────
+// DB: name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, description TEXT (nullable)
+// DB enum: project_status — active | on_hold | completed | cancelled
+const CODE_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 const projectSchema = z.object({
-  name: z.string().min(2, "Name is required"),
-  code: z.string().min(2, "Code is required").max(10),
-  description: z.string().optional(),
+  name: z
+    .string()
+    .min(1, "Project name is required")
+    .min(2, "Name must be at least 2 characters")
+    .transform(v => v.trim()),
+  code: z
+    .string()
+    .min(1, "Project code is required")
+    .regex(CODE_PATTERN, "Code may only contain letters, numbers, hyphens, and underscores")
+    .transform(v => v.trim()),
+  description: z
+    .string()
+    .optional()
+    .transform(v => v?.trim() || undefined),
   status: z.enum(["active", "on_hold", "completed", "cancelled"]),
   organizationId: z.coerce.number().min(1, "Organization is required"),
 });
@@ -35,6 +53,7 @@ export default function Projects() {
   const { user } = useAuth();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [orgFilter, setOrgFilter] = useState<string>("_all");
+  const [formError, setFormError] = useState<string | null>(null);
 
   const isSysAdmin = user?.role === "system_owner" || user?.role === "admin";
   const canCreateProject = isSysAdmin || user?.role === "project_manager";
@@ -52,6 +71,7 @@ export default function Projects() {
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectSchema),
+    mode: "onChange",
     defaultValues: {
       name: "",
       code: "",
@@ -62,15 +82,39 @@ export default function Projects() {
   });
 
   const onSubmit = async (values: ProjectFormValues) => {
+    setFormError(null);
     try {
-      await createMutation.mutateAsync({ data: values });
+      await createMutation.mutateAsync({ data: values as any });
       toast({ title: "Project created successfully" });
       setIsCreateOpen(false);
-      form.reset({ ...form.formState.defaultValues, organizationId: user?.organizationId ?? 1 });
+      form.reset({ name: "", code: "", description: "", status: "active", organizationId: user?.organizationId ?? 1 });
       refetch();
     } catch (error: any) {
-      toast({ variant: "destructive", title: "Failed to create project", description: error.message });
+      // Extract structured field errors from the API response
+      const apiData = error?.data ?? {};
+      const fieldErrors: Record<string, string> = apiData.fields ?? {};
+
+      if (Object.keys(fieldErrors).length > 0) {
+        // Set errors on individual fields so they appear inline
+        for (const [field, msg] of Object.entries(fieldErrors)) {
+          form.setError(field as keyof ProjectFormValues, { message: String(msg) });
+        }
+        setFormError(apiData.message ?? "Please fix the errors below and try again.");
+      } else {
+        // Generic error — show in form banner and toast
+        const msg = apiData.message ?? error?.message ?? "Failed to create project";
+        setFormError(msg);
+        toast({ variant: "destructive", title: "Failed to create project", description: msg });
+      }
     }
+  };
+
+  const handleDialogChange = (open: boolean) => {
+    if (!open) {
+      setFormError(null);
+      form.reset({ name: "", code: "", description: "", status: "active", organizationId: user?.organizationId ?? 1 });
+    }
+    setIsCreateOpen(open);
   };
 
   const statusColors: Record<string, string> = {
@@ -111,48 +155,75 @@ export default function Projects() {
           )}
 
           {canCreateProject && (
-            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+            <Dialog open={isCreateOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
                 <Button className="shadow-sm">
                   <Plus className="mr-2 h-4 w-4" /> New Project
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="sm:max-w-[520px]">
                 <DialogHeader>
                   <DialogTitle>Create Project</DialogTitle>
                 </DialogHeader>
+
+                {formError && (
+                  <Alert variant="destructive" className="py-2.5">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-sm">{formError}</AlertDescription>
+                  </Alert>
+                )}
+
                 <Form {...form}>
                   <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
+
+                      {/* Project Name */}
                       <FormField
                         control={form.control}
                         name="name"
                         render={({ field }) => (
                           <FormItem className="col-span-2">
-                            <FormLabel>Project Name</FormLabel>
-                            <FormControl><Input placeholder="E.g. Terminal 5 Expansion" {...field} /></FormControl>
+                            <FormLabel>Project Name <span className="text-destructive">*</span></FormLabel>
+                            <FormControl>
+                              <Input placeholder="E.g. Terminal 5 Expansion" {...field} />
+                            </FormControl>
+                            <FormDescription>A descriptive name for the project.</FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
+
+                      {/* Project Code */}
                       <FormField
                         control={form.control}
                         name="code"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Project Code</FormLabel>
-                            <FormControl><Input placeholder="T5-EXP" {...field} /></FormControl>
+                            <FormLabel>Project Code <span className="text-destructive">*</span></FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="T5-EXP"
+                                className="font-mono uppercase"
+                                {...field}
+                                onChange={e => field.onChange(e.target.value.toUpperCase())}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Unique code — letters, numbers, <code className="text-xs bg-muted px-1 rounded">-</code> or <code className="text-xs bg-muted px-1 rounded">_</code> only.
+                            </FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
+
+                      {/* Status */}
                       <FormField
                         control={form.control}
                         name="status"
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Status</FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <Select onValueChange={field.onChange} value={field.value}>
                               <FormControl>
                                 <SelectTrigger><SelectValue /></SelectTrigger>
                               </FormControl>
@@ -163,17 +234,20 @@ export default function Projects() {
                                 <SelectItem value="cancelled">Cancelled</SelectItem>
                               </SelectContent>
                             </Select>
+                            <FormDescription>Current project status.</FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
+
+                      {/* Organization (admins only) */}
                       {isSysAdmin && organizations.length > 0 && (
                         <FormField
                           control={form.control}
                           name="organizationId"
                           render={({ field }) => (
                             <FormItem className="col-span-2">
-                              <FormLabel>Organization</FormLabel>
+                              <FormLabel>Organization <span className="text-destructive">*</span></FormLabel>
                               <Select
                                 onValueChange={(v) => field.onChange(parseInt(v))}
                                 value={String(field.value)}
@@ -187,26 +261,45 @@ export default function Projects() {
                                   ))}
                                 </SelectContent>
                               </Select>
+                              <FormDescription>The organization this project belongs to.</FormDescription>
                               <FormMessage />
                             </FormItem>
                           )}
                         />
                       )}
+
+                      {/* Description */}
                       <FormField
                         control={form.control}
                         name="description"
                         render={({ field }) => (
                           <FormItem className="col-span-2">
-                            <FormLabel>Description <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
-                            <FormControl><Input placeholder="Brief project description" {...field} /></FormControl>
+                            <FormLabel>
+                              Description <span className="text-muted-foreground text-xs font-normal">(optional)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Textarea
+                                placeholder="Brief description of the project scope and objectives"
+                                rows={2}
+                                className="resize-none text-sm"
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>Nullable — leave blank if not applicable.</FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
                     </div>
-                    <DialogFooter className="pt-4">
-                      <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-                      <Button type="submit" disabled={createMutation.isPending}>
+
+                    <DialogFooter className="pt-2">
+                      <Button type="button" variant="outline" onClick={() => handleDialogChange(false)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={createMutation.isPending || !form.formState.isValid}
+                      >
                         {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         Create Project
                       </Button>
@@ -257,18 +350,20 @@ export default function Projects() {
                   </div>
                 </CardContent>
                 <CardFooter className="border-t bg-muted/20 px-6 py-4 flex justify-between text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1.5" title="Team Members">
-                    <Users className="h-4 w-4" />
-                    <span>{project.memberCount || 0}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5" title="Documents">
-                    <FileText className="h-4 w-4" />
-                    <span>{project.documentCount || 0}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5" title="Created On">
-                    <Calendar className="h-4 w-4" />
-                    <span>{format(new Date(project.createdAt), 'MMM yyyy')}</span>
-                  </div>
+                  <span className="flex items-center gap-1">
+                    <Users className="h-3.5 w-3.5" />
+                    {project.memberCount} member{project.memberCount !== 1 ? "s" : ""}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <FileText className="h-3.5 w-3.5" />
+                    {project.documentCount} doc{project.documentCount !== 1 ? "s" : ""}
+                  </span>
+                  {project.startDate && (
+                    <span className="flex items-center gap-1">
+                      <Calendar className="h-3.5 w-3.5" />
+                      {format(new Date(project.startDate), "MMM yyyy")}
+                    </span>
+                  )}
                 </CardFooter>
               </Card>
             </Link>
