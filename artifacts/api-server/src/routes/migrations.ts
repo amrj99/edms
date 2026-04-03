@@ -204,7 +204,14 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
   if (!job) return res.status(404).json({ error: "Job not found" });
 
-  const { title, code, discipline, docType, revision, docDate, issuer, skip } = req.body;
+  const { title, code, discipline, docType, revision, docDate, issuer, skip, status } = req.body;
+  // Normalise skip: handle boolean, number, or string "true"/"false"/"1"/"0"
+  const skipNorm = skip !== undefined
+    ? (skip === true || skip === 1 || skip === "true" || skip === "1" ? 1 : 0)
+    : undefined;
+  const derivedStatus = skipNorm !== undefined
+    ? (skipNorm ? "skipped" : "confirmed")
+    : (status ?? undefined);
   const [updated] = await db.update(migrationItemsTable).set({
     title: title ?? undefined,
     code: code ?? undefined,
@@ -213,8 +220,8 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
     revision: revision ?? undefined,
     docDate: docDate ?? undefined,
     issuer: issuer ?? undefined,
-    skip: skip !== undefined ? (skip ? 1 : 0) : undefined,
-    status: skip ? "skipped" : "confirmed",
+    skip: skipNorm,
+    status: derivedStatus,
   }).where(and(eq(migrationItemsTable.id, itemId), eq(migrationItemsTable.jobId, id)))
     .returning();
   if (!updated) return res.status(404).json({ error: "Item not found" });

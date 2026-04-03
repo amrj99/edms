@@ -151,10 +151,11 @@ export default function MigrationWizard() {
       return r.json() as Promise<{ job: MigrationJob; items: MigrationItem[] }>;
     },
     enabled: !!jobId,
-    refetchInterval: (data) => {
-      if (!data) return 2000;
-      const status = (data as any)?.job?.status;
-      if (status === "analyzing" || status === "executing") return 2000;
+    staleTime: 0,
+    // TanStack Query v5: refetchInterval receives a Query object, not raw data
+    refetchInterval: (query) => {
+      const status = (query as any)?.state?.data?.job?.status;
+      if (!status || status === "analyzing" || status === "executing") return 2000;
       return false;
     },
   });
@@ -398,9 +399,11 @@ export default function MigrationWizard() {
   );
 
   const renderStep2 = () => {
-    const isAnalyzing = job?.status === "analyzing" || job?.status === "pending";
-    const analyzed = items.filter(i => i.status !== "pending" && i.status !== "analyzing").length;
-    const progress = items.length > 0 ? Math.round((analyzed / items.length) * 100) : 0;
+    const isDone = job?.status === "awaiting_review" || job?.status === "completed";
+    const isAnalyzing = !isDone && (job?.status === "analyzing" || job?.status === "pending" || !job?.status);
+    const analyzed = items.filter(i => i.status !== "pending").length;
+    const total = items.length;
+    const progress = isDone ? 100 : total > 0 ? Math.round((analyzed / total) * 100) : 0;
 
     return (
       <div className="space-y-6">
@@ -421,7 +424,7 @@ export default function MigrationWizard() {
                 {isAnalyzing ? "Analyzing files..." : "Analysis complete"}
               </p>
               <p className="text-sm text-muted-foreground">
-                {analyzed} of {items.length} files processed
+                {isDone ? `${total} files analyzed` : `${analyzed} of ${total} files processed`}
               </p>
             </div>
           </div>
@@ -448,7 +451,14 @@ export default function MigrationWizard() {
           </div>
         </div>
 
-        {!isAnalyzing && (
+        {isAnalyzing && (
+          <div className="flex justify-end">
+            <Button variant="outline" size="sm" onClick={() => refetchJob()} className="gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Refresh
+            </Button>
+          </div>
+        )}
+        {isDone && (
           <div className="flex justify-end">
             <Button onClick={() => setStep(3)} className="gap-2">
               Review Results <ChevronRight className="h-4 w-4" />
