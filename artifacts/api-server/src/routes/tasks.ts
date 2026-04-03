@@ -6,6 +6,7 @@ import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { sendTaskAssignedEmail } from "../lib/email.js";
 import { emitToUser } from "../lib/socket.js";
+import { triggerSkillEvent } from "../lib/skill-engine.js";
 
 const router = Router();
 
@@ -217,6 +218,15 @@ router.put("/:id", requireAuth, async (req, res) => {
       emitToUser(task.createdById, "notification:new", statusNotif);
     }
   } catch (_) {}
+
+  // Fire skill event for task_completed trigger (fire-and-forget)
+  if (status === "completed" && task.projectId && req.user?.organizationId) {
+    triggerSkillEvent("task_completed", {
+      taskId:         task.id,
+      projectId:      task.projectId,
+      organizationId: req.user.organizationId,
+    }).catch(() => {});
+  }
 
   const enriched = await enrichTasks([task]);
   res.json(enriched[0]);

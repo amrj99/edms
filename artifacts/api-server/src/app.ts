@@ -7,6 +7,7 @@ import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
+import { runScheduledSkills } from "./lib/skill-engine.js";
 import { extractRealIp } from "./middlewares/real-ip.js";
 import { db } from "@workspace/db";
 import {
@@ -144,6 +145,16 @@ seedDefaultAdmin().catch((err) => {
 initRlsPolicies().catch((err) => {
   logger.warn({ err }, "RLS init failed — app continues without DB-level row security");
 });
+
+// ─── Skill engine cron ────────────────────────────────────────────────────────
+// Runs every hour. Each scheduled skill self-determines whether it is due
+// based on its last successful execution time.
+setTimeout(() => {
+  runScheduledSkills().catch((err) => logger.warn({ err }, "skill cron: initial run failed"));
+  setInterval(() => {
+    runScheduledSkills().catch((err) => logger.warn({ err }, "skill cron: periodic run failed"));
+  }, 60 * 60 * 1000);
+}, 60_000); // wait 60 s after start to let DB settle
 
 // ─── Due-date reminder job ────────────────────────────────────────────────────
 // Runs every hour; sends a task_overdue notification once per day per overdue item.
