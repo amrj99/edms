@@ -668,16 +668,26 @@ export interface ClassificationResult {
  */
 export async function classifyItem(input: {
   type: "document" | "correspondence";
+  organizationId?: number | null;
   title?: string | null;
   documentType?: string | null;
   discipline?: string | null;
   subject?: string | null;
   body?: string | null;
 }): Promise<ClassificationResult | null> {
-  // Check if AI is globally enabled and classification is on
+  // Gate 1: Global kill-switch — if classification is explicitly disabled system-wide, stop.
   const classificationEnabled = await getSystemSettingValue("ai_classification_enabled");
   if (classificationEnabled === "false") return null;
 
+  // Gate 2: Per-organization module toggle.
+  // The module name mirrors the on-demand AI route: "documents" or "correspondence".
+  if (input.organizationId) {
+    const module = input.type === "document" ? "documents" : "correspondence";
+    const orgEnabled = await isModuleEnabled(module, input.organizationId);
+    if (!orgEnabled) return null;
+  }
+
+  // Gate 3: Provider must not be "none".
   const { provider } = await getAIProviderConfig();
   if (provider === "none") return null;
 

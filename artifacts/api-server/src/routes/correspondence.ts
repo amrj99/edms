@@ -133,7 +133,7 @@ router.post("/", requireAuth, async (req, res) => {
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "correspondence", entityId: corr.id, entityTitle: corr.subject, projectId });
 
   // AI classification (non-blocking)
-  try { await classifyItem({ type: "correspondence", subject: corr.subject, body: corr.body }); } catch (_) {}
+  try { await classifyItem({ type: "correspondence", organizationId: req.user!.organizationId, subject: corr.subject, body: corr.body }); } catch (_) {}
 
   // Rules engine (non-blocking)
   try {

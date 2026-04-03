@@ -1,8 +1,9 @@
-import { pgTable, serial, text, timestamp, integer, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { projectsTable } from "./projects";
+import { organizationsTable } from "./organizations";
 
 export const notificationTypeEnum = pgEnum("notification_type", [
   "document_uploaded",
@@ -30,6 +31,7 @@ export const notificationTypeEnum = pgEnum("notification_type", [
 export const notificationsTable = pgTable("notifications", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => usersTable.id).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   type: notificationTypeEnum("type").notNull(),
   title: text("title").notNull(),
   message: text("message").notNull(),
@@ -40,7 +42,11 @@ export const notificationsTable = pgTable("notifications", {
   actionUrl: text("action_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   readAt: timestamp("read_at"),
-});
+}, (t) => [
+  index("idx_notifications_user_id").on(t.userId),
+  index("idx_notifications_organization_id").on(t.organizationId),
+  index("idx_notifications_is_read").on(t.isRead),
+]);
 
 export const insertNotificationSchema = createInsertSchema(notificationsTable).omit({
   id: true,

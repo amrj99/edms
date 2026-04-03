@@ -16,7 +16,7 @@
 
 import { db } from "@workspace/db";
 import { rulesTable, notificationsTable, tasksTable, usersTable } from "@workspace/db";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, inArray } from "drizzle-orm";
 import { emitToUser } from "./socket.js";
 import { logger } from "./logger.js";
 
@@ -83,31 +83,41 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
           if (actionType === "assign_user") {
             const userId = Number(config.userId);
             if (userId) {
-              await db.insert(tasksTable).values({
-                title: `Rule: ${rule.name} — ${ctx.entityTitle ?? "New item"}`,
-                description: `Auto-assigned by rule "${rule.name}"`,
-                status: "pending",
-                priority: "medium",
-                projectId: ctx.projectId,
-                organizationId: ctx.orgId,
-                assignedToId: userId,
-                createdById: ctx.triggeredByUserId,
-                sourceType: "manual",
-                sourceId: ctx.entityId,
-              });
-              executedActions.push(`assign_user:${userId}`);
+              // Verify the assignee belongs to the same organization before creating the task.
+              const [assignee] = await db.select({ id: usersTable.id, organizationId: usersTable.organizationId })
+                .from(usersTable)
+                .where(eq(usersTable.id, userId))
+                .limit(1);
 
-              // notify the assignee
-              await db.insert(notificationsTable).values({
-                userId,
-                type: "task_assigned",
-                title: `Auto-assigned: ${ctx.entityTitle ?? "New item"}`,
-                message: `Rule "${rule.name}" assigned you to this item.`,
-                projectId: ctx.projectId,
-                entityType: ctx.type,
-                entityId: ctx.entityId,
-              });
-              emitToUser(userId, "notification:new", {});
+              if (!assignee || assignee.organizationId !== ctx.orgId) {
+                logger.warn({ ruleId: rule.id, userId, orgId: ctx.orgId }, "assign_user skipped — user not in rule org");
+              } else {
+                await db.insert(tasksTable).values({
+                  title: `Rule: ${rule.name} — ${ctx.entityTitle ?? "New item"}`,
+                  description: `Auto-assigned by rule "${rule.name}"`,
+                  status: "pending",
+                  priority: "medium",
+                  projectId: ctx.projectId,
+                  organizationId: ctx.orgId,
+                  assignedToId: userId,
+                  createdById: ctx.triggeredByUserId,
+                  sourceType: "manual",
+                  sourceId: ctx.entityId,
+                });
+                executedActions.push(`assign_user:${userId}`);
+
+                await db.insert(notificationsTable).values({
+                  userId,
+                  organizationId: ctx.orgId,
+                  type: "task_assigned",
+                  title: `Auto-assigned: ${ctx.entityTitle ?? "New item"}`,
+                  message: `Rule "${rule.name}" assigned you to this item.`,
+                  projectId: ctx.projectId,
+                  entityType: ctx.type,
+                  entityId: ctx.entityId,
+                });
+                emitToUser(userId, "notification:new", {});
+              }
             }
           } else if (actionType === "assign_team") {
             // Team assignment — store as a note for now; teams can be extended later
@@ -115,23 +125,53 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
             executedActions.push(`assign_team:${teamName}`);
           } else if (actionType === "send_notification") {
             const message = String(config.message ?? `Rule triggered: ${rule.name}`);
-            const userIds: number[] = Array.isArray(config.userIds) ? config.userIds.map(Number) : [];
+            const rawUserIds: number[] = Array.isArray(config.userIds) ? config.userIds.map(Number).filter(Boolean) : [];
 
-            // If no explicit user list, notify the sender
-            const targets = userIds.length > 0 ? userIds : [ctx.triggeredByUserId];
-            await db.insert(notificationsTable).values(
-              targets.map(uid => ({
-                userId: uid,
-                type: "system" as const,
-                title: `Rule: ${rule.name}`,
-                message,
-                projectId: ctx.projectId,
-                entityType: ctx.type,
-                entityId: ctx.entityId,
-              }))
-            );
-            for (const uid of targets) emitToUser(uid, "notification:new", {});
-            executedActions.push(`send_notification:${targets.join(",")}`);
+            let targets: number[];
+
+            if (rawUserIds.length > 0) {
+              // Validate every listed userId belongs to the same organization as the rule.
+              // This prevents a misconfigured rule from notifying users in foreign tenants.
+              const validUsers = await db
+                .select({ id: usersTable.id })
+                .from(usersTable)
+                .where(
+                  and(
+                    inArray(usersTable.id, rawUserIds),
+                    eq(usersTable.organizationId, ctx.orgId),
+                  )
+                );
+
+              const validIds = new Set(validUsers.map(u => u.id));
+              const rejected = rawUserIds.filter(id => !validIds.has(id));
+              if (rejected.length > 0) {
+                logger.warn(
+                  { ruleId: rule.id, rejected, orgId: ctx.orgId },
+                  "send_notification: dropped cross-org userIds from rule action",
+                );
+              }
+              targets = [...validIds];
+            } else {
+              // Default: notify the user who triggered the event (always same org).
+              targets = [ctx.triggeredByUserId];
+            }
+
+            if (targets.length > 0) {
+              await db.insert(notificationsTable).values(
+                targets.map(uid => ({
+                  userId: uid,
+                  organizationId: ctx.orgId,
+                  type: "system" as const,
+                  title: `Rule: ${rule.name}`,
+                  message,
+                  projectId: ctx.projectId,
+                  entityType: ctx.type,
+                  entityId: ctx.entityId,
+                }))
+              );
+              for (const uid of targets) emitToUser(uid, "notification:new", {});
+              executedActions.push(`send_notification:${targets.join(",")}`);
+            }
           }
         } catch (actionErr) {
           logger.warn({ err: actionErr, ruleId: rule.id, action }, "Rule action failed");

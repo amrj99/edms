@@ -152,6 +152,7 @@ router.post("/", requireAuth, async (req, res) => {
   try {
     aiClassification = await classifyItem({
       type: "document",
+      organizationId: req.user!.organizationId,
       title: doc.title,
       documentType: doc.documentType,
       discipline: doc.discipline,
