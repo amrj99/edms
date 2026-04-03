@@ -6,6 +6,8 @@ import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
+import { initRlsPolicies } from "./lib/rls-init.js";
+import { extractRealIp } from "./middlewares/real-ip.js";
 import { db } from "@workspace/db";
 import {
   tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable, projectsTable,
@@ -16,13 +18,42 @@ import { sendOverdueTaskEmail } from "./lib/email.js";
 const app: Express = express();
 const isProd = process.env.NODE_ENV === "production";
 
-// ─── Security headers ─────────────────────────────────────────────────────────
-app.use(helmet({
-  crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false,
-}));
+// ─── Trust proxy (Cloudflare → Nginx → Node) ──────────────────────────────────
+// Tells Express to trust the leftmost X-Forwarded-For entry added by a trusted
+// reverse proxy. Required for req.ip to be the real client IP and for
+// express-rate-limit to work correctly behind Cloudflare/Nginx.
+app.set("trust proxy", 1);
+
+// ─── Real-IP extraction (must come first) ─────────────────────────────────────
+// Reads CF-Connecting-IP > X-Forwarded-For > req.ip and sets req.realIp.
+app.use(extractRealIp);
+
+// ─── Security headers (Cloudflare-compatible) ─────────────────────────────────
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false,
+
+    // Strict-Transport-Security: HTTPS is terminated at Cloudflare but it's
+    // still good practice to send HSTS so browsers remember to use HTTPS.
+    strictTransportSecurity: isProd
+      ? { maxAge: 31_536_000, includeSubDomains: true }
+      : false,
+
+    // Prevent browsers from sniffing content types
+    noSniff: true,
+
+    // Deny X-Frame-Options for clickjacking protection
+    frameguard: { action: "deny" },
+
+    // Referrer-Policy
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
+// In production, restrict origins to the ALLOWED_ORIGINS env var (comma-separated).
+// In development, allow all origins for convenience.
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : [];
@@ -45,22 +76,29 @@ app.use(
 );
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
+// Global IP-based limiter acts as a baseline safety net for unrecognised routes.
+// Authenticated API routes use the per-org tenant limiter (in routes/index.ts).
 const globalLimiter = rateLimit({
-  windowMs: 60 * 1000,
+  windowMs: 60_000,
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests", message: "Rate limit exceeded. Please wait before retrying." },
+  validate: { keyGeneratorIpFallback: false },
   skip: () => !isProd,
+  keyGenerator: (req: Request) => req.realIp ?? req.ip ?? "unknown",
+  message: { error: "Too many requests", message: "Rate limit exceeded. Please wait before retrying." },
 });
 
+// Auth endpoints stay on a strict IP-based limiter to prevent brute-force.
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60_000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests", message: "Too many authentication attempts. Try again in 15 minutes." },
+  validate: { keyGeneratorIpFallback: false },
   skip: () => !isProd,
+  keyGenerator: (req: Request) => req.realIp ?? req.ip ?? "unknown",
+  message: { error: "Too many requests", message: "Too many authentication attempts. Try again in 15 minutes." },
 });
 
 app.use("/api", globalLimiter);
@@ -100,6 +138,11 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 // ─── Startup ──────────────────────────────────────────────────────────────────
 seedDefaultAdmin().catch((err) => {
   logger.error({ err }, "Seed failed — continuing anyway");
+});
+
+// Idempotent — enables RLS + org-isolation policies on all critical tables.
+initRlsPolicies().catch((err) => {
+  logger.warn({ err }, "RLS init failed — app continues without DB-level row security");
 });
 
 // ─── Due-date reminder job ────────────────────────────────────────────────────

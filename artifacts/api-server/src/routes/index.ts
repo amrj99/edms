@@ -1,5 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireOrgScope } from "../lib/org-scope.js";
+import { setRlsContext } from "../middlewares/rls-context.js";
+import { tenantRateLimit } from "../middlewares/tenant-rate-limit.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
 import aiRouter from "./ai.js";
@@ -45,10 +47,19 @@ router.use("/public/share", publicShareRouter);
 // Routes below this middleware are guaranteed to have req.user set (via requireAuth
 // in each route) and req.orgId populated. system_owner users without an assigned
 // org may still proceed — they span all tenants by design.
-router.use((req, _res, next) => {
-  if (req.user) requireOrgScope(req, _res, next);
+router.use((req, res, next) => {
+  if (req.user) requireOrgScope(req, res, next);
   else next();
 });
+
+// ── RLS session context: set app.current_org_id for DB-level row security ──────
+router.use((req, res, next) => {
+  if (req.user) setRlsContext(req, res, next);
+  else next();
+});
+
+// ── Per-tenant rate limiting (org subscription tier, Cloudflare-aware) ──────────
+router.use(tenantRateLimit);
 
 router.use("/organizations", organizationsRouter);
 router.use("/users", usersRouter);

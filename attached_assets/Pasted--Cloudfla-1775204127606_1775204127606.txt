@@ -1,0 +1,41 @@
+فكرة ممتازة! وهذا قرار صحيح تماماً. دعني أعدّل الرسالة لتكون متوافقة مع بيئة الخادم الخاص + Cloudflare + Domain.
+
+ما الذي يتغير مع هذا الإعداد؟
+المستخدم → Cloudflare → Domain → خادمك (Nginx) → Node.js App → PostgreSQL
+هذا يؤثر على:
+
+RLS — لا يتأثر، يعمل على مستوى PostgreSQL مباشرة ✅
+Rate Limiting — يجب أن يكون على مستوى Cloudflare وليس فقط Express
+JWT Auth — يجب مراعاة Cloudflare headers مثل CF-Connecting-IP
+HTTPS — Cloudflare يتولاها تلقائياً
+WebSockets — Socket.io يحتاج إعداد خاص مع Cloudflare
+
+
+الرسالة المعدّلة الجاهزة للإرسال:
+
+
+Security hardening — Phase 1: RLS + Rate Limiting (production-ready for VPS + Cloudflare deployment)
+Important context: This system will be deployed on a private VPS with Nginx, a custom domain, and Cloudflare as the CDN/proxy. All changes must be compatible with this setup.
+1. Row-Level Security (RLS) on PostgreSQL
+Enable RLS as a second defense layer on the most critical tables: documents, projects, tasks, notifications, rules, correspondence. For each table, create a policy that checks organization_id = current_setting('app.current_org_id', true)::integer. Set this session variable in the auth middleware after JWT validation using SET LOCAL app.current_org_id = ? within the request transaction. Use true as the second argument to current_setting so it returns NULL instead of throwing if the variable is not set. This is a defense-in-depth measure — if application-layer filtering ever has a bug, the database will still block cross-org access.
+2. Per-tenant Rate Limiting (Cloudflare-aware)
+
+Use express-rate-limit with a Redis or in-memory store scoped per organizationId (not per IP), since Cloudflare may route multiple users through the same IP.
+Read the real client IP from CF-Connecting-IP header (set by Cloudflare) with fallback to X-Forwarded-For then req.ip. Add this IP extraction as a middleware that sets req.realIp.
+Limits based on org_config.subscription_tier: free = 300 req/min, basic = 600 req/min, professional = 1500 req/min, enterprise = unlimited.
+Return HTTP 429 with { error: "rate_limit_exceeded", retryAfter, tier, limit }.
+Do NOT use IP-based rate limiting as the primary method — Cloudflare proxies will make it unreliable.
+
+3. Security headers (Cloudflare-compatible)
+
+Add helmet.js middleware for security headers.
+Set trust proxy to 1 in Express so it correctly reads headers forwarded by Cloudflare/Nginx.
+Ensure CORS is configured to allow only the production domain (not *) once deployed.
+Add Strict-Transport-Security header since HTTPS will be terminated at Cloudflare.
+
+4. WebSocket compatibility with Cloudflare
+
+Ensure Socket.io is configured to work behind Cloudflare proxy (Cloudflare supports WebSockets on paid plans, or use long-polling as fallback on free plan).
+Add a note in the deployment config about enabling WebSockets in Cloudflare dashboard if using the proxied (orange cloud) mode.
+
+
