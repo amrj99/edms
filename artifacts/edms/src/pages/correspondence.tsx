@@ -7,6 +7,7 @@ import {
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
   Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen, ExternalLink,
+  Download, FileText, LinkIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { FileDropZone } from "@/components/file-drop-zone";
-import { RecipientAutocomplete, CCAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
+import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
@@ -73,7 +74,14 @@ export default function CorrespondencePage() {
     projectId: string; toUserIds: number[]; cc: string; bcc: string; taskToId: string;
   }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
   const [toPickUser, setToPickUser] = useState("");
-  const [composeAttachments, setComposeAttachments] = useState<{ url: string; name: string; size: number }[]>([]);
+  type UploadAttachment = { kind: "upload"; url: string; name: string; size: number };
+  type RefAttachment = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
+  type ComposeAttachment = UploadAttachment | RefAttachment;
+
+  const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
+  const [showBcc, setShowBcc] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [projectPickerSearch, setProjectPickerSearch] = useState("");
   const [corrShareOpen, setCorrShareOpen] = useState(false);
   const [corrShareForm, setCorrShareForm] = useState({ expiresInDays: "30", password: "" });
   const [corrShareResult, setCorrShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
@@ -192,6 +200,24 @@ export default function CorrespondencePage() {
   });
   const allUsers: any[] = usersData?.users ?? [];
 
+  const composeProjectId = compose.projectId && compose.projectId !== "_none" ? parseInt(compose.projectId) : null;
+  const { data: projectDocsData } = useQuery({
+    queryKey: ["project-docs-picker", composeProjectId],
+    queryFn: async () => {
+      if (!composeProjectId) return { documents: [] };
+      const r = await fetch(`/api/projects/${composeProjectId}/documents`);
+      return r.json();
+    },
+    enabled: !!composeProjectId && projectPickerOpen,
+  });
+  const projectDocs: any[] = projectDocsData?.documents ?? [];
+  const filteredProjectDocs = projectPickerSearch.trim()
+    ? projectDocs.filter(d =>
+        d.title?.toLowerCase().includes(projectPickerSearch.toLowerCase()) ||
+        d.documentNumber?.toLowerCase().includes(projectPickerSearch.toLowerCase())
+      )
+    : projectDocs;
+
   const createCorr = useMutation({
     mutationFn: async ({ data, sendNow }: { data: typeof compose; sendNow: boolean }) => {
       const projectId = data.projectId && data.projectId !== "_none" ? parseInt(data.projectId) : null;
@@ -206,7 +232,11 @@ export default function CorrespondencePage() {
         cc: data.cc || undefined,
         bcc: data.bcc || undefined,
         taskToId: data.taskToId && data.taskToId !== "_none" ? data.taskToId : undefined,
-        attachments: composeAttachments.length > 0 ? composeAttachments.map(a => ({ fileName: a.name, fileUrl: a.url, fileSize: a.size })) : undefined,
+        attachments: composeAttachments.length > 0 ? composeAttachments.map(a =>
+          a.kind === "ref"
+            ? { fileName: a.name, fileUrl: a.fileUrl, documentNumber: a.documentNumber }
+            : { fileName: a.name, fileUrl: a.url, fileSize: a.size }
+        ) : undefined,
         sendNow,
         folder: "inbox",
       };
@@ -220,6 +250,7 @@ export default function CorrespondencePage() {
       setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
       setToPickUser("");
       setComposeAttachments([]);
+      setShowBcc(false);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
     },
     onError: () => toast({ title: "Failed to create", variant: "destructive" }),
@@ -403,6 +434,7 @@ export default function CorrespondencePage() {
       taskToId: "",
     });
     setComposeAttachments([]);
+    setShowBcc(false);
     setComposeOpen(true);
   };
 
@@ -426,6 +458,7 @@ export default function CorrespondencePage() {
       taskToId: "",
     });
     setComposeAttachments([]);
+    setShowBcc(false);
     setReplyingToId(selected.id);
     setComposeOpen(true);
   };
@@ -1022,29 +1055,47 @@ export default function CorrespondencePage() {
                 className="mt-1"
               />
             </div>
-            {/* CC / BCC */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* CC */}
+            <div>
+              <Label>CC</Label>
+              <EmailChipInput
+                users={allUsers as RecipientUser[]}
+                value={compose.cc}
+                onChange={v => setCompose(f => ({ ...f, cc: v }))}
+                placeholder="Add email, press Enter or comma…"
+                className="mt-1"
+              />
+            </div>
+            {/* BCC — hidden by default, toggle with link */}
+            {!showBcc ? (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-primary transition-colors w-fit -mt-1"
+                onClick={() => setShowBcc(true)}
+              >
+                + Add BCC
+              </button>
+            ) : (
               <div>
-                <Label>CC (email addresses)</Label>
-                <CCAutocomplete
-                  users={allUsers as RecipientUser[]}
-                  value={compose.cc}
-                  onChange={v => setCompose(f => ({ ...f, cc: v }))}
-                  placeholder="cc@example.com"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>BCC (email addresses)</Label>
-                <CCAutocomplete
+                <div className="flex items-center justify-between">
+                  <Label>BCC</Label>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+                    onClick={() => { setShowBcc(false); setCompose(f => ({ ...f, bcc: "" })); }}
+                  >
+                    Remove BCC
+                  </button>
+                </div>
+                <EmailChipInput
                   users={allUsers as RecipientUser[]}
                   value={compose.bcc}
                   onChange={v => setCompose(f => ({ ...f, bcc: v }))}
-                  placeholder="bcc@example.com"
+                  placeholder="Add email, press Enter or comma…"
                   className="mt-1"
                 />
               </div>
-            </div>
+            )}
             {/* Subject */}
             <div>
               <Label>Subject *</Label>
@@ -1070,29 +1121,75 @@ export default function CorrespondencePage() {
             </div>
             {/* Attachments */}
             <div>
-              <Label className="flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Attachments</Label>
-              <div className="mt-1">
-                <FileDropZone
-                  onUpload={file => setComposeAttachments(prev => [...prev, file])}
-                  onMultiUpload={files => setComposeAttachments(prev => [...prev, ...files])}
-                  label="Drop files or click to attach"
-                  multiple
-                />
-                {composeAttachments.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {composeAttachments.map((f, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1">
-                        <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
-                        <span className="truncate flex-1">{f.name}</span>
-                        <span className="text-muted-foreground shrink-0">{(f.size / 1024).toFixed(0)} KB</span>
-                        <button type="button" onClick={() => setComposeAttachments(prev => prev.filter((_, j) => j !== i))} className="text-destructive hover:bg-destructive/10 rounded p-0.5">
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+              <div className="flex items-center justify-between mb-1">
+                <Label className="flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Attachments</Label>
+                {composeProjectId && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={() => { setProjectPickerSearch(""); setProjectPickerOpen(true); }}
+                  >
+                    <LinkIcon className="h-3 w-3" /> Attach from Project
+                  </Button>
                 )}
               </div>
+              <FileDropZone
+                onUpload={file => setComposeAttachments(prev => [...prev, { kind: "upload", ...file }])}
+                onMultiUpload={files => setComposeAttachments(prev => [...prev, ...files.map(f => ({ kind: "upload" as const, ...f }))])}
+                label="Drop files or click to attach"
+                multiple
+              />
+              {composeAttachments.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {composeAttachments.map((att, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1.5">
+                      {att.kind === "ref"
+                        ? <LinkIcon className="h-3 w-3 text-primary shrink-0" />
+                        : <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                      }
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate block font-medium">{att.name}</span>
+                        {att.kind === "ref" && (
+                          <span className="text-muted-foreground font-mono text-[10px]">{att.documentNumber}</span>
+                        )}
+                        {att.kind === "upload" && (
+                          <span className="text-muted-foreground">{(att.size / 1024).toFixed(0)} KB</span>
+                        )}
+                      </div>
+                      {att.kind === "ref" && att.fileUrl && (
+                        <>
+                          <a
+                            href={att.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline shrink-0 flex items-center gap-0.5"
+                            title="Open"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          <a
+                            href={att.fileUrl}
+                            download
+                            className="text-muted-foreground hover:text-foreground shrink-0 flex items-center gap-0.5"
+                            title="Download"
+                          >
+                            <Download className="h-3 w-3" />
+                          </a>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setComposeAttachments(prev => prev.filter((_, j) => j !== i))}
+                        className="text-destructive hover:bg-destructive/10 rounded p-0.5 shrink-0"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             {/* Body */}
             <div>
@@ -1119,6 +1216,79 @@ export default function CorrespondencePage() {
               {createCorr.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               Send
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Attach from Project dialog */}
+      <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <LinkIcon className="h-4 w-4" /> Attach from Project
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <Input
+              placeholder="Search documents…"
+              value={projectPickerSearch}
+              onChange={e => setProjectPickerSearch(e.target.value)}
+              className="h-9"
+              autoFocus
+            />
+            <ScrollArea className="h-64 border rounded-lg">
+              {filteredProjectDocs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full py-8 text-muted-foreground">
+                  <FileText className="h-8 w-8 mb-2 opacity-30" />
+                  <p className="text-sm">
+                    {projectPickerSearch ? "No matching documents" : "No documents in this project"}
+                  </p>
+                </div>
+              ) : (
+                <div className="p-1">
+                  {filteredProjectDocs.map((doc: any) => {
+                    const alreadyAdded = composeAttachments.some(a => a.kind === "ref" && a.documentId === doc.id);
+                    return (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        disabled={alreadyAdded}
+                        className="w-full flex items-start gap-3 px-3 py-2 rounded-md hover:bg-accent text-left disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        onClick={() => {
+                          if (alreadyAdded) return;
+                          setComposeAttachments(prev => [
+                            ...prev,
+                            {
+                              kind: "ref" as const,
+                              documentId: doc.id,
+                              name: doc.title,
+                              documentNumber: doc.documentNumber,
+                              fileUrl: doc.fileUrl ?? "",
+                            },
+                          ]);
+                          setProjectPickerOpen(false);
+                        }}
+                      >
+                        <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{doc.title}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{doc.documentNumber}</p>
+                          {doc.folderName && (
+                            <p className="text-[10px] text-muted-foreground">{doc.folderName}</p>
+                          )}
+                        </div>
+                        {alreadyAdded && (
+                          <span className="text-xs text-muted-foreground shrink-0 self-center">Added</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProjectPickerOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -9,6 +10,7 @@ import {
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
   Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
   ArrowUp, ArrowDown, ChevronsUpDown, Trash2, Paperclip,
+  LayoutList, FolderTree, FolderInput,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -90,6 +92,12 @@ export default function DocumentsPage() {
       setSortDir("asc");
     }
   };
+
+  // View mode: list or folder
+  type ViewMode = "list" | "folders";
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
+  const [moveToFolderDoc, setMoveToFolderDoc] = useState<any>(null);
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
@@ -254,6 +262,39 @@ export default function DocumentsPage() {
     });
   };
 
+  // Move to folder mutation
+  const moveToFolderMut = useMutation({
+    mutationFn: async ({ docId, projectId, folderId }: { docId: number; projectId: number; folderId: number | null }) => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${docId}/folder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderId }),
+      });
+      if (!r.ok) throw new Error("Failed to move document");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["global-documents"] });
+      qc.invalidateQueries({ queryKey: ["project-folders"] });
+      setMoveToFolderDoc(null);
+      toast({ title: "Document moved" });
+    },
+    onError: () => toast({ title: "Failed to move document", variant: "destructive" }),
+  });
+
+  // Folder view: need folder list for move target selector
+  const folderViewProjectId = filterProject !== "_all" ? parseInt(filterProject) : null;
+  const { data: folderPickData } = useQuery({
+    queryKey: ["project-folders", moveToFolderDoc?.projectId],
+    queryFn: async () => {
+      if (!moveToFolderDoc?.projectId) return { folders: [] };
+      const r = await fetch(`/api/projects/${moveToFolderDoc.projectId}/documents/folders`);
+      return r.json();
+    },
+    enabled: !!moveToFolderDoc,
+  });
+  const pickerFolders: any[] = folderPickData?.folders ?? [];
+
   const { getThStyle, startResize, resetWidths } = useResizableColumns("global-documents", DOC_COLS);
 
   const COLS: { key: SortKey; label: string }[] = [
@@ -268,6 +309,17 @@ export default function DocumentsPage() {
     { key: "updatedAt",      label: "Updated" },
   ];
 
+  // Filter docs by folder in folder view
+  const folderFiltered = useMemo(() => {
+    if (viewMode !== "folders" || !folderViewProjectId) return filtered;
+    return filtered.filter(d => {
+      if (selectedFolderId === null) return d.projectId === folderViewProjectId;
+      return d.folderId === selectedFolderId && d.projectId === folderViewProjectId;
+    });
+  }, [viewMode, folderViewProjectId, selectedFolderId, filtered]);
+
+  const displayDocs = viewMode === "folders" ? folderFiltered : filtered;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -275,10 +327,38 @@ export default function DocumentsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Documents</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            All documents across your projects — {filtered.length} of {allDocs.length} shown
+            {viewMode === "folders" && folderViewProjectId
+              ? `Folder view — ${displayDocs.length} document${displayDocs.length !== 1 ? "s" : ""}`
+              : `All documents across your projects — ${filtered.length} of ${allDocs.length} shown`}
           </p>
         </div>
         <div className="flex gap-2">
+          {/* View toggle */}
+          <div className="flex rounded-md border overflow-hidden">
+            <Button
+              variant={viewMode === "list" ? "default" : "ghost"}
+              size="sm"
+              className="rounded-none h-9 px-3 gap-1.5 border-0"
+              onClick={() => setViewMode("list")}
+              title="List view"
+            >
+              <LayoutList className="h-3.5 w-3.5" /> List
+            </Button>
+            <Button
+              variant={viewMode === "folders" ? "default" : "ghost"}
+              size="sm"
+              className="rounded-none h-9 px-3 gap-1.5 border-0 border-l"
+              onClick={() => {
+                setViewMode("folders");
+                if (filterProject === "_all" && projects.length > 0) {
+                  setFilterProject(String(projects[0].id));
+                }
+              }}
+              title="Folder view (requires project filter)"
+            >
+              <FolderTree className="h-3.5 w-3.5" /> Folders
+            </Button>
+          </div>
           <Button variant="outline" size="sm" className="gap-1.5 h-9" onClick={() => refetch()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </Button>
@@ -364,8 +444,30 @@ export default function DocumentsPage() {
         </div>
       </div>
 
+      {/* Folder view: require project filter */}
+      {viewMode === "folders" && !folderViewProjectId && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-center gap-2">
+          <FolderTree className="h-4 w-4 shrink-0" />
+          Select a project in the filter bar above to use the folder view.
+        </div>
+      )}
+
+      {/* Main content area — sidebar + table layout in folder mode */}
+      <div className={viewMode === "folders" && folderViewProjectId ? "flex gap-4 items-start" : ""}>
+        {/* Folder sidebar */}
+        {viewMode === "folders" && folderViewProjectId && (
+          <div className="w-56 shrink-0 border rounded-xl bg-card shadow-sm overflow-hidden">
+            <FolderSidebar
+              projectId={folderViewProjectId}
+              selectedFolderId={selectedFolderId}
+              onSelectFolder={setSelectedFolderId}
+              canEdit={true}
+            />
+          </div>
+        )}
+
       {/* Table */}
-      <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
+      <div className={`bg-card border rounded-xl shadow-sm overflow-hidden ${viewMode === "folders" && folderViewProjectId ? "flex-1 min-w-0" : ""}`}>
         <div className="flex items-center justify-end px-3 py-1.5 border-b bg-muted/20">
           <button
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
@@ -408,14 +510,16 @@ export default function DocumentsPage() {
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-primary" />
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : displayDocs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={COLS.length + 1} className="py-12 text-center text-muted-foreground">
                     <FolderOpen className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                    No documents match the current filters.
+                    {viewMode === "folders"
+                      ? "No documents in this folder."
+                      : "No documents match the current filters."}
                   </TableCell>
                 </TableRow>
-              ) : filtered.map((doc: any) => (
+              ) : displayDocs.map((doc: any) => (
                 <TableRow
                   key={doc.id}
                   className="hover:bg-muted/20 group cursor-pointer"
@@ -462,6 +566,10 @@ export default function DocumentsPage() {
                         onClick={() => setHistoryDoc(doc)}>
                         <History className="h-3.5 w-3.5" />
                       </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Move to Folder"
+                        onClick={() => setMoveToFolderDoc(doc)}>
+                        <FolderInput className="h-3.5 w-3.5" />
+                      </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" title="Send for Review"
                         onClick={() => openWorkflow(doc)}>
                         <Send className="h-3.5 w-3.5" />
@@ -479,6 +587,7 @@ export default function DocumentsPage() {
           </Table>
         </div>
       </div>
+      </div>{/* end flex wrapper */}
 
       {/* Files Panel Sheet */}
       <Sheet open={!!filesDoc} onOpenChange={open => !open && setFilesDoc(null)}>
@@ -534,6 +643,60 @@ export default function DocumentsPage() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
+
+      {/* Move to Folder Dialog */}
+      <Dialog open={!!moveToFolderDoc} onOpenChange={open => !open && setMoveToFolderDoc(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FolderInput className="h-4 w-4" /> Move to Folder
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-3">
+            <div className="bg-muted/40 rounded-lg p-3 text-sm">
+              <p className="font-mono font-semibold text-primary text-xs">{moveToFolderDoc?.documentNumber}</p>
+              <p className="text-muted-foreground text-xs mt-0.5 truncate">{moveToFolderDoc?.title}</p>
+            </div>
+            <Select
+              value={moveToFolderDoc?.folderId ? String(moveToFolderDoc.folderId) : "_root"}
+              onValueChange={val => {
+                if (!moveToFolderDoc) return;
+                moveToFolderMut.mutate({
+                  docId: moveToFolderDoc.id,
+                  projectId: moveToFolderDoc.projectId,
+                  folderId: val === "_root" ? null : parseInt(val),
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select folder…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_root">
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <FolderOpen className="h-3.5 w-3.5" /> Root (no folder)
+                  </span>
+                </SelectItem>
+                {pickerFolders.map((f: any) => (
+                  <SelectItem key={f.id} value={String(f.id)}>
+                    <span className="flex items-center gap-2">
+                      <FolderOpen className="h-3.5 w-3.5 text-amber-500" /> {f.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {pickerFolders.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                No folders in this project yet. Create folders first via the Folders view.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveToFolderDoc(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Send for Workflow Dialog */}
       <Dialog open={!!workflowDoc} onOpenChange={open => { if (!open) { setWorkflowDoc(null); setWfAttachIds([]); } }}>
