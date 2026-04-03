@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable,
-  tasksTable, projectMembersTable, notificationsTable,
+  tasksTable, projectMembersTable, notificationsTable, documentRevisionsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
@@ -24,6 +24,8 @@ router.get("/", async (req, res) => {
       subject: transmittalsTable.subject,
       description: transmittalsTable.description,
       status: transmittalsTable.status,
+      direction: transmittalsTable.direction,
+      partyType: transmittalsTable.partyType,
       purpose: transmittalsTable.purpose,
       dueDate: transmittalsTable.dueDate,
       sentAt: transmittalsTable.sentAt,
@@ -76,7 +78,7 @@ router.get("/:id", async (req, res) => {
 // Create transmittal
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, documentIds } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, documentIds, direction, partyType } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
   // Generate transmittal number
@@ -93,6 +95,8 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     subject,
     description,
     purpose: purpose || "for_information",
+    direction: direction || "outgoing",
+    partyType: partyType || "consultant",
     dueDate: dueDate ? new Date(dueDate) : undefined,
     toExternal,
     projectId,
@@ -123,12 +127,39 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 // Update transmittal
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
-  const { subject, description, purpose, dueDate, toExternal, status } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, status, direction, partyType } = req.body;
   const [transmittal] = await db.update(transmittalsTable)
-    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, status, updatedAt: new Date() })
+    .set({
+      subject, description, purpose,
+      dueDate: dueDate ? new Date(dueDate) : undefined,
+      toExternal, status,
+      ...(direction !== undefined ? { direction } : {}),
+      ...(partyType !== undefined ? { partyType } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(transmittalsTable.id, id))
     .returning();
   res.json(transmittal);
+});
+
+// Update a single transmittal item (reviewCode, reviewComment, reviewDate, etc.)
+router.put("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+  const itemId = parseInt(req.params.itemId);
+  const transmittalId = parseInt(req.params.id);
+  const { reviewCode, reviewComment, reviewDate, revision, copies, purpose } = req.body;
+  const [item] = await db.update(transmittalItemsTable)
+    .set({
+      ...(reviewCode !== undefined ? { reviewCode } : {}),
+      ...(reviewComment !== undefined ? { reviewComment } : {}),
+      ...(reviewDate !== undefined ? { reviewDate: reviewDate ? new Date(reviewDate) : null } : {}),
+      ...(revision !== undefined ? { revision } : {}),
+      ...(copies !== undefined ? { copies } : {}),
+      ...(purpose !== undefined ? { purpose } : {}),
+    })
+    .where(and(eq(transmittalItemsTable.id, itemId), eq(transmittalItemsTable.transmittalId, transmittalId)))
+    .returning();
+  if (!item) { res.status(404).json({ error: "Item not found" }); return; }
+  res.json(item);
 });
 
 // Send transmittal
@@ -352,6 +383,50 @@ router.post(
             comment,
           })
         ));
+      }
+    }
+
+    // ── Auto-update document status from review codes when incoming transmittal approved ──
+    if (existing.direction === "incoming") {
+      const items = await db
+        .select()
+        .from(transmittalItemsTable)
+        .where(eq(transmittalItemsTable.transmittalId, id));
+
+      const noDowngrade = ["issued", "superseded", "void"];
+
+      for (const item of items) {
+        let newDocStatus: string | null = null;
+        switch (item.reviewCode) {
+          case "A": newDocStatus = "approved"; break;
+          case "B": newDocStatus = "approved_with_comments"; break;
+          case "C": newDocStatus = "for_revision"; break;
+          case "D": newDocStatus = "rejected"; break;
+          default: break;
+        }
+        if (!newDocStatus) continue;
+
+        const [currentDoc] = await db
+          .select({ status: documentsTable.status, organizationId: documentsTable.organizationId })
+          .from(documentsTable)
+          .where(eq(documentsTable.id, item.documentId));
+
+        if (!currentDoc || noDowngrade.includes(currentDoc.status)) continue;
+
+        await db.update(documentsTable)
+          .set({ status: newDocStatus as any, updatedAt: new Date() })
+          .where(eq(documentsTable.id, item.documentId));
+
+        await db.insert(documentRevisionsTable).values({
+          documentId: item.documentId,
+          organizationId: currentDoc.organizationId ?? existing.projectId,
+          revision: item.revision ?? "—",
+          status: newDocStatus,
+          comment: `Auto-updated via Transmittal ${existing.transmittalNumber} — Review Code ${item.reviewCode}`,
+          createdById: existing.createdById,
+          reviewDecision: item.reviewCode,
+          reviewerName: existing.toExternal ?? undefined,
+        });
       }
     }
 

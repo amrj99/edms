@@ -48,12 +48,16 @@ export const documentsTable = pgTable("documents", {
   additionalFiles: jsonb("additional_files").default([]),
   source: text("source"),
   issuedBy: text("issued_by"),
+  partyType: text("party_type"),
+  drawingType: text("drawing_type"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [
   index("idx_documents_organization_id").on(t.organizationId),
   index("idx_documents_project_id").on(t.projectId),
   index("idx_documents_status").on(t.status),
+  index("idx_documents_party_type").on(t.partyType),
+  index("idx_documents_drawing_type").on(t.drawingType),
 ]);
 
 export const documentRevisionsTable = pgTable("document_revisions", {

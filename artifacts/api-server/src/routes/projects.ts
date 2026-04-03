@@ -5,6 +5,7 @@ import { eq, count, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
+import { seedRegisterDefaults } from "./registers.js";
 
 const router = Router();
 
@@ -166,6 +167,9 @@ router.post("/", requireAuth, async (req, res) => {
       entityTitle: project.name,
       projectId: project.id,
     });
+
+    // Seed register column defaults for the new project
+    try { await seedRegisterDefaults(project.id, organizationId!); } catch { /* non-blocking */ }
 
     res.status(201).json({ ...project, memberCount: 1, documentCount: 0 });
   } catch (err: unknown) {

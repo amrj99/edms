@@ -1,0 +1,279 @@
+إليك النص الكامل بالإنجليزية:
+
+---
+
+## 📋 EDMS — Register System Development
+
+### Context
+We need to build three main registers in the system:
+- **Master Document Register** — tracks all project documents
+- **Drawings Register** — tracks drawings by type (Design / Shop / IFC / As-Built)
+- **Transmittal Register** — tracks all outgoing and incoming transmittals
+
+Registers are **not** separate database tables — they are filtered queries/views on existing tables with smart filtering by party, direction, discipline, and status.
+
+---
+
+### 1️⃣ Database Schema Changes (New Migration Required)
+
+**a) `transmittals.ts` — Add two fields:**
+```typescript
+direction: text("direction").notNull().default("outgoing"),
+// Values: "outgoing" | "incoming"
+
+partyType: text("party_type").notNull().default("consultant"),
+// Values: "owner" | "consultant" | "main_contractor" | "subcontractor" | "authority"
+```
+
+**b) `documents.ts` — Add two fields:**
+```typescript
+partyType: text("party_type").default("consultant"),
+// Who originated the document: "owner" | "consultant" | "main_contractor" | "subcontractor"
+
+drawingType: text("drawing_type"),
+// Values: "design" | "shop" | "ifc" | "as_built"
+// Only populated when documentType = "Drawing"
+```
+
+**c) `transmittal_items` — Add three fields:**
+```typescript
+reviewCode: text("review_code"),
+// Values: "A" | "B" | "C" | "D" | "UR"
+// A = Approved
+// B = Approved with Comments
+// C = Revise & Resubmit
+// D = Rejected
+// UR = Under Review
+
+reviewComment: text("review_comment"),
+reviewDate: timestamp("review_date"),
+```
+
+**d) `metadata.ts` — Extend `metadata_applies_to` enum:**
+```typescript
+export const metadataAppliesToEnum = pgEnum("metadata_applies_to", [
+  "document",
+  "correspondence",
+  "transmittal",
+  "drawing",
+  "ncr",
+  "itr",
+  "noc",
+  "all",
+]);
+```
+
+**e) New table — `register_column_config`:**
+```typescript
+import { pgTable, serial, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
+import { organizationsTable } from "./organizations";
+import { projectsTable } from "./projects";
+
+export const registerColumnConfigTable = pgTable("register_column_config", {
+  id: serial("id").primaryKey(),
+
+  organizationId: integer("organization_id")
+    .references(() => organizationsTable.id)
+    .notNull(),
+
+  projectId: integer("project_id")
+    .references(() => projectsTable.id),
+  // null = org-level default
+  // if projectId is set, it overrides the org-level default for that project
+
+  registerType: text("register_type").notNull(),
+  // Values: "transmittal" | "document" | "drawing" | "ncr" | "itr" | "noc" | "correspondence"
+
+  columnKey: text("column_key").notNull(),
+  // Examples: "discipline" | "drawing_type" | "review_code" | "party_type" | "area_location" | "itp_ref"
+
+  isVisible: boolean("is_visible").notNull().default(true),
+  displayOrder: integer("display_order").notNull().default(0),
+
+  columnLabel: text("column_label"),
+  // Custom column label — if null, system uses default label
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+```
+
+---
+
+### 2️⃣ Automatic Document Status Update Logic
+
+When an **incoming** transmittal is updated and its `approvalStatus` changes, the system must automatically update the status of all linked documents. Add this logic inside the transmittal update endpoint:
+
+```typescript
+// After saving the transmittal update, run this logic:
+
+if (
+  transmittal.direction === "incoming" &&
+  updatedData.approvalStatus === "approved"
+) {
+  const items = await db
+    .select()
+    .from(transmittalItemsTable)
+    .where(eq(transmittalItemsTable.transmittalId, transmittalId));
+
+  for (const item of items) {
+    let newDocStatus: DocumentStatus | null = null;
+
+    switch (item.reviewCode) {
+      case "A": newDocStatus = "approved"; break;
+      case "B": newDocStatus = "approved_with_comments"; break;
+      case "C": newDocStatus = "for_revision"; break;
+      case "D": newDocStatus = "rejected"; break;
+      default:  break; // UR or null = no change
+    }
+
+    if (newDocStatus) {
+      // Safety check: do not downgrade a document that is already in a higher state
+      const currentDoc = await db
+        .select()
+        .from(documentsTable)
+        .where(eq(documentsTable.id, item.documentId))
+        .then(r => r[0]);
+
+      const noDowngrade = ["issued", "superseded", "void"];
+      if (currentDoc && noDowngrade.includes(currentDoc.status)) continue;
+
+      // 1. Update document status
+      await db
+        .update(documentsTable)
+        .set({ status: newDocStatus, updatedAt: new Date() })
+        .where(eq(documentsTable.id, item.documentId));
+
+      // 2. Log to document_revisions for full traceability
+      await db.insert(documentRevisionsTable).values({
+        documentId: item.documentId,
+        organizationId: transmittal.organizationId,
+        revision: item.revision ?? "—",
+        status: newDocStatus,
+        comment: `Auto-updated via Transmittal ${transmittal.transmittalNumber} — Review Code ${item.reviewCode}`,
+        createdById: transmittal.createdById,
+        reviewDecision: item.reviewCode,
+        reviewerName: transmittal.toExternal ?? undefined,
+      });
+    }
+  }
+}
+```
+
+---
+
+### 3️⃣ New API Endpoints
+
+```
+// ─── Register Endpoints ──────────────────────────────────────────
+GET /api/projects/:projectId/registers/documents
+GET /api/projects/:projectId/registers/drawings
+GET /api/projects/:projectId/registers/transmittals
+
+// Shared query params for all registers:
+?partyType=consultant         // filter by party
+&direction=incoming           // filter by direction (transmittals only)
+&discipline=Civil             // filter by discipline
+&drawingType=shop             // filter by drawing type (drawings only)
+&status=approved              // filter by document/transmittal status
+&reviewCode=A                 // filter by review code
+&search=SD-101                // full-text search on number and title
+&page=1&limit=50              // pagination
+
+// ─── Document Transmittal History ───────────────────────────────
+GET /api/projects/:projectId/documents/:documentId/transmittal-history
+// Returns: all transmittals this document has passed through, ordered by sent_at ASC
+// Each entry includes: transmittalNumber, direction, partyType, reviewCode,
+//                      reviewComment, sentAt, responseDate, approvalStatus
+
+// ─── Register Column Configuration ──────────────────────────────
+GET /api/projects/:projectId/register-config/:registerType
+PUT /api/projects/:projectId/register-config/:registerType
+// Allows showing/hiding and reordering columns per project
+// Falls back to org-level config if no project-level config exists
+// Falls back to system defaults if no org-level config exists
+```
+
+---
+
+### 4️⃣ Default Column Configuration Per Register
+
+When a new project is created, auto-populate `register_column_config` with these defaults:
+
+```typescript
+// Master Document Register — default columns
+const documentRegisterDefaults = [
+  { columnKey: "document_number",  isVisible: true,  displayOrder: 1 },
+  { columnKey: "title",            isVisible: true,  displayOrder: 2 },
+  { columnKey: "document_type",    isVisible: true,  displayOrder: 3 },
+  { columnKey: "discipline",       isVisible: true,  displayOrder: 4 },
+  { columnKey: "revision",         isVisible: true,  displayOrder: 5 },
+  { columnKey: "status",           isVisible: true,  displayOrder: 6 },
+  { columnKey: "party_type",       isVisible: true,  displayOrder: 7 },
+  { columnKey: "issued_by",        isVisible: true,  displayOrder: 8 },
+  { columnKey: "created_at",       isVisible: true,  displayOrder: 9 },
+  { columnKey: "remarks",          isVisible: false, displayOrder: 10 },
+];
+
+// Drawings Register — default columns
+const drawingRegisterDefaults = [
+  { columnKey: "document_number",  isVisible: true,  displayOrder: 1 },
+  { columnKey: "title",            isVisible: true,  displayOrder: 2 },
+  { columnKey: "drawing_type",     isVisible: true,  displayOrder: 3 },
+  { columnKey: "discipline",       isVisible: true,  displayOrder: 4 },
+  { columnKey: "revision",         isVisible: true,  displayOrder: 5 },
+  { columnKey: "review_code",      isVisible: true,  displayOrder: 6 },
+  { columnKey: "party_type",       isVisible: true,  displayOrder: 7 },
+  { columnKey: "submission_date",  isVisible: true,  displayOrder: 8 },
+  { columnKey: "response_date",    isVisible: true,  displayOrder: 9 },
+  { columnKey: "transmittal_ref",  isVisible: true,  displayOrder: 10 },
+  { columnKey: "area_location",    isVisible: false, displayOrder: 11 },
+  { columnKey: "itp_ref",          isVisible: false, displayOrder: 12 },
+];
+
+// Transmittal Register — default columns
+const transmittalRegisterDefaults = [
+  { columnKey: "transmittal_number", isVisible: true,  displayOrder: 1  },
+  { columnKey: "subject",            isVisible: true,  displayOrder: 2  },
+  { columnKey: "direction",          isVisible: true,  displayOrder: 3  },
+  { columnKey: "party_type",         isVisible: true,  displayOrder: 4  },
+  { columnKey: "status",             isVisible: true,  displayOrder: 5  },
+  { columnKey: "purpose",            isVisible: true,  displayOrder: 6  },
+  { columnKey: "sent_at",            isVisible: true,  displayOrder: 7  },
+  { columnKey: "due_date",           isVisible: true,  displayOrder: 8  },
+  { columnKey: "approval_status",    isVisible: true,  displayOrder: 9  },
+  { columnKey: "items_count",        isVisible: true,  displayOrder: 10 },
+  { columnKey: "review_code",        isVisible: true,  displayOrder: 11 },
+  { columnKey: "remarks",            isVisible: false, displayOrder: 12 },
+];
+```
+
+---
+
+### 5️⃣ Important Implementation Notes
+
+**Multi-tenancy:**
+- All new tables must include `organization_id` for proper multi-tenant row-level isolation
+- Verify that `transmittals` table has `organization_id` — add it if missing
+
+**Column config inheritance:**
+- Project-level config overrides org-level config
+- Org-level config overrides system defaults
+- Always fall back gracefully through this chain
+
+**Auto status update rules:**
+- Never downgrade a document already in `issued`, `superseded`, or `void` status
+- Always write a `document_revisions` entry when auto-updating, referencing the transmittal number
+- Only trigger auto-update when `direction = "incoming"` — outgoing transmittals do not update document status
+
+**Register query performance:**
+- Add database indexes on `documents.party_type`, `documents.drawing_type`, `transmittals.direction`, and `transmittals.party_type`
+- The `transmittal-history` endpoint should join `transmittals`, `transmittal_items`, and `document_revisions` in a single query
+
+**party_type values (use consistently across all tables):**
+```
+"owner"            → Client / Employer
+"consultant"       → Engineer / Consultant
+"main_contractor"  → Main Contractor
+"subcontractor"    → Subcontractor
+"authority"        → Government Authority (used mainly for NOC)
+```

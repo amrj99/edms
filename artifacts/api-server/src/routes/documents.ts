@@ -807,4 +807,34 @@ router.delete("/:id/files/:fileId", requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
+// ─── Transmittal History for a Document ───────────────────────────────────────
+router.get("/:docId/transmittal-history", requireAuth, async (req, res) => {
+  const docId = parseInt(req.params.docId);
+  const projectId = parseInt(req.params.projectId);
+  const { transmittalsTable, transmittalItemsTable, documentRevisionsTable: drTable } = await import("@workspace/db");
+  const { asc } = await import("drizzle-orm");
+
+  const rows = await db
+    .select({
+      transmittalId: transmittalsTable.id,
+      transmittalNumber: transmittalsTable.transmittalNumber,
+      subject: transmittalsTable.subject,
+      direction: transmittalsTable.direction,
+      partyType: transmittalsTable.partyType,
+      sentAt: transmittalsTable.sentAt,
+      acknowledgedAt: transmittalsTable.acknowledgedAt,
+      approvalStatus: transmittalsTable.approvalStatus,
+      itemRevision: transmittalItemsTable.revision,
+      reviewCode: transmittalItemsTable.reviewCode,
+      reviewComment: transmittalItemsTable.reviewComment,
+      reviewDate: transmittalItemsTable.reviewDate,
+    })
+    .from(transmittalItemsTable)
+    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+    .where(and(eq(transmittalItemsTable.documentId, docId), eq(transmittalsTable.projectId, projectId)))
+    .orderBy(asc(transmittalsTable.sentAt));
+
+  res.json({ history: rows });
+});
+
 export default router;
