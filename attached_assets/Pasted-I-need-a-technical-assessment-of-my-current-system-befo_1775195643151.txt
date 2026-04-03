@@ -1,0 +1,54 @@
+I need a technical assessment of my current system before converting it to SaaS.
+
+Please analyze and confirm the following:
+
+MULTI-TENANT & DATA ISOLATION
+
+1. Do all core tables include organization_id (users, projects, documents, correspondence, workflows, roles)?
+2. Are all API queries filtered by organization_id?
+3. Is there middleware enforcing organization scoping?
+4. Can users from one organization access another organization's data?
+5. Is tenant isolation enforced at database level or only UI level?
+
+AUTHENTICATION & ORGANIZATIONS
+6. Is each user linked to a single organization?
+7. Can a user belong to multiple organizations?
+8. Is organization switching supported?
+9. Is there an organization owner concept?
+
+ROLES & PERMISSIONS
+10. Are roles global or organization-scoped?
+11. Can each organization define its own roles?
+12. Is RBAC implemented (role-based access control)?
+13. Are permissions stored in database or hardcoded?
+14. Can permissions be customized per organization?
+
+AUTO-FILL / AUTOMATION
+15. The system already auto-fills some fields — how is this implemented?
+16. Are auto-fill rules configurable?
+17. Are they rule-based or AI-based?
+18. Can we extend them as reusable "skills"?
+19. Is there an automation engine already available?
+
+SKILLS / AUTOMATION ENGINE
+20. Is there a plugin or skills architecture?
+21. Can we add rule-based automations?
+22. Can skills be organization-specific?
+23. Can skills be enabled/disabled dynamically?
+
+SaaS READINESS
+24. Is the system currently single-tenant or multi-tenant?
+25. What is missing to make it true SaaS?
+26. Is subscription logic supported?
+27. Is feature-based module access supported?
+28. Are organizations fully isolated?
+
+PERFORMANCE & SECURITY
+29. Are organization_id indexes added?
+30. Are API routes protected against cross-tenant access?
+
+Please provide a detailed evaluation and list:
+
+* What is already implemented
+* What is partially implemented
+* What is missing for SaaS conversion
