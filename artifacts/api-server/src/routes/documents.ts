@@ -32,8 +32,82 @@ router.get("/folders", requireAuth, async (req, res) => {
 router.post("/folders", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const { name, parentId } = req.body;
-  const [folder] = await db.insert(foldersTable).values({ name, projectId, parentId }).returning();
+  if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+  const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
   res.status(201).json({ ...folder, documentCount: 0 });
+});
+
+router.put("/folders/:folderId", requireAuth, async (req, res) => {
+  const folderId = parseInt(req.params.folderId);
+  const projectId = parseInt(req.params.projectId);
+  const { name, parentId } = req.body;
+  const update: Record<string, any> = {};
+  if (name !== undefined) update.name = name.trim();
+  if (parentId !== undefined) update.parentId = parentId === null ? null : parseInt(parentId);
+  if (!Object.keys(update).length) return res.status(400).json({ error: "nothing to update" });
+  const [folder] = await db.update(foldersTable)
+    .set(update)
+    .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)))
+    .returning();
+  if (!folder) return res.status(404).json({ error: "folder not found" });
+  res.json(folder);
+});
+
+router.delete("/folders/:folderId", requireAuth, async (req, res) => {
+  const folderId = parseInt(req.params.folderId);
+  const projectId = parseInt(req.params.projectId);
+  const [folder] = await db.select().from(foldersTable)
+    .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
+  if (!folder) return res.status(404).json({ error: "folder not found" });
+  // Move child folders to parent
+  await db.update(foldersTable)
+    .set({ parentId: folder.parentId ?? null })
+    .where(eq(foldersTable.parentId, folderId));
+  // Unset folderId on documents
+  await db.update(documentsTable)
+    .set({ folderId: folder.parentId ?? null })
+    .where(and(eq(documentsTable.folderId, folderId), eq(documentsTable.projectId, projectId)));
+  await db.delete(foldersTable).where(eq(foldersTable.id, folderId));
+  res.status(204).send();
+});
+
+// POST /folders/copy-from — copy folder tree from another project in same org
+router.post("/folders/copy-from", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const { sourceProjectId } = req.body;
+  if (!sourceProjectId) return res.status(400).json({ error: "sourceProjectId required" });
+  // Verify source project is in same org
+  const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
+  const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
+  if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
+    return res.status(403).json({ error: "Source project not in same organization" });
+  }
+  const sourceFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
+  // Insert in two passes: roots first, then children (BFS)
+  const idMap = new Map<number, number>();
+  const roots = sourceFolders.filter(f => !f.parentId);
+  const children = sourceFolders.filter(f => f.parentId);
+  for (const f of roots) {
+    const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: null }).returning();
+    idMap.set(f.id, created.id);
+  }
+  // Up to 5 levels
+  let remaining = children;
+  for (let pass = 0; pass < 5 && remaining.length; pass++) {
+    const next: typeof remaining = [];
+    for (const f of remaining) {
+      const newParent = idMap.get(f.parentId!);
+      if (newParent !== undefined) {
+        const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: newParent }).returning();
+        idMap.set(f.id, created.id);
+      } else {
+        next.push(f);
+      }
+    }
+    remaining = next;
+  }
+  const newFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, projectId));
+  res.json({ folders: newFolders, copiedCount: idMap.size });
 });
 
 // Documents
@@ -272,6 +346,19 @@ router.delete("/:id", requireAuth, async (req, res) => {
   await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
   await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
   res.status(204).send();
+});
+
+// PATCH /:id/folder — move document to a different folder (or root)
+router.patch("/:id/folder", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const { folderId } = req.body;  // null = move to root
+  const [doc] = await db.update(documentsTable)
+    .set({ folderId: folderId ?? null, updatedAt: new Date() })
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .returning();
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  res.json({ id: doc.id, folderId: doc.folderId });
 });
 
 router.get("/:id/revisions", requireAuth, async (req, res) => {

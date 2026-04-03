@@ -869,3 +869,74 @@ Respond with JSON only: {"category": "<one of: Drawing|Report|Procedure|Specific
 
   return result ?? null;
 }
+
+// ── Migration wizard helpers ──────────────────────────────────────────────────
+
+/** Returns the current provider name for a given org, or null if none configured. */
+export async function getOrgProvider(organizationId: number): Promise<string | null> {
+  try {
+    const quota = await getOrgAiQuota(organizationId);
+    return quota.provider && quota.provider !== "none" ? quota.provider : null;
+  } catch {
+    const { provider } = await getAIProviderConfig();
+    return provider !== "none" ? provider : null;
+  }
+}
+
+export interface ExtractedDocMeta {
+  metadata: {
+    title?: string;
+    code?: string;
+    discipline?: string;
+    docType?: string;
+    revision?: string;
+    date?: string;
+    issuer?: string;
+    isReply?: boolean;
+    replyTo?: string;
+  };
+  confidence: number;
+}
+
+/**
+ * Use AI to extract document metadata from its file path and name.
+ * Falls back gracefully on any error.
+ */
+export async function extractDocumentMetadataFromPath(
+  filePath: string,
+  fileName: string,
+): Promise<ExtractedDocMeta> {
+  const prompt = `You are an engineering document management AI. Given a file path from an engineering project, extract document metadata.
+
+File path: "${filePath}"
+File name: "${fileName}"
+
+Extract the following metadata (leave empty string if not determinable):
+- title: Human-readable document title
+- code: Document number/code (e.g., ABC-CIV-DWG-001)
+- discipline: Engineering discipline (Civil, Structural, Mechanical, Electrical, Instrumentation, Piping, Process, Architecture, HVAC, General)
+- docType: Document type (Drawing, Specification, Report, Calculation, Procedure, Manual, Letter, Transmittal, ITR, NCR, WIR, RFI, Other)
+- revision: Revision identifier (e.g., A, B, 1, 2, P1)
+- date: Date in YYYY-MM-DD format if discernible
+- issuer: Issuing company or person if in path
+- isReply: true if the document appears to be a reply (look for Re:, response, reply in name)
+- replyTo: Referenced document number if this is a reply
+- confidence: Integer 0-100 representing extraction confidence
+
+Return JSON only.`;
+
+  try {
+    const result = await callAI(
+      prompt,
+      "You extract structured metadata from engineering document paths. Return valid JSON only.",
+      "fast",
+      true,
+    ) as ExtractedDocMeta["metadata"] & { confidence?: number };
+
+    const confidence = typeof result?.confidence === "number" ? result.confidence : 50;
+    const { confidence: _, ...metadata } = result as any;
+    return { metadata, confidence };
+  } catch {
+    return { metadata: {}, confidence: 0 };
+  }
+}

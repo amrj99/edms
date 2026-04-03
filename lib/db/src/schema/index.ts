@@ -19,3 +19,4 @@ export * from "./meetings";
 export * from "./chat";
 export * from "./rules";
 export * from "./skills";
+export * from "./migrations";

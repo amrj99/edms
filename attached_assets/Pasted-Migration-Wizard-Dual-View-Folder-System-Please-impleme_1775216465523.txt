@@ -1,0 +1,89 @@
+Migration Wizard + Dual View Folder System
+Please implement the following two major features:
+PART 1 — DUAL VIEW: LIST & FOLDER
+
+Add a view toggle on the Documents page with two modes:
+
+List view (current behavior — keep as-is)
+Folder view (new — shows documents inside a navigable folder tree)
+
+
+In folder view, show the project's folder structure as a sidebar tree. Clicking a folder shows only documents inside it. Breadcrumb navigation at the top.
+Project admins can build and edit the folder structure freely:
+
+Create, rename, delete, move folders
+Drag documents into folders
+Copy folder structure from another project in the same org
+Import folder structure from a JSON or Excel template file
+
+
+
+PART 2 — MIGRATION WIZARD (available on Basic plan and above)
+A step-by-step wizard accessible from Project Settings → "Import Existing Project".
+Step 1 — Upload
+
+User drags a root folder or selects multiple files/folders
+System reads the folder tree and displays it for review before analysis begins
+Show total file count and estimated analysis time
+
+Step 2 — AI Analysis
+
+For each readable file (PDF, DOCX, XLSX — skip DWG/DXF), read the first 2 pages and extract:
+
+Document title
+Document number/code
+Date
+Discipline and document type
+Revision number
+Issuer/author
+Whether it is a reply to a previous correspondence (look for "Re:", "In response to", "Reference:", or similar patterns) — mark these with a isReply: true flag and try to extract the referenced document number
+
+
+Use the file's folder path as a fallback for discipline and type if not found in content
+Try to extract document code from filename if not found in content
+Show a confidence score per file: High (85%+), Medium (50-84%), Low (<50%)
+
+Step 3 — Review Table
+
+Show all files in a reviewable table with columns: File, Extracted Title, Code, Type, Discipline, Revision, Date, Confidence, Action
+High confidence rows are pre-checked and ready
+Medium confidence rows are highlighted in amber — user must confirm or edit
+Low confidence and unreadable files (DWG etc.) are highlighted in red — user fills manually or skips
+Bulk actions: "Accept all high confidence", "Skip unreadable files"
+
+Step 4 — Storage Choice
+
+Show two options:
+
+Transfer to system storage — files are uploaded to the configured storage (S3/cloud/local)
+Keep on your server — files stay in place, system stores only the path/URL reference. User enters the base URL or network path.
+
+
+
+Step 5 — Import & Report Generation
+
+Import all confirmed documents into the project with the extracted metadata
+Automatically build the folder structure matching the original folder tree
+After import, automatically generate the following registers with the imported data:
+
+Master Document Register
+Correspondence Register (for files flagged as correspondence)
+Transmittal Register (for files flagged as transmittals)
+ITR / NCR / WIR / SOR registers — only generated if matching document types were found
+
+
+Show a final import summary: "X documents imported, Y skipped, Z need attention"
+
+PRICING GATE
+
+Starter plan: Migration Wizard is hidden
+Basic: up to 200 files per import
+Professional: up to 1000 files per import
+Enterprise: unlimited
+
+GENERAL NOTES
+
+The entire wizard is org-scoped — all data, folders, and imported documents are isolated per organization
+All AI analysis calls are logged to ai_logs with the org's organization_id
+The wizard checks the org's ai_daily_limit before starting — if quota is insufficient for the batch size, warn the user before proceeding
+Fire-and-forget execution for large batches — show a progress bar and allow the user to navigate away and come back

@@ -1,4 +1,4 @@
-import { useParams, Link } from "wouter";
+import { useParams, Link, useLocation } from "wouter";
 import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/api-client-react";
 import {
@@ -8,6 +8,7 @@ import {
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
+  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -29,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
@@ -223,6 +225,7 @@ const PROJECT_DOC_COLS = [
 function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -233,6 +236,9 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [searchQ, setSearchQ] = useState("");
   const [filterDiscipline, setFilterDiscipline] = useState("_all");
   const [filterDocType, setFilterDocType] = useState("_all");
+  // View mode: list or folder
+  const [viewMode, setViewMode] = useState<"list" | "folder">("list");
+  const [folderViewFolderId, setFolderViewFolderId] = useState<number | null>(null);
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [docPreview, setDocPreview] = useState<any>(null);
@@ -416,6 +422,10 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     }
     if (filterDiscipline !== "_all" && d.discipline !== filterDiscipline) return false;
     if (filterDocType !== "_all" && d.documentType !== filterDocType) return false;
+    // In folder view, filter by selected folder (null = all / root = no folder)
+    if (viewMode === "folder" && folderViewFolderId !== null) {
+      if (d.folderId !== folderViewFolderId) return false;
+    }
     return true;
   });
 
@@ -517,7 +527,24 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             <span className="text-sm font-medium text-primary">{selectedIds.size} selected</span>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* View toggle */}
+          <div className="flex items-center rounded-md border overflow-hidden h-9">
+            <button
+              className={`flex items-center gap-1.5 px-2.5 h-full text-xs font-medium transition-colors ${viewMode === "list" ? "bg-primary text-primary-foreground" : "bg-transparent hover:bg-muted text-muted-foreground"}`}
+              onClick={() => setViewMode("list")}
+              title="List view"
+            >
+              <LayoutList className="h-3.5 w-3.5" /> List
+            </button>
+            <button
+              className={`flex items-center gap-1.5 px-2.5 h-full text-xs font-medium transition-colors border-l ${viewMode === "folder" ? "bg-primary text-primary-foreground" : "bg-transparent hover:bg-muted text-muted-foreground"}`}
+              onClick={() => setViewMode("folder")}
+              title="Folder view"
+            >
+              <FolderTree className="h-3.5 w-3.5" /> Folders
+            </button>
+          </div>
           {selectedIds.size > 0 && (
             <>
               <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsBulkTransOpen(true)}>
@@ -538,6 +565,14 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={runValidation} disabled={validating || allDocs.length === 0}>
             <ShieldAlert className="h-3.5 w-3.5" />
             {validating ? "Validating..." : "Validate"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9 gap-1.5 border-amber-400/60 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950"
+            onClick={() => navigate(`/migration-wizard?projectId=${projectId}`)}
+          >
+            <FolderMinus className="h-3.5 w-3.5" /> Import Existing
           </Button>
           <Button
             size="sm"
@@ -671,11 +706,37 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
         </DialogContent>
       </Dialog>
 
-      {/* Documents Table */}
-      <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-        <div className="flex items-center justify-end px-3 py-1 border-b bg-muted/20">
+      {/* Documents Table — with optional Folder sidebar */}
+      <div className={`bg-card border rounded-xl shadow-sm overflow-hidden ${viewMode === "folder" ? "flex" : ""}`}>
+        {viewMode === "folder" && (
+          <div className="w-56 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">
+            <FolderSidebar
+              projectId={projectId}
+              selectedFolderId={folderViewFolderId}
+              onSelectFolder={setFolderViewFolderId}
+              canEdit={true}
+            />
+          </div>
+        )}
+        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex items-center justify-between px-3 py-1 border-b bg-muted/20">
+          {viewMode === "folder" && folderViewFolderId !== null && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <button
+                className="hover:text-foreground"
+                onClick={() => setFolderViewFolderId(null)}
+              >
+                <Folder className="h-3.5 w-3.5 inline mr-0.5" /> All
+              </button>
+              <ChevronRight className="h-3 w-3" />
+              <span className="text-foreground font-medium">
+                {data?.documents?.find((d: any) => d.folderId === folderViewFolderId)?.folderName ?? `Folder ${folderViewFolderId}`}
+              </span>
+            </div>
+          )}
+          {viewMode !== "folder" && <span />}
           <button
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted ml-auto"
             onClick={resetDocWidths}
             title="Reset column widths"
           >Reset columns</button>
@@ -813,6 +874,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             })}
           </TableBody>
         </Table>
+        </div>
         </div>
       </div>
 
