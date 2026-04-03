@@ -272,8 +272,18 @@ export default function MigrationWizard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      if (!r.ok) throw new Error("Import failed");
+      if (r.status === 409) {
+        // Already executing or completed — just refetch to show current state
+        return { alreadyRunning: true };
+      }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error ?? "Import failed to start");
+      }
       return r.json();
+    },
+    onSuccess: () => {
+      refetchJob();
     },
     onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
   });
@@ -735,7 +745,7 @@ export default function MigrationWizard() {
   );
 
   const renderStep5 = () => {
-    const isExecuting = job?.status === "executing";
+    const isExecuting = job?.status === "executing" || executeMut.isPending;
     const isComplete = job?.status === "completed";
     const isFailed = job?.status === "failed";
     const hasStarted = isExecuting || isComplete || isFailed;
