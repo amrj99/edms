@@ -362,7 +362,7 @@ export function AppSidebar() {
     { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
     { title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp },
-    ...(modules.registers ? [{ title: t("navRegisters"), url: "/registers", icon: BarChart3 }] : []),
+    ...(modules.registers ? [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] : []),
     ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: t("navSearch"), url: "/search", icon: Search },

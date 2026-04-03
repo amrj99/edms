@@ -14,11 +14,6 @@ export const metadataFieldTypeEnum = pgEnum("metadata_field_type", [
 export const metadataAppliesToEnum = pgEnum("metadata_applies_to", [
   "document",
   "correspondence",
-  "transmittal",
-  "drawing",
-  "ncr",
-  "itr",
-  "noc",
   "all",
 ]);
 

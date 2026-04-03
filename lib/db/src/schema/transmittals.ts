@@ -19,8 +19,6 @@ export const transmittalsTable = pgTable("transmittals", {
   subject: text("subject").notNull(),
   description: text("description"),
   status: transmittalStatusEnum("status").notNull().default("draft"),
-  direction: text("direction").notNull().default("outgoing"),
-  partyType: text("party_type").notNull().default("consultant"),
   projectId: integer("project_id").references(() => projectsTable.id).notNull(),
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
   toUserId: integer("to_user_id").references(() => usersTable.id),
@@ -47,9 +45,6 @@ export const transmittalItemsTable = pgTable("transmittal_items", {
   revision: text("revision"),
   copies: integer("copies").default(1),
   purpose: text("purpose"),
-  reviewCode: text("review_code"),
-  reviewComment: text("review_comment"),
-  reviewDate: timestamp("review_date"),
   addedAt: timestamp("added_at").defaultNow().notNull(),
 });
 

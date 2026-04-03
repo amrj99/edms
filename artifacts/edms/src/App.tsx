@@ -42,7 +42,6 @@ import ReportsDashboard from "@/pages/reports-dashboard";
 import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
-import RegistersPage from "@/pages/registers";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -189,9 +188,6 @@ function Router() {
       </Route>
       <Route path="/migration-wizard">
         <ProtectedRoute component={MigrationWizard} />
-      </Route>
-      <Route path="/registers">
-        <ProtectedRoute component={RegistersPage} />
       </Route>
 
       <Route component={NotFound} />
