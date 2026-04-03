@@ -237,47 +237,92 @@ function NotificationBell() {
 }
 
 // ─── Global Project Switcher ──────────────────────────────────────────────────
+const STATUS_BADGE_COLORS: Record<string, string> = {
+  active:    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
+  completed: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  on_hold:   "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  cancelled: "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400",
+  planning:  "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400",
+};
+
 function ProjectSwitcher() {
   const [open, setOpen] = useState(false);
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { t, isRtl } = useI18n();
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
-  const projects = projectsData?.projects ?? [];
+  const projects: any[] = projectsData?.projects ?? [];
+
+  // Detect the current project from the URL
+  const projectIdFromUrl = (() => {
+    const m = location.match(/^\/projects\/(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  })();
+  const currentProject = projectIdFromUrl ? projects.find(p => p.id === projectIdFromUrl) : null;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs max-w-[180px] hidden md:flex">
-          <FolderKanban className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{t("switchProject")}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-auto py-1 px-2.5 gap-1.5 text-xs hidden md:flex flex-col items-start max-w-[200px] hover:border-primary/50"
+        >
+          <span className="text-[10px] text-muted-foreground leading-none font-normal w-full">
+            {currentProject ? "Current Project" : t("switchProject")}
+          </span>
+          <span className="flex items-center gap-1.5 w-full">
+            <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="truncate font-medium text-foreground leading-none">
+              {currentProject
+                ? `${currentProject.name} (${currentProject.code})`
+                : t("switchProject")}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground ml-auto" />
+          </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="end" dir={isRtl ? "rtl" : "ltr"}>
+      <PopoverContent className="w-80 p-0" align="end" dir={isRtl ? "rtl" : "ltr"}>
         <Command>
-          <CommandInput placeholder={t("globalSearchPlaceholder")} className="h-9" />
+          <CommandInput placeholder="Search projects…" className="h-9" />
           <CommandEmpty>{t("globalNoResults")}</CommandEmpty>
           <CommandGroup heading={t("navProjects")}>
-            <ScrollArea className="max-h-72">
-              {projects.map((p: any) => (
-                <CommandItem
-                  key={p.id}
-                  value={`${p.code} ${p.name}`}
-                  onSelect={() => {
-                    trackRecentProject({ id: p.id, code: p.code, name: p.name });
-                    navigate(`/projects/${p.id}`);
-                    setOpen(false);
-                  }}
-                  className="cursor-pointer"
-                >
-                  <span className="font-mono text-xs text-muted-foreground me-2">{p.code}</span>
-                  <span className="truncate">{p.name}</span>
-                </CommandItem>
-              ))}
+            <ScrollArea className="max-h-80">
+              {projects.map((p: any) => {
+                const isCurrent = p.id === projectIdFromUrl;
+                const statusColor = STATUS_BADGE_COLORS[p.status] ?? "bg-muted text-muted-foreground";
+                return (
+                  <CommandItem
+                    key={p.id}
+                    value={`${p.code} ${p.name}`}
+                    onSelect={() => {
+                      trackRecentProject({ id: p.id, code: p.code, name: p.name });
+                      navigate(`/projects/${p.id}`);
+                      setOpen(false);
+                    }}
+                    className={`cursor-pointer py-2.5 ${isCurrent ? "bg-primary/5" : ""}`}
+                  >
+                    <div className="flex items-center gap-2.5 w-full min-w-0">
+                      <FolderKanban className={`h-4 w-4 shrink-0 ${isCurrent ? "text-primary" : "text-muted-foreground"}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-sm truncate">{p.name}</span>
+                          <span className="font-mono text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">{p.code}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium capitalize shrink-0 ${statusColor}`}>
+                            {p.status?.replace("_", " ") ?? "—"}
+                          </span>
+                        </div>
+                      </div>
+                      {isCurrent && <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-auto" />}
+                    </div>
+                  </CommandItem>
+                );
+              })}
             </ScrollArea>
           </CommandGroup>
         </Command>
@@ -719,7 +764,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <div className="hidden md:block">
                 <AICommandAssistant />
               </div>
-              <div className="text-sm font-medium text-muted-foreground hidden lg:block max-w-[150px] truncate">{user?.organizationName}</div>
+              {user?.organizationName && (
+                <div className="hidden lg:flex flex-col items-end max-w-[160px] shrink-0">
+                  <span className="text-[10px] text-muted-foreground/70 leading-none">Organization</span>
+                  <span className="text-xs font-semibold text-foreground truncate leading-tight mt-0.5">{user.organizationName}</span>
+                </div>
+              )}
               <LanguageToggle />
               <OrgSwitcher />
               <ProjectSwitcher />

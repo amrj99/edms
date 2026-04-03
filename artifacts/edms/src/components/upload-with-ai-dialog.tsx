@@ -118,7 +118,7 @@ export function UploadWithAIDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[720px] max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -127,7 +127,7 @@ export function UploadWithAIDialog({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0">
-          <div className="px-6 py-4 space-y-4">
+          <div className="px-6 py-4 space-y-5">
             {/* AI Procedure Panel */}
             <AIProcedurePanel
               projectCode={projectCode}
@@ -138,104 +138,133 @@ export function UploadWithAIDialog({
               onApply={handleAIProcedureApply}
             />
 
-            {/* File drop zone */}
-            <FileDropZone
-              onUpload={handleFileUploaded}
-              label="Click to browse or drag a single file here"
-              multiple={false}
-            />
+            {/* ── Section 1: File Upload ───────────────────────────── */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">1</div>
+                <p className="text-sm font-semibold">File Upload</p>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <FileDropZone
+                onUpload={handleFileUploaded}
+                label="Click to browse or drag a single file here"
+                multiple={false}
+              />
+              {uploadedFile && (
+                <div className="flex items-center gap-2.5 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-lg px-3 py-2.5 mt-3">
+                  <FileText className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{uploadedFile.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {uploadedFile.size < 1024 * 1024
+                        ? `${(uploadedFile.size / 1024).toFixed(0)} KB`
+                        : `${(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB`}
+                      {" · ready to save"}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
 
-            {uploadedFile && (
-              <div className="flex items-center gap-2 bg-muted/30 rounded-lg px-3 py-2 text-sm">
-                <FileText className="h-4 w-4 text-primary shrink-0" />
-                <span className="font-medium truncate">{uploadedFile.name}</span>
-                <span className="text-muted-foreground text-xs ml-auto shrink-0">
-                  {(uploadedFile.size / 1024).toFixed(0)} KB
-                </span>
+            {/* ── Section 2: Document Identity ────────────────────── */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">2</div>
+                <p className="text-sm font-semibold">Document Identity</p>
+                <div className="flex-1 h-px bg-border" />
               </div>
-            )}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <Label className="text-sm font-medium">Title *</Label>
+                  <Input
+                    value={title}
+                    onChange={e => { setTitle(e.target.value); if (e.target.value) setTitleError(null); }}
+                    placeholder="E.g. Ground Floor Plan"
+                    className="mt-1"
+                  />
+                  {titleError && <p className="text-xs text-destructive mt-1">{titleError}</p>}
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Document Number</Label>
+                  <Input
+                    value={docNumber}
+                    onChange={e => setDocNumber(e.target.value)}
+                    placeholder="Auto-generated or from AI"
+                    className="mt-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Issued By</Label>
+                  <Input
+                    value={issuedBy}
+                    onChange={e => setIssuedBy(e.target.value)}
+                    placeholder="E.g. ABC Engineering"
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            </div>
 
-            {/* Metadata form */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <Label className="text-sm font-medium">Document Number</Label>
-                <Input
-                  value={docNumber}
-                  onChange={e => setDocNumber(e.target.value)}
-                  placeholder="Auto-generated or from AI"
-                  className="mt-1 font-mono"
-                />
+            {/* ── Section 3: Classification ────────────────────────── */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">3</div>
+                <p className="text-sm font-semibold">Classification</p>
+                <div className="flex-1 h-px bg-border" />
               </div>
-              <div className="col-span-2">
-                <Label className="text-sm font-medium">Title *</Label>
-                <Input
-                  value={title}
-                  onChange={e => { setTitle(e.target.value); if (e.target.value) setTitleError(null); }}
-                  placeholder="E.g. Ground Floor Plan"
-                  className="mt-1"
-                />
-                {titleError && <p className="text-xs text-destructive mt-1">{titleError}</p>}
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Discipline</Label>
-                <Input
-                  value={discipline}
-                  onChange={e => setDiscipline(e.target.value)}
-                  placeholder="E.g. Structural"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Revision</Label>
-                <Input
-                  value={revision}
-                  onChange={e => setRevision(e.target.value)}
-                  placeholder="01"
-                  className="mt-1 font-mono"
-                />
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Document Type</Label>
-                <Select value={docType} onValueChange={setDocType}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {DOC_TYPES.map(t => (
-                      <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Status</Label>
-                <Select value={status} onValueChange={setStatus}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {STATUSES.map(s => (
-                      <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g, " ")}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Source</Label>
-                <Select value={source || "_none"} onValueChange={v => setSource(v === "_none" ? "" : v)}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_none">— None —</SelectItem>
-                    {SOURCES.map(s => (
-                      <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-sm font-medium">Issued By</Label>
-                <Input
-                  value={issuedBy}
-                  onChange={e => setIssuedBy(e.target.value)}
-                  placeholder="E.g. ABC Engineering"
-                  className="mt-1"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm font-medium">Discipline</Label>
+                  <Input
+                    value={discipline}
+                    onChange={e => setDiscipline(e.target.value)}
+                    placeholder="E.g. Structural"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Document Type</Label>
+                  <Select value={docType} onValueChange={setDocType}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {DOC_TYPES.map(t => (
+                        <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Status</Label>
+                  <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {STATUSES.map(s => (
+                        <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g, " ")}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Revision</Label>
+                  <Input
+                    value={revision}
+                    onChange={e => setRevision(e.target.value)}
+                    placeholder="01"
+                    className="mt-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Source</Label>
+                  <Select value={source || "_none"} onValueChange={v => setSource(v === "_none" ? "" : v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">— None —</SelectItem>
+                      {SOURCES.map(s => (
+                        <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
           </div>

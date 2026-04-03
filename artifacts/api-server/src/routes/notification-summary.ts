@@ -48,7 +48,7 @@ router.get("/notifications/summary", requireAuth, async (req, res) => {
           isNotNull(correspondenceTable.projectId),
           inArray(correspondenceTable.projectId as any, pids),
           lt(correspondenceTable.dueDate, new Date()),
-          sql`${correspondenceTable.status} NOT IN ('closed','acknowledged')`,
+          sql`${correspondenceTable.status} NOT IN ('closed','responded')`,
         )),
       db.select({ count: sql<number>`count(*)::int` })
         .from(documentsTable)

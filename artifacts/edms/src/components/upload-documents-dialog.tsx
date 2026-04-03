@@ -52,7 +52,7 @@ function formatSize(bytes: number) {
 }
 
 const ACCEPT = "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*,.dwg,.dxf";
-const MAX_MB = 50;
+const MAX_MB = 100;
 
 function defaultMeta(file: File): DocMeta {
   return {
@@ -115,7 +115,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
     const valid = incoming.filter(f => f.size <= MAX_MB * 1024 * 1024);
     const oversized = incoming.filter(f => f.size > MAX_MB * 1024 * 1024);
     if (oversized.length) {
-      setGlobalError(`${oversized.map(f => f.name).join(", ")} exceed the ${MAX_MB} MB limit and were skipped.`);
+      setGlobalError(`${oversized.map(f => f.name).join(", ")} — File exceeds the ${MAX_MB}MB limit. Please compress the file or contact your administrator.`);
     }
     setFiles(prev => {
       const existingNames = new Set(prev.map(f => f.file.name));
@@ -217,19 +217,33 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
   const hasPending = files.some(f => f.uploadStatus === "pending" || f.uploadStatus === "error");
   const pendingCount = files.filter(f => f.uploadStatus === "pending" || f.uploadStatus === "error").length;
 
+  const readyCount = files.filter(f => f.uploadStatus === "pending" && f.meta.title.trim()).length;
+  const needsDetailsCount = files.filter(f => f.uploadStatus === "pending" && !f.meta.title.trim()).length;
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[680px] max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[860px] max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Upload className="h-4 w-4" />
             Upload Documents
-            {files.length > 0 && (
-              <span className="ml-1 text-xs font-normal text-muted-foreground">
-                — {files.length} file{files.length !== 1 ? "s" : ""} staged
-              </span>
-            )}
           </DialogTitle>
+          {/* Summary bar */}
+          {files.length > 0 && (
+            <div className="flex items-center gap-3 mt-2 text-xs">
+              <span className="font-medium text-foreground">{files.length} file{files.length !== 1 ? "s" : ""} staged</span>
+              <span className="text-muted-foreground">—</span>
+              <span className={readyCount > 0 ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
+                {readyCount} ready
+              </span>
+              {needsDetailsCount > 0 && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-amber-600 font-medium">{needsDetailsCount} need title</span>
+                </>
+              )}
+            </div>
+          )}
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto min-h-0">
@@ -241,7 +255,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
               onDrop={onDrop}
               onClick={() => !anyUploading && inputRef.current?.click()}
               className={cn(
-                "border-2 border-dashed rounded-xl p-5 flex flex-col items-center justify-center text-center transition-all cursor-pointer select-none",
+                "border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center transition-all cursor-pointer select-none min-h-[150px] px-6 py-6 gap-2",
                 isDragging ? "border-primary bg-primary/5 scale-[1.01]" : "border-border hover:border-primary/50 hover:bg-muted/20",
                 anyUploading && "opacity-50 cursor-not-allowed pointer-events-none",
               )}
@@ -255,9 +269,11 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                 onChange={onChange}
                 disabled={anyUploading}
               />
-              <Upload className={cn("h-5 w-5 mb-1.5", isDragging ? "text-primary" : "text-muted-foreground")} />
-              <p className="text-sm font-medium">{files.length === 0 ? "Click to browse or drag files here" : "Add more files"}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">PDF, DOCX, DWG, XLSX, images · max {MAX_MB} MB · multiple files</p>
+              <div className={cn("rounded-full p-3 transition-colors", isDragging ? "bg-primary/15" : "bg-muted")}>
+                <Upload className={cn("h-6 w-6", isDragging ? "text-primary" : "text-muted-foreground")} />
+              </div>
+              <p className="text-sm font-semibold">{files.length === 0 ? "Click to browse or drag files here" : "Add more files"}</p>
+              <p className="text-xs text-muted-foreground">PDF, DOCX, DWG, XLSX, images · max {MAX_MB}MB per file · multiple files OK</p>
             </div>
 
             {globalError && (
@@ -268,10 +284,12 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
 
             {/* Copy-to-all hint */}
             {files.length > 1 && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <ClipboardCopy className="h-3 w-3" />
-                Use "Copy to all" on any file to apply its discipline, revision, type, status, source, and issuer to every other file.
-              </p>
+              <div className="flex items-center gap-2 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900 px-3 py-2">
+                <ClipboardCopy className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                <p className="text-xs text-blue-700 dark:text-blue-400">
+                  Use <span className="font-semibold">Copy to all</span> on any file card to apply its discipline, revision, type, status, source, and issuer to all other files at once.
+                </p>
+              </div>
             )}
 
             {/* Staged file cards */}
@@ -282,10 +300,14 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                   "border rounded-xl overflow-hidden transition-all",
                   entry.uploadStatus === "done" && "border-emerald-200 dark:border-emerald-900",
                   entry.uploadStatus === "error" && "border-destructive/40",
+                  entry.expanded && entry.uploadStatus !== "done" && "border-primary/60 ring-1 ring-primary/20",
                 )}
               >
                 {/* Card header */}
-                <div className="flex items-center gap-2 px-3 py-2.5 bg-muted/30">
+                <div className={cn(
+                  "flex items-center gap-2 px-3 py-2.5 transition-colors",
+                  entry.expanded && entry.uploadStatus !== "done" ? "bg-primary/5" : "bg-muted/30",
+                )}>
                   {entry.uploadStatus === "uploading" ? (
                     <Loader2 className="h-4 w-4 text-primary animate-spin shrink-0" />
                   ) : entry.uploadStatus === "done" ? (
@@ -308,11 +330,11 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                     {files.length > 1 && entry.uploadStatus === "pending" && (
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                        className="h-7 px-2.5 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/5 hover:text-primary hover:border-primary/60 font-medium"
                         onClick={() => copyToAll(entry.id)}
-                        title="Copy discipline, revision, type, status, source and issuer to all other files"
+                        title="Apply this file's discipline, revision, type, status, source and issuer to all other files in this upload"
                       >
                         <Copy className="h-3 w-3" /> Copy to all
                       </Button>
@@ -467,32 +489,39 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-3 border-t shrink-0 flex items-center gap-2 justify-between sm:justify-between">
-          <div className="flex items-center gap-2">
-            {allDone && (
-              <span className="text-sm text-emerald-600 flex items-center gap-1">
-                <Check className="h-3.5 w-3.5" /> All {files.length} file{files.length !== 1 ? "s" : ""} uploaded successfully
-              </span>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={handleClose} disabled={anyUploading}>
-              {allDone ? "Close" : "Cancel"}
-            </Button>
-            {!allDone && (
-              <Button
-                onClick={handleUploadAll}
-                disabled={files.length === 0 || !hasPending || anyUploading || files.some(f => f.uploadStatus === "pending" && !f.meta.title.trim())}
-              >
-                {anyUploading ? (
-                  <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Uploading…</>
-                ) : (
-                  <><Upload className="h-3.5 w-3.5 mr-1.5" />
-                    Upload{pendingCount > 0 ? ` ${pendingCount} File${pendingCount !== 1 ? "s" : ""}` : ""}
-                  </>
-                )}
+        <DialogFooter className="px-6 py-3 border-t shrink-0">
+          <div className="flex items-center justify-between gap-2 w-full">
+            <div className="flex items-center gap-2 min-w-0">
+              {allDone ? (
+                <span className="text-sm text-emerald-600 flex items-center gap-1">
+                  <Check className="h-3.5 w-3.5" /> All {files.length} file{files.length !== 1 ? "s" : ""} uploaded successfully
+                </span>
+              ) : needsDetailsCount > 0 && !anyUploading ? (
+                <span className="text-xs text-amber-600 flex items-center gap-1.5">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  {needsDetailsCount} file{needsDetailsCount !== 1 ? "s" : ""} still need{needsDetailsCount === 1 ? "s" : ""} a title — expand to fill in
+                </span>
+              ) : null}
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button variant="outline" onClick={handleClose} disabled={anyUploading}>
+                {allDone ? "Close" : "Cancel"}
               </Button>
-            )}
+              {!allDone && (
+                <Button
+                  onClick={handleUploadAll}
+                  disabled={files.length === 0 || !hasPending || anyUploading || needsDetailsCount > 0}
+                >
+                  {anyUploading ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Uploading…</>
+                  ) : (
+                    <><Upload className="h-3.5 w-3.5 mr-1.5" />
+                      Upload{pendingCount > 0 ? ` ${pendingCount} File${pendingCount !== 1 ? "s" : ""}` : ""}
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
           </div>
         </DialogFooter>
       </DialogContent>

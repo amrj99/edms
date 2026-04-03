@@ -84,7 +84,7 @@ function formatSize(bytes: number) {
 function FileDropZone({
   onUpload,
   accept = "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*,.dwg,.dxf",
-  maxSizeMb = 50,
+  maxSizeMb = 100,
   label = "Click to browse or drag file here",
   className,
   disabled,
@@ -105,7 +105,7 @@ function FileDropZone({
     if (!files.length) return;
     const valid = files.filter(f => {
       if (f.size > maxSizeMb * 1024 * 1024) {
-        setEntries(prev => [...prev, { file: f, progress: 0, status: "error", error: `Exceeds ${maxSizeMb} MB limit` }]);
+        setEntries(prev => [...prev, { file: f, progress: 0, status: "error", error: `File exceeds the ${maxSizeMb}MB limit. Please compress the file or contact your administrator.` }]);
         return false;
       }
       return true;
@@ -162,8 +162,8 @@ function FileDropZone({
         onDrop={onDrop}
         onClick={() => !disabled && !isUploading && inputRef.current?.click()}
         className={cn(
-          "border-2 border-dashed rounded-xl p-4 flex flex-col items-center justify-center text-center transition-all cursor-pointer select-none min-h-[88px]",
-          isDragging ? "border-primary bg-primary/5 scale-[1.01]" : "border-border hover:border-primary/50 hover:bg-muted/30",
+          "border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center transition-all cursor-pointer select-none min-h-[180px] px-6 py-8 gap-2",
+          isDragging ? "border-primary bg-primary/8 scale-[1.01]" : "border-border hover:border-primary/50 hover:bg-muted/30",
           (disabled || isUploading) && "opacity-50 cursor-not-allowed pointer-events-none",
         )}
       >
@@ -176,9 +176,15 @@ function FileDropZone({
           onChange={onChange}
           disabled={disabled || isUploading}
         />
-        <Upload className={cn("h-5 w-5 mb-1.5 transition-colors", isDragging ? "text-primary" : "text-muted-foreground")} />
-        <p className="font-medium text-sm">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">PDF, DOCX, DWG, XLSX, images · max {maxSizeMb} MB{multiple ? " · multiple files OK" : ""}</p>
+        <div className={cn(
+          "rounded-full p-4 transition-colors",
+          isDragging ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+        )}>
+          <Upload className={cn("h-8 w-8 transition-colors", isDragging ? "text-primary" : "text-muted-foreground")} />
+        </div>
+        <p className="font-semibold text-sm">{label}</p>
+        <p className="text-xs text-muted-foreground">PDF, DOCX, DWG, XLSX, images{multiple ? " · multiple files OK" : ""}</p>
+        <p className="text-xs text-muted-foreground/70">max {maxSizeMb}MB per file</p>
       </div>
 
       {entries.length > 0 && (

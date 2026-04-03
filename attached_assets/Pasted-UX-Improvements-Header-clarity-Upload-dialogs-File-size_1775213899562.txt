@@ -1,0 +1,28 @@
+UX Improvements — Header clarity + Upload dialogs + File size limit
+1. Header — Project context clarity
+
+The current project selector shows only the project code (e.g. "CCCCC") which is not meaningful. Change it to show full format: Project Name (Code) e.g. "Test Project (CCCCC)".
+Add a small label "Current Project" above or below the project name in the header so users always know which project they are working in.
+In the Switch Project dropdown, show each project as: Project Name — Code — Status badge.
+The organization name and project name in the header should be visually separated — use different font sizes or colors so they are clearly distinguishable.
+
+2. Upload with AI dialog — layout improvements
+
+Increase the dialog width to at least 680px and height to show all fields without scrolling.
+Make the file drop zone significantly larger — minimum 180px tall — with a clear dashed border, a large upload icon, and clear text. Add a visible color highlight when a file is dragged over it.
+Show a live preview of the selected file name and size immediately after selection.
+Group fields logically with clear section dividers: (1) File Upload, (2) Document Identity (Number, Title), (3) Classification (Discipline, Type, Status, Revision).
+
+3. Bulk Upload dialog — layout improvements
+
+Increase dialog width to at least 800px so fields are not cramped.
+Make the "Copy to all" button more prominent with a tooltip: "Apply this file's settings to all other files in this upload".
+Add a color highlight to the currently expanded file card so users know which file they are editing.
+Show a summary bar at the top: e.g. "3 files staged — 0 ready, 3 need details" that updates as fields are filled.
+Disable the "Upload X Files" button until all files have at least a Title filled in, with a clear message explaining why it is disabled.
+
+4. File size limit
+
+Keep the current file size limit as-is for now (do not increase beyond what the free Cloudflare plan supports — 100MB).
+Update all UI labels and helper text to clearly show the current limit (e.g. "max 100MB per file").
+Make sure the error message when a file exceeds the limit is clear and user-friendly: "File exceeds the 100MB limit. Please compress the file or contact your administrator."
