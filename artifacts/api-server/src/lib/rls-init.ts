@@ -28,6 +28,12 @@ const RLS_TABLES = [
   "tasks",
   "notifications",
   "rules",
+  "correspondence",
+  "transmittals",
+  "inspection_requests",
+  "ncr_records",
+  "noc_records",
+  "metadata_fields",
 ] as const;
 
 const POLICY_NAME = "org_isolation_policy";

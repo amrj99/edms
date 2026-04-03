@@ -100,6 +100,7 @@ router.post("/", requireAuth, async (req, res) => {
   const [corr] = await db.insert(correspondenceTable).values({
     subject, type,
     body: body || "",
+    organizationId: req.user!.organizationId ?? null,
     fromUserId: req.user!.id,
     projectId,
     folder: sendNow ? "sent" : "draft",
@@ -239,6 +240,7 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
     subject: subject || `Re: ...`,
     type: type || "letter",
     body: body || "",
+    organizationId: req.user!.organizationId ?? null,
     fromUserId: req.user!.id,
     projectId,
     parentId,

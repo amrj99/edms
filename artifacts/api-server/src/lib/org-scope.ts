@@ -14,6 +14,7 @@
 
 import { Request, Response, NextFunction } from "express";
 import { isSysAdmin } from "./auth.js";
+import { createAuditLog } from "./audit.js";
 
 declare global {
   namespace Express {
@@ -30,6 +31,9 @@ declare global {
  * Middleware: resolve and attach req.orgId from the authenticated user.
  * Blocks non-system-owner users who have no organization assigned.
  * Must be used after requireAuth.
+ *
+ * When a system_owner uses the orgOverride query parameter, the override is
+ * recorded in the audit log for compliance traceability.
  */
 export function requireOrgScope(req: Request, res: Response, next: NextFunction): void {
   const user = req.user;
@@ -49,6 +53,29 @@ export function requireOrgScope(req: Request, res: Response, next: NextFunction)
   }
 
   req.orgId = orgId ?? undefined;
+
+  // Audit system_owner org-override usage for compliance
+  if (user.role === "system_owner") {
+    const override = req.query.orgOverride;
+    if (override && !isNaN(Number(override))) {
+      const overrideOrgId = Number(override);
+      // Fire-and-forget — must not block the request
+      createAuditLog({
+        userId: user.id,
+        organizationId: overrideOrgId,
+        action: "system_owner_org_override",
+        entityType: "organization",
+        entityId: overrideOrgId,
+        details: {
+          path: req.path,
+          method: req.method,
+          overrideOrgId,
+          originalOrgId: user.organizationId ?? null,
+        },
+      }).catch(() => {});
+    }
+  }
+
   next();
 }
 

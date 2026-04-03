@@ -1,6 +1,7 @@
-import { pgTable, serial, text, timestamp, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, boolean, pgEnum, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { organizationsTable } from "./organizations";
 
 export const metadataFieldTypeEnum = pgEnum("metadata_field_type", [
   "text",
@@ -19,7 +20,8 @@ export const metadataAppliesToEnum = pgEnum("metadata_applies_to", [
 
 export const metadataFieldsTable = pgTable("metadata_fields", {
   id: serial("id").primaryKey(),
-  name: text("name").notNull().unique(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
+  name: text("name").notNull(),
   label: text("label").notNull(),
   fieldType: metadataFieldTypeEnum("field_type").notNull(),
   options: text("options").array(),

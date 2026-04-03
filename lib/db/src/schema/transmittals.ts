@@ -5,6 +5,7 @@ import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { documentsTable } from "./documents";
 import { approvalStatusEnum } from "./registers";
+import { organizationsTable } from "./organizations";
 
 export const transmittalStatusEnum = pgEnum("transmittal_status", [
   "draft",
@@ -19,6 +20,7 @@ export const transmittalsTable = pgTable("transmittals", {
   subject: text("subject").notNull(),
   description: text("description"),
   status: transmittalStatusEnum("status").notNull().default("draft"),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   projectId: integer("project_id").references(() => projectsTable.id).notNull(),
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
   toUserId: integer("to_user_id").references(() => usersTable.id),

@@ -1,31 +1,58 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { metadataFieldsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { requireOrgScope } from "../lib/org-scope.js";
 
 const router = Router();
 
-router.get("/", requireAuth, async (_req, res) => {
-  const fields = await db.select().from(metadataFieldsTable).orderBy(metadataFieldsTable.name);
+router.get("/", requireAuth, requireOrgScope, async (req, res) => {
+  const orgId = req.orgId;
+  const fields = await db
+    .select()
+    .from(metadataFieldsTable)
+    .where(
+      orgId
+        ? or(
+            eq(metadataFieldsTable.organizationId, orgId),
+            isNull(metadataFieldsTable.organizationId),
+          )
+        : isNull(metadataFieldsTable.organizationId),
+    )
+    .orderBy(metadataFieldsTable.name);
   res.json({ fields });
 });
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, requireOrgScope, async (req, res) => {
   const { name, label, fieldType, options, required, appliesTo } = req.body;
   if (!name || !label || !fieldType) {
     res.status(400).json({ error: "Bad Request", message: "name, label, fieldType required" });
     return;
   }
-  const [field] = await db.insert(metadataFieldsTable).values({
-    name, label, fieldType, options: options || [], required: required ?? false, appliesTo: appliesTo || "document",
-  }).returning();
+  const orgId = req.orgId ?? null;
+  const [field] = await db
+    .insert(metadataFieldsTable)
+    .values({
+      organizationId: orgId,
+      name,
+      label,
+      fieldType,
+      options: options || [],
+      required: required ?? false,
+      appliesTo: appliesTo || "document",
+    })
+    .returning();
   res.status(201).json(field);
 });
 
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, requireOrgScope, async (req, res) => {
   const id = parseInt(req.params.id);
-  await db.delete(metadataFieldsTable).where(eq(metadataFieldsTable.id, id));
+  const orgId = req.orgId;
+  const where = orgId
+    ? and(eq(metadataFieldsTable.id, id), eq(metadataFieldsTable.organizationId, orgId))
+    : eq(metadataFieldsTable.id, id);
+  await db.delete(metadataFieldsTable).where(where);
   res.status(204).send();
 });
 

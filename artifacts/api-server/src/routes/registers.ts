@@ -52,6 +52,7 @@ router.post("/inspection-requests", requireAuth, requireRole("admin", "project_m
     date: date ? new Date(date) : undefined,
     status: resolvedStatus, contractor, linkedCorrespondenceId, remarks,
     direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
+    organizationId: req.user!.organizationId ?? null,
     projectId, createdById: req.user!.id,
   }).returning();
   res.status(201).json(row);
@@ -227,6 +228,7 @@ router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager",
     status: resolvedStatus, correctiveAction,
     closeDate: closeDate ? new Date(closeDate) : undefined,
     remarks, direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
+    organizationId: req.user!.organizationId ?? null,
     projectId, createdById: req.user!.id,
   }).returning();
   res.status(201).json(row);
@@ -365,6 +367,7 @@ router.post("/noc-records", requireAuth, requireRole("admin", "project_manager",
     date: date ? new Date(date) : undefined,
     status: status ?? "pending", linkedDocumentId, remarks,
     direction: direction ?? null, partyType: partyType ?? null,
+    organizationId: req.user!.organizationId ?? null,
     projectId, createdById: req.user!.id,
   }).returning();
   res.status(201).json(row);

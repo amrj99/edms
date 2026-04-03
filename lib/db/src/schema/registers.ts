@@ -1,6 +1,7 @@
 import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
+import { organizationsTable } from "./organizations";
 
 // ─── Shared Approval Status Enum ──────────────────────────────────────────────
 export const approvalStatusEnum = pgEnum("approval_status", ["none", "pending", "approved", "rejected"]);
@@ -26,6 +27,7 @@ export const inspectionRequestsTable = pgTable("inspection_requests", {
   direction: text("direction"),
   partyType: text("party_type"),
   reviewCode: text("review_code"),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => usersTable.id),
   approvalStatus: approvalStatusEnum("approval_status").notNull().default("none"),
@@ -56,6 +58,7 @@ export const ncrRecordsTable = pgTable("ncr_records", {
   direction: text("direction"),
   partyType: text("party_type"),
   reviewCode: text("review_code"),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => usersTable.id),
   approvalStatus: approvalStatusEnum("approval_status").notNull().default("none"),
@@ -80,6 +83,7 @@ export const nocRecordsTable = pgTable("noc_records", {
   remarks: text("remarks"),
   direction: text("direction"),
   partyType: text("party_type"),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   projectId: integer("project_id").notNull().references(() => projectsTable.id, { onDelete: "cascade" }),
   createdById: integer("created_by_id").notNull().references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),

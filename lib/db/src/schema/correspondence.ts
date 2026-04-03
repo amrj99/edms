@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
+import { organizationsTable } from "./organizations";
 
 export const correspondenceTypeEnum = pgEnum("correspondence_type", [
   "transmittal",
@@ -46,6 +47,7 @@ export const correspondenceTable = pgTable("correspondence", {
   type: correspondenceTypeEnum("type").notNull(),
   folder: correspondenceFolderEnum("folder").notNull().default("draft"),
   body: text("body"),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   fromUserId: integer("from_user_id").references(() => usersTable.id).notNull(),
   projectId: integer("project_id").references(() => projectsTable.id),
   parentId: integer("parent_id"),
