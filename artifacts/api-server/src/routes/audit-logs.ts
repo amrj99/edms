@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { auditLogsTable, usersTable, projectsTable } from "@workspace/db";
-import { eq, and, desc, gte, lte, ilike, or, inArray, count, type SQL } from "drizzle-orm";
+import { eq, and, desc, gte, lte, ilike, or, isNull, count, type SQL } from "drizzle-orm";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 
 const router = Router();
@@ -10,33 +10,58 @@ const AUDIT_ROLES = ["system_owner", "admin", "project_manager", "document_contr
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Safely extract a string query-param value. */
 function qstr(val: unknown): string | undefined {
   return typeof val === "string" && val !== "" ? val : undefined;
 }
 
-/** Build a WHERE condition that scopes audit logs to a single organization. */
+/**
+ * Build an org-scoping WHERE condition for audit logs.
+ *
+ * Strategy:
+ *   New rows (post-migration): filtered by the direct organization_id column — O(1) index hit.
+ *   Legacy rows (pre-migration, organization_id IS NULL): filtered by user/project membership
+ *   to avoid showing another org's historical data.
+ *
+ * Both conditions are OR-combined so no rows are silently dropped during the transition.
+ */
 async function buildOrgCondition(organizationId: number): Promise<SQL<unknown>> {
   const [orgUsers, orgProjects] = await Promise.all([
-    db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.organizationId, organizationId)),
-    db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, organizationId)),
+    db.select({ id: usersTable.id }).from(usersTable)
+      .where(eq(usersTable.organizationId, organizationId)),
+    db.select({ id: projectsTable.id }).from(projectsTable)
+      .where(eq(projectsTable.organizationId, organizationId)),
   ]);
 
   const userIds = orgUsers.map(u => u.id);
   const projectIds = orgProjects.map(p => p.id);
 
-  const clauses: SQL<unknown>[] = [];
-  if (userIds.length > 0) clauses.push(inArray(auditLogsTable.userId, userIds));
-  if (projectIds.length > 0) clauses.push(inArray(auditLogsTable.projectId, projectIds));
+  // Direct org column match (new rows) — fast, indexed
+  const directMatch = eq(auditLogsTable.organizationId, organizationId);
 
-  // If the org has no users and no projects, return a condition that matches nothing.
-  if (clauses.length === 0) return eq(auditLogsTable.id, -1);
+  // Legacy fallback (rows written before org_id was added)
+  const legacyClauses: SQL<unknown>[] = [isNull(auditLogsTable.organizationId)];
+  if (userIds.length > 0) {
+    const { inArray } = await import("drizzle-orm");
+    legacyClauses.push(inArray(auditLogsTable.userId, userIds) as SQL<unknown>);
+  }
+  if (projectIds.length > 0) {
+    const { inArray } = await import("drizzle-orm");
+    legacyClauses.push(inArray(auditLogsTable.projectId, projectIds) as SQL<unknown>);
+  }
 
-  const [first, ...rest] = clauses;
-  return rest.length > 0 ? (or(first, ...rest) as SQL<unknown>) : first;
+  const hasLegacyScope = legacyClauses.length > 1; // more than just isNull
+
+  if (!hasLegacyScope) {
+    // Org has no users/projects yet — only match direct org_id rows
+    return directMatch;
+  }
+
+  const [nullCheck, ...memberChecks] = legacyClauses;
+  const legacyMatch = and(nullCheck, or(...memberChecks) as SQL<unknown>) as SQL<unknown>;
+
+  return or(directMatch, legacyMatch) as SQL<unknown>;
 }
 
-/** Combine an array of conditions with AND, returning undefined when empty. */
 function buildWhere(conditions: SQL<unknown>[]): SQL<unknown> | undefined {
   if (conditions.length === 0) return undefined;
   const [first, ...rest] = conditions;
@@ -62,7 +87,11 @@ router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
 
   const currentUser = req.user!;
   if (!isSysAdmin(currentUser)) {
-    conditions.push(await buildOrgCondition(currentUser.organizationId!));
+    if (!currentUser.organizationId) {
+      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+      return;
+    }
+    conditions.push(await buildOrgCondition(currentUser.organizationId));
   }
   if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
   if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
@@ -138,7 +167,11 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
 
   const currentUser = req.user!;
   if (!isSysAdmin(currentUser)) {
-    conditions.push(await buildOrgCondition(currentUser.organizationId!));
+    if (!currentUser.organizationId) {
+      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+      return;
+    }
+    conditions.push(await buildOrgCondition(currentUser.organizationId));
   }
   if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
   if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
@@ -156,7 +189,7 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
       or(
         ilike(auditLogsTable.entityTitle, q),
         ilike(auditLogsTable.action, q),
-        ilike(auditLogsTable.entityType, q)
+        ilike(auditLogsTable.entityType, q),
       ) as SQL<unknown>
     );
   }
@@ -210,7 +243,11 @@ router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res)
 
   const currentUser = req.user!;
   if (!isSysAdmin(currentUser)) {
-    conditions.push(await buildOrgCondition(currentUser.organizationId!));
+    if (!currentUser.organizationId) {
+      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+      return;
+    }
+    conditions.push(await buildOrgCondition(currentUser.organizationId));
   }
   if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
   if (entityType && entityType !== "_all" && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType));

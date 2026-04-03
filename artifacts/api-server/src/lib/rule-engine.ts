@@ -89,6 +89,7 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
                 status: "pending",
                 priority: "medium",
                 projectId: ctx.projectId,
+                organizationId: ctx.orgId,
                 assignedToId: userId,
                 createdById: ctx.triggeredByUserId,
                 sourceType: "manual",

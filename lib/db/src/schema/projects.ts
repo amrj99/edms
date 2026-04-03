@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
@@ -23,7 +23,10 @@ export const projectsTable = pgTable("projects", {
   organizationId: integer("organization_id").references(() => organizationsTable.id).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_projects_organization_id").on(t.organizationId),
+  index("idx_projects_status").on(t.status),
+]);
 
 export const projectMembersTable = pgTable("project_members", {
   id: serial("id").primaryKey(),
@@ -31,7 +34,10 @@ export const projectMembersTable = pgTable("project_members", {
   userId: integer("user_id").references(() => usersTable.id).notNull(),
   role: userRoleEnum("role").notNull().default("viewer"),
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_project_members_project_id").on(t.projectId),
+  index("idx_project_members_user_id").on(t.userId),
+]);
 
 export const packagesTable = pgTable("packages", {
   id: serial("id").primaryKey(),

@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { tasksTable, usersTable, projectsTable, notificationsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull, or } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireOrgScope } from "../lib/org-scope.js";
 import { sendTaskAssignedEmail } from "../lib/email.js";
 import { emitToUser } from "../lib/socket.js";
 
@@ -23,18 +24,45 @@ async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[]) {
   }));
 }
 
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, requireOrgScope, async (req, res) => {
   const user = req.user!;
   const { projectId, status, assignedToMe } = req.query;
 
-  let tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt));
-
+  // Build a scoped query using the direct organization_id column when available,
+  // with a fallback to project membership for legacy rows (null organization_id).
+  let tasks;
   if (!isSysAdmin(user) && user.organizationId) {
+    const orgId = user.organizationId;
+
+    // Legacy rows have no organization_id — scope them via project membership
     const orgProjects = await db.select({ id: projectsTable.id })
       .from(projectsTable)
-      .where(eq(projectsTable.organizationId, user.organizationId));
-    const orgProjectIds = new Set(orgProjects.map(p => p.id));
-    tasks = tasks.filter(t => !t.projectId || orgProjectIds.has(t.projectId));
+      .where(eq(projectsTable.organizationId, orgId));
+    const orgProjectIds = orgProjects.map(p => p.id);
+
+    tasks = await db.select().from(tasksTable)
+      .where(
+        or(
+          // New rows: direct org column
+          eq(tasksTable.organizationId, orgId),
+          // Legacy rows: scoped by project
+          and(
+            isNull(tasksTable.organizationId),
+            orgProjectIds.length > 0
+              ? (await import("drizzle-orm")).inArray(tasksTable.projectId, orgProjectIds)
+              : eq(tasksTable.id, -1),
+          ),
+          // Tasks with no project and no org (personal tasks created by this user)
+          and(
+            isNull(tasksTable.organizationId),
+            isNull(tasksTable.projectId),
+            eq(tasksTable.createdById, user.id),
+          ),
+        )
+      )
+      .orderBy(desc(tasksTable.updatedAt));
+  } else {
+    tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt));
   }
 
   if (projectId) tasks = tasks.filter(t => t.projectId === parseInt(projectId as string));
@@ -45,7 +73,7 @@ router.get("/", requireAuth, async (req, res) => {
   res.json({ tasks: enriched, total: enriched.length });
 });
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, requireOrgScope, async (req, res) => {
   const { title, description, priority, assignedToId, projectId, dueDate } = req.body;
   const effectiveAssignedToId = assignedToId || req.user!.id;
   const [task] = await db.insert(tasksTable).values({
@@ -53,6 +81,7 @@ router.post("/", requireAuth, async (req, res) => {
     assignedToId: effectiveAssignedToId,
     createdById: req.user!.id,
     projectId: projectId || null,
+    organizationId: req.user!.organizationId ?? null,
     dueDate: dueDate ? new Date(dueDate) : undefined,
     sourceType: "manual",
   }).returning();

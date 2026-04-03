@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, jsonb, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
@@ -33,7 +33,10 @@ export const rulesTable = pgTable("rules", {
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_rules_organization_id").on(t.organizationId),
+  index("idx_rules_is_enabled").on(t.isEnabled),
+]);
 
 export const insertRuleSchema = createInsertSchema(rulesTable).omit({
   id: true,

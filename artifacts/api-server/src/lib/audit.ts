@@ -3,6 +3,7 @@ import { auditLogsTable } from "@workspace/db";
 
 export async function createAuditLog(params: {
   userId?: number;
+  organizationId?: number;
   action: string;
   entityType: string;
   entityId: number;
@@ -13,6 +14,7 @@ export async function createAuditLog(params: {
   try {
     await db.insert(auditLogsTable).values({
       userId: params.userId,
+      organizationId: params.organizationId,
       action: params.action,
       entityType: params.entityType,
       entityId: params.entityId,

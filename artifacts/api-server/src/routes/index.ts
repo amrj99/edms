@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { requireOrgScope } from "../lib/org-scope.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
 import aiRouter from "./ai.js";
@@ -38,6 +39,17 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
+router.use("/public/share", publicShareRouter);
+
+// ── Tenant isolation: inject req.orgId for all authenticated protected routes ──
+// Routes below this middleware are guaranteed to have req.user set (via requireAuth
+// in each route) and req.orgId populated. system_owner users without an assigned
+// org may still proceed — they span all tenants by design.
+router.use((req, _res, next) => {
+  if (req.user) requireOrgScope(req, _res, next);
+  else next();
+});
+
 router.use("/organizations", organizationsRouter);
 router.use("/users", usersRouter);
 router.use("/projects", projectsRouter);
@@ -57,7 +69,6 @@ router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
 router.use("/storage", storageRouter);
 router.use("/admin", adminRouter);
-router.use("/public/share", publicShareRouter);
 router.use("/documents", globalDocumentsRouter);
 router.use("/projects/:projectId", registersRouter);
 router.use("/projects/:projectId", deliverablesRouter);
