@@ -62,10 +62,12 @@ router.get("/:id", async (req, res) => {
       revision: transmittalItemsTable.revision,
       copies: transmittalItemsTable.copies,
       purpose: transmittalItemsTable.purpose,
+      reviewCode: transmittalItemsTable.reviewCode,
       documentNumber: documentsTable.documentNumber,
       documentTitle: documentsTable.title,
       documentType: documentsTable.documentType,
       discipline: documentsTable.discipline,
+      documentStatus: documentsTable.status,
     })
     .from(transmittalItemsTable)
     .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
@@ -280,6 +282,18 @@ router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "doc
   const itemId = parseInt(req.params.itemId);
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
   res.json({ success: true });
+});
+
+// Set per-item review code
+router.patch("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller", "reviewer"), async (req, res) => {
+  const itemId = parseInt(req.params.itemId);
+  const { reviewCode } = req.body;
+  const [updated] = await db.update(transmittalItemsTable)
+    .set({ reviewCode: reviewCode ?? null })
+    .where(eq(transmittalItemsTable.id, itemId))
+    .returning();
+  if (!updated) { res.status(404).json({ error: "Item not found" }); return; }
+  res.json(updated);
 });
 
 // Create / update share link

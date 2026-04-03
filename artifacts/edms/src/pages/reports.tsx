@@ -1013,6 +1013,91 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
   );
 }
 
+// ─── Transmittal Document List ────────────────────────────────────────────────
+function TransmittalDocumentList({ transmittalId, projectId }: { transmittalId: number; projectId: string | number }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["trs-detail", transmittalId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
+  const items: any[] = data?.items ?? [];
+
+  const setItemReviewCode = async (itemId: number, reviewCode: string | null) => {
+    await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/items/${itemId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewCode }),
+    });
+    qc.invalidateQueries({ queryKey: ["trs-detail", transmittalId] });
+  };
+
+  const docStatusColor: Record<string, string> = {
+    approved: "text-green-700",
+    in_review: "text-amber-700",
+    draft: "text-muted-foreground",
+    rejected: "text-red-700",
+    superseded: "text-muted-foreground",
+    issued: "text-blue-700",
+  };
+
+  return (
+    <div className="border-t mt-4 pt-4 space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+        Documents Transmitted
+        <span className="ml-2 font-normal normal-case text-muted-foreground">({items.length})</span>
+      </p>
+      {isLoading ? (
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      ) : items.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">No documents attached to this transmittal.</p>
+      ) : (
+        <div className="rounded-md border overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-muted/40 border-b">
+                <th className="text-left px-2 py-1.5 font-medium text-muted-foreground whitespace-nowrap">Doc No</th>
+                <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">Title</th>
+                <th className="text-left px-2 py-1.5 font-medium text-muted-foreground whitespace-nowrap">Rev</th>
+                <th className="text-left px-2 py-1.5 font-medium text-muted-foreground whitespace-nowrap">Review Code</th>
+                <th className="text-left px-2 py-1.5 font-medium text-muted-foreground whitespace-nowrap">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item: any, idx: number) => (
+                <tr key={item.id} className={`border-b last:border-b-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                  <td className="px-2 py-1.5 font-mono text-primary whitespace-nowrap">{item.documentNumber || "—"}</td>
+                  <td className="px-2 py-1.5 max-w-[160px] truncate" title={item.documentTitle}>{item.documentTitle || "—"}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">{item.revision || "—"}</td>
+                  <td className="px-2 py-1.5 whitespace-nowrap">
+                    <select
+                      value={item.reviewCode ?? ""}
+                      onChange={e => setItemReviewCode(item.id, e.target.value || null)}
+                      className="text-xs border rounded px-1 py-0.5 bg-background cursor-pointer"
+                    >
+                      <option value="">—</option>
+                      <option value="A">A – Approved</option>
+                      <option value="B">B – Approved w/ Comments</option>
+                      <option value="C">C – Revise & Resubmit</option>
+                      <option value="D">D – Rejected</option>
+                    </select>
+                  </td>
+                  <td className={`px-2 py-1.5 whitespace-nowrap capitalize ${docStatusColor[item.documentStatus ?? ""] ?? "text-muted-foreground"}`}>
+                    {item.documentStatus?.replace(/_/g, " ") ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Transmittal History Panel ────────────────────────────────────────────────
 function TransmittalHistoryPanel({ transmittalId, projectId }: { transmittalId: number; projectId: string | number }) {
   const { data, isLoading } = useQuery({
@@ -1163,6 +1248,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
               queryKey={["rpt-trans", filters.projectId]}
               onRecordUpdated={setDetailItem}
             />
+            <TransmittalDocumentList transmittalId={detailItem.id} projectId={filters.projectId} />
             <TransmittalHistoryPanel transmittalId={detailItem.id} projectId={filters.projectId} />
           </>
         )}

@@ -57,6 +57,7 @@ export const transmittalItemsTable = pgTable("transmittal_items", {
   revision: text("revision"),
   copies: integer("copies").default(1),
   purpose: text("purpose"),
+  reviewCode: text("review_code"),
   addedAt: timestamp("added_at").defaultNow().notNull(),
 });
 
