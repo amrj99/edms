@@ -16,6 +16,7 @@ export const organizationsTable = pgTable("organizations", {
   contactEmail: text("contact_email"),
   contactPhone: text("contact_phone"),
   address: text("address"),
+  subscriptionTier: text("subscription_tier").default("free"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
