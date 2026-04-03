@@ -30,7 +30,7 @@ export const aiCacheTable = pgTable("ai_cache", {
   entityId: integer("entity_id").notNull(),
   analysisType: text("analysis_type").notNull(),
   result: jsonb("result").notNull(),
-  model: text("model").notNull().default("gpt-5-mini"),
+  model: text("model").notNull().default("gpt-4o-mini"),
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [

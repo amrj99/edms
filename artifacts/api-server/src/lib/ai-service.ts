@@ -5,8 +5,8 @@
  */
 import OpenAI from "openai";
 import { db } from "@workspace/db";
-import { aiCacheTable, aiLogsTable, aiSettingsTable, systemSettingsTable } from "@workspace/db";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { aiCacheTable, aiLogsTable, aiSettingsTable, systemSettingsTable, orgConfigTable } from "@workspace/db";
+import { and, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -133,6 +133,83 @@ export function getProviderStatus() {
       envVarsRequired: [],
     },
   };
+}
+
+// ─── Subscription tier definitions ──────────────────────────────────────────
+
+export const SUBSCRIPTION_TIERS = {
+  free:         { aiProvider: "none",   aiModel: null,          aiDailyLimit: 0 },
+  basic:        { aiProvider: "groq",   aiModel: null,          aiDailyLimit: 30 },
+  professional: { aiProvider: "openai", aiModel: "gpt-4o-mini", aiDailyLimit: 500 },
+  enterprise:   { aiProvider: "openai", aiModel: "gpt-4o",      aiDailyLimit: 0 },
+} as const;
+
+export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
+
+// ─── Per-org AI quota ─────────────────────────────────────────────────────────
+
+export interface OrgAiQuota {
+  provider: string | null;   // org-level override or null (inherits global)
+  model: string | null;      // org-level model override or null
+  dailyLimit: number;        // 0 = unlimited
+  usedToday: number;         // successful AI calls since 00:00 UTC today
+  remaining: number | null;  // null = unlimited; otherwise dailyLimit - usedToday
+}
+
+export async function getOrgAiQuota(organizationId: number): Promise<OrgAiQuota> {
+  const [cfg] = await db
+    .select({ aiProvider: orgConfigTable.aiProvider, aiModel: orgConfigTable.aiModel, aiDailyLimit: orgConfigTable.aiDailyLimit })
+    .from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, organizationId));
+
+  const provider   = cfg?.aiProvider   ?? null;
+  const model      = cfg?.aiModel      ?? null;
+  const dailyLimit = cfg?.aiDailyLimit ?? 0;
+
+  // Count successful AI calls for this org since 00:00 UTC today
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
+
+  const [countRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(aiLogsTable)
+    .where(and(
+      eq(aiLogsTable.organizationId, organizationId),
+      eq(aiLogsTable.success, true),
+      gte(aiLogsTable.createdAt, todayUtc),
+    ));
+
+  const usedToday = Number(countRow?.count ?? 0);
+  const remaining = dailyLimit > 0 ? Math.max(0, dailyLimit - usedToday) : null;
+
+  return { provider, model, dailyLimit, usedToday, remaining };
+}
+
+// ─── Build a one-shot AI client for a specific provider (no global cache) ────
+
+async function buildProviderClient(provider: string): Promise<OpenAI | null> {
+  if (provider === "groq") {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      logger.warn("Org uses groq provider but GROQ_API_KEY is not set");
+      return null;
+    }
+    return new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
+  }
+  if (provider === "openai") {
+    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!baseURL || !apiKey) {
+      logger.warn("Org uses openai provider but Replit OpenAI integration is not configured");
+      return null;
+    }
+    return new OpenAI({ apiKey, baseURL });
+  }
+  if (provider === "ollama") {
+    const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
+    return new OpenAI({ apiKey: "ollama", baseURL });
+  }
+  return null;
 }
 
 // ─── Cache helpers ───────────────────────────────────────────────────────────
@@ -709,14 +786,70 @@ export async function classifyItem(input: {
   if (classificationEnabled === "false") return null;
 
   // Gate 2: Per-organization module toggle.
-  // The module name mirrors the on-demand AI route: "documents" or "correspondence".
   if (input.organizationId) {
     const module = input.type === "document" ? "documents" : "correspondence";
     const orgEnabled = await isModuleEnabled(module, input.organizationId);
     if (!orgEnabled) return null;
   }
 
-  // Gate 3: Provider must not be "none".
+  // Gate 2.5: Per-org daily quota check.
+  // Count today's successful AI log entries for this org; block if limit is hit.
+  if (input.organizationId) {
+    const quota = await getOrgAiQuota(input.organizationId);
+    if (quota.dailyLimit > 0 && quota.usedToday >= quota.dailyLimit) {
+      logger.warn(
+        { organizationId: input.organizationId, usedToday: quota.usedToday, dailyLimit: quota.dailyLimit },
+        "classifyItem skipped — org AI daily quota reached",
+      );
+      return null;
+    }
+
+    // Gate 2.6: Org-level AI provider override.
+    // If the org has an explicit provider configured, use it (or skip if "none").
+    if (quota.provider !== null) {
+      if (quota.provider === "none") return null;
+
+      // Build a one-shot client for the org's provider
+      const orgClient = await buildProviderClient(quota.provider);
+      if (!orgClient) return null; // provider not configured — fail gracefully
+
+      // Resolve the model: org override → provider default
+      const providerDefaults: Record<string, string> = {
+        openai: "gpt-4o-mini",
+        groq:   "llama-3.1-8b-instant",
+        ollama: "llama3.2",
+      };
+      const model = quota.model ?? providerDefaults[quota.provider] ?? "gpt-4o-mini";
+
+      const context = input.type === "document"
+        ? `Document: "${input.title ?? ""}" | Type: ${input.documentType ?? "unknown"} | Discipline: ${input.discipline ?? "unknown"}`
+        : `Correspondence subject: "${input.subject ?? ""}" | Body preview: ${(input.body ?? "").slice(0, 200)}`;
+
+      try {
+        const response = await orgClient.chat.completions.create({
+          model,
+          max_completion_tokens: 512,
+          messages: [
+            { role: "system", content: "You are an engineering document classification AI. Classify documents concisely." },
+            {
+              role: "user",
+              content: `Classify this engineering document/correspondence for an EDMS system.\n${context}\n\nRespond with JSON only: {"category": "<one of: Drawing|Report|Procedure|Specification|Letter|Memo|RFI|NCR|Other>", "tags": ["<tag1>","<tag2>"], "priority": "<low|medium|high|critical>"}`,
+            },
+          ],
+          ...(quota.provider !== "groq" ? { response_format: { type: "json_object" } } : {}),
+        });
+        const content = response.choices[0]?.message?.content ?? "{}";
+        const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/```\s*([\s\S]*?)```/);
+        const jsonStr  = jsonMatch ? jsonMatch[1].trim() : content.trim();
+        return JSON.parse(jsonStr) as ClassificationResult;
+      } catch (err) {
+        logger.warn({ err, provider: quota.provider }, "Org-level classifyItem call failed");
+        return null;
+      }
+    }
+  }
+
+  // Gate 3: Global provider must not be "none".
   const { provider } = await getAIProviderConfig();
   if (provider === "none") return null;
 

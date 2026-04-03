@@ -9,6 +9,7 @@ import {
 } from "@workspace/db";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
+import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
 
 const router = Router();
@@ -505,6 +506,83 @@ router.put("/ai-classification", requireRole("admin", "system_owner"), async (re
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── AI Quota: per-org daily usage ─────────────────────────────────────────────
+
+// GET /api/admin/ai-quota — sysadmin: quota for all orgs; org admin: own org only
+router.get("/ai-quota", requireAuth, async (req, res) => {
+  try {
+    const user = req.user!;
+
+    if (isSysAdmin(user)) {
+      // Return quota summary for every org that has an org_config row
+      const configs = await db
+        .select({
+          organizationId: orgConfigTable.organizationId,
+          subscriptionTier: orgConfigTable.subscriptionTier,
+          aiProvider: orgConfigTable.aiProvider,
+          aiModel: orgConfigTable.aiModel,
+          aiDailyLimit: orgConfigTable.aiDailyLimit,
+        })
+        .from(orgConfigTable);
+
+      const quotas = await Promise.all(
+        configs.map(async (cfg) => ({
+          organizationId: cfg.organizationId,
+          subscriptionTier: cfg.subscriptionTier,
+          quota: await getOrgAiQuota(cfg.organizationId),
+        }))
+      );
+      return res.json({ quotas });
+    }
+
+    // Non-sysadmin: own org only
+    if (!user.organizationId) return res.status(403).json({ error: "No organization" });
+    const quota = await getOrgAiQuota(user.organizationId);
+    return res.json({ organizationId: user.organizationId, quota });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Subscription tier — preset AI config bundles ─────────────────────────────
+
+// PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (sysadmin only)
+router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
+  if (!isSysAdmin(req.user!)) return res.status(403).json({ error: "System owner access required" });
+
+  const orgId = parseInt(req.params.orgId);
+  const { tier } = req.body as { tier: SubscriptionTier };
+
+  if (!tier || !(tier in SUBSCRIPTION_TIERS)) {
+    return res.status(400).json({
+      error: "Invalid tier",
+      validTiers: Object.keys(SUBSCRIPTION_TIERS),
+      tiers: SUBSCRIPTION_TIERS,
+    });
+  }
+
+  const preset = SUBSCRIPTION_TIERS[tier];
+
+  const existing = await db.select().from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
+
+  const update = {
+    subscriptionTier: tier,
+    aiProvider:   preset.aiProvider,
+    aiModel:      preset.aiModel,
+    aiDailyLimit: preset.aiDailyLimit,
+    updatedAt:    new Date(),
+  };
+
+  if (existing.length === 0) {
+    await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
+  } else {
+    await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
+  }
+
+  res.json({ organizationId: orgId, tier, applied: preset });
 });
 
 export default router;

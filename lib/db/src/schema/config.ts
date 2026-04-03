@@ -45,18 +45,29 @@ export const orgConfigTable = pgTable("org_config", {
   primaryColor: text("primary_color").default("#2563eb"),
   storageQuotaMb: integer("storage_quota_mb").default(10240),
   storagePath: text("storage_path"),
-  storageType: text("storage_type").default("cloud"), // 'cloud' | 'onpremise'
+  storageType: text("storage_type").default("cloud"), // 'cloud' | 'onpremise' | 's3'
   s3Endpoint: text("s3_endpoint"),
   s3Bucket: text("s3_bucket"),
   s3Region: text("s3_region"),
-  s3AccessKey: text("s3_access_key"),
-  s3SecretKey: text("s3_secret_key"),
+  s3AccessKey: text("s3_access_key"),   // stored encrypted — see lib/encryption.ts
+  s3SecretKey: text("s3_secret_key"),   // stored encrypted — see lib/encryption.ts
   modules: jsonb("modules").notNull().default({
     dashboard: true,
     deliverables: true,
     registers: true,
     notifications: true,
   }),
+  // ─── Subscription / AI tier ──────────────────────────────────────────────
+  // tier: "free" | "basic" | "professional" | "enterprise"
+  // Applying a tier via PUT /api/admin/ai-tier/:orgId populates the three fields below.
+  subscriptionTier: text("subscription_tier").default("free"),
+  // Per-org AI provider override. null = inherit global system setting.
+  // Values: "none" | "groq" | "openai"
+  aiProvider: text("ai_provider"),
+  // Model override, e.g. "gpt-4o-mini", "gpt-4o". null = use provider default.
+  aiModel: text("ai_model"),
+  // Max AI calls per calendar day (UTC). 0 = unlimited.
+  aiDailyLimit: integer("ai_daily_limit").default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

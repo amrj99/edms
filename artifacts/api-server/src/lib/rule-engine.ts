@@ -12,10 +12,12 @@
  *   1. All enabled rules whose appliesTo matches the context type are fetched.
  *   2. Each rule's conditions are AND-checked against the context.
  *   3. Matching rules execute their actions in priority order.
+ *
+ * Every rule execution is logged to rule_execution_logs for full auditability.
  */
 
 import { db } from "@workspace/db";
-import { rulesTable, notificationsTable, tasksTable, usersTable } from "@workspace/db";
+import { rulesTable, ruleExecutionLogsTable, notificationsTable, tasksTable, usersTable } from "@workspace/db";
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { emitToUser } from "./socket.js";
 import { logger } from "./logger.js";
@@ -72,8 +74,11 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
     const results: RuleActionResult[] = [];
 
     for (const rule of matchingRules) {
+      const ruleStart = Date.now();
       const actions = (rule.actions as Record<string, unknown>[]) ?? [];
       const executedActions: string[] = [];
+      let ruleSuccess = true;
+      let ruleErrorMsg: string | null = null;
 
       for (const action of actions) {
         try {
@@ -120,7 +125,7 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
               }
             }
           } else if (actionType === "assign_team") {
-            // Team assignment — store as a note for now; teams can be extended later
+            // Team assignment — stored as a note; teams can be extended later
             const teamName = String(config.teamName ?? config.teamId ?? "");
             executedActions.push(`assign_team:${teamName}`);
           } else if (actionType === "send_notification") {
@@ -131,7 +136,6 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
 
             if (rawUserIds.length > 0) {
               // Validate every listed userId belongs to the same organization as the rule.
-              // This prevents a misconfigured rule from notifying users in foreign tenants.
               const validUsers = await db
                 .select({ id: usersTable.id })
                 .from(usersTable)
@@ -174,9 +178,26 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
             }
           }
         } catch (actionErr) {
+          ruleSuccess = false;
+          ruleErrorMsg = String(actionErr);
           logger.warn({ err: actionErr, ruleId: rule.id, action }, "Rule action failed");
         }
       }
+
+      // ── Log this rule's execution ────────────────────────────────────────────
+      const durationMs = Date.now() - ruleStart;
+      await db.insert(ruleExecutionLogsTable).values({
+        ruleId: rule.id,
+        organizationId: ctx.orgId,
+        entityType: ctx.type,
+        entityId: ctx.entityId ?? null,
+        actionsTaken: executedActions,
+        success: ruleSuccess,
+        errorMessage: ruleErrorMsg,
+        durationMs,
+      }).catch((logErr) => {
+        logger.warn({ err: logErr, ruleId: rule.id }, "Failed to write rule execution log");
+      });
 
       if (executedActions.length > 0) {
         results.push({ ruleId: rule.id, ruleName: rule.name, actions: executedActions });

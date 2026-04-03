@@ -45,6 +45,25 @@ export const rulesTable = pgTable("rules", {
   index("idx_rules_is_enabled").on(t.isEnabled),
 ]);
 
+// ─── Rule Execution Logs — per-rule audit trail ────────────────────────────────
+
+export const ruleExecutionLogsTable = pgTable("rule_execution_logs", {
+  id: serial("id").primaryKey(),
+  ruleId: integer("rule_id").references(() => rulesTable.id).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id).notNull(),
+  entityType: text("entity_type").notNull(),        // "document" | "correspondence"
+  entityId: integer("entity_id"),                   // id of the triggering entity
+  actionsTaken: jsonb("actions_taken").notNull().default([]), // ["assign_user:5", "send_notification:3,7"]
+  success: boolean("success").notNull().default(true),
+  errorMessage: text("error_message"),
+  durationMs: integer("duration_ms"),
+  executedAt: timestamp("executed_at").defaultNow().notNull(),
+}, (t) => [
+  index("idx_rule_exec_logs_rule_id").on(t.ruleId),
+  index("idx_rule_exec_logs_organization_id").on(t.organizationId),
+  index("idx_rule_exec_logs_executed_at").on(t.executedAt),
+]);
+
 export const insertRuleSchema = createInsertSchema(rulesTable).omit({
   id: true,
   createdAt: true,
@@ -53,3 +72,4 @@ export const insertRuleSchema = createInsertSchema(rulesTable).omit({
 
 export type Rule = typeof rulesTable.$inferSelect;
 export type InsertRule = z.infer<typeof insertRuleSchema>;
+export type RuleExecutionLog = typeof ruleExecutionLogsTable.$inferSelect;

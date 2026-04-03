@@ -45,7 +45,8 @@
     "openai": "^6.27.0",
     "pino": "^9",
     "pino-http": "^10",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
