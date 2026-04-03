@@ -734,6 +734,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const { modules } = useModules();
   const { isRtl } = useI18n();
+  const { activeOrgId } = useOrgContext();
 
   // Establish WebSocket connection for real-time updates (notifications, chat)
   useRealtime();
@@ -764,7 +765,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <div className="hidden md:block">
                 <AICommandAssistant />
               </div>
-              {user?.organizationName && (
+              {user?.organizationName && !activeOrgId && (
                 <div className="hidden lg:flex flex-col items-end max-w-[160px] shrink-0">
                   <span className="text-[10px] text-muted-foreground/70 leading-none">Organization</span>
                   <span className="text-xs font-semibold text-foreground truncate leading-tight mt-0.5">{user.organizationName}</span>
