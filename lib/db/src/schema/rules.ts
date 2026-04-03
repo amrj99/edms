@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, jsonb, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, jsonb, boolean, index, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { organizationsTable } from "./organizations";
@@ -18,6 +18,13 @@ import { usersTable } from "./users";
  *
  * appliesTo: "document" | "correspondence" | "both"
  */
+
+export const ruleAppliesToEnum = pgEnum("rule_applies_to", [
+  "document",
+  "correspondence",
+  "both",
+]);
+
 export const rulesTable = pgTable("rules", {
   id: serial("id").primaryKey(),
   organizationId: integer("organization_id").references(() => organizationsTable.id).notNull(),
@@ -25,7 +32,7 @@ export const rulesTable = pgTable("rules", {
   description: text("description"),
   priority: integer("priority").notNull().default(0),
   isEnabled: boolean("is_enabled").notNull().default(true),
-  appliesTo: text("applies_to").notNull().default("both"), // "document" | "correspondence" | "both"
+  appliesTo: ruleAppliesToEnum("applies_to").notNull().default("both"),
   conditions: jsonb("conditions").notNull().default({}),
   // { documentType?, discipline?, projectId?, subjectContains?, senderUserId? }
   actions: jsonb("actions").notNull().default([]),

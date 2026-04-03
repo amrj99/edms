@@ -6,7 +6,7 @@
 import OpenAI from "openai";
 import { db } from "@workspace/db";
 import { aiCacheTable, aiLogsTable, aiSettingsTable, systemSettingsTable } from "@workspace/db";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -137,13 +137,22 @@ export function getProviderStatus() {
 
 // ─── Cache helpers ───────────────────────────────────────────────────────────
 
-async function getCache(entityType: string, entityId: number, analysisType: string) {
+async function getCache(
+  entityType: string,
+  entityId: number,
+  analysisType: string,
+  organizationId?: number | null,
+) {
   const rows = await db.select().from(aiCacheTable).where(
     and(
       eq(aiCacheTable.entityType, entityType),
       eq(aiCacheTable.entityId, entityId),
       eq(aiCacheTable.analysisType, analysisType),
       gt(aiCacheTable.expiresAt, new Date()),
+      // Org-scoped lookup: if orgId provided match it; otherwise allow any (system entries)
+      organizationId != null
+        ? eq(aiCacheTable.organizationId, organizationId)
+        : undefined,
     )
   ).limit(1);
   return rows[0]?.result ?? null;
@@ -155,17 +164,36 @@ async function setCache(
   analysisType: string,
   result: unknown,
   model: string,
+  organizationId?: number | null,
 ) {
   const expiresAt = new Date(Date.now() + CACHE_TTL_MS);
-  await db.insert(aiCacheTable).values({
-    entityType, entityId, analysisType, result: result as any, model, expiresAt,
-  }).onConflictDoUpdate({
-    target: [aiCacheTable.entityType, aiCacheTable.entityId, aiCacheTable.analysisType],
-    set: { result: result as any, model, expiresAt, createdAt: new Date() },
-  });
+
+  if (organizationId != null) {
+    // Org-scoped upsert — full 4-column unique key is well-defined (no NULLs in key)
+    await db.insert(aiCacheTable).values({
+      organizationId, entityType, entityId, analysisType, result: result as any, model, expiresAt,
+    }).onConflictDoUpdate({
+      target: [aiCacheTable.organizationId, aiCacheTable.entityType, aiCacheTable.entityId, aiCacheTable.analysisType],
+      set: { result: result as any, model, expiresAt, createdAt: new Date() },
+    });
+  } else {
+    // No-org (system-level) entry: DELETE + INSERT to avoid NULL unique-key ambiguity
+    await db.delete(aiCacheTable).where(
+      and(
+        eq(aiCacheTable.entityType, entityType),
+        eq(aiCacheTable.entityId, entityId),
+        eq(aiCacheTable.analysisType, analysisType),
+        isNull(aiCacheTable.organizationId),
+      )
+    );
+    await db.insert(aiCacheTable).values({
+      organizationId: null, entityType, entityId, analysisType, result: result as any, model, expiresAt,
+    });
+  }
 }
 
 async function logAiAction(opts: {
+  organizationId?: number | null;
   userId?: number;
   module: string;
   action: string;
@@ -177,6 +205,7 @@ async function logAiAction(opts: {
   errorMessage?: string;
 }) {
   await db.insert(aiLogsTable).values({
+    organizationId: opts.organizationId ?? null,
     userId: opts.userId,
     module: opts.module as any,
     action: opts.action,
@@ -293,9 +322,9 @@ export async function analyzeDocument(doc: {
   description?: string | null;
   fileName?: string | null;
   metadata?: unknown;
-}, userId?: number, forceRefresh = false): Promise<DocumentAnalysis> {
+}, userId?: number, forceRefresh = false, organizationId?: number | null): Promise<DocumentAnalysis> {
   if (!forceRefresh) {
-    const cached = await getCache("document", doc.id, "analyze");
+    const cached = await getCache("document", doc.id, "analyze", organizationId);
     if (cached) return cached as DocumentAnalysis;
   }
 
@@ -327,9 +356,9 @@ Respond ONLY with valid JSON in this exact schema:
 }`,
     ) as DocumentAnalysis;
 
-    await setCache("document", doc.id, "analyze", result, "fast");
+    await setCache("document", doc.id, "analyze", result, "fast", organizationId);
     await logAiAction({
-      userId, module: "documents", action: "analyze",
+      organizationId, userId, module: "documents", action: "analyze",
       entityType: "document", entityId: doc.id,
       latencyMs: Date.now() - start, success: true,
     });
@@ -337,7 +366,7 @@ Respond ONLY with valid JSON in this exact schema:
     return result;
   } catch (err) {
     await logAiAction({
-      userId, module: "documents", action: "analyze",
+      organizationId, userId, module: "documents", action: "analyze",
       entityType: "document", entityId: doc.id,
       latencyMs: Date.now() - start, success: false,
       errorMessage: String(err),
@@ -368,9 +397,9 @@ export async function analyzeCorrespondence(corr: {
   body?: string | null;
   status: string;
   fromUserId?: number | null;
-}, userId?: number, forceRefresh = false): Promise<CorrespondenceAnalysis> {
+}, userId?: number, forceRefresh = false, organizationId?: number | null): Promise<CorrespondenceAnalysis> {
   if (!forceRefresh) {
-    const cached = await getCache("correspondence", corr.id, "analyze");
+    const cached = await getCache("correspondence", corr.id, "analyze", organizationId);
     if (cached) return cached as CorrespondenceAnalysis;
   }
 
@@ -400,9 +429,9 @@ Respond ONLY with valid JSON in this exact schema:
 }`,
     ) as CorrespondenceAnalysis;
 
-    await setCache("correspondence", corr.id, "analyze", result, "fast");
+    await setCache("correspondence", corr.id, "analyze", result, "fast", organizationId);
     await logAiAction({
-      userId, module: "correspondence", action: "analyze",
+      organizationId, userId, module: "correspondence", action: "analyze",
       entityType: "correspondence", entityId: corr.id,
       latencyMs: Date.now() - start, success: true,
     });
@@ -410,7 +439,7 @@ Respond ONLY with valid JSON in this exact schema:
     return result;
   } catch (err) {
     await logAiAction({
-      userId, module: "correspondence", action: "analyze",
+      organizationId, userId, module: "correspondence", action: "analyze",
       entityType: "correspondence", entityId: corr.id,
       latencyMs: Date.now() - start, success: false,
       errorMessage: String(err),

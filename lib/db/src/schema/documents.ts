@@ -1,8 +1,9 @@
-import { pgTable, serial, text, timestamp, integer, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
+import { organizationsTable } from "./organizations";
 
 export const documentStatusEnum = pgEnum("document_status", [
   "draft",
@@ -26,6 +27,7 @@ export const foldersTable = pgTable("folders", {
 
 export const documentsTable = pgTable("documents", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   documentNumber: text("document_number").notNull(),
   title: text("title").notNull(),
   documentType: text("document_type"),
@@ -48,10 +50,15 @@ export const documentsTable = pgTable("documents", {
   issuedBy: text("issued_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_documents_organization_id").on(t.organizationId),
+  index("idx_documents_project_id").on(t.projectId),
+  index("idx_documents_status").on(t.status),
+]);
 
 export const documentRevisionsTable = pgTable("document_revisions", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   documentId: integer("document_id").references(() => documentsTable.id).notNull(),
   revision: text("revision").notNull(),
   status: text("status").notNull(),
@@ -62,12 +69,16 @@ export const documentRevisionsTable = pgTable("document_revisions", {
   reviewDecision: text("review_decision"),
   reviewerName: text("reviewer_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_doc_revisions_organization_id").on(t.organizationId),
+  index("idx_doc_revisions_document_id").on(t.documentId),
+]);
 
 // ─── Document Files (one-to-many file attachments per document) ───────────────
 
 export const documentFilesTable = pgTable("document_files", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   documentId: integer("document_id").references(() => documentsTable.id).notNull(),
   fileUrl: text("file_url").notNull(),
   fileName: text("file_name").notNull(),
@@ -75,7 +86,10 @@ export const documentFilesTable = pgTable("document_files", {
   fileType: text("file_type"), // MIME type
   uploadedById: integer("uploaded_by_id").references(() => usersTable.id).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_doc_files_organization_id").on(t.organizationId),
+  index("idx_doc_files_document_id").on(t.documentId),
+]);
 
 export const insertDocumentFileSchema = createInsertSchema(documentFilesTable).omit({
   id: true,

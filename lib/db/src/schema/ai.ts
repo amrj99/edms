@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, text, timestamp, integer, boolean, jsonb, pgEnum, unique,
+  pgTable, serial, text, timestamp, integer, boolean, jsonb, pgEnum, unique, index,
 } from "drizzle-orm/pg-core";
 import { organizationsTable } from "./organizations";
 
@@ -25,6 +25,7 @@ export const aiSettingsTable = pgTable("ai_settings", {
 
 export const aiCacheTable = pgTable("ai_cache", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   entityType: text("entity_type").notNull(),
   entityId: integer("entity_id").notNull(),
   analysisType: text("analysis_type").notNull(),
@@ -33,11 +34,14 @@ export const aiCacheTable = pgTable("ai_cache", {
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
-  unique("ai_cache_entity_analysis").on(t.entityType, t.entityId, t.analysisType),
+  // organizationId is part of the unique key: same entity can have per-org cache entries
+  unique("ai_cache_entity_analysis").on(t.organizationId, t.entityType, t.entityId, t.analysisType),
+  index("idx_ai_cache_organization_id").on(t.organizationId),
 ]);
 
 export const aiLogsTable = pgTable("ai_logs", {
   id: serial("id").primaryKey(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   userId: integer("user_id"),
   module: aiModuleEnum("module").notNull(),
   action: text("action").notNull(),
@@ -48,7 +52,11 @@ export const aiLogsTable = pgTable("ai_logs", {
   success: boolean("success").notNull().default(true),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_ai_logs_organization_id").on(t.organizationId),
+  index("idx_ai_logs_user_id").on(t.userId),
+  index("idx_ai_logs_module").on(t.module),
+]);
 
 export type AiModule = typeof aiModuleEnum.enumValues[number];
 export type AiSettings = typeof aiSettingsTable.$inferSelect;

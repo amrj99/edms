@@ -8,6 +8,7 @@ import {
   deliverablesTable, meetingsTable, systemSettingsTable,
 } from "@workspace/db";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
+import { encrypt } from "../lib/encryption.js";
 import { testSmtpConnection } from "../lib/email.js";
 
 const router = Router();
@@ -105,9 +106,10 @@ router.put("/storage-config/:orgId", async (req, res) => {
   if (s3Endpoint !== undefined) updateData.s3Endpoint = s3Endpoint;
   if (s3Bucket !== undefined) updateData.s3Bucket = s3Bucket;
   if (s3Region !== undefined) updateData.s3Region = s3Region;
-  if (s3AccessKey !== undefined) updateData.s3AccessKey = s3AccessKey;
+  // Encrypt credentials at rest — decrypt() in orgStorage.ts handles backward-compat plaintext
+  if (s3AccessKey !== undefined) updateData.s3AccessKey = encrypt(s3AccessKey);
   // Only update secret key if explicitly provided (not empty string placeholder)
-  if (s3SecretKey) updateData.s3SecretKey = s3SecretKey;
+  if (s3SecretKey) updateData.s3SecretKey = encrypt(s3SecretKey);
 
   const existing = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId)).limit(1);
   if (existing.length === 0) {

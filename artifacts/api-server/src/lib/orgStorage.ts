@@ -9,6 +9,7 @@ import { db } from "@workspace/db";
 import { orgConfigTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { ObjectStorageService } from "./objectStorage.js";
+import { decrypt } from "./encryption.js";
 
 const cloudStorage = new ObjectStorageService();
 
@@ -57,15 +58,16 @@ async function buildS3Client(cfg: {
   s3SecretKey?: string | null;
 }) {
   const { S3Client } = await import("@aws-sdk/client-s3");
+  // Decrypt credentials — values stored as plaintext before ENCRYPTION_KEY was set
+  // are returned as-is by decrypt(), so this is fully backward compatible.
+  const accessKeyId = cfg.s3AccessKey ? decrypt(cfg.s3AccessKey) : undefined;
+  const secretAccessKey = cfg.s3SecretKey ? decrypt(cfg.s3SecretKey) : undefined;
   return new S3Client({
     region: cfg.s3Region || "us-east-1",
     ...(cfg.s3Endpoint ? { endpoint: cfg.s3Endpoint } : {}),
-    ...(cfg.s3AccessKey && cfg.s3SecretKey
+    ...(accessKeyId && secretAccessKey
       ? {
-          credentials: {
-            accessKeyId: cfg.s3AccessKey,
-            secretAccessKey: cfg.s3SecretKey,
-          },
+          credentials: { accessKeyId, secretAccessKey },
           forcePathStyle: !!cfg.s3Endpoint, // MinIO / custom endpoint requires path-style
         }
       : {}),
