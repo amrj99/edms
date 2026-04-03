@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
-  transmittalsTable, transmittalItemsTable, documentsTable, usersTable, projectsTable,
+  transmittalsTable, transmittalItemsTable, transmittalHistoryTable,
+  documentsTable, usersTable, projectsTable,
   tasksTable, projectMembersTable, notificationsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
@@ -76,7 +77,7 @@ router.get("/:id", async (req, res) => {
 // Create transmittal
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, documentIds } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, documentIds, direction, partyType, reviewCode } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
   // Generate transmittal number
@@ -88,6 +89,10 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
   const [project] = await db.select({ code: projectsTable.code }).from(projectsTable).where(eq(projectsTable.id, projectId));
   const transmittalNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
 
+  let initialStatus: "draft" | "sent" | "acknowledged" | "rejected" = "draft";
+  if (reviewCode === "A" || reviewCode === "B") initialStatus = "acknowledged";
+  else if (reviewCode === "D") initialStatus = "rejected";
+
   const [transmittal] = await db.insert(transmittalsTable).values({
     transmittalNumber,
     subject,
@@ -97,6 +102,10 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     toExternal,
     projectId,
     createdById: req.user!.id,
+    direction: direction ?? null,
+    partyType: partyType ?? null,
+    reviewCode: reviewCode ?? null,
+    status: initialStatus,
   }).returning();
 
   // Add documents
@@ -108,6 +117,16 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
       }))
     );
   }
+
+  // Log creation history
+  const actor = req.user as any;
+  const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+  await db.insert(transmittalHistoryTable).values({
+    transmittalId: transmittal.id,
+    eventType: "created",
+    description: `Transmittal created${direction ? ` (${direction})` : ""}${partyType ? ` for ${partyType}` : ""}`,
+    performedByName: actorName,
+  });
 
   await createAuditLog({
     userId: req.user!.id,
@@ -123,11 +142,37 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 // Update transmittal
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
-  const { subject, description, purpose, dueDate, toExternal, status } = req.body;
+  const projectId = parseInt(req.params.projectId);
+  const { subject, description, purpose, dueDate, toExternal, status, direction, partyType, reviewCode } = req.body;
+
+  const [existing] = await db.select().from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+
+  let resolvedStatus = status;
+  const reviewCodeChanged = reviewCode !== undefined && reviewCode !== existing?.reviewCode;
+  if (reviewCode !== undefined) {
+    if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "acknowledged";
+    else if (reviewCode === "C") resolvedStatus = "sent";
+    else if (reviewCode === "D") resolvedStatus = "rejected";
+  }
+
   const [transmittal] = await db.update(transmittalsTable)
-    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, status, updatedAt: new Date() })
-    .where(eq(transmittalsTable.id, id))
+    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, status: resolvedStatus, direction, partyType, reviewCode, updatedAt: new Date() })
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
     .returning();
+
+  if (reviewCodeChanged && reviewCode) {
+    const actor = req.user as any;
+    const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+    const codeLabels: Record<string, string> = { A: "Approved", B: "Approved with Comments", C: "Revise and Resubmit", D: "Rejected" };
+    await db.insert(transmittalHistoryTable).values({
+      transmittalId: id,
+      eventType: "review_code_set",
+      description: `Review code set to ${reviewCode} — ${codeLabels[reviewCode] ?? reviewCode}`,
+      performedByName: actorName,
+    });
+  }
+
   res.json(transmittal);
 });
 
@@ -138,6 +183,14 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id))
     .returning();
+  const actor = req.user as any;
+  const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+  await db.insert(transmittalHistoryTable).values({
+    transmittalId: id,
+    eventType: "sent",
+    description: `Transmittal sent${transmittal?.toExternal ? ` to ${transmittal.toExternal}` : ""}`,
+    performedByName: actorName,
+  });
   await createAuditLog({
     userId: req.user!.id, action: "update", entityType: "transmittal",
     entityId: id, details: { action: "sent" },
@@ -192,7 +245,24 @@ router.post("/:id/acknowledge", async (req, res) => {
     .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id))
     .returning();
+  const actor = (req as any).user as any;
+  const actorName = actor ? `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "External" : "External";
+  await db.insert(transmittalHistoryTable).values({
+    transmittalId: id,
+    eventType: "acknowledged",
+    description: "Transmittal acknowledged by recipient",
+    performedByName: actorName,
+  });
   res.json(transmittal);
+});
+
+// Get transmittal history
+router.get("/:id/history", async (req, res) => {
+  const id = parseInt(req.params.id);
+  const rows = await db.select().from(transmittalHistoryTable)
+    .where(eq(transmittalHistoryTable.transmittalId, id))
+    .orderBy(desc(transmittalHistoryTable.createdAt));
+  res.json({ history: rows });
 });
 
 // Add document to transmittal

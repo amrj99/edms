@@ -356,6 +356,35 @@ function ExportButtons({ data, filename, columns, title }: {
   );
 }
 
+// ─── Review Code Pill ─────────────────────────────────────────────────────────
+function ReviewCodePill({ code }: { code?: string | null }) {
+  if (!code) return <span className="text-muted-foreground text-xs">—</span>;
+  const map: Record<string, { label: string; cls: string }> = {
+    A: { label: "A – Approved",              cls: "bg-green-100 text-green-800" },
+    B: { label: "B – Approved w/ Comments",  cls: "bg-teal-100 text-teal-800" },
+    C: { label: "C – Revise & Resubmit",     cls: "bg-amber-100 text-amber-800" },
+    D: { label: "D – Rejected",              cls: "bg-red-100 text-red-800" },
+  };
+  const entry = map[code];
+  if (!entry) return <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">{code}</span>;
+  return (
+    <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${entry.cls}`}>
+      {entry.label}
+    </span>
+  );
+}
+
+function DirectionBadge({ direction }: { direction?: string | null }) {
+  if (!direction) return <span className="text-muted-foreground text-xs">—</span>;
+  const isIn = direction.toUpperCase() === "IN";
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-xs px-2 py-0.5 rounded-full font-semibold ${isIn ? "bg-blue-100 text-blue-800" : "bg-orange-100 text-orange-800"}`}>
+      {isIn ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />}
+      {direction.toUpperCase()}
+    </span>
+  );
+}
+
 // ─── Global filter state type ─────────────────────────────────────────────────
 interface Filters {
   projectId: string;
@@ -366,11 +395,13 @@ interface Filters {
   discipline: string;
   docType: string;
   party: string;
+  direction: string;
 }
 
 const DEFAULT_FILTERS: Filters = {
   projectId: "_all", status: "_all", search: "",
   dateFrom: "", dateTo: "", discipline: "_all", docType: "_all", party: "_all",
+  direction: "_all",
 };
 
 function applyDateFilter(items: any[], dateField: string, from: string, to: string) {
@@ -388,7 +419,7 @@ function applyTextFilter(items: any[], q: string, keys: string[]) {
 
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 function FilterBar({
-  filters, onFiltersChange, projects, showDiscipline, showParty, showDocType,
+  filters, onFiltersChange, projects, showDiscipline, showParty, showDocType, showDirection,
   disciplines = [],
 }: {
   filters: Filters;
@@ -397,12 +428,14 @@ function FilterBar({
   showDiscipline?: boolean;
   showParty?: boolean;
   showDocType?: boolean;
+  showDirection?: boolean;
   disciplines?: string[];
 }) {
   const { t, isRtl } = useI18n();
   const set = (key: keyof Filters, val: string) => onFiltersChange({ ...filters, [key]: val });
   const hasFilters = filters.projectId !== "_all" || filters.status !== "_all" || filters.search ||
-    filters.dateFrom || filters.dateTo || filters.discipline !== "_all" || filters.party !== "_all";
+    filters.dateFrom || filters.dateTo || filters.discipline !== "_all" || filters.party !== "_all" ||
+    filters.direction !== "_all";
 
   return (
     <div className={`bg-card border rounded-xl p-3 shadow-sm ${isRtl ? "font-[Tahoma,Arial,sans-serif]" : ""}`}>
@@ -455,6 +488,19 @@ function FilterBar({
               {["client","consultant","subcontractor","other"].map(p => (
                 <SelectItem key={p} value={p} className="capitalize">{t(p as any)}</SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {showDirection && (
+          <Select value={filters.direction} onValueChange={v => set("direction", v)}>
+            <SelectTrigger className="h-8 w-[110px] text-xs">
+              <SelectValue placeholder="All Directions" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_all">All Directions</SelectItem>
+              <SelectItem value="IN">↓ IN</SelectItem>
+              <SelectItem value="OUT">↑ OUT</SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -967,16 +1013,56 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
   );
 }
 
+// ─── Transmittal History Panel ────────────────────────────────────────────────
+function TransmittalHistoryPanel({ transmittalId, projectId }: { transmittalId: number; projectId: string | number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["trs-history", transmittalId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/history`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
+  const entries: any[] = data?.history ?? [];
+  const eventIcons: Record<string, string> = {
+    created: "🆕", sent: "📤", acknowledged: "✅", review_code_set: "🔖",
+    approval_submitted: "⏳", record_approved: "✔️", record_rejected: "✖️",
+  };
+  return (
+    <div className="border-t mt-4 pt-4 space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transmittal History</p>
+      {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : entries.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">No history recorded yet.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {entries.map(e => (
+            <div key={e.id} className="flex items-start gap-2 text-xs">
+              <span className="text-base leading-none mt-0.5 shrink-0">{eventIcons[e.eventType] ?? "•"}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-foreground">{e.description}</p>
+                <p className="text-muted-foreground">{e.performedByName && `${e.performedByName} · `}{fmt(e.createdAt)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 3. Transmittal Register ──────────────────────────────────────────────────
 function TransmittalRegister({ filters }: { filters: Filters }) {
   const { t, isRtl } = useI18n();
   const [detailItem, setDetailItem] = useState<any>(null);
   const TRS_COLS = [
     { key: "transmittalNumber", label: t("transmittalNo") },
+    { key: "direction", label: "Direction" },
     { key: "createdAt", label: t("date") },
     { key: "subject", label: t("subject") },
     { key: "toExternal", label: t("to") },
+    { key: "partyType", label: "Party Type" },
     { key: "purpose", label: t("purpose") },
+    { key: "reviewCode", label: "Review Code" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "sentAt", label: t("sentDate") },
@@ -999,8 +1085,9 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
   const filtered = useMemo(() => {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
+    if (filters.direction !== "_all") d = d.filter(x => (x.direction ?? "").toUpperCase() === filters.direction);
     d = applyDateFilter(d, "createdAt", filters.dateFrom, filters.dateTo);
-    d = applyTextFilter(d, filters.search, ["transmittalNumber", "subject", "toExternal"]);
+    d = applyTextFilter(d, filters.search, ["transmittalNumber", "subject", "toExternal", "partyType"]);
     return d;
   }, [allItems, filters]);
 
@@ -1033,10 +1120,13 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
             ) : filtered.map(tr => (
               <TableRow key={tr.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(tr)}>
                 {visibleCols.has("transmittalNumber") && <TableCell className="font-mono text-xs text-primary">{tr.transmittalNumber || `TRS-${String(tr.id).padStart(4,"0")}`}</TableCell>}
+                {visibleCols.has("direction") && <TableCell><DirectionBadge direction={tr.direction} /></TableCell>}
                 {visibleCols.has("createdAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.createdAt)}</TableCell>}
                 {visibleCols.has("subject") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{tr.subject}</TableCell>}
                 {visibleCols.has("toExternal") && <TableCell className="text-xs max-w-[120px] truncate">{tr.toExternal || "—"}</TableCell>}
+                {visibleCols.has("partyType") && <TableCell className="text-xs">{tr.partyType || "—"}</TableCell>}
                 {visibleCols.has("purpose") && <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>}
+                {visibleCols.has("reviewCode") && <TableCell><ReviewCodePill code={tr.reviewCode} /></TableCell>}
                 {visibleCols.has("status") && <TableCell><StatusPill status={tr.status} /></TableCell>}
                 {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={tr.approvalStatus} /></TableCell>}
                 {visibleCols.has("sentAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.sentAt)}</TableCell>}
@@ -1053,22 +1143,28 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
         title={detailItem?.subject ?? "Transmittal Detail"}
         fields={[
           { key: "transmittalNumber", label: "Transmittal No" },
+          { key: "direction", label: "Direction" },
+          { key: "partyType", label: "Party Type" },
           { key: "subject", label: "Subject" },
           { key: "toExternal", label: "To" },
           { key: "purpose", label: "Purpose" },
+          { key: "reviewCode", label: "Review Code" },
           { key: "status", label: "Status" },
           { key: "sentAt", label: "Sent Date", format: fmt },
           { key: "acknowledgedAt", label: "Acknowledged", format: fmt },
         ]}
       >
         {detailItem && filters.projectId !== "_all" && (
-          <ApprovalPanel
-            record={detailItem}
-            entityType="transmittal"
-            projectId={filters.projectId}
-            queryKey={["rpt-trans", filters.projectId]}
-            onRecordUpdated={setDetailItem}
-          />
+          <>
+            <ApprovalPanel
+              record={detailItem}
+              entityType="transmittal"
+              projectId={filters.projectId}
+              queryKey={["rpt-trans", filters.projectId]}
+              onRecordUpdated={setDetailItem}
+            />
+            <TransmittalHistoryPanel transmittalId={detailItem.id} projectId={filters.projectId} />
+          </>
         )}
       </RecordDetailSheet>
     </div>
@@ -1199,9 +1295,12 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   const ITR_COLS = [
     { key: "requestNumber", label: t("requestNo") },
     { key: "type", label: t("requestType") },
+    { key: "direction", label: "Direction" },
+    { key: "partyType", label: "Party Type" },
     { key: "description", label: t("description") },
     { key: "location", label: t("location") },
     { key: "date", label: t("date") },
+    { key: "reviewCode", label: "Review Code" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "contractor", label: t("contractor") },
@@ -1209,7 +1308,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("itr", ITR_COLS.map(c => c.key));
-  const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
+  const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-itr", filters.projectId, projects.map((p: any) => p.id).join(",")],
@@ -1239,8 +1338,9 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   const filtered = useMemo(() => {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
+    if (filters.direction !== "_all") d = d.filter(x => (x.direction ?? "").toUpperCase() === filters.direction);
     d = applyDateFilter(d, "date", filters.dateFrom, filters.dateTo);
-    d = applyTextFilter(d, filters.search, ["requestNumber", "description", "location", "contractor"]);
+    d = applyTextFilter(d, filters.search, ["requestNumber", "description", "location", "contractor", "partyType"]);
     return sortItems(d, sortKey, sortDir);
   }, [allItems, filters, sortKey, sortDir]);
 
@@ -1249,7 +1349,13 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
       const r = await fetch(`/api/projects/${filters.projectId}/inspection-requests`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, requestNumber: form.requestNumber || `${form.type.toUpperCase()}-${Date.now()}` }),
+        body: JSON.stringify({
+          ...form,
+          requestNumber: form.requestNumber || `${form.type.toUpperCase()}-${Date.now()}`,
+          direction: form.direction || null,
+          partyType: form.partyType || null,
+          reviewCode: form.reviewCode || null,
+        }),
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -1257,7 +1363,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["rpt-itr"] });
       setAddOpen(false);
-      setForm({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "" });
+      setForm({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
       toast({ title: "Inspection request added" });
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
@@ -1304,9 +1410,12 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
                 <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
                   {visibleCols.has("requestNumber") && <TableCell className="font-mono text-xs text-primary">{item.requestNumber}</TableCell>}
                   {visibleCols.has("type") && <TableCell><span className="text-xs font-semibold uppercase text-primary">{item.type}</span></TableCell>}
+                  {visibleCols.has("direction") && <TableCell><DirectionBadge direction={item.direction} /></TableCell>}
+                  {visibleCols.has("partyType") && <TableCell className="text-xs">{item.partyType || "—"}</TableCell>}
                   {visibleCols.has("description") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>}
                   {visibleCols.has("location") && <TableCell className="text-xs">{item.location || "—"}</TableCell>}
                   {visibleCols.has("date") && <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>}
+                  {visibleCols.has("reviewCode") && <TableCell><ReviewCodePill code={item.reviewCode} /></TableCell>}
                   {visibleCols.has("status") && <TableCell><StatusPill status={item.status} /></TableCell>}
                   {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
                   {visibleCols.has("contractor") && <TableCell className="text-xs">{item.contractor || "—"}</TableCell>}
@@ -1327,8 +1436,11 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
         fields={[
           { key: "requestNumber", label: "Request No" },
           { key: "type", label: "Type" },
+          { key: "direction", label: "Direction" },
+          { key: "partyType", label: "Party Type" },
           { key: "description", label: "Description" },
           { key: "location", label: "Location" },
+          { key: "reviewCode", label: "Review Code" },
           { key: "status", label: "Status" },
           { key: "contractor", label: "Contractor" },
           { key: "date", label: "Date", format: fmt },
@@ -1348,7 +1460,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
       </RecordDetailSheet>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-[480px]">
+        <DialogContent className="sm:max-w-[520px]">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><ClipboardList className="h-4 w-4" /> {t("addRecord")} — {t("itrMirRegister")}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -1363,6 +1475,29 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
                   <SelectContent>
                     <SelectItem value="itr">ITR</SelectItem>
                     <SelectItem value="mir">MIR</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Direction</Label>
+                <Select value={form.direction || "_none"} onValueChange={v => setForm(f => ({ ...f, direction: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="IN">↓ IN</SelectItem>
+                    <SelectItem value="OUT">↑ OUT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Party Type</Label>
+                <Select value={form.partyType || "_none"} onValueChange={v => setForm(f => ({ ...f, partyType: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="Client">Client</SelectItem>
+                    <SelectItem value="Consultant">Consultant</SelectItem>
+                    <SelectItem value="Contractor">Contractor</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1383,16 +1518,31 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
                 <Input value={form.contractor} onChange={e => setForm(f => ({ ...f, contractor: e.target.value }))} className="mt-1 h-8 text-sm" />
               </div>
               <div>
-                <Label className="text-xs">{t("status")}</Label>
-                <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
-                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                <Label className="text-xs">Review Code <span className="text-muted-foreground">(auto-sets status)</span></Label>
+                <Select value={form.reviewCode || "_none"} onValueChange={v => setForm(f => ({ ...f, reviewCode: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
                   <SelectContent>
-                    {["pending","scheduled","in_progress","passed","failed","cancelled"].map(s => (
-                      <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g," ")}</SelectItem>
-                    ))}
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="A">A – Approved</SelectItem>
+                    <SelectItem value="B">B – Approved w/ Comments</SelectItem>
+                    <SelectItem value="C">C – Revise & Resubmit</SelectItem>
+                    <SelectItem value="D">D – Rejected</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+              {!form.reviewCode && (
+                <div>
+                  <Label className="text-xs">{t("status")}</Label>
+                  <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
+                    <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["pending","scheduled","in_progress","passed","failed","cancelled"].map(s => (
+                        <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g," ")}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="col-span-2">
                 <Label className="text-xs">{t("remarks")}</Label>
                 <Textarea value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} rows={2} className="mt-1 text-sm" />
@@ -1427,9 +1577,12 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
   const NCR_COLS = [
     { key: "reportNumber", label: t("reportNo") },
     { key: "type", label: t("type") },
+    { key: "direction", label: "Direction" },
+    { key: "partyType", label: "Party Type" },
     { key: "description", label: t("description") },
     { key: "location", label: t("location") },
     { key: "raisedBy", label: t("raisedBy") },
+    { key: "reviewCode", label: "Review Code" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "correctiveAction", label: t("correctiveAction") },
@@ -1437,7 +1590,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("ncr", NCR_COLS.map(c => c.key));
-  const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
+  const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-ncr", filters.projectId, projects.map((p: any) => p.id).join(",")],
@@ -1477,7 +1630,13 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
       const r = await fetch(`/api/projects/${filters.projectId}/ncr-records`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, reportNumber: form.reportNumber || `${form.type.toUpperCase()}-${Date.now()}` }),
+        body: JSON.stringify({
+          ...form,
+          reportNumber: form.reportNumber || `${form.type.toUpperCase()}-${Date.now()}`,
+          direction: form.direction || null,
+          partyType: form.partyType || null,
+          reviewCode: form.reviewCode || null,
+        }),
       });
       if (!r.ok) throw new Error("Failed");
       return r.json();
@@ -1485,7 +1644,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["rpt-ncr"] });
       setAddOpen(false);
-      setForm({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "" });
+      setForm({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
       toast({ title: "NCR/SOR record added" });
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
@@ -1532,9 +1691,12 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
                 <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
                   {visibleCols.has("reportNumber") && <TableCell className="font-mono text-xs text-destructive font-semibold">{item.reportNumber}</TableCell>}
                   {visibleCols.has("type") && <TableCell><span className="text-xs font-semibold uppercase text-destructive">{item.type}</span></TableCell>}
+                  {visibleCols.has("direction") && <TableCell><DirectionBadge direction={item.direction} /></TableCell>}
+                  {visibleCols.has("partyType") && <TableCell className="text-xs">{item.partyType || "—"}</TableCell>}
                   {visibleCols.has("description") && <TableCell className="text-sm max-w-[200px] truncate font-medium">{item.description || "—"}</TableCell>}
                   {visibleCols.has("location") && <TableCell className="text-xs">{item.location || "—"}</TableCell>}
                   {visibleCols.has("raisedBy") && <TableCell className="text-xs">{item.raisedBy || "—"}</TableCell>}
+                  {visibleCols.has("reviewCode") && <TableCell><ReviewCodePill code={item.reviewCode} /></TableCell>}
                   {visibleCols.has("status") && <TableCell><StatusPill status={item.status} /></TableCell>}
                   {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={item.approvalStatus} /></TableCell>}
                   {visibleCols.has("correctiveAction") && <TableCell className="text-xs max-w-[150px] truncate">{item.correctiveAction || "—"}</TableCell>}
@@ -1555,9 +1717,12 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
         fields={[
           { key: "reportNumber", label: "Report No" },
           { key: "type", label: "Type" },
+          { key: "direction", label: "Direction" },
+          { key: "partyType", label: "Party Type" },
           { key: "description", label: "Description" },
           { key: "location", label: "Location" },
           { key: "raisedBy", label: "Raised By" },
+          { key: "reviewCode", label: "Review Code" },
           { key: "status", label: "Status" },
           { key: "correctiveAction", label: "Corrective Action" },
           { key: "closeDate", label: "Close Date", format: fmt },
@@ -1577,7 +1742,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
       </RecordDetailSheet>
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-[480px]">
+        <DialogContent className="sm:max-w-[520px]">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> {t("addRecord")} — {t("ncrSorRegister")}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -1595,6 +1760,29 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <Label className="text-xs">Direction</Label>
+                <Select value={form.direction || "_none"} onValueChange={v => setForm(f => ({ ...f, direction: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="IN">↓ IN</SelectItem>
+                    <SelectItem value="OUT">↑ OUT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Party Type</Label>
+                <Select value={form.partyType || "_none"} onValueChange={v => setForm(f => ({ ...f, partyType: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="Client">Client</SelectItem>
+                    <SelectItem value="Consultant">Consultant</SelectItem>
+                    <SelectItem value="Contractor">Contractor</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="col-span-2">
                 <Label className="text-xs">{t("description")}</Label>
                 <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={2} className="mt-1 text-sm" />
@@ -1608,16 +1796,31 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
                 <Input value={form.raisedBy} onChange={e => setForm(f => ({ ...f, raisedBy: e.target.value }))} className="mt-1 h-8 text-sm" />
               </div>
               <div>
-                <Label className="text-xs">{t("status")}</Label>
-                <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
-                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                <Label className="text-xs">Review Code <span className="text-muted-foreground">(auto-sets status)</span></Label>
+                <Select value={form.reviewCode || "_none"} onValueChange={v => setForm(f => ({ ...f, reviewCode: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
                   <SelectContent>
-                    {["open","in_progress","closed","voided"].map(s => (
-                      <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g," ")}</SelectItem>
-                    ))}
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="A">A – Approved / Closed</SelectItem>
+                    <SelectItem value="B">B – In Progress</SelectItem>
+                    <SelectItem value="C">C – Revise & Resubmit</SelectItem>
+                    <SelectItem value="D">D – Rejected</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+              {!form.reviewCode && (
+                <div>
+                  <Label className="text-xs">{t("status")}</Label>
+                  <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
+                    <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["open","in_progress","closed","voided"].map(s => (
+                        <SelectItem key={s} value={s} className="capitalize">{s.replace(/_/g," ")}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div>
                 <Label className="text-xs">{t("closeDate")}</Label>
                 <Input type="date" value={form.closeDate} onChange={e => setForm(f => ({ ...f, closeDate: e.target.value }))} className="mt-1 h-8 text-sm" />
@@ -1653,7 +1856,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
   const [sortKey, setSortKey] = useState("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
-  const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
+  const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
   const { data, isLoading } = useQuery({
     queryKey: ["rpt-noc", filters.projectId, projects.map((p: any) => p.id).join(",")],
@@ -1683,8 +1886,9 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
   const filtered = useMemo(() => {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
+    if (filters.direction !== "_all") d = d.filter(x => (x.direction ?? "").toUpperCase() === filters.direction);
     d = applyDateFilter(d, "date", filters.dateFrom, filters.dateTo);
-    d = applyTextFilter(d, filters.search, ["nocNumber", "authority", "remarks"]);
+    d = applyTextFilter(d, filters.search, ["nocNumber", "authority", "remarks", "partyType"]);
     return sortItems(d, sortKey, sortDir);
   }, [allItems, filters, sortKey, sortDir]);
 
@@ -1697,6 +1901,9 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
           ...form,
           nocNumber: form.nocNumber || `NOC-${Date.now()}`,
           linkedDocumentId: form.linkedDocumentId ? parseInt(form.linkedDocumentId) : undefined,
+          direction: form.direction || null,
+          partyType: form.partyType || null,
+          reviewCode: form.reviewCode || null,
         }),
       });
       if (!r.ok) throw new Error("Failed");
@@ -1705,7 +1912,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["rpt-noc"] });
       setAddOpen(false);
-      setForm({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "" });
+      setForm({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
       toast({ title: "NOC record added" });
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
@@ -1713,8 +1920,11 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
 
   const COLS = [
     { key: "nocNumber", label: t("nocNo") },
+    { key: "direction", label: "Direction" },
+    { key: "partyType", label: "Party Type" },
     { key: "authority", label: t("authority") },
     { key: "date", label: t("date") },
+    { key: "reviewCode", label: "Review Code" },
     { key: "status", label: t("status") },
     { key: "remarks", label: t("remarks") },
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
@@ -1759,8 +1969,11 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
               ) : filtered.map(item => (
                 <TableRow key={item.id} className="hover:bg-muted/20 cursor-pointer" onClick={() => setDetailItem(item)}>
                   <TableCell className="font-mono text-xs text-primary font-semibold">{item.nocNumber}</TableCell>
+                  <TableCell><DirectionBadge direction={item.direction} /></TableCell>
+                  <TableCell className="text-xs">{item.partyType || "—"}</TableCell>
                   <TableCell className="text-sm max-w-[150px] truncate font-medium">{item.authority || "—"}</TableCell>
                   <TableCell className="text-xs whitespace-nowrap">{fmt(item.date)}</TableCell>
+                  <TableCell><ReviewCodePill code={item.reviewCode} /></TableCell>
                   <TableCell><StatusPill status={item.status} /></TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{item.remarks || "—"}</TableCell>
                   {isCrossOrg && <TableCell className="text-xs font-medium text-blue-700 dark:text-blue-400">{item._orgName || "—"}</TableCell>}
@@ -1778,8 +1991,11 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
         title={detailItem?.nocNumber ?? "NOC Detail"}
         fields={[
           { key: "nocNumber", label: "NOC No" },
+          { key: "direction", label: "Direction" },
+          { key: "partyType", label: "Party Type" },
           { key: "authority", label: "Authority" },
           { key: "date", label: "Date", format: fmt },
+          { key: "reviewCode", label: "Review Code" },
           { key: "status", label: "Status" },
           { key: "remarks", label: "Remarks" },
           { key: "_orgName", label: t("orgName_label") },
@@ -1787,7 +2003,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
       />
 
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="sm:max-w-[520px]">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><FileCheck className="h-4 w-4" /> {t("addRecord")} — {t("nocRegister")}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -1800,20 +2016,58 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
                 <Input value={form.authority} onChange={e => setForm(f => ({ ...f, authority: e.target.value }))} className="mt-1 h-8 text-sm" />
               </div>
               <div>
+                <Label className="text-xs">Direction</Label>
+                <Select value={form.direction || "_none"} onValueChange={v => setForm(f => ({ ...f, direction: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="IN">↓ IN</SelectItem>
+                    <SelectItem value="OUT">↑ OUT</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Party Type</Label>
+                <Select value={form.partyType || "_none"} onValueChange={v => setForm(f => ({ ...f, partyType: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="Client">Client</SelectItem>
+                    <SelectItem value="Consultant">Consultant</SelectItem>
+                    <SelectItem value="Contractor">Contractor</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
                 <Label className="text-xs">{t("date")}</Label>
                 <Input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} className="mt-1 h-8 text-sm" />
               </div>
               <div>
-                <Label className="text-xs">{t("status")}</Label>
-                <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
-                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                <Label className="text-xs">Review Code <span className="text-muted-foreground">(auto-sets status)</span></Label>
+                <Select value={form.reviewCode || "_none"} onValueChange={v => setForm(f => ({ ...f, reviewCode: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Select…" /></SelectTrigger>
                   <SelectContent>
-                    {["pending","approved","rejected","expired"].map(s => (
-                      <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
-                    ))}
+                    <SelectItem value="_none">— None —</SelectItem>
+                    <SelectItem value="A">A – Approved</SelectItem>
+                    <SelectItem value="B">B – Approved w/ Comments</SelectItem>
+                    <SelectItem value="C">C – Revise & Resubmit</SelectItem>
+                    <SelectItem value="D">D – Rejected</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+              {!form.reviewCode && (
+                <div>
+                  <Label className="text-xs">{t("status")}</Label>
+                  <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v }))}>
+                    <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["pending","approved","rejected","expired"].map(s => (
+                        <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="col-span-2">
                 <Label className="text-xs">{t("remarks")}</Label>
                 <Textarea value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} rows={3} className="mt-1 text-sm" />
@@ -1914,6 +2168,7 @@ export default function Reports() {
         projects={projects}
         showParty={activeTab === "correspondence"}
         showDiscipline={activeTab === "drawings"}
+        showDirection={["transmittals","itr","ncr","noc"].includes(activeTab)}
       />
 
       {/* Register Tabs */}

@@ -34,8 +34,20 @@ export const transmittalsTable = pgTable("transmittals", {
   approvedById: integer("approved_by_id").references(() => usersTable.id),
   approvalComment: text("approval_comment"),
   approvedAt: timestamp("approved_at"),
+  direction: text("direction"),
+  partyType: text("party_type"),
+  reviewCode: text("review_code"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const transmittalHistoryTable = pgTable("transmittal_history", {
+  id: serial("id").primaryKey(),
+  transmittalId: integer("transmittal_id").references(() => transmittalsTable.id, { onDelete: "cascade" }).notNull(),
+  eventType: text("event_type").notNull(),
+  description: text("description").notNull(),
+  performedByName: text("performed_by_name"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const transmittalItemsTable = pgTable("transmittal_items", {
