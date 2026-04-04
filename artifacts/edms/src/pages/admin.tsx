@@ -28,7 +28,7 @@ import {
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
   LayoutDashboard, ClipboardList, Bell, Link2, Zap, BarChart3,
-  FileText, Send, TrendingUp,
+  FileText, Send, TrendingUp, AlertTriangle, CreditCard,
 } from "lucide-react";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
@@ -1309,9 +1309,108 @@ function UsageDashboard() {
               </CardContent>
             </Card>
           )}
+
+          {/* Billing status breakdown */}
+          {orgs.length > 0 && <BillingStatusTable orgs={orgs} isSys={isSys} />}
         </>
       )}
     </TabsContent>
+  );
+}
+
+// ─── Billing Status Table ────────────────────────────────────────────────────
+function planBadgeClass(plan: string) {
+  switch (plan) {
+    case "starter":      return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
+    case "basic":        return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300";
+    case "professional": return "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300";
+    case "enterprise":   return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
+    default:             return "bg-muted text-muted-foreground";
+  }
+}
+
+function statusBadgeClass(status: string) {
+  switch (status) {
+    case "active":   return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300";
+    case "trialing": return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
+    case "past_due": return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
+    case "canceled": return "bg-gray-100 text-gray-500 dark:bg-gray-800/40 dark:text-gray-400";
+    default:         return "bg-muted text-muted-foreground";
+  }
+}
+
+function fmtStorage(mb: number) {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${mb} MB`;
+}
+
+function BillingStatusTable({ orgs, isSys }: { orgs: any[]; isSys: boolean }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2 pt-4 px-4">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <CreditCard className="h-4 w-4 text-primary" />
+          Billing Status{isSys ? " — All Organisations" : ""}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-0 pb-0">
+        <Table>
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              <TableHead className="text-xs px-4">Organisation</TableHead>
+              <TableHead className="text-xs">Plan</TableHead>
+              <TableHead className="text-xs">Status</TableHead>
+              <TableHead className="text-xs text-right">Seats</TableHead>
+              <TableHead className="text-xs text-right">Storage</TableHead>
+              <TableHead className="text-xs text-right">Renewal</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {orgs.map((org: any) => {
+              const seatsAt = org.seatsAllowed !== null && org.seatsUsed >= org.seatsAllowed;
+              const storagePct = org.storageAllowedMb ? (org.storageUsedMb / org.storageAllowedMb) * 100 : 0;
+              const storageWarn = storagePct >= 80;
+
+              return (
+                <TableRow key={org.orgId} className="text-xs">
+                  <TableCell className="px-4 font-medium">
+                    <span className="flex items-center gap-1.5">
+                      {org.paymentFailed && (
+                        <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" title="Payment failed" />
+                      )}
+                      {org.orgName}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ${planBadgeClass(org.billingPlan)}`}>
+                      {org.billingPlan}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(org.billingStatus)}`}>
+                      {org.billingStatus === "past_due" ? "Past Due" : org.billingStatus === "trialing" ? "Trial" : org.billingStatus.charAt(0).toUpperCase() + org.billingStatus.slice(1)}
+                    </span>
+                  </TableCell>
+                  <TableCell className={`text-right tabular-nums ${seatsAt ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>
+                    {org.seatsUsed}
+                    {org.seatsAllowed !== null ? ` / ${org.seatsAllowed}` : ""}
+                  </TableCell>
+                  <TableCell className={`text-right tabular-nums ${storageWarn ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}>
+                    {fmtStorage(org.storageUsedMb)}
+                    {org.storageAllowedMb !== null ? ` / ${fmtStorage(org.storageAllowedMb)}` : ""}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {org.renewalDate
+                      ? new Date(org.renewalDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+                      : "—"}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 

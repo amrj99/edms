@@ -7,8 +7,9 @@ import {
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
   deliverablesTable, meetingsTable, systemSettingsTable,
   aiLogsTable, ruleExecutionLogsTable, rulesTable,
-  projectMembersTable,
+  projectMembersTable, subscriptionsTable,
 } from "@workspace/db";
+import { PLANS } from "../lib/plans.js";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
@@ -115,7 +116,7 @@ router.get("/usage", async (req, res) => {
   // --- aggregate per-org counts via raw SQL for efficiency ---
   const [
     docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
-    itrRows, ncrRows, nocRows,
+    itrRows, ncrRows, nocRows, subRows,
   ] = await Promise.all([
     // documents per org (via project)
     db.select({
@@ -175,6 +176,15 @@ router.get("/usage", async (req, res) => {
       orgId: nocRecordsTable.organizationId,
       count: sql<number>`count(*)::int`,
     }).from(nocRecordsTable).groupBy(nocRecordsTable.organizationId),
+
+    // Billing subscriptions
+    db.select({
+      organizationId: subscriptionsTable.organizationId,
+      planId: subscriptionsTable.planId,
+      status: subscriptionsTable.status,
+      currentPeriodEnd: subscriptionsTable.currentPeriodEnd,
+      paymentFailedAt: subscriptionsTable.paymentFailedAt,
+    }).from(subscriptionsTable),
   ]);
 
   const byOrg = (rows: any[], key = "orgId") => new Map(rows.map(r => [r[key], r]));
@@ -187,22 +197,40 @@ router.get("/usage", async (req, res) => {
   const itrMap   = byOrg(itrRows);
   const ncrMap   = byOrg(ncrRows);
   const nocMap   = byOrg(nocRows);
+  const subMap   = new Map(subRows.map(r => [r.organizationId, r]));
 
-  const result = orgs.map(org => ({
-    orgId: org.id,
-    orgName: org.name,
-    orgType: org.type,
-    seats:        memberMap.get(org.id)?.seats ?? 0,
-    documents:    docMap.get(org.id)?.count ?? 0,
-    correspondence: corrMap.get(org.id)?.count ?? 0,
-    transmittals: trsMap.get(org.id)?.count ?? 0,
-    aiCalls:      aiMap.get(org.id)?.calls ?? 0,
-    aiTokens:     aiMap.get(org.id)?.tokens ?? 0,
-    ruleExecutions: ruleMap.get(org.id)?.executions ?? 0,
-    itr:          itrMap.get(org.id)?.count ?? 0,
-    ncr:          ncrMap.get(org.id)?.count ?? 0,
-    noc:          nocMap.get(org.id)?.count ?? 0,
-  }));
+  const result = orgs.map(org => {
+    const sub = subMap.get(org.id);
+    const billingPlan    = sub?.planId ?? org.subscriptionTier ?? "free";
+    const billingStatus  = sub?.status ?? "free";
+    const plan           = PLANS.find(p => p.id === billingPlan) ?? null;
+    const seatsUsed      = memberMap.get(org.id)?.seats ?? 0;
+
+    return {
+      orgId: org.id,
+      orgName: org.name,
+      orgType: org.type,
+      seats:        seatsUsed,
+      documents:    docMap.get(org.id)?.count ?? 0,
+      correspondence: corrMap.get(org.id)?.count ?? 0,
+      transmittals: trsMap.get(org.id)?.count ?? 0,
+      aiCalls:      aiMap.get(org.id)?.calls ?? 0,
+      aiTokens:     aiMap.get(org.id)?.tokens ?? 0,
+      ruleExecutions: ruleMap.get(org.id)?.executions ?? 0,
+      itr:          itrMap.get(org.id)?.count ?? 0,
+      ncr:          ncrMap.get(org.id)?.count ?? 0,
+      noc:          nocMap.get(org.id)?.count ?? 0,
+      // Billing fields
+      billingPlan,
+      billingStatus,
+      renewalDate:        sub?.currentPeriodEnd ? sub.currentPeriodEnd.toISOString() : null,
+      seatsUsed,
+      seatsAllowed:       plan?.maxUsers ?? null,
+      storageUsedMb:      org.storageUsedMb ?? 0,
+      storageAllowedMb:   plan?.storageMb ?? null,
+      paymentFailed:      billingStatus === "past_due",
+    };
+  });
 
   const sum = (key: string) => result.reduce((a, r) => a + (r as any)[key], 0);
   const totals = {
