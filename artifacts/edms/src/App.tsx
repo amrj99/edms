@@ -42,6 +42,7 @@ import ReportsDashboard from "@/pages/reports-dashboard";
 import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
+import BillingPage from "@/pages/billing";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -152,6 +153,9 @@ function Router() {
       </Route>
       <Route path="/admin">
         <ProtectedRoute component={Admin} />
+      </Route>
+      <Route path="/billing">
+        <ProtectedRoute component={BillingPage} />
       </Route>
       <Route path="/correspondence">
         <ProtectedRoute component={CorrespondencePage} />

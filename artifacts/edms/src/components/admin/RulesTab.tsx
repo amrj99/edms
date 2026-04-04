@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus, Pencil, Trash2, Loader2, GripVertical, ToggleLeft, ToggleRight,
-  Zap, AlertTriangle, X, ChevronDown,
+  Zap, AlertTriangle, X, ChevronDown, ShieldAlert, RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,7 +61,18 @@ interface Rule {
   appliesTo: "document" | "correspondence" | "both";
   conditions: Record<string, string>;
   actions: RuleAction[];
+  consecutiveFailures: number;
+  lastFailedAt: string | null;
+  isCircuitOpen: boolean;
   createdAt: string;
+}
+
+const COOLDOWN_MS = 30 * 60 * 1000;
+
+function getCircuitState(rule: Rule): "closed" | "open" | "half-open" {
+  if (!rule.isCircuitOpen) return "closed";
+  const elapsed = rule.lastFailedAt ? Date.now() - new Date(rule.lastFailedAt).getTime() : Infinity;
+  return elapsed >= COOLDOWN_MS ? "half-open" : "open";
 }
 
 const EMPTY_FORM = (): Omit<Rule, "id" | "createdAt"> => ({
@@ -72,6 +83,9 @@ const EMPTY_FORM = (): Omit<Rule, "id" | "createdAt"> => ({
   appliesTo: "both",
   conditions: {},
   actions: [],
+  consecutiveFailures: 0,
+  lastFailedAt: null,
+  isCircuitOpen: false,
 });
 
 // ─── Condition Row ────────────────────────────────────────────────────────────
@@ -412,6 +426,21 @@ export function RulesTab({ orgId }: { orgId?: number | null }) {
     onError: () => toast({ title: "Failed to toggle rule", variant: "destructive" }),
   });
 
+  const resetCircuitMutation = useMutation({
+    mutationFn: async (ruleId: number) => {
+      const r = await fetch(`/api/rules/${ruleId}/reset-circuit`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error("Reset failed");
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-rules"] });
+      toast({ title: "Circuit breaker reset — rule will execute again" });
+    },
+    onError: () => toast({ title: "Failed to reset circuit breaker", variant: "destructive" }),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
       const r = await fetch(`/api/rules/${id}`, { method: "DELETE", credentials: "include" });
@@ -473,69 +502,117 @@ export function RulesTab({ orgId }: { orgId?: number | null }) {
             .map(rule => (
               <div
                 key={rule.id}
-                className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
+                className={`rounded-lg border transition-colors ${
                   rule.isEnabled ? "bg-card" : "bg-muted/30 opacity-70"
                 }`}
               >
-                {/* Priority badge */}
-                <span className="text-[10px] font-mono text-muted-foreground w-6 text-center shrink-0">
-                  {rule.priority}
-                </span>
+                <div className="flex items-center gap-3 p-3">
+                  {/* Priority badge */}
+                  <span className="text-[10px] font-mono text-muted-foreground w-6 text-center shrink-0">
+                    {rule.priority}
+                  </span>
 
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium truncate">{rule.name}</span>
-                    <Badge
-                      variant="outline"
-                      className="text-[10px] capitalize shrink-0"
-                    >
-                      {rule.appliesTo}
-                    </Badge>
-                    {!rule.isEnabled && (
-                      <Badge variant="secondary" className="text-[10px] shrink-0">
-                        Disabled
+                  {/* Info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium truncate">{rule.name}</span>
+                      <Badge variant="outline" className="text-[10px] capitalize shrink-0">
+                        {rule.appliesTo}
                       </Badge>
+                      {!rule.isEnabled && (
+                        <Badge variant="secondary" className="text-[10px] shrink-0">Disabled</Badge>
+                      )}
+                      {(() => {
+                        const cs = getCircuitState(rule);
+                        if (cs === "open") return (
+                          <Badge variant="destructive" className="text-[10px] gap-1 shrink-0">
+                            <ShieldAlert className="h-2.5 w-2.5" /> Circuit Open
+                          </Badge>
+                        );
+                        if (cs === "half-open") return (
+                          <Badge className="text-[10px] gap-1 shrink-0 bg-amber-500 hover:bg-amber-500">
+                            <ShieldAlert className="h-2.5 w-2.5" /> Half-Open
+                          </Badge>
+                        );
+                        if (rule.consecutiveFailures > 0) return (
+                          <Badge variant="outline" className="text-[10px] gap-1 shrink-0 text-amber-600 border-amber-300">
+                            <AlertTriangle className="h-2.5 w-2.5" /> {rule.consecutiveFailures} failure{rule.consecutiveFailures > 1 ? "s" : ""}
+                          </Badge>
+                        );
+                        return null;
+                      })()}
+                    </div>
+                    {rule.description && (
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{rule.description}</p>
                     )}
-                  </div>
-                  {rule.description && (
-                    <p className="text-xs text-muted-foreground truncate mt-0.5">
-                      {rule.description}
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      {Object.keys(rule.conditions).length} condition(s) · {rule.actions.length} action(s)
                     </p>
-                  )}
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    {Object.keys(rule.conditions).length} condition(s) · {rule.actions.length} action(s)
-                  </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {(rule.isCircuitOpen || rule.consecutiveFailures > 0) && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-amber-600"
+                        title="Reset circuit breaker"
+                        onClick={() => resetCircuitMutation.mutate(rule.id)}
+                        disabled={resetCircuitMutation.isPending}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    <Switch
+                      checked={rule.isEnabled}
+                      onCheckedChange={() => toggleMutation.mutate(rule)}
+                      className="scale-90"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      title="Edit"
+                      onClick={() => { setEditRule(rule); setDialogOpen(true); }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive"
+                      title="Delete"
+                      onClick={() => {
+                        if (confirm(`Delete rule "${rule.name}"?`)) deleteMutation.mutate(rule.id);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex items-center gap-1 shrink-0">
-                  <Switch
-                    checked={rule.isEnabled}
-                    onCheckedChange={() => toggleMutation.mutate(rule)}
-                    className="scale-90"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    title="Edit"
-                    onClick={() => { setEditRule(rule); setDialogOpen(true); }}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-destructive"
-                    title="Delete"
-                    onClick={() => {
-                      if (confirm(`Delete rule "${rule.name}"?`)) deleteMutation.mutate(rule.id);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                {/* Circuit open warning bar */}
+                {getCircuitState(rule) === "open" && rule.lastFailedAt && (
+                  <div className="px-3 pb-3 pt-0">
+                    <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 text-xs text-destructive flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5">
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                        Rule suspended after {rule.consecutiveFailures} consecutive failures.
+                        Auto-retries after 30 min cooldown.
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 text-[10px] border-destructive/30 text-destructive hover:bg-destructive/10 shrink-0"
+                        onClick={() => resetCircuitMutation.mutate(rule.id)}
+                        disabled={resetCircuitMutation.isPending}
+                      >
+                        Reset now
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
         </div>

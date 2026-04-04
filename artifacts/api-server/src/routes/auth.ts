@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "crypto";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -281,6 +282,67 @@ router.post("/reset-password", async (req, res) => {
     .where(eq(refreshTokensTable.userId, tokenRecord.userId));
 
   res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
+});
+
+// ─── Self-service org registration ────────────────────────────────────────────
+// Public endpoint — no auth required. Creates a new org + initial admin user.
+router.post("/register-org", async (req, res) => {
+  const { orgName, adminFirstName, adminLastName, adminEmail, adminPassword } = req.body ?? {};
+
+  if (!orgName || !adminEmail || !adminPassword || !adminFirstName || !adminLastName) {
+    res.status(400).json({ error: "Bad Request", message: "orgName, adminFirstName, adminLastName, adminEmail, adminPassword are all required" });
+    return;
+  }
+
+  if (adminPassword.length < 8) {
+    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+    return;
+  }
+
+  // Check email not already taken
+  const existing = await db.select().from(usersTable).where(eq(usersTable.email, adminEmail.toLowerCase().trim())).limit(1);
+  if (existing.length > 0) {
+    res.status(400).json({ error: "Conflict", message: "An account with this email already exists" });
+    return;
+  }
+
+  // Check org name not already taken
+  const existingOrg = await db.select().from(organizationsTable).where(eq(organizationsTable.name, orgName.trim())).limit(1);
+  if (existingOrg.length > 0) {
+    res.status(400).json({ error: "Conflict", message: "An organisation with this name already exists" });
+    return;
+  }
+
+  // Create organisation
+  const [org] = await db.insert(organizationsTable).values({
+    name: orgName.trim(),
+    type: "client",
+  }).returning();
+
+  // Create admin user
+  const passwordHash = await hashPassword(adminPassword);
+  const verificationToken = crypto.randomBytes(32).toString("hex");
+
+  const [user] = await db.insert(usersTable).values({
+    email: adminEmail.toLowerCase().trim(),
+    passwordHash,
+    firstName: adminFirstName.trim(),
+    lastName: adminLastName.trim(),
+    role: "admin",
+    organizationId: org.id,
+    isActive: true,
+  }).returning();
+
+  // Return verification token in response (dev mode — no SMTP required)
+  res.status(201).json({
+    success: true,
+    message: "Organisation and admin account created successfully.",
+    orgId: org.id,
+    orgName: org.name,
+    userId: user.id,
+    verificationToken,
+    note: "In production, the verification token would be emailed. For now it is returned in this response.",
+  });
 });
 
 export default router;

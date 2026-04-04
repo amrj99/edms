@@ -46,6 +46,7 @@
     "pino": "^9",
     "pino-http": "^10",
     "socket.io": "^4.8.3",
+    "stripe": "^22.0.0",
     "zod": "catalog:"
   },
   "devDependencies": {

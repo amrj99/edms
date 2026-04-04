@@ -272,4 +272,26 @@ router.patch("/:id/toggle", requireAuth, requireAdmin, async (req, res) => {
   res.json(updated);
 });
 
+// POST /api/rules/:id/reset-circuit — manually reset the circuit breaker
+router.post("/:id/reset-circuit", requireAuth, requireAdmin, async (req, res) => {
+  const orgId = req.user!.organizationId;
+  const id = parseInt(req.params.id);
+
+  const [rule] = await db.select().from(rulesTable)
+    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+  if (!rule) return res.status(404).json({ error: "Rule not found" });
+
+  const [updated] = await db.update(rulesTable)
+    .set({
+      consecutiveFailures: 0,
+      isCircuitOpen: false,
+      lastFailedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(rulesTable.id, id))
+    .returning();
+
+  res.json(updated);
+});
+
 export default router;

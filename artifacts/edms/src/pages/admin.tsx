@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from "react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
+  ResponsiveContainer, Legend,
+} from "recharts";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RulesTab } from "@/components/admin/RulesTab";
 import { useAuth } from "@/lib/auth";
@@ -23,7 +27,8 @@ import {
   CheckCircle2, AlertCircle, Loader2, Activity, Database,
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
-  LayoutDashboard, ClipboardList, Bell, Link2, Zap,
+  LayoutDashboard, ClipboardList, Bell, Link2, Zap, BarChart3,
+  FileText, Send, TrendingUp,
 } from "lucide-react";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
@@ -317,6 +322,7 @@ export default function Admin() {
             { value: "system", label: "System", icon: Server },
             { value: "branding", label: "Branding", icon: Globe },
             { value: "modules", label: "Modules", icon: Layers },
+            { value: "usage", label: "Usage", icon: BarChart3 },
           ].map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="gap-1.5 text-xs px-3">
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -1139,8 +1145,173 @@ export default function Admin() {
 
         {/* Module Licensing */}
         <ModulesTab orgs={orgs} isSysOwner={user?.role === "system_owner"} />
+
+        {/* Usage Monitoring Dashboard */}
+        <UsageDashboard />
       </Tabs>
     </div>
+  );
+}
+
+// ─── Usage Monitoring Dashboard Tab ─────────────────────────────────────────────
+function UsageDashboard() {
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["admin-usage"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/usage");
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+  });
+
+  const orgs: any[] = data?.orgs ?? [];
+  const totals: any = data?.totals ?? {};
+  const isSys: boolean = data?.isSysAdmin ?? false;
+
+  const METRIC_CARDS = [
+    { key: "seats",          label: "Total Users",       icon: Users,       color: "text-blue-500",   bg: "bg-blue-50 dark:bg-blue-950/30" },
+    { key: "documents",      label: "Documents",         icon: FileText,    color: "text-indigo-500", bg: "bg-indigo-50 dark:bg-indigo-950/30" },
+    { key: "correspondence", label: "Correspondence",    icon: Send,        color: "text-purple-500", bg: "bg-purple-50 dark:bg-purple-950/30" },
+    { key: "transmittals",   label: "Transmittals",      icon: ClipboardList, color: "text-sky-500", bg: "bg-sky-50 dark:bg-sky-950/30" },
+    { key: "ruleExecutions", label: "Rule Executions",   icon: Zap,         color: "text-amber-500", bg: "bg-amber-50 dark:bg-amber-950/30" },
+    { key: "aiCalls",        label: "AI Calls",          icon: Brain,       color: "text-green-500", bg: "bg-green-50 dark:bg-green-950/30" },
+  ];
+
+  const chartData = orgs.map(o => ({
+    name: o.orgName.length > 14 ? o.orgName.slice(0, 13) + "…" : o.orgName,
+    Documents: o.documents,
+    Correspondence: o.correspondence,
+    Transmittals: o.transmittals,
+  }));
+
+  return (
+    <TabsContent value="usage" className="mt-4 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold flex items-center gap-2"><BarChart3 className="h-4 w-4 text-primary" />Usage Monitoring</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">{isSys ? "All organisations" : "Your organisation"} · real-time counts</p>
+        </div>
+        <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => refetch()}>
+          <RefreshCw className="h-3 w-3" /> Refresh
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
+          <Loader2 className="h-5 w-5 animate-spin" /> Loading usage data…
+        </div>
+      ) : (
+        <>
+          {/* Summary metric cards */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {METRIC_CARDS.map(({ key, label, icon: Icon, color, bg }) => (
+              <Card key={key} className="p-3">
+                <div className={`inline-flex p-1.5 rounded-lg ${bg} mb-2`}>
+                  <Icon className={`h-4 w-4 ${color}`} />
+                </div>
+                <p className="text-2xl font-bold">{(totals[key] ?? 0).toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+              </Card>
+            ))}
+          </div>
+
+          {/* AI tokens summary */}
+          <Card className="p-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">AI Token Usage</p>
+            <p className="text-3xl font-bold">{(totals.aiTokens ?? 0).toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">total tokens consumed across {isSys ? "all orgs" : "your org"}</p>
+          </Card>
+
+          {/* Bar chart — only useful with multiple orgs */}
+          {orgs.length > 1 && (
+            <Card className="p-4">
+              <p className="text-sm font-semibold mb-4 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" />Document Activity by Organisation</p>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={chartData} margin={{ top: 4, right: 16, left: -8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <RechartTooltip contentStyle={{ fontSize: 12 }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="Documents" fill="#6366f1" radius={[3,3,0,0]} />
+                  <Bar dataKey="Correspondence" fill="#0ea5e9" radius={[3,3,0,0]} />
+                  <Bar dataKey="Transmittals" fill="#a855f7" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
+          {/* Per-org breakdown table */}
+          {isSys && orgs.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm">Per-Organisation Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent className="px-0 pb-0">
+                <Table>
+                  <TableHeader className="bg-muted/40">
+                    <TableRow>
+                      <TableHead className="text-xs px-4">Organisation</TableHead>
+                      <TableHead className="text-xs text-right">Users</TableHead>
+                      <TableHead className="text-xs text-right">Docs</TableHead>
+                      <TableHead className="text-xs text-right">Corr.</TableHead>
+                      <TableHead className="text-xs text-right">TRS</TableHead>
+                      <TableHead className="text-xs text-right">ITR</TableHead>
+                      <TableHead className="text-xs text-right">NCR</TableHead>
+                      <TableHead className="text-xs text-right">NOC</TableHead>
+                      <TableHead className="text-xs text-right">AI Calls</TableHead>
+                      <TableHead className="text-xs text-right">Tokens</TableHead>
+                      <TableHead className="text-xs text-right">Rule Runs</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {orgs.map((org: any) => (
+                      <TableRow key={org.orgId} className="text-xs">
+                        <TableCell className="px-4 font-medium">{org.orgName}</TableCell>
+                        <TableCell className="text-right">{org.seats}</TableCell>
+                        <TableCell className="text-right">{org.documents}</TableCell>
+                        <TableCell className="text-right">{org.correspondence}</TableCell>
+                        <TableCell className="text-right">{org.transmittals}</TableCell>
+                        <TableCell className="text-right">{org.itr}</TableCell>
+                        <TableCell className="text-right">{org.ncr}</TableCell>
+                        <TableCell className="text-right">{org.noc}</TableCell>
+                        <TableCell className="text-right">{org.aiCalls}</TableCell>
+                        <TableCell className="text-right">{(org.aiTokens ?? 0).toLocaleString()}</TableCell>
+                        <TableCell className="text-right">{org.ruleExecutions}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Single-org summary */}
+          {!isSys && orgs.length === 1 && (
+            <Card>
+              <CardHeader className="pb-2 pt-4 px-4">
+                <CardTitle className="text-sm">{orgs[0].orgName} — Detailed Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    { label: "ITR / MIR", value: orgs[0].itr },
+                    { label: "NCR / SOR", value: orgs[0].ncr },
+                    { label: "NOC", value: orgs[0].noc },
+                    { label: "Rule Executions", value: orgs[0].ruleExecutions },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="border rounded-lg p-3">
+                      <p className="text-2xl font-bold">{value}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+    </TabsContent>
   );
 }
 

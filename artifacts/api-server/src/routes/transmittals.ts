@@ -4,8 +4,9 @@ import {
   transmittalsTable, transmittalItemsTable, transmittalHistoryTable,
   documentsTable, usersTable, projectsTable,
   tasksTable, projectMembersTable, notificationsTable,
+  correspondenceTable,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
@@ -26,6 +27,9 @@ router.get("/", async (req, res) => {
       description: transmittalsTable.description,
       status: transmittalsTable.status,
       purpose: transmittalsTable.purpose,
+      direction: transmittalsTable.direction,
+      partyType: transmittalsTable.partyType,
+      reviewCode: transmittalsTable.reviewCode,
       dueDate: transmittalsTable.dueDate,
       sentAt: transmittalsTable.sentAt,
       acknowledgedAt: transmittalsTable.acknowledgedAt,
@@ -37,6 +41,10 @@ router.get("/", async (req, res) => {
       approvedById: transmittalsTable.approvedById,
       approvalComment: transmittalsTable.approvalComment,
       approvedAt: transmittalsTable.approvedAt,
+      itemCount: sql<number>`(
+        SELECT COUNT(*) FROM transmittal_items
+        WHERE transmittal_id = ${transmittalsTable.id}
+      )::int`,
     })
     .from(transmittalsTable)
     .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
@@ -266,6 +274,87 @@ router.get("/:id/history", async (req, res) => {
     .where(eq(transmittalHistoryTable.transmittalId, id))
     .orderBy(desc(transmittalHistoryTable.createdAt));
   res.json({ history: rows });
+});
+
+// ─── AI-assisted suggest-links ────────────────────────────────────────────────
+// Pure lexical scoring — no LLM call needed; fast and free.
+const STOPWORDS = new Set([
+  "a","an","the","and","or","of","in","to","for","with","on","at","by","from",
+  "is","are","was","were","be","been","being","have","has","had","do","does",
+  "did","will","would","could","should","may","might","shall","can","that","this",
+  "these","those","it","its","re","submission","transmittal","letter","regarding",
+]);
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    (text ?? "").toLowerCase().split(/\W+/).filter(w => w.length > 2 && !STOPWORDS.has(w))
+  );
+}
+
+function jaccardScore(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  const intersection = [...a].filter(t => b.has(t)).length;
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+router.get("/:id/suggest-links", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const transmittalId = parseInt(req.params.id);
+
+  const [transmittal] = await db.select().from(transmittalsTable).where(eq(transmittalsTable.id, transmittalId));
+  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+
+  const queryText = `${transmittal.subject ?? ""} ${transmittal.description ?? ""}`;
+  const queryTokens = tokenize(queryText);
+
+  // Already-linked document IDs (exclude from suggestions)
+  const linkedItems = await db.select({ documentId: transmittalItemsTable.documentId })
+    .from(transmittalItemsTable)
+    .where(eq(transmittalItemsTable.transmittalId, transmittalId));
+  const linkedDocIds = new Set(linkedItems.map(i => i.documentId));
+
+  // Candidate documents
+  const docs = await db.select({
+    id: documentsTable.id,
+    documentNumber: documentsTable.documentNumber,
+    title: documentsTable.title,
+    description: documentsTable.description,
+    status: documentsTable.status,
+    revision: documentsTable.revision,
+    documentType: documentsTable.documentType,
+  }).from(documentsTable).where(eq(documentsTable.projectId, projectId));
+
+  const docSuggestions = docs
+    .filter(d => !linkedDocIds.has(d.id))
+    .map(d => ({
+      ...d,
+      score: jaccardScore(queryTokens, tokenize(`${d.title} ${d.description ?? ""} ${d.documentNumber}`)),
+    }))
+    .filter(d => d.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  // Candidate correspondence
+  const corrRows = await db.select({
+    id: correspondenceTable.id,
+    referenceNumber: correspondenceTable.referenceNumber,
+    subject: correspondenceTable.subject,
+    status: correspondenceTable.status,
+    createdAt: correspondenceTable.createdAt,
+    direction: correspondenceTable.direction,
+  }).from(correspondenceTable).where(eq(correspondenceTable.projectId, projectId));
+
+  const corrSuggestions = corrRows
+    .map(c => ({
+      ...c,
+      score: jaccardScore(queryTokens, tokenize(`${c.subject} ${c.referenceNumber ?? ""}`)),
+    }))
+    .filter(c => c.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  res.json({ documents: docSuggestions, correspondence: corrSuggestions, queryTokens: [...queryTokens] });
 });
 
 // Add document to transmittal

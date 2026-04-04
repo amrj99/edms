@@ -6,6 +6,8 @@ import {
   correspondenceTable, transmittalsTable, tasksTable, orgConfigTable,
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
   deliverablesTable, meetingsTable, systemSettingsTable,
+  aiLogsTable, ruleExecutionLogsTable, rulesTable,
+  projectMembersTable,
 } from "@workspace/db";
 import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
@@ -94,6 +96,122 @@ router.get("/storage-usage", async (req, res) => {
   });
 
   res.json({ usage: result });
+});
+
+// ─── Usage Monitoring Dashboard ────────────────────────────────────────────────
+router.get("/usage", async (req, res) => {
+  const user = req.user!;
+
+  let orgs: any[] = [];
+  if (isSysAdmin(user)) {
+    orgs = await db.select().from(organizationsTable);
+  } else if (user.organizationId) {
+    orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
+  }
+
+  const orgIds = orgs.map(o => o.id);
+  if (orgIds.length === 0) { res.json({ orgs: [], totals: {} }); return; }
+
+  // --- aggregate per-org counts via raw SQL for efficiency ---
+  const [
+    docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
+    itrRows, ncrRows, nocRows,
+  ] = await Promise.all([
+    // documents per org (via project)
+    db.select({
+      orgId: projectsTable.organizationId,
+      count: sql<number>`count(${documentsTable.id})::int`,
+    }).from(documentsTable)
+      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+      .groupBy(projectsTable.organizationId),
+
+    // correspondence per org
+    db.select({
+      orgId: correspondenceTable.organizationId,
+      count: sql<number>`count(*)::int`,
+    }).from(correspondenceTable).groupBy(correspondenceTable.organizationId),
+
+    // transmittals per org
+    db.select({
+      orgId: transmittalsTable.organizationId,
+      count: sql<number>`count(*)::int`,
+    }).from(transmittalsTable).groupBy(transmittalsTable.organizationId),
+
+    // AI calls + tokens per org
+    db.select({
+      orgId: aiLogsTable.organizationId,
+      calls: sql<number>`count(*)::int`,
+      tokens: sql<number>`coalesce(sum(${aiLogsTable.tokensUsed}), 0)::int`,
+    }).from(aiLogsTable).groupBy(aiLogsTable.organizationId),
+
+    // rule executions per org (via rules table's organizationId)
+    db.select({
+      orgId: rulesTable.organizationId,
+      executions: sql<number>`count(${ruleExecutionLogsTable.id})::int`,
+    }).from(ruleExecutionLogsTable)
+      .leftJoin(rulesTable, eq(ruleExecutionLogsTable.ruleId, rulesTable.id))
+      .groupBy(rulesTable.organizationId),
+
+    // project members per org (seat count)
+    db.select({
+      orgId: usersTable.organizationId,
+      seats: sql<number>`count(*)::int`,
+    }).from(usersTable).where(sql`${usersTable.organizationId} is not null`).groupBy(usersTable.organizationId),
+
+    // ITR count
+    db.select({
+      orgId: inspectionRequestsTable.organizationId,
+      count: sql<number>`count(*)::int`,
+    }).from(inspectionRequestsTable).groupBy(inspectionRequestsTable.organizationId),
+
+    // NCR count
+    db.select({
+      orgId: ncrRecordsTable.organizationId,
+      count: sql<number>`count(*)::int`,
+    }).from(ncrRecordsTable).groupBy(ncrRecordsTable.organizationId),
+
+    // NOC count
+    db.select({
+      orgId: nocRecordsTable.organizationId,
+      count: sql<number>`count(*)::int`,
+    }).from(nocRecordsTable).groupBy(nocRecordsTable.organizationId),
+  ]);
+
+  const byOrg = (rows: any[], key = "orgId") => new Map(rows.map(r => [r[key], r]));
+  const docMap   = byOrg(docRows);
+  const corrMap  = byOrg(corrRows);
+  const trsMap   = byOrg(trsRows);
+  const aiMap    = byOrg(aiRows);
+  const ruleMap  = byOrg(ruleRows);
+  const memberMap = byOrg(memberRows);
+  const itrMap   = byOrg(itrRows);
+  const ncrMap   = byOrg(ncrRows);
+  const nocMap   = byOrg(nocRows);
+
+  const result = orgs.map(org => ({
+    orgId: org.id,
+    orgName: org.name,
+    orgType: org.type,
+    seats:        memberMap.get(org.id)?.seats ?? 0,
+    documents:    docMap.get(org.id)?.count ?? 0,
+    correspondence: corrMap.get(org.id)?.count ?? 0,
+    transmittals: trsMap.get(org.id)?.count ?? 0,
+    aiCalls:      aiMap.get(org.id)?.calls ?? 0,
+    aiTokens:     aiMap.get(org.id)?.tokens ?? 0,
+    ruleExecutions: ruleMap.get(org.id)?.executions ?? 0,
+    itr:          itrMap.get(org.id)?.count ?? 0,
+    ncr:          ncrMap.get(org.id)?.count ?? 0,
+    noc:          nocMap.get(org.id)?.count ?? 0,
+  }));
+
+  const sum = (key: string) => result.reduce((a, r) => a + (r as any)[key], 0);
+  const totals = {
+    seats: sum("seats"), documents: sum("documents"), correspondence: sum("correspondence"),
+    transmittals: sum("transmittals"), aiCalls: sum("aiCalls"), aiTokens: sum("aiTokens"),
+    ruleExecutions: sum("ruleExecutions"), itr: sum("itr"), ncr: sum("ncr"), noc: sum("noc"),
+  };
+
+  res.json({ orgs: result, totals, isSysAdmin: isSysAdmin(user) });
 });
 
 // ─── Update Storage Config per org ────────────────────────────────────────────

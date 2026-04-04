@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useRegister } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Building2, Loader2, Eye, EyeOff, AlertCircle, CheckCircle2, Lock } from "lucide-react";
+import { Building2, Loader2, Eye, EyeOff, AlertCircle, CheckCircle2, Lock, UserPlus, Building } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -63,12 +63,138 @@ function PasswordStrength({ password }: { password: string }) {
   );
 }
 
+// ─── Create-Org Form ─────────────────────────────────────────────────────────
+const orgRegSchema = z.object({
+  orgName: z.string().min(2, "Organisation name must be at least 2 characters").max(100),
+  adminFirstName: z.string().min(1, "First name is required").max(50),
+  adminLastName: z.string().min(1, "Last name is required").max(50),
+  adminEmail: z.string().email("Please enter a valid email address"),
+  adminPassword: z.string().min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Must contain an uppercase letter")
+    .regex(/[0-9]/, "Must contain a number"),
+  confirmPassword: z.string(),
+}).refine(d => d.adminPassword === d.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] });
+
+type OrgRegValues = z.infer<typeof orgRegSchema>;
+
+function CreateOrgForm() {
+  const [, setLocation] = useLocation();
+  const [showPw, setShowPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const form = useForm<OrgRegValues>({
+    resolver: zodResolver(orgRegSchema),
+    defaultValues: { orgName: "", adminFirstName: "", adminLastName: "", adminEmail: "", adminPassword: "", confirmPassword: "" },
+  });
+
+  const pw = form.watch("adminPassword");
+
+  const onSubmit = async (data: OrgRegValues) => {
+    setServerError(null); setLoading(true);
+    try {
+      const r = await fetch("/api/auth/register-org", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orgName: data.orgName,
+          adminFirstName: data.adminFirstName,
+          adminLastName: data.adminLastName,
+          adminEmail: data.adminEmail,
+          adminPassword: data.adminPassword,
+        }),
+      });
+      const json = await r.json();
+      if (!r.ok) { setServerError(json.message ?? "Registration failed"); return; }
+      setSuccess(`Organisation "${json.orgName}" created! Redirecting to login…`);
+      setTimeout(() => setLocation("/login"), 2500);
+    } catch {
+      setServerError("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        {serverError && <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>{serverError}</AlertDescription></Alert>}
+        {success && <Alert><CheckCircle2 className="h-4 w-4 text-green-500" /><AlertDescription>{success}</AlertDescription></Alert>}
+
+        <FormField control={form.control} name="orgName" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Organisation Name</FormLabel>
+            <FormControl><Input placeholder="Acme Engineering" className="h-11" disabled={loading} {...field} /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+
+        <div className="grid grid-cols-2 gap-4">
+          <FormField control={form.control} name="adminFirstName" render={({ field }) => (
+            <FormItem><FormLabel>First name</FormLabel><FormControl><Input placeholder="John" className="h-11" disabled={loading} {...field} /></FormControl><FormMessage /></FormItem>
+          )} />
+          <FormField control={form.control} name="adminLastName" render={({ field }) => (
+            <FormItem><FormLabel>Last name</FormLabel><FormControl><Input placeholder="Smith" className="h-11" disabled={loading} {...field} /></FormControl><FormMessage /></FormItem>
+          )} />
+        </div>
+
+        <FormField control={form.control} name="adminEmail" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Admin Email</FormLabel>
+            <FormControl><Input placeholder="admin@company.com" type="email" className="h-11" disabled={loading} {...field} /></FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+
+        <FormField control={form.control} name="adminPassword" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Password</FormLabel>
+            <FormControl>
+              <div className="relative">
+                <Input placeholder="••••••••" type={showPw ? "text" : "password"} className="h-11 pr-10" disabled={loading} {...field} />
+                <button type="button" onClick={() => setShowPw(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </FormControl>
+            <PasswordStrength password={pw} />
+            <FormMessage />
+          </FormItem>
+        )} />
+
+        <FormField control={form.control} name="confirmPassword" render={({ field }) => (
+          <FormItem>
+            <FormLabel>Confirm password</FormLabel>
+            <FormControl>
+              <div className="relative">
+                <Input placeholder="••••••••" type={showConfirm ? "text" : "password"} className="h-11 pr-10" disabled={loading} {...field} />
+                <button type="button" onClick={() => setShowConfirm(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>
+                  {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )} />
+
+        <Button type="submit" className="w-full h-11 text-base font-semibold mt-2" disabled={loading || !!success}>
+          {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Creating organisation…</> : "Create Organisation"}
+        </Button>
+      </form>
+    </Form>
+  );
+}
+
+// ─── Main Register Page ───────────────────────────────────────────────────────
 export default function Register() {
   const { login: setAuthToken } = useAuth();
   const registerMutation = useRegister();
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"join" | "create">("join");
 
   const { data: systemSettings, isLoading: settingsLoading } = useQuery({
     queryKey: ["system-settings-public"],
@@ -167,6 +293,28 @@ export default function Register() {
           ) : (
 
           <div className="bg-card px-6 py-8 shadow-xl shadow-black/5 rounded-2xl border border-border/50">
+            {/* Mode Toggle */}
+            <div className="flex rounded-lg border bg-muted p-1 mb-6 gap-1">
+              <button
+                type="button"
+                onClick={() => setMode("join")}
+                className={`flex-1 flex items-center justify-center gap-1.5 rounded-md py-2 text-sm font-medium transition-colors ${mode === "join" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <UserPlus className="h-3.5 w-3.5" /> Join Organisation
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("create")}
+                className={`flex-1 flex items-center justify-center gap-1.5 rounded-md py-2 text-sm font-medium transition-colors ${mode === "create" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                <Building className="h-3.5 w-3.5" /> Create Organisation
+              </button>
+            </div>
+
+            {mode === "create" ? (
+              <CreateOrgForm />
+            ) : (
+            <>
             {serverError && (
               <Alert variant="destructive" className="mb-6">
                 <AlertCircle className="h-4 w-4" />
@@ -354,6 +502,8 @@ export default function Register() {
                 </Link>
               </p>
             </div>
+            </>
+            )}
           </div>
           )}
         </div>

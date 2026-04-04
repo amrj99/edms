@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isBefore, isAfter } from "date-fns";
 import * as XLSX from "xlsx";
@@ -28,6 +28,7 @@ import {
   Mail, Send, PenLine, ClipboardList, ShieldAlert, FileCheck, Plus, Filter, X,
   Eye, EyeOff, Columns3, Save, BookOpen, ChevronDown, Trash2,
   CheckCircle2, XCircle, Clock, CircleDot, ArrowUp, ArrowDown,
+  Sparkles, Link2, ExternalLink,
 } from "lucide-react";
 
 function SortableHead({ label, colKey, sortKey, sortDir, onSort, className = "" }: {
@@ -1013,7 +1014,143 @@ function CorrespondenceRegister({ filters }: { filters: Filters }) {
   );
 }
 
-// ─── Transmittal Document List ────────────────────────────────────────────────
+// ─── Smart Link Panel (AI-assisted transmittal linking) ───────────────────────
+function SmartLinkPanel({ transmittalId, projectId }: { transmittalId: number; projectId: string | number }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [accepting, setAccepting] = useState<number | null>(null);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["trs-suggest", transmittalId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/suggest-links`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    enabled: false,
+  });
+
+  const handleOpen = () => {
+    setOpen(v => !v);
+    if (!data) refetch();
+  };
+
+  const acceptDoc = async (doc: any) => {
+    setAccepting(doc.id);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: doc.id, revision: doc.revision }),
+      });
+      if (!r.ok) throw new Error("Failed to add");
+      qc.invalidateQueries({ queryKey: ["trs-detail", transmittalId] });
+      qc.invalidateQueries({ queryKey: ["trs-suggest", transmittalId] });
+      toast({ title: "Document linked", description: `${doc.documentNumber} added to transmittal.` });
+    } catch {
+      toast({ title: "Failed to link document", variant: "destructive" });
+    } finally {
+      setAccepting(null);
+    }
+  };
+
+  const docs: any[] = data?.documents ?? [];
+  const corr: any[] = data?.correspondence ?? [];
+  const hasResults = docs.length > 0 || corr.length > 0;
+
+  const scoreBar = (score: number) => (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.round(score * 100)}%` }} />
+      </div>
+      <span className="text-[10px] text-muted-foreground w-7">{Math.round(score * 100)}%</span>
+    </div>
+  );
+
+  return (
+    <div className="border-t mt-4 pt-3">
+      <button
+        onClick={handleOpen}
+        className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 transition-colors"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        Smart Link Suggestions
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-4">
+          {isLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Analysing transmittal subject for matches…
+            </div>
+          )}
+
+          {!isLoading && !hasResults && data && (
+            <p className="text-xs text-muted-foreground italic">
+              No strong matches found. Try adding more detail to the transmittal subject or description.
+            </p>
+          )}
+
+          {docs.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <FileText className="h-3 w-3" /> Document Matches
+              </p>
+              <div className="rounded-md border divide-y">
+                {docs.map((doc: any) => (
+                  <div key={doc.id} className="flex items-center gap-2 px-2.5 py-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono text-primary truncate">{doc.documentNumber}</p>
+                      <p className="text-xs text-foreground truncate" title={doc.title}>{doc.title}</p>
+                      <p className="text-[10px] text-muted-foreground capitalize">{doc.revision ? `Rev ${doc.revision}` : ""} · {doc.status?.replace(/_/g," ")}</p>
+                    </div>
+                    {scoreBar(doc.score)}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-xs px-2 shrink-0"
+                      disabled={accepting === doc.id}
+                      onClick={() => acceptDoc(doc)}
+                    >
+                      {accepting === doc.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Link2 className="h-3 w-3 mr-1" />Link</>}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {corr.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                <Mail className="h-3 w-3" /> Correspondence Matches
+              </p>
+              <div className="rounded-md border divide-y">
+                {corr.map((c: any) => (
+                  <div key={c.id} className="flex items-center gap-2 px-2.5 py-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono text-primary truncate">{c.referenceNumber || `CORR-${c.id}`}</p>
+                      <p className="text-xs text-foreground truncate" title={c.subject}>{c.subject}</p>
+                      <p className="text-[10px] text-muted-foreground capitalize">{c.direction ?? ""} · {c.status?.replace(/_/g," ")}</p>
+                    </div>
+                    {scoreBar(c.score)}
+                    <span className="inline-flex items-center text-[10px] text-muted-foreground gap-0.5 shrink-0">
+                      <ExternalLink className="h-3 w-3" /> ref
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TransmittalDocumentList({ transmittalId, projectId }: { transmittalId: number; projectId: string | number }) {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -1109,26 +1246,51 @@ function TransmittalHistoryPanel({ transmittalId, projectId }: { transmittalId: 
     },
   });
   const entries: any[] = data?.history ?? [];
-  const eventIcons: Record<string, string> = {
-    created: "🆕", sent: "📤", acknowledged: "✅", review_code_set: "🔖",
-    approval_submitted: "⏳", record_approved: "✔️", record_rejected: "✖️",
+
+  type EventMeta = { icon: ReactNode; color: string; line: string };
+  const eventMeta = (eventType: string): EventMeta => {
+    const map: Record<string, EventMeta> = {
+      created:           { icon: <Plus className="h-3 w-3" />,          color: "bg-blue-500",   line: "border-blue-200" },
+      sent:              { icon: <Send className="h-3 w-3" />,           color: "bg-indigo-500", line: "border-indigo-200" },
+      acknowledged:      { icon: <CheckCircle2 className="h-3 w-3" />,  color: "bg-green-500",  line: "border-green-200" },
+      review_code_set:   { icon: <BookOpen className="h-3 w-3" />,      color: "bg-amber-500",  line: "border-amber-200" },
+      approval_submitted:{ icon: <Clock className="h-3 w-3" />,         color: "bg-yellow-500", line: "border-yellow-200" },
+      record_approved:   { icon: <CheckCircle2 className="h-3 w-3" />,  color: "bg-green-600",  line: "border-green-300" },
+      record_rejected:   { icon: <XCircle className="h-3 w-3" />,       color: "bg-red-500",    line: "border-red-200" },
+      item_added:        { icon: <Plus className="h-3 w-3" />,           color: "bg-sky-500",    line: "border-sky-200" },
+      item_removed:      { icon: <Trash2 className="h-3 w-3" />,        color: "bg-gray-400",   line: "border-gray-200" },
+    };
+    return map[eventType] ?? { icon: <CircleDot className="h-3 w-3" />, color: "bg-gray-400", line: "border-gray-200" };
   };
+
   return (
     <div className="border-t mt-4 pt-4 space-y-2">
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Transmittal History</p>
       {isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : entries.length === 0 ? (
         <p className="text-xs text-muted-foreground italic">No history recorded yet.</p>
       ) : (
-        <div className="space-y-1.5">
-          {entries.map(e => (
-            <div key={e.id} className="flex items-start gap-2 text-xs">
-              <span className="text-base leading-none mt-0.5 shrink-0">{eventIcons[e.eventType] ?? "•"}</span>
-              <div className="flex-1 min-w-0">
-                <p className="text-foreground">{e.description}</p>
-                <p className="text-muted-foreground">{e.performedByName && `${e.performedByName} · `}{fmt(e.createdAt)}</p>
-              </div>
-            </div>
-          ))}
+        <div className="relative pl-5">
+          <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
+          <div className="space-y-3">
+            {entries.map((e) => {
+              const meta = eventMeta(e.eventType);
+              return (
+                <div key={e.id} className="relative flex items-start gap-3 text-xs">
+                  <span className={`absolute -left-5 flex h-[18px] w-[18px] items-center justify-center rounded-full text-white shrink-0 mt-0.5 ${meta.color}`}>
+                    {meta.icon}
+                  </span>
+                  <div className="flex-1 min-w-0 pt-0.5">
+                    <p className="text-foreground leading-snug">{e.description}</p>
+                    <p className="text-muted-foreground mt-0.5">
+                      {e.performedByName && <span className="font-medium text-foreground/70">{e.performedByName}</span>}
+                      {e.performedByName && " · "}
+                      {fmt(e.createdAt)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -1148,6 +1310,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
     { key: "partyType", label: "Party Type" },
     { key: "purpose", label: t("purpose") },
     { key: "reviewCode", label: "Review Code" },
+    { key: "itemCount", label: "Docs" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "sentAt", label: t("sentDate") },
@@ -1212,6 +1375,15 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
                 {visibleCols.has("partyType") && <TableCell className="text-xs">{tr.partyType || "—"}</TableCell>}
                 {visibleCols.has("purpose") && <TableCell className="text-xs capitalize">{tr.purpose?.replace(/_/g," ") || "—"}</TableCell>}
                 {visibleCols.has("reviewCode") && <TableCell><ReviewCodePill code={tr.reviewCode} /></TableCell>}
+                {visibleCols.has("itemCount") && (
+                  <TableCell>
+                    {(tr.itemCount ?? 0) > 0
+                      ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                          <BookOpen className="h-3 w-3" />{tr.itemCount}
+                        </span>
+                      : <span className="text-muted-foreground text-xs">—</span>}
+                  </TableCell>
+                )}
                 {visibleCols.has("status") && <TableCell><StatusPill status={tr.status} /></TableCell>}
                 {visibleCols.has("approvalStatus") && <TableCell><ApprovalBadge status={tr.approvalStatus} /></TableCell>}
                 {visibleCols.has("sentAt") && <TableCell className="text-xs whitespace-nowrap">{fmt(tr.sentAt)}</TableCell>}
@@ -1249,6 +1421,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
               onRecordUpdated={setDetailItem}
             />
             <TransmittalDocumentList transmittalId={detailItem.id} projectId={filters.projectId} />
+            <SmartLinkPanel transmittalId={detailItem.id} projectId={filters.projectId} />
             <TransmittalHistoryPanel transmittalId={detailItem.id} projectId={filters.projectId} />
           </>
         )}

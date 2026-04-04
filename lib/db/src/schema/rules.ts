@@ -38,6 +38,9 @@ export const rulesTable = pgTable("rules", {
   actions: jsonb("actions").notNull().default([]),
   // [{ type: "assign_user"|"assign_team"|"send_notification", config: {...} }]
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastFailedAt: timestamp("last_failed_at"),
+  isCircuitOpen: boolean("is_circuit_open").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [

@@ -13,7 +13,7 @@ import {
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
   CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
-  ExternalLink, Menu, MoreHorizontal, Eye, EyeOff, Trash2,
+  ExternalLink, Menu, MoreHorizontal, Eye, EyeOff, Trash2, CreditCard,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -373,6 +373,7 @@ export function AppSidebar() {
     { title: t("navUsersRoles"), url: "/users", icon: Users },
     { title: t("navConfig"), url: "/config", icon: SlidersHorizontal },
     { title: t("navAdmin"), url: "/admin", icon: ShieldCheck },
+    { title: "Billing", url: "/billing", icon: CreditCard },
     { title: t("navSettings"), url: "/settings", icon: Settings },
     { title: t("navAISettings"), url: "/ai-settings", icon: Brain },
   ];

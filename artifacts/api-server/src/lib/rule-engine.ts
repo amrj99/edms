@@ -1,19 +1,15 @@
 /**
  * Rule Engine — evaluates admin-defined automation rules.
  *
- * Context shape (all optional):
- *   {
- *     type: "document" | "correspondence",
- *     projectId, documentType?, discipline?,
- *     subject?, senderUserId?, orgId
- *   }
+ * Circuit Breaker:
+ *   - CLOSED  (isCircuitOpen=false): normal execution.
+ *   - OPEN    (isCircuitOpen=true, within cooldown): rule is skipped.
+ *   - HALF-OPEN (isCircuitOpen=true, cooldown elapsed): one attempt allowed;
+ *               success → CLOSED, failure → remain OPEN with fresh cooldown.
  *
- * Matching rules (priority ASC — lower number = higher priority):
- *   1. All enabled rules whose appliesTo matches the context type are fetched.
- *   2. Each rule's conditions are AND-checked against the context.
- *   3. Matching rules execute their actions in priority order.
- *
- * Every rule execution is logged to rule_execution_logs for full auditability.
+ * Thresholds:
+ *   FAILURE_THRESHOLD = 5 consecutive failures → trip (OPEN)
+ *   COOLDOWN_MS       = 30 minutes before half-open retry
  */
 
 import { db } from "@workspace/db";
@@ -21,6 +17,9 @@ import { rulesTable, ruleExecutionLogsTable, notificationsTable, tasksTable, use
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { emitToUser } from "./socket.js";
 import { logger } from "./logger.js";
+
+const FAILURE_THRESHOLD = 5;
+const COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 
 export interface RuleContext {
   type: "document" | "correspondence";
@@ -30,7 +29,7 @@ export interface RuleContext {
   discipline?: string | null;
   subject?: string | null;
   senderUserId?: number;
-  entityId?: number;          // id of the created doc/corr (for task/notification refs)
+  entityId?: number;
   entityTitle?: string;
   triggeredByUserId: number;
 }
@@ -39,6 +38,41 @@ export interface RuleActionResult {
   ruleId: number;
   ruleName: string;
   actions: string[];
+}
+
+/** Determine circuit state for a given rule row. */
+function circuitState(rule: typeof rulesTable.$inferSelect): "closed" | "open" | "half-open" {
+  if (!rule.isCircuitOpen) return "closed";
+  const elapsed = rule.lastFailedAt ? Date.now() - new Date(rule.lastFailedAt).getTime() : Infinity;
+  return elapsed >= COOLDOWN_MS ? "half-open" : "open";
+}
+
+/** Update circuit breaker columns after a rule execution. */
+async function updateCircuitState(
+  ruleId: number,
+  succeeded: boolean,
+  prevConsecutiveFailures: number,
+): Promise<void> {
+  if (succeeded) {
+    await db.update(rulesTable).set({
+      consecutiveFailures: 0,
+      isCircuitOpen: false,
+      lastFailedAt: null,
+      updatedAt: new Date(),
+    }).where(eq(rulesTable.id, ruleId));
+  } else {
+    const newFailures = prevConsecutiveFailures + 1;
+    const tripCircuit = newFailures >= FAILURE_THRESHOLD;
+    await db.update(rulesTable).set({
+      consecutiveFailures: newFailures,
+      isCircuitOpen: tripCircuit,
+      lastFailedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(rulesTable.id, ruleId));
+    if (tripCircuit) {
+      logger.warn({ ruleId, newFailures }, "Circuit breaker TRIPPED — rule suspended for 30 min");
+    }
+  }
 }
 
 export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[]> {
@@ -74,6 +108,33 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
     const results: RuleActionResult[] = [];
 
     for (const rule of matchingRules) {
+      // ── Circuit Breaker check ────────────────────────────────────────────────
+      const state = circuitState(rule);
+
+      if (state === "open") {
+        const minutesLeft = rule.lastFailedAt
+          ? Math.ceil((COOLDOWN_MS - (Date.now() - new Date(rule.lastFailedAt).getTime())) / 60000)
+          : 0;
+        logger.info({ ruleId: rule.id, minutesLeft }, "Circuit OPEN — skipping rule");
+
+        await db.insert(ruleExecutionLogsTable).values({
+          ruleId: rule.id,
+          organizationId: ctx.orgId,
+          entityType: ctx.type,
+          entityId: ctx.entityId ?? null,
+          actionsTaken: [],
+          success: false,
+          errorMessage: `Circuit breaker OPEN — skipped (cooldown: ${minutesLeft}min remaining)`,
+          durationMs: 0,
+        }).catch(() => {});
+        continue;
+      }
+
+      if (state === "half-open") {
+        logger.info({ ruleId: rule.id }, "Circuit HALF-OPEN — attempting one execution");
+      }
+
+      // ── Execute the rule ─────────────────────────────────────────────────────
       const ruleStart = Date.now();
       const actions = (rule.actions as Record<string, unknown>[]) ?? [];
       const executedActions: string[] = [];
@@ -88,7 +149,6 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
           if (actionType === "assign_user") {
             const userId = Number(config.userId);
             if (userId) {
-              // Verify the assignee belongs to the same organization before creating the task.
               const [assignee] = await db.select({ id: usersTable.id, organizationId: usersTable.organizationId })
                 .from(usersTable)
                 .where(eq(usersTable.id, userId))
@@ -125,7 +185,6 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
               }
             }
           } else if (actionType === "assign_team") {
-            // Team assignment — stored as a note; teams can be extended later
             const teamName = String(config.teamName ?? config.teamId ?? "");
             executedActions.push(`assign_team:${teamName}`);
           } else if (actionType === "send_notification") {
@@ -135,7 +194,6 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
             let targets: number[];
 
             if (rawUserIds.length > 0) {
-              // Validate every listed userId belongs to the same organization as the rule.
               const validUsers = await db
                 .select({ id: usersTable.id })
                 .from(usersTable)
@@ -156,7 +214,6 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
               }
               targets = [...validIds];
             } else {
-              // Default: notify the user who triggered the event (always same org).
               targets = [ctx.triggeredByUserId];
             }
 
@@ -184,7 +241,7 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
         }
       }
 
-      // ── Log this rule's execution ────────────────────────────────────────────
+      // ── Log execution ────────────────────────────────────────────────────────
       const durationMs = Date.now() - ruleStart;
       await db.insert(ruleExecutionLogsTable).values({
         ruleId: rule.id,
@@ -198,6 +255,9 @@ export async function evaluateRules(ctx: RuleContext): Promise<RuleActionResult[
       }).catch((logErr) => {
         logger.warn({ err: logErr, ruleId: rule.id }, "Failed to write rule execution log");
       });
+
+      // ── Update circuit state ─────────────────────────────────────────────────
+      await updateCircuitState(rule.id, ruleSuccess, rule.consecutiveFailures).catch(() => {});
 
       if (executedActions.length > 0) {
         results.push({ ruleId: rule.id, ruleName: rule.name, actions: executedActions });

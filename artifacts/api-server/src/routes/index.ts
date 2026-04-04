@@ -38,6 +38,7 @@ import calendarRouter from "./calendar.js";
 import rulesRouter from "./rules.js";
 import skillsRouter from "./skills.js";
 import migrationsRouter from "./migrations.js";
+import billingRouter from "./billing.js";
 
 const router: IRouter = Router();
 
@@ -96,5 +97,6 @@ router.use("/", notificationSummaryRouter);
 router.use("/rules", rulesRouter);
 router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
+router.use("/billing", billingRouter);
 
 export default router;
