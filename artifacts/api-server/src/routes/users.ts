@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable } from "@workspace/db";
-import { eq, count } from "drizzle-orm";
+import { eq, count, and } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { PLANS } from "../lib/plans.js";
 
 const router = Router();
 
@@ -39,6 +40,32 @@ router.post("/", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Bad Request", message: "All fields required" });
     return;
   }
+
+  // Enforce per-plan user limit
+  const targetOrgId = organizationId ? parseInt(String(organizationId)) : req.user!.organizationId;
+  if (targetOrgId) {
+    const [org] = await db
+      .select({ subscriptionTier: organizationsTable.subscriptionTier })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, targetOrgId));
+
+    const plan = PLANS.find(p => p.id === (org?.subscriptionTier ?? "free"));
+    if (plan && plan.maxUsers !== null) {
+      const [uc] = await db
+        .select({ cnt: count() })
+        .from(usersTable)
+        .where(and(eq(usersTable.organizationId, targetOrgId), eq(usersTable.isActive, true)));
+      const currentCount = Number(uc?.cnt ?? 0);
+      if (currentCount >= plan.maxUsers) {
+        res.status(403).json({
+          error: "USER_LIMIT_REACHED",
+          message: `Your ${plan.name} plan allows up to ${plan.maxUsers} users. Please upgrade to add more.`,
+        });
+        return;
+      }
+    }
+  }
+
   const [user] = await db.insert(usersTable).values({
     email: email.toLowerCase(),
     passwordHash: await hashPassword(password),

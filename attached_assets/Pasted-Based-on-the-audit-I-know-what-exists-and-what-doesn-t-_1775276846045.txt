@@ -1,0 +1,122 @@
+Based on the audit, I know what exists and what doesn't. Please do NOT rebuild 
+what's already there. Instead, make these precise targeted fixes:
+
+---
+
+PROBLEM 1 — No proper subscriptions table
+
+The current system stores plan data as a text field "subscriptionTier" and Stripe 
+data as a JSON blob in system_settings. This is not maintainable.
+
+FIX: Add a proper `subscriptions` table using Drizzle ORM with these columns:
+- id (uuid, primary key)
+- organizationId (foreign key to organizations)
+- planId (text: "starter" | "basic" | "professional" | "enterprise" | "free")
+- stripeCustomerId (text, nullable)
+- stripeSubscriptionId (text, nullable)
+- stripePriceId (text, nullable)
+- status (text: "active" | "trialing" | "past_due" | "canceled" | "free")
+- currentPeriodStart (timestamp, nullable)
+- currentPeriodEnd (timestamp, nullable)
+- seatsCount (integer, default 1)
+- createdAt, updatedAt (timestamps)
+
+Migrate the existing Stripe data from system_settings JSON blobs into this new table.
+Keep the subscriptionTier text column on organizations for quick lookups, but it 
+should always be updated in sync with the subscriptions table.
+
+---
+
+PROBLEM 2 — User and storage limits defined but never enforced
+
+In billing.ts, PLANS defines maxUsers and storageMb for each tier, but these values 
+are never checked anywhere.
+
+FIX A — Enforce user limits:
+In the user invitation endpoint and the user creation endpoint, before adding a new 
+user, check:
+1. Get the org's current user count from the database
+2. Get the org's plan maxUsers from the PLANS config
+3. If currentCount >= maxUsers (and maxUsers is not null), return HTTP 403:
+   { error: "USER_LIMIT_REACHED", message: "Your plan allows X users. Please upgrade to add more." }
+
+FIX B — Add storage tracking:
+Add a column `storageUsedMb` (integer, default 0) to the organizations table.
+In every file upload handler (documents, transmittal attachments, any multer handler):
+1. After successful upload, add the file size (in MB) to the org's storageUsedMb
+2. After file deletion, subtract from storageUsedMb
+3. Before accepting an upload, check: if (storageUsedMb + newFileMb > maxStorageMb) return 403:
+   { error: "STORAGE_LIMIT_REACHED", message: "Storage limit reached. Please upgrade your plan." }
+
+---
+
+PROBLEM 3 — Modules system completely disconnected from subscription plans
+
+The OrgModules flags exist, but upgrading a plan through Stripe does NOT change any 
+module flags. The system owner must manually toggle them.
+
+FIX: Create a plan-to-modules mapping and apply it automatically.
+
+Add this function to billing.ts:
+
+function getDefaultModulesForPlan(planId: string): OrgModules {
+  const moduleMap = {
+    free:         { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
+    starter:      { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: false },
+    basic:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
+    professional: { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
+    enterprise:   { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
+  };
+  return moduleMap[planId] ?? moduleMap.free;
+}
+
+Call this function in two places:
+1. In the webhook handler for `checkout.session.completed`: after updating the 
+   subscriptionTier, also call this function and save the result to the org_config 
+   modules column.
+2. In the webhook handler for `customer.subscription.deleted`: reset modules to 
+   the "free" mapping.
+
+---
+
+PROBLEM 4 — invoice.payment_failed does nothing useful
+
+Currently when a payment fails, the webhook just logs a warning. The org keeps full 
+access indefinitely.
+
+FIX: When invoice.payment_failed is received:
+1. Set the subscription status to "past_due" in the subscriptions table
+2. Keep the current plan active for a 7-day grace period
+3. Add a new database column `paymentFailedAt` (timestamp) on the subscriptions table
+4. Expose this in the GET /api/billing/status response so the frontend can show a 
+   warning banner
+
+---
+
+PROBLEM 5 — No API-level enforcement for modules (frontend-only guards)
+
+A user can currently bypass the frontend and call any API endpoint directly, even 
+if their module is disabled.
+
+FIX: Create a middleware function `requireModule(moduleName: keyof OrgModules)`:
+- Reads the org's modules from org_config
+- If the module is false, returns HTTP 403: { error: "MODULE_DISABLED" }
+- Apply this middleware to:
+  * All transmittal/register routes → requireModule("registers")
+  * All deliverable routes → requireModule("deliverables")
+  * All chat routes → requireModule("chat")
+
+---
+
+IMPORTANT: Do not touch the Stripe client setup, the webhook signature verification, 
+or the checkout/portal flow — those are already correctly structured. Just add the 
+env var placeholders if they are missing:
+
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRICE_STARTER=
+STRIPE_PRICE_BASIC=
+STRIPE_PRICE_PROFESSIONAL=
+STRIPE_PRICE_ENTERPRISE=
+
+Show me every file you create or modify, with the exact changes made.

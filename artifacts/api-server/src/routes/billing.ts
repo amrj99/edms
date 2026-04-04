@@ -2,102 +2,28 @@ import { Router } from "express";
 import Stripe from "stripe";
 import { requireAuth } from "../lib/auth.js";
 import { db } from "@workspace/db";
-import { organizationsTable, systemSettingsTable } from "@workspace/db/schema";
-import { eq, and } from "drizzle-orm";
+import {
+  organizationsTable,
+  systemSettingsTable,
+  subscriptionsTable,
+  orgConfigTable,
+} from "@workspace/db/schema";
+import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
+import { PLANS, getDefaultModulesForPlan } from "../lib/plans.js";
+
+export { PLANS };
 
 const router = Router();
 
-// ─── Plans config ────────────────────────────────────────────────────────────
-export const PLANS = [
-  {
-    id: "starter",
-    name: "Starter",
-    description: "Essential document management for small teams",
-    priceAed: 45,
-    currency: "aed",
-    interval: "month",
-    features: [
-      "Up to 10 users",
-      "5 GB storage",
-      "Basic transmittal management",
-      "Standard support",
-      "Document versioning",
-    ],
-    maxUsers: 10,
-    storageMb: 5120,
-    stripePriceEnv: "STRIPE_PRICE_STARTER",
-  },
-  {
-    id: "basic",
-    name: "Basic",
-    description: "Full EDMS for growing engineering teams",
-    priceAed: 65,
-    currency: "aed",
-    interval: "month",
-    features: [
-      "Up to 25 users",
-      "25 GB storage",
-      "Transmittal & register management",
-      "Email support",
-      "AI-assisted linking",
-      "Rules engine",
-    ],
-    maxUsers: 25,
-    storageMb: 25600,
-    stripePriceEnv: "STRIPE_PRICE_BASIC",
-    popular: true,
-  },
-  {
-    id: "professional",
-    name: "Professional",
-    description: "Advanced EDMS for large projects",
-    priceAed: 80,
-    currency: "aed",
-    interval: "month",
-    features: [
-      "Up to 100 users",
-      "100 GB storage",
-      "All registers (ITR, NCR, NOC)",
-      "Priority support",
-      "Advanced analytics",
-      "Custom workflows",
-      "API access",
-    ],
-    maxUsers: 100,
-    storageMb: 102400,
-    stripePriceEnv: "STRIPE_PRICE_PROFESSIONAL",
-  },
-  {
-    id: "enterprise",
-    name: "Enterprise",
-    description: "Unlimited scale for large organisations",
-    priceAed: 95,
-    currency: "aed",
-    interval: "month",
-    features: [
-      "Unlimited users",
-      "1 TB storage",
-      "All features",
-      "Dedicated support",
-      "SLA guarantee",
-      "On-premise option",
-      "Custom integrations",
-      "SSO / SAML",
-    ],
-    maxUsers: null,
-    storageMb: 1048576,
-    stripePriceEnv: "STRIPE_PRICE_ENTERPRISE",
-  },
-];
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Stripe client ────────────────────────────────────────────────────────────
 function getStripe(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return null;
   return new Stripe(key, { apiVersion: "2025-03-31.basil" });
 }
 
+// ─── Legacy system_settings helpers (kept for checkout/portal customer lookup) ─
 async function getOrgStripeData(orgId: number): Promise<Record<string, string>> {
   const rows = await db
     .select()
@@ -109,15 +35,52 @@ async function getOrgStripeData(orgId: number): Promise<Record<string, string>> 
 
 async function setOrgStripeData(orgId: number, data: Record<string, string>) {
   const key = `stripe_org_${orgId}`;
-  const existing = await db
-    .select()
-    .from(systemSettingsTable)
-    .where(eq(systemSettingsTable.key, key));
+  const existing = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
   const value = JSON.stringify(data);
   if (existing.length > 0) {
     await db.update(systemSettingsTable).set({ value, updatedAt: new Date() }).where(eq(systemSettingsTable.key, key));
   } else {
     await db.insert(systemSettingsTable).values({ key, value });
+  }
+}
+
+// ─── Subscriptions table helpers ──────────────────────────────────────────────
+async function upsertSubscription(orgId: number, data: Partial<typeof subscriptionsTable.$inferInsert>) {
+  const [existing] = await db
+    .select({ id: subscriptionsTable.id })
+    .from(subscriptionsTable)
+    .where(eq(subscriptionsTable.organizationId, orgId));
+
+  if (existing) {
+    const [updated] = await db
+      .update(subscriptionsTable)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(subscriptionsTable.organizationId, orgId))
+      .returning();
+    return updated;
+  } else {
+    const [inserted] = await db
+      .insert(subscriptionsTable)
+      .values({ organizationId: orgId, ...data })
+      .returning();
+    return inserted;
+  }
+}
+
+async function applyModulesForPlan(orgId: number, planId: string) {
+  const modules = getDefaultModulesForPlan(planId);
+  const [existingConfig] = await db
+    .select({ id: orgConfigTable.id })
+    .from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, orgId));
+
+  if (existingConfig) {
+    await db
+      .update(orgConfigTable)
+      .set({ modules, updatedAt: new Date() })
+      .where(eq(orgConfigTable.organizationId, orgId));
+  } else {
+    await db.insert(orgConfigTable).values({ organizationId: orgId, modules });
   }
 }
 
@@ -135,33 +98,62 @@ router.get("/status", requireAuth, async (req, res) => {
     const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId));
     if (!org) return res.status(404).json({ message: "Organisation not found" });
 
-    const stripeData = await getOrgStripeData(orgId);
-    const currentPlan = PLANS.find(p => p.id === org.subscriptionTier) ?? null;
+    // Primary: read from subscriptions table
+    let [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.organizationId, orgId));
 
+    // Lazy migration: if no subscriptions row but system_settings data exists, migrate it
+    if (!sub) {
+      const legacyData = await getOrgStripeData(orgId);
+      if (legacyData.subscriptionId || legacyData.customerId) {
+        sub = await upsertSubscription(orgId, {
+          planId: legacyData.planId ?? org.subscriptionTier ?? "free",
+          stripeCustomerId: legacyData.customerId ?? null,
+          stripeSubscriptionId: legacyData.subscriptionId ?? null,
+          status: legacyData.subscriptionId ? "active" : "free",
+        });
+        logger.info({ orgId }, "Lazily migrated subscription from system_settings to subscriptions table");
+      }
+    }
+
+    const tier = org.subscriptionTier ?? "free";
+    const currentPlan = PLANS.find(p => p.id === tier) ?? null;
+
+    // Try to refresh live status from Stripe if configured
     const stripe = getStripe();
-    let subscriptionStatus = "inactive";
-    let currentPeriodEnd: string | null = null;
-    let seats = 0;
+    let subscriptionStatus: string = sub?.status ?? "free";
+    let currentPeriodEnd: string | null = sub?.currentPeriodEnd?.toISOString() ?? null;
+    let seats: number = sub?.seatsCount ?? 0;
 
-    if (stripe && stripeData.subscriptionId) {
+    if (stripe && sub?.stripeSubscriptionId) {
       try {
-        const sub = await stripe.subscriptions.retrieve(stripeData.subscriptionId);
-        subscriptionStatus = sub.status;
-        currentPeriodEnd = new Date((sub as any).current_period_end * 1000).toISOString();
-        seats = (sub as any).items?.data?.[0]?.quantity ?? 0;
+        const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
+        subscriptionStatus = stripeSub.status;
+        currentPeriodEnd = new Date((stripeSub as any).current_period_end * 1000).toISOString();
+        seats = (stripeSub as any).items?.data?.[0]?.quantity ?? 1;
+        // Keep subscriptions table in sync
+        await upsertSubscription(orgId, {
+          status: stripeSub.status as any,
+          currentPeriodEnd: new Date((stripeSub as any).current_period_end * 1000),
+          currentPeriodStart: new Date((stripeSub as any).current_period_start * 1000),
+          seatsCount: seats,
+        });
       } catch (e) {
         logger.warn("Failed to retrieve Stripe subscription", e);
       }
     }
 
     res.json({
-      tier: org.subscriptionTier ?? "free",
+      tier,
       plan: currentPlan,
       subscriptionStatus,
       currentPeriodEnd,
       seats,
-      stripeCustomerId: stripeData.customerId ?? null,
-      stripeSubscriptionId: stripeData.subscriptionId ?? null,
+      paymentFailedAt: sub?.paymentFailedAt?.toISOString() ?? null,
+      stripeCustomerId: sub?.stripeCustomerId ?? null,
+      stripeSubscriptionId: sub?.stripeSubscriptionId ?? null,
+      storageUsedMb: org.storageUsedMb ?? 0,
+      storageLimitMb: currentPlan?.storageMb ?? null,
+      maxUsers: currentPlan?.maxUsers ?? null,
     });
   } catch (err) {
     logger.error(err, "billing status error");
@@ -195,6 +187,12 @@ router.post("/checkout", requireAuth, async (req, res) => {
     let customerId = stripeData.customerId;
 
     if (!customerId) {
+      const [existingSub] = await db.select({ stripeCustomerId: subscriptionsTable.stripeCustomerId })
+        .from(subscriptionsTable).where(eq(subscriptionsTable.organizationId, orgId));
+      customerId = existingSub?.stripeCustomerId ?? undefined;
+    }
+
+    if (!customerId) {
       const customer = await stripe.customers.create({
         name: org.name,
         email: org.contactEmail ?? undefined,
@@ -202,6 +200,7 @@ router.post("/checkout", requireAuth, async (req, res) => {
       });
       customerId = customer.id;
       await setOrgStripeData(orgId, { ...stripeData, customerId });
+      await upsertSubscription(orgId, { stripeCustomerId: customerId });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -231,11 +230,19 @@ router.post("/portal", requireAuth, async (req, res) => {
     if (!orgId) return res.status(400).json({ message: "No organisation context" });
 
     const stripeData = await getOrgStripeData(orgId);
-    if (!stripeData.customerId) return res.status(400).json({ message: "No Stripe customer found for this organisation" });
+    let customerId = stripeData.customerId;
+
+    if (!customerId) {
+      const [sub] = await db.select({ stripeCustomerId: subscriptionsTable.stripeCustomerId })
+        .from(subscriptionsTable).where(eq(subscriptionsTable.organizationId, orgId));
+      customerId = sub?.stripeCustomerId ?? undefined;
+    }
+
+    if (!customerId) return res.status(400).json({ message: "No Stripe customer found for this organisation" });
 
     const { returnUrl } = req.body as { returnUrl?: string };
     const session = await stripe.billingPortal.sessions.create({
-      customer: stripeData.customerId,
+      customer: customerId,
       return_url: returnUrl ?? `${process.env.APP_URL ?? ""}/billing`,
     });
 
@@ -247,13 +254,10 @@ router.post("/portal", requireAuth, async (req, res) => {
 });
 
 // ─── POST /api/billing/webhook ────────────────────────────────────────────────
-// Must be mounted with express.raw() — see app.ts / index.ts
+// Must be mounted with express.raw() — see app.ts
 router.post(
   "/webhook",
-  (req, res, next) => {
-    // Allow raw body if already parsed; express.raw is set up in app
-    next();
-  },
+  (req, res, next) => { next(); },
   async (req, res) => {
     const stripe = getStripe();
     if (!stripe) return res.status(503).send("Stripe not configured");
@@ -278,44 +282,132 @@ router.post(
           const orgId = parseInt(session.metadata?.orgId ?? "0");
           const planId = session.metadata?.planId ?? "free";
           const subscriptionId = session.subscription as string;
+          const customerId = session.customer as string;
+
           if (orgId && subscriptionId) {
-            const existing = await getOrgStripeData(orgId);
-            await setOrgStripeData(orgId, { ...existing, subscriptionId, planId, customerId: session.customer as string });
-            await db.update(organizationsTable).set({ subscriptionTier: planId, updatedAt: new Date() }).where(eq(organizationsTable.id, orgId));
+            // Keep legacy system_settings for portal customer lookup
+            const legacyExisting = await getOrgStripeData(orgId);
+            await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId, planId, customerId });
+
+            // Write to subscriptions table
+            let periodStart: Date | null = null;
+            let periodEnd: Date | null = null;
+            let seats = 1;
+            try {
+              const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
+              periodStart = new Date((stripeSub as any).current_period_start * 1000);
+              periodEnd   = new Date((stripeSub as any).current_period_end   * 1000);
+              seats       = (stripeSub as any).items?.data?.[0]?.quantity ?? 1;
+            } catch { /* ignore */ }
+
+            await upsertSubscription(orgId, {
+              planId,
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscriptionId,
+              status: "active",
+              currentPeriodStart: periodStart,
+              currentPeriodEnd: periodEnd,
+              seatsCount: seats,
+              paymentFailedAt: null,
+            });
+
+            // Keep org.subscriptionTier in sync
+            await db.update(organizationsTable)
+              .set({ subscriptionTier: planId, updatedAt: new Date() })
+              .where(eq(organizationsTable.id, orgId));
+
+            // Auto-apply module flags for this plan
+            await applyModulesForPlan(orgId, planId);
+
             logger.info({ orgId, planId, subscriptionId }, "Subscription activated via checkout");
           }
           break;
         }
+
         case "customer.subscription.updated": {
           const sub = event.data.object as Stripe.Subscription;
           const orgId = parseInt(sub.metadata?.orgId ?? "0");
           const planId = sub.metadata?.planId ?? "";
+
           if (orgId) {
-            const existing = await getOrgStripeData(orgId);
-            await setOrgStripeData(orgId, { ...existing, subscriptionId: sub.id, planId: planId || existing.planId });
+            const legacyExisting = await getOrgStripeData(orgId);
+            await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId: sub.id, planId: planId || legacyExisting.planId });
+
+            const resolvedPlanId = planId || legacyExisting.planId || "free";
+            await upsertSubscription(orgId, {
+              stripeSubscriptionId: sub.id,
+              planId: resolvedPlanId,
+              status: sub.status as any,
+              currentPeriodStart: new Date((sub as any).current_period_start * 1000),
+              currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
+              seatsCount: (sub as any).items?.data?.[0]?.quantity ?? 1,
+              paymentFailedAt: null,
+            });
+
             if (planId) {
-              await db.update(organizationsTable).set({ subscriptionTier: planId, updatedAt: new Date() }).where(eq(organizationsTable.id, orgId));
+              await db.update(organizationsTable)
+                .set({ subscriptionTier: planId, updatedAt: new Date() })
+                .where(eq(organizationsTable.id, orgId));
+              await applyModulesForPlan(orgId, planId);
             }
-            logger.info({ orgId, status: sub.status }, "Subscription updated");
+
+            logger.info({ orgId, status: sub.status, planId: resolvedPlanId }, "Subscription updated");
           }
           break;
         }
+
         case "customer.subscription.deleted": {
           const sub = event.data.object as Stripe.Subscription;
           const orgId = parseInt(sub.metadata?.orgId ?? "0");
+
           if (orgId) {
-            const existing = await getOrgStripeData(orgId);
-            await setOrgStripeData(orgId, { ...existing, subscriptionId: sub.id, planId: "free" });
-            await db.update(organizationsTable).set({ subscriptionTier: "free", updatedAt: new Date() }).where(eq(organizationsTable.id, orgId));
+            const legacyExisting = await getOrgStripeData(orgId);
+            await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId: sub.id, planId: "free" });
+
+            await upsertSubscription(orgId, {
+              planId: "free",
+              status: "canceled",
+              stripeSubscriptionId: sub.id,
+              currentPeriodEnd: null,
+              currentPeriodStart: null,
+            });
+
+            await db.update(organizationsTable)
+              .set({ subscriptionTier: "free", updatedAt: new Date() })
+              .where(eq(organizationsTable.id, orgId));
+
+            // Reset modules to free-tier mapping
+            await applyModulesForPlan(orgId, "free");
+
             logger.info({ orgId }, "Subscription cancelled — reverted to free");
           }
           break;
         }
+
         case "invoice.payment_failed": {
           const invoice = event.data.object as Stripe.Invoice;
-          logger.warn({ customerId: invoice.customer, invoiceId: invoice.id }, "Invoice payment failed");
+          const customerId = invoice.customer as string;
+
+          if (customerId) {
+            // Find the org via stripeCustomerId in subscriptions table
+            const [sub] = await db
+              .select({ organizationId: subscriptionsTable.organizationId })
+              .from(subscriptionsTable)
+              .where(eq(subscriptionsTable.stripeCustomerId, customerId));
+
+            if (sub?.organizationId) {
+              await upsertSubscription(sub.organizationId, {
+                status: "past_due",
+                paymentFailedAt: new Date(),
+              });
+              logger.warn({ orgId: sub.organizationId, customerId, invoiceId: invoice.id }, "Payment failed — subscription marked past_due");
+            } else {
+              logger.warn({ customerId, invoiceId: invoice.id }, "invoice.payment_failed: no matching org found");
+            }
+          }
           break;
         }
+
         default:
           logger.debug({ type: event.type }, "Unhandled Stripe webhook event");
       }

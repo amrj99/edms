@@ -1,7 +1,8 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable } from "@workspace/db";
+import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -739,10 +740,35 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
   }
 
   const orgId = req.user!.organizationId ?? null;
+
+  // ── Storage quota check ──────────────────────────────────────────────────
+  if (orgId) {
+    const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
+    const totalNewMb = totalNewBytes / (1024 * 1024);
+
+    const [org] = await db
+      .select({ subscriptionTier: organizationsTable.subscriptionTier, storageUsedMb: organizationsTable.storageUsedMb })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, orgId));
+
+    const plan = PLANS.find(p => p.id === (org?.subscriptionTier ?? "free"));
+    if (plan && org) {
+      const usedMb = org.storageUsedMb ?? 0;
+      if (usedMb + totalNewMb > plan.storageMb) {
+        return res.status(403).json({
+          error: "STORAGE_LIMIT_REACHED",
+          message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
+        });
+      }
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   const uploader = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).then(r => r[0]);
   const uploadedByName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined;
 
   const results = [];
+  let totalUploadedBytes = 0;
   for (const multerFile of uploadedFiles) {
     // Upload buffer to org-aware storage backend
     const stored = await uploadBuffer({
@@ -772,7 +798,17 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
       projectId,
     });
 
+    totalUploadedBytes += multerFile.size;
     results.push({ ...dbFile, uploadedByName });
+  }
+
+  // Increment org storage counter (ceil to avoid under-counting)
+  if (orgId && totalUploadedBytes > 0) {
+    const addedMb = Math.ceil(totalUploadedBytes / (1024 * 1024));
+    await db
+      .update(organizationsTable)
+      .set({ storageUsedMb: sql`GREATEST(0, COALESCE(storage_used_mb, 0) + ${addedMb})`, updatedAt: new Date() })
+      .where(eq(organizationsTable.id, orgId));
   }
 
   emitToUser(req.user!.id, "document:updated", { documentId: docId });
@@ -803,6 +839,18 @@ router.delete("/:id/files/:fileId", requireAuth, async (req, res) => {
     entityTitle: `${doc.title} — removed file: ${file.fileName}`,
     projectId,
   });
+
+  // Decrement org storage counter (floor to avoid over-subtracting)
+  const orgId = req.user!.organizationId;
+  if (orgId && file.fileSize) {
+    const removedMb = Math.floor(file.fileSize / (1024 * 1024));
+    if (removedMb > 0) {
+      await db
+        .update(organizationsTable)
+        .set({ storageUsedMb: sql`GREATEST(0, COALESCE(storage_used_mb, 0) - ${removedMb})`, updatedAt: new Date() })
+        .where(eq(organizationsTable.id, orgId));
+    }
+  }
 
   res.status(204).end();
 });
