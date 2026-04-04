@@ -529,6 +529,49 @@ router.post(
       }
     }
 
+    // Auto-update linked document statuses for incoming transmittals based on per-item reviewCode
+    const PROTECTED_DOC_STATUSES = new Set(["issued", "superseded", "void"]);
+    const REVIEW_CODE_TO_STATUS: Record<string, ReviewDecision> = {
+      A: "approved",
+      B: "approved_with_comments",
+      C: "for_revision",
+      D: "rejected",
+    };
+
+    if ((existing.direction ?? "").toUpperCase() === "IN") {
+      const items = await db
+        .select({
+          documentId: transmittalItemsTable.documentId,
+          reviewCode: transmittalItemsTable.reviewCode,
+          currentStatus: documentsTable.status,
+        })
+        .from(transmittalItemsTable)
+        .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
+        .where(eq(transmittalItemsTable.transmittalId, id));
+
+      const reviewer = req.user as any;
+      const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+
+      await Promise.all(
+        items
+          .filter(item => {
+            if (!item.reviewCode) return false;
+            if (!REVIEW_CODE_TO_STATUS[item.reviewCode]) return false;
+            if (PROTECTED_DOC_STATUSES.has(item.currentStatus ?? "")) return false;
+            return true;
+          })
+          .map(item =>
+            applyDocumentReviewDecision({
+              documentId: item.documentId,
+              decision: REVIEW_CODE_TO_STATUS[item.reviewCode!],
+              reviewerId: req.user!.id,
+              reviewerName,
+              comment: `Auto-updated from transmittal ${row.transmittalNumber} (review code ${item.reviewCode})`,
+            })
+          )
+      );
+    }
+
     await createAuditLog({
       userId: req.user!.id, action: "record_approved", entityType: "transmittal",
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,

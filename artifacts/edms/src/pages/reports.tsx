@@ -397,12 +397,13 @@ interface Filters {
   docType: string;
   party: string;
   direction: string;
+  trsPartyType: string;
 }
 
 const DEFAULT_FILTERS: Filters = {
   projectId: "_all", status: "_all", search: "",
   dateFrom: "", dateTo: "", discipline: "_all", docType: "_all", party: "_all",
-  direction: "_all",
+  direction: "_all", trsPartyType: "_all",
 };
 
 function applyDateFilter(items: any[], dateField: string, from: string, to: string) {
@@ -420,7 +421,7 @@ function applyTextFilter(items: any[], q: string, keys: string[]) {
 
 // ─── Filter Bar ───────────────────────────────────────────────────────────────
 function FilterBar({
-  filters, onFiltersChange, projects, showDiscipline, showParty, showDocType, showDirection,
+  filters, onFiltersChange, projects, showDiscipline, showParty, showDocType, showDirection, showTrsPartyType,
   disciplines = [],
 }: {
   filters: Filters;
@@ -430,13 +431,14 @@ function FilterBar({
   showParty?: boolean;
   showDocType?: boolean;
   showDirection?: boolean;
+  showTrsPartyType?: boolean;
   disciplines?: string[];
 }) {
   const { t, isRtl } = useI18n();
   const set = (key: keyof Filters, val: string) => onFiltersChange({ ...filters, [key]: val });
   const hasFilters = filters.projectId !== "_all" || filters.status !== "_all" || filters.search ||
     filters.dateFrom || filters.dateTo || filters.discipline !== "_all" || filters.party !== "_all" ||
-    filters.direction !== "_all";
+    filters.direction !== "_all" || filters.trsPartyType !== "_all";
 
   return (
     <div className={`bg-card border rounded-xl p-3 shadow-sm ${isRtl ? "font-[Tahoma,Arial,sans-serif]" : ""}`}>
@@ -500,8 +502,24 @@ function FilterBar({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="_all">All Directions</SelectItem>
-              <SelectItem value="IN">↓ IN</SelectItem>
-              <SelectItem value="OUT">↑ OUT</SelectItem>
+              <SelectItem value="IN">↓ Incoming</SelectItem>
+              <SelectItem value="OUT">↑ Outgoing</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+
+        {showTrsPartyType && (
+          <Select value={filters.trsPartyType} onValueChange={v => set("trsPartyType", v)}>
+            <SelectTrigger className="h-8 w-[160px] text-xs">
+              <SelectValue placeholder="All Party Types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_all">All Party Types</SelectItem>
+              <SelectItem value="Owner">Owner</SelectItem>
+              <SelectItem value="Consultant">Consultant</SelectItem>
+              <SelectItem value="Main Contractor">Main Contractor</SelectItem>
+              <SelectItem value="Subcontractor">Subcontractor</SelectItem>
+              <SelectItem value="Authority">Authority</SelectItem>
             </SelectContent>
           </Select>
         )}
@@ -1220,6 +1238,7 @@ function TransmittalDocumentList({ transmittalId, projectId }: { transmittalId: 
                       <option value="B">B – Approved w/ Comments</option>
                       <option value="C">C – Revise & Resubmit</option>
                       <option value="D">D – Rejected</option>
+                      <option value="UR">UR – Under Review</option>
                     </select>
                   </td>
                   <td className={`px-2 py-1.5 whitespace-nowrap capitalize ${docStatusColor[item.documentStatus ?? ""] ?? "text-muted-foreground"}`}>
@@ -1334,6 +1353,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
     if (filters.direction !== "_all") d = d.filter(x => (x.direction ?? "").toUpperCase() === filters.direction);
+    if (filters.trsPartyType !== "_all") d = d.filter(x => x.partyType === filters.trsPartyType);
     d = applyDateFilter(d, "createdAt", filters.dateFrom, filters.dateTo);
     d = applyTextFilter(d, filters.search, ["transmittalNumber", "subject", "toExternal", "partyType"]);
     return d;
@@ -2428,6 +2448,7 @@ export default function Reports() {
         showParty={activeTab === "correspondence"}
         showDiscipline={activeTab === "drawings"}
         showDirection={["transmittals","itr","ncr","noc"].includes(activeTab)}
+        showTrsPartyType={activeTab === "transmittals"}
       />
 
       {/* Register Tabs */}
