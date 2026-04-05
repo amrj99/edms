@@ -18,7 +18,7 @@ import {
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarProvider, SidebarTrigger,
-  SidebarHeader, SidebarFooter,
+  SidebarHeader, SidebarFooter, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -357,8 +357,10 @@ export function AppSidebar() {
     { title: t("navProjects"), url: "/projects", icon: FolderKanban },
     { title: t("navDocuments"), url: "/documents", icon: FileText },
     { title: t("navCalendar"), url: "/calendar", icon: CalendarDays },
-    { title: t("navMeetings"), url: "/meetings", icon: CalendarDays },
-    { title: t("navActionItems"), url: "/action-items", icon: ListTodo },
+    {
+      title: t("navMeetings"), url: "/meetings", icon: CalendarDays,
+      children: [{ title: t("navActionItems"), url: "/action-items", icon: ListTodo }],
+    },
     { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
     { title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp },
@@ -374,7 +376,6 @@ export function AppSidebar() {
     { title: t("navConfig"), url: "/config", icon: SlidersHorizontal },
     { title: t("navAdmin"), url: "/admin", icon: ShieldCheck },
     { title: "Billing", url: "/billing", icon: CreditCard },
-    { title: t("navSettings"), url: "/settings", icon: Settings },
     { title: t("navAISettings"), url: "/ai-settings", icon: Brain },
   ];
 
@@ -402,6 +403,20 @@ export function AppSidebar() {
                       <span>{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
+                  {(item as any).children?.length > 0 && (
+                    <SidebarMenuSub>
+                      {(item as any).children.map((child: any) => (
+                        <SidebarMenuSubItem key={child.url}>
+                          <SidebarMenuSubButton asChild isActive={location === child.url || location.startsWith(child.url)}>
+                            <Link href={child.url} className="flex items-center gap-2">
+                              <child.icon className="h-3.5 w-3.5" />
+                              <span>{child.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

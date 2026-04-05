@@ -77,6 +77,60 @@ router.get("/", async (req: Request, res: Response) => {
   res.json({ meetings });
 });
 
+// ─── Cross-project action items list ──────────────────────────────────────────
+router.get("/action-items", async (req: Request, res: Response) => {
+  const userId    = req.user!.id;
+  const orgId     = req.user!.organizationId;
+  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+  const status    = req.query.status as string | undefined;
+  const overdue   = req.query.overdue === "true";
+  const assignee  = req.query.assignee ? parseInt(req.query.assignee as string) : undefined;
+
+  // Resolve visible projects
+  let allowedProjectIds: number[] | undefined;
+  if (projectId) {
+    allowedProjectIds = [projectId];
+  } else if (orgId) {
+    const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
+    allowedProjectIds = projs.map(p => p.id);
+  }
+
+  const rows = await db.select({
+    item: meetingActionItemsTable,
+    meeting: { id: meetingsTable.id, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber, projectId: meetingsTable.projectId },
+    assignedTo: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName },
+    project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
+  })
+    .from(meetingActionItemsTable)
+    .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
+    .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
+    .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+    .orderBy(desc(meetingActionItemsTable.createdAt));
+
+  const now = new Date();
+  const filtered = rows.filter(r => {
+    if (allowedProjectIds && r.meeting.projectId && !allowedProjectIds.includes(r.meeting.projectId)) return false;
+    if (status && r.item.status !== status) return false;
+    if (overdue && !(r.item.dueDate && r.item.dueDate < now && r.item.status !== "done")) return false;
+    if (assignee && r.item.assignedToId !== assignee) return false;
+    return true;
+  });
+
+  res.json({
+    actionItems: filtered.map(r => ({
+      ...r.item,
+      meetingTitle: r.meeting.title,
+      meetingRef: r.meeting.referenceNumber,
+      meetingId: r.meeting.id,
+      projectId: r.meeting.projectId,
+      projectName: r.project?.name,
+      projectCode: r.project?.code,
+      assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
+      isOverdue: r.item.dueDate ? r.item.dueDate < now && r.item.status !== "done" : false,
+    })),
+  });
+});
+
 // ─── Get meeting detail ────────────────────────────────────────────────────────
 router.get("/:id", async (req: Request, res: Response) => {
   const id = parseInt(req.params.id);
@@ -289,60 +343,6 @@ router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "doc
     .where(eq(meetingAttendeesTable.id, attId))
     .returning();
   res.json({ attendee: updated });
-});
-
-// ─── Cross-project action items list ──────────────────────────────────────────
-router.get("/action-items", async (req: Request, res: Response) => {
-  const userId    = req.user!.id;
-  const orgId     = req.user!.organizationId;
-  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
-  const status    = req.query.status as string | undefined;
-  const overdue   = req.query.overdue === "true";
-  const assignee  = req.query.assignee ? parseInt(req.query.assignee as string) : undefined;
-
-  // Resolve visible projects
-  let allowedProjectIds: number[] | undefined;
-  if (projectId) {
-    allowedProjectIds = [projectId];
-  } else if (orgId) {
-    const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
-    allowedProjectIds = projs.map(p => p.id);
-  }
-
-  const rows = await db.select({
-    item: meetingActionItemsTable,
-    meeting: { id: meetingsTable.id, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber, projectId: meetingsTable.projectId },
-    assignedTo: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName },
-    project: { id: projectsTable.id, name: projectsTable.name, code: projectsTable.code },
-  })
-    .from(meetingActionItemsTable)
-    .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
-    .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
-    .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
-    .orderBy(desc(meetingActionItemsTable.createdAt));
-
-  const now = new Date();
-  const filtered = rows.filter(r => {
-    if (allowedProjectIds && r.meeting.projectId && !allowedProjectIds.includes(r.meeting.projectId)) return false;
-    if (status && r.item.status !== status) return false;
-    if (overdue && !(r.item.dueDate && r.item.dueDate < now && r.item.status !== "done")) return false;
-    if (assignee && r.item.assignedToId !== assignee) return false;
-    return true;
-  });
-
-  res.json({
-    actionItems: filtered.map(r => ({
-      ...r.item,
-      meetingTitle: r.meeting.title,
-      meetingRef: r.meeting.referenceNumber,
-      meetingId: r.meeting.id,
-      projectId: r.meeting.projectId,
-      projectName: r.project?.name,
-      projectCode: r.project?.code,
-      assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
-      isOverdue: r.item.dueDate ? r.item.dueDate < now && r.item.status !== "done" : false,
-    })),
-  });
 });
 
 // ─── Add / update action item ──────────────────────────────────────────────────
