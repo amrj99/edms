@@ -224,14 +224,17 @@ router.get("/reports", requireAuth, async (req, res) => {
     ))
     .orderBy(meetingsTable.meetingDate);
 
-  // Correspondence volume last 7 days (by day)
+  // Correspondence volume last 7 days (by day) — scoped to org
   const recentCorr = await db.select({
     id: correspondenceTable.id,
     createdAt: correspondenceTable.createdAt,
     status: correspondenceTable.status,
   })
     .from(correspondenceTable)
-    .where(gte(correspondenceTable.createdAt, sevenDaysAgo))
+    .where(and(
+      gte(correspondenceTable.createdAt, sevenDaysAgo),
+      orgId ? eq(correspondenceTable.organizationId, orgId) : undefined,
+    ))
     .orderBy(correspondenceTable.createdAt);
 
   // Group by date
