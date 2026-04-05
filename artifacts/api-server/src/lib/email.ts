@@ -1,49 +1,48 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-// ─── SMTP Configuration ──────────────────────────────────────────────────────
-// Configure via environment variables:
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_SECURE
-// If not configured the service silently skips sending (dev mode).
+// ─── Transport ────────────────────────────────────────────────────────────────
+// Email is sent via Resend (RESEND_API_KEY env var).
+// If the key is absent the service logs and skips — no silent data loss.
 
-function createTransport() {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+const FROM = "ArcScale EDMS <onboarding@resend.dev>";
+export const APP_URL = process.env.APP_URL ?? "https://your-edms.replit.app";
 
-  if (!host || !user || !pass) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port: parseInt(process.env.SMTP_PORT ?? "587"),
-    secure: process.env.SMTP_SECURE === "true",
-    auth: { user, pass },
-    tls: { rejectUnauthorized: false },
-  });
+let _resend: Resend | null = null;
+function getResend(): Resend | null {
+  if (!process.env.RESEND_API_KEY) return null;
+  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY);
+  return _resend;
 }
-
-const FROM = process.env.SMTP_FROM ?? "noreply@edms.local";
-const APP_URL = process.env.APP_URL ?? "https://your-edms.replit.app";
 
 // ─── Generic Send ─────────────────────────────────────────────────────────────
 export async function sendEmail(to: string | string[], subject: string, html: string, text?: string) {
-  const transport = createTransport();
-  if (!transport) {
-    console.info(`[email] SMTP not configured — skipping email to ${Array.isArray(to) ? to.join(", ") : to}: ${subject}`);
+  const client = getResend();
+  if (!client) {
+    console.info(`[email] RESEND_API_KEY not configured — skipping email to ${Array.isArray(to) ? to.join(", ") : to}: ${subject}`);
     return { skipped: true };
   }
   try {
-    const info = await transport.sendMail({ from: FROM, to, subject, html, text: text ?? subject });
-    console.info(`[email] sent to ${Array.isArray(to) ? to.join(", ") : to}: ${subject} (${info.messageId})`);
-    return { sent: true, messageId: info.messageId };
+    const toArr = Array.isArray(to) ? to : [to];
+    const { data, error } = await client.emails.send({
+      from: FROM,
+      to: toArr,
+      subject,
+      html,
+      ...(text && { text }),
+    });
+    if (error) {
+      console.error(`[email] Resend error for "${subject}":`, error.message);
+      return { sent: false, error: error.message };
+    }
+    console.info(`[email] sent via Resend to ${toArr.join(", ")}: ${subject} (id=${data?.id})`);
+    return { sent: true, id: data?.id };
   } catch (err: any) {
-    console.error(`[email] failed to send to ${to}: ${err.message}`);
+    console.error(`[email] send failed: ${err.message}`);
     return { sent: false, error: err.message };
   }
 }
 
-// ─── Email Templates ──────────────────────────────────────────────────────────
+// ─── Base HTML Layout ─────────────────────────────────────────────────────────
 function baseLayout(content: string, title: string) {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -87,6 +86,42 @@ function baseLayout(content: string, title: string) {
   </div>
 </body>
 </html>`;
+}
+
+// ─── Welcome ──────────────────────────────────────────────────────────────────
+export async function sendWelcomeEmail(opts: {
+  to: string;
+  firstName: string;
+  organizationName?: string;
+}) {
+  const html = baseLayout(`
+    <h2>Welcome to ArcScale EDMS!</h2>
+    <p>Hi ${opts.firstName}, your account has been created${opts.organizationName ? ` for <strong>${opts.organizationName}</strong>` : ""}. You can now log in and start managing your engineering documents.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Platform</span><span class="value">ArcScale EDMS</span></div>
+      ${opts.organizationName ? `<div class="info-row"><span class="label">Organization</span><span class="value">${opts.organizationName}</span></div>` : ""}
+    </div>
+    <a class="btn" href="${APP_URL}">Log In to EDMS →</a>
+    <p style="color:#6b7280;font-size:13px;">If you did not create this account, please ignore this email.</p>
+  `, "Welcome to ArcScale EDMS");
+
+  return sendEmail(opts.to, "Welcome to ArcScale EDMS", html);
+}
+
+// ─── Password Reset ───────────────────────────────────────────────────────────
+export async function sendPasswordResetEmail(opts: {
+  to: string;
+  firstName: string;
+  resetUrl: string;
+}) {
+  const html = baseLayout(`
+    <h2>Reset Your Password</h2>
+    <p>Hi ${opts.firstName}, we received a request to reset your ArcScale EDMS password.</p>
+    <a class="btn" href="${opts.resetUrl}">Reset Password →</a>
+    <p style="color:#6b7280;font-size:13px;">This link expires in 1 hour. If you did not request a password reset, please ignore this email — your password will remain unchanged.</p>
+  `, "Reset Your Password");
+
+  return sendEmail(opts.to, "Reset your ArcScale EDMS password", html);
 }
 
 // ─── Review Submitted ─────────────────────────────────────────────────────────
@@ -179,6 +214,36 @@ export async function sendDocumentRejectedEmail(opts: {
   return sendEmail(opts.to, `[Rejected] ${opts.documentNumber} — ${opts.documentTitle}`, html);
 }
 
+// ─── Document Uploaded ────────────────────────────────────────────────────────
+export async function sendDocumentUploadedEmail(opts: {
+  to: string | string[];
+  documentNumber: string;
+  documentTitle: string;
+  revision: string;
+  uploadedBy: string;
+  projectName: string;
+  documentType?: string;
+  discipline?: string;
+  projectId: number;
+}) {
+  const url = `${APP_URL}/projects/${opts.projectId}`;
+  const html = baseLayout(`
+    <h2>New Document Uploaded</h2>
+    <p>A new document has been uploaded to <strong>${opts.projectName}</strong> by <strong>${opts.uploadedBy}</strong>.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Document Number</span><span class="value">${opts.documentNumber}</span></div>
+      <div class="info-row"><span class="label">Title</span><span class="value">${opts.documentTitle}</span></div>
+      <div class="info-row"><span class="label">Revision</span><span class="value">${opts.revision}</span></div>
+      ${opts.documentType ? `<div class="info-row"><span class="label">Type</span><span class="value">${opts.documentType}</span></div>` : ""}
+      ${opts.discipline ? `<div class="info-row"><span class="label">Discipline</span><span class="value">${opts.discipline}</span></div>` : ""}
+      <div class="info-row"><span class="label">Status</span><span class="value"><span class="badge badge-gray">Draft</span></span></div>
+    </div>
+    <a class="btn" href="${url}">View Document →</a>
+  `, "New Document Uploaded");
+
+  return sendEmail(opts.to, `[Uploaded] ${opts.documentNumber} — ${opts.documentTitle}`, html);
+}
+
 // ─── Transmittal Sent ─────────────────────────────────────────────────────────
 export async function sendTransmittalEmail(opts: {
   to: string | string[];
@@ -209,7 +274,7 @@ export async function sendTransmittalEmail(opts: {
   return sendEmail(opts.to, `[Transmittal] ${opts.transmittalNumber} — ${opts.subject}`, html);
 }
 
-// ─── Notification Email ───────────────────────────────────────────────────────
+// ─── Generic Notification ─────────────────────────────────────────────────────
 export async function sendNotificationEmail(opts: {
   to: string;
   title: string;
@@ -226,7 +291,7 @@ export async function sendNotificationEmail(opts: {
   return sendEmail(opts.to, `[EDMS] ${opts.title}`, html);
 }
 
-// ─── Task Assigned Email ──────────────────────────────────────────────────────
+// ─── Task Assigned ────────────────────────────────────────────────────────────
 export async function sendTaskAssignedEmail(opts: {
   to: string;
   assigneeName: string;
@@ -262,7 +327,7 @@ export async function sendTaskAssignedEmail(opts: {
   return sendEmail(opts.to, `[Task] ${opts.taskTitle}`, html);
 }
 
-// ─── Overdue Task Reminder Email ──────────────────────────────────────────────
+// ─── Overdue Task Reminder ────────────────────────────────────────────────────
 export async function sendOverdueTaskEmail(opts: {
   to: string;
   userName: string;
@@ -290,7 +355,7 @@ export async function sendOverdueTaskEmail(opts: {
   return sendEmail(opts.to, `[Overdue] ${opts.taskTitle}`, html);
 }
 
-// ─── Workflow Approval Request Email ─────────────────────────────────────────
+// ─── Workflow Approval Request ────────────────────────────────────────────────
 export async function sendWorkflowApprovalEmail(opts: {
   to: string | string[];
   reviewerName: string;
@@ -321,16 +386,18 @@ export async function sendWorkflowApprovalEmail(opts: {
   return sendEmail(opts.to, `[Approval] ${opts.documentNumber} — ${opts.documentTitle}`, html);
 }
 
-// ─── SMTP Config Test ─────────────────────────────────────────────────────────
+// ─── Email / Resend Connection Test ──────────────────────────────────────────
 export async function testSmtpConnection(): Promise<{ success: boolean; message: string }> {
-  const transport = createTransport();
-  if (!transport) {
-    return { success: false, message: "SMTP not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS environment variables." };
+  const client = getResend();
+  if (!client) {
+    return { success: false, message: "RESEND_API_KEY is not configured. Add it to your environment secrets." };
   }
   try {
-    await transport.verify();
-    return { success: true, message: "SMTP connection verified successfully." };
+    // Resend doesn't have a verify() endpoint, so we probe the domains list as a lightweight check
+    const { error } = await client.domains.list();
+    if (error) return { success: false, message: `Resend API error: ${error.message}` };
+    return { success: true, message: "Resend connection verified successfully." };
   } catch (err: any) {
-    return { success: false, message: `SMTP connection failed: ${err.message}` };
+    return { success: false, message: `Resend connection failed: ${err.message}` };
   }
 }

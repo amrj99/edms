@@ -7,7 +7,9 @@ import { eq, and, count, desc, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
-import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail } from "../lib/email.js";
+import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail, sendDocumentUploadedEmail } from "../lib/email.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
+import { getProjectRecipientsByRole } from "../lib/notifications/recipients.js";
 import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import { evaluateRules } from "../lib/rule-engine.js";
@@ -278,6 +280,34 @@ router.post("/", requireAuth, async (req, res) => {
     }
   } catch (_) {}
 
+  // Email notification for document_uploaded (non-blocking, respects user prefs)
+  try {
+    const [uploader] = await db
+      .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+      .from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
+    const uploaderName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : "Someone";
+    const [project] = await db
+      .select({ name: projectsTable.name })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
+    const filtered = recipients.filter(r => r.userId !== req.user!.id);
+    await dispatchNotification({
+      event: "document_uploaded",
+      recipients: filtered,
+      sendEmail: (to) => sendDocumentUploadedEmail({
+        to,
+        documentNumber: doc.documentNumber ?? "",
+        documentTitle: doc.title,
+        revision: doc.revision ?? "A",
+        uploadedBy: uploaderName,
+        projectName: project?.name ?? "Unknown Project",
+        documentType: doc.documentType ?? undefined,
+        discipline: doc.discipline ?? undefined,
+        projectId,
+      }),
+    });
+  } catch (_) {}
+
   res.status(201).json({ ...doc, aiClassification, createdByName: undefined, folderName: undefined });
 });
 
@@ -450,15 +480,19 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
     const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
     const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (creator?.email) {
-      sendDocumentApprovedEmail({
-        to: creator.email,
-        documentNumber: doc.documentNumber ?? "",
-        documentTitle: doc.title,
-        revision: doc.revision ?? "01",
-        approvedBy: reviewerName,
-        projectName: project?.name ?? "Unknown Project",
-        comment,
-        projectId,
+      dispatchNotification({
+        event: "document_approved",
+        recipients: [{ userId: doc.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
+        sendEmail: (to) => sendDocumentApprovedEmail({
+          to: to[0],
+          documentNumber: doc.documentNumber ?? "",
+          documentTitle: doc.title,
+          revision: doc.revision ?? "01",
+          approvedBy: reviewerName,
+          projectName: project?.name ?? "Unknown Project",
+          comment,
+          projectId,
+        }),
       }).catch(() => {});
     }
     // In-app notification to the document creator
@@ -521,15 +555,19 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
     const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
     const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (creator?.email) {
-      sendDocumentRejectedEmail({
-        to: creator.email,
-        documentNumber: doc.documentNumber ?? "",
-        documentTitle: doc.title,
-        revision: doc.revision ?? "01",
-        rejectedBy: reviewerName,
-        projectName: project?.name ?? "Unknown Project",
-        comment,
-        projectId,
+      dispatchNotification({
+        event: "document_rejected",
+        recipients: [{ userId: doc.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
+        sendEmail: (to) => sendDocumentRejectedEmail({
+          to: to[0],
+          documentNumber: doc.documentNumber ?? "",
+          documentTitle: doc.title,
+          revision: doc.revision ?? "01",
+          rejectedBy: reviewerName,
+          projectName: project?.name ?? "Unknown Project",
+          comment,
+          projectId,
+        }),
       }).catch(() => {});
     }
     // In-app notification to the document creator

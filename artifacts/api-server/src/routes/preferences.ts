@@ -13,7 +13,7 @@ router.get("/preferences", requireAuth, async (req, res) => {
 });
 
 router.put("/preferences", requireAuth, async (req, res) => {
-  const { dashboardWidgets, dashboardLayout, savedFilters, columnPrefs } = req.body;
+  const { dashboardWidgets, dashboardLayout, savedFilters, columnPrefs, notificationPrefs } = req.body;
   const existing = await db.select().from(userPreferencesTable)
     .where(eq(userPreferencesTable.userId, req.user!.id));
 
@@ -24,6 +24,7 @@ router.put("/preferences", requireAuth, async (req, res) => {
         ...(dashboardLayout !== undefined && { dashboardLayout }),
         ...(savedFilters !== undefined && { savedFilters }),
         ...(columnPrefs !== undefined && { columnPrefs }),
+        ...(notificationPrefs !== undefined && { notificationPrefs }),
         updatedAt: new Date(),
       })
       .where(eq(userPreferencesTable.userId, req.user!.id))
@@ -37,6 +38,7 @@ router.put("/preferences", requireAuth, async (req, res) => {
       dashboardLayout: dashboardLayout ?? null,
       savedFilters: savedFilters ?? null,
       columnPrefs: columnPrefs ?? null,
+      notificationPrefs: notificationPrefs ?? null,
     }).returning();
     res.status(201).json(row);
   }

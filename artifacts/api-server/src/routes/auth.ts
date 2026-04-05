@@ -13,6 +13,7 @@ import {
   verifyToken,
   requireAuth,
 } from "../lib/auth.js";
+import { sendWelcomeEmail, sendPasswordResetEmail, APP_URL } from "../lib/email.js";
 
 const router = Router();
 
@@ -139,10 +140,18 @@ router.post("/register", async (req, res) => {
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
+  // Welcome email — fire and forget
+  let orgName: string | undefined;
+  if (user.organizationId) {
+    const [org] = await db.select({ name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
+    orgName = org?.name;
+  }
+  sendWelcomeEmail({ to: user.email, firstName: user.firstName, organizationName: orgName }).catch(() => {});
+
   res.status(201).json({
     token: accessToken,
     refreshToken,
-    user: buildUserResponse(user),
+    user: buildUserResponse(user, orgName),
   });
 });
 
@@ -236,12 +245,12 @@ router.post("/forgot-password", async (req, res) => {
       expiresAt,
     });
 
-    // In production, send an email. For now, include token in response for testing.
+    // Send password reset email via Resend
+    const resetUrl = `${APP_URL}/reset-password?token=${resetToken}`;
+    sendPasswordResetEmail({ to: user.email, firstName: user.firstName, resetUrl }).catch(() => {});
+
     res.json({
       message: "If an account with that email exists, a password reset link has been sent.",
-      // Development only - remove in production:
-      resetToken,
-      resetUrl: `/reset-password?token=${resetToken}`,
     });
     return;
   }
