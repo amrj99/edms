@@ -3,6 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
+import { organizationsTable } from "./organizations";
 
 export const meetingStatusEnum = pgEnum("meeting_status", [
   "scheduled",
@@ -15,6 +16,7 @@ export const meetingsTable = pgTable("meetings", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
   projectId: integer("project_id").references(() => projectsTable.id),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   organizedById: integer("organized_by_id").references(() => usersTable.id).notNull(),
   status: meetingStatusEnum("status").notNull().default("scheduled"),
   location: text("location"),
@@ -31,6 +33,7 @@ export const meetingsTable = pgTable("meetings", {
 export const meetingAttendeesTable = pgTable("meeting_attendees", {
   id: serial("id").primaryKey(),
   meetingId: integer("meeting_id").references(() => meetingsTable.id, { onDelete: "cascade" }).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   userId: integer("user_id").references(() => usersTable.id),
   name: text("name"), // for external attendees without user accounts
   email: text("email"),
@@ -40,6 +43,7 @@ export const meetingAttendeesTable = pgTable("meeting_attendees", {
 export const meetingActionItemsTable = pgTable("meeting_action_items", {
   id: serial("id").primaryKey(),
   meetingId: integer("meeting_id").references(() => meetingsTable.id, { onDelete: "cascade" }).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   title: text("title").notNull(),
   assignedToId: integer("assigned_to_id").references(() => usersTable.id),
   assignedToName: text("assigned_to_name"), // for external attendees
@@ -54,6 +58,7 @@ export const meetingActionItemsTable = pgTable("meeting_action_items", {
 export const meetingAttachmentsTable = pgTable("meeting_attachments", {
   id: serial("id").primaryKey(),
   meetingId: integer("meeting_id").references(() => meetingsTable.id, { onDelete: "cascade" }).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id),
   fileName: text("file_name").notNull(),
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),

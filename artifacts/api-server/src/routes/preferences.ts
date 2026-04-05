@@ -32,6 +32,7 @@ router.put("/preferences", requireAuth, async (req, res) => {
   } else {
     const [row] = await db.insert(userPreferencesTable).values({
       userId: req.user!.id,
+      organizationId: req.user!.organizationId ?? null,
       dashboardWidgets: dashboardWidgets ?? null,
       dashboardLayout: dashboardLayout ?? null,
       savedFilters: savedFilters ?? null,

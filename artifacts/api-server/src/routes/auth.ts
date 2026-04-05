@@ -74,6 +74,7 @@ router.post("/login", async (req, res) => {
   const refreshToken = generateSecureToken();
   await db.insert(refreshTokensTable).values({
     userId: user.id,
+    organizationId: user.organizationId ?? null,
     token: refreshToken,
     expiresAt: getRefreshTokenExpiryDate(),
   });
@@ -133,6 +134,7 @@ router.post("/register", async (req, res) => {
   const refreshToken = generateSecureToken();
   await db.insert(refreshTokensTable).values({
     userId: user.id,
+    organizationId: user.organizationId ?? null,
     token: refreshToken,
     expiresAt: getRefreshTokenExpiryDate(),
   });
@@ -188,6 +190,12 @@ router.post("/refresh-token", async (req, res) => {
     return;
   }
 
+  // Verify refresh token is bound to the same organization as the user
+  if (tokenRecord.organizationId !== null && tokenRecord.organizationId !== user.organizationId) {
+    res.status(401).json({ error: "Unauthorized", message: "Token organization mismatch" });
+    return;
+  }
+
   // Revoke old token and issue new ones
   await db.update(refreshTokensTable)
     .set({ revokedAt: new Date() })
@@ -198,6 +206,7 @@ router.post("/refresh-token", async (req, res) => {
 
   await db.insert(refreshTokensTable).values({
     userId: user.id,
+    organizationId: user.organizationId ?? null,
     token: newRefreshToken,
     expiresAt: getRefreshTokenExpiryDate(),
   });
@@ -222,6 +231,7 @@ router.post("/forgot-password", async (req, res) => {
 
     await db.insert(passwordResetTokensTable).values({
       userId: user.id,
+      organizationId: user.organizationId ?? null,
       token: resetToken,
       expiresAt,
     });
@@ -263,6 +273,17 @@ router.post("/reset-password", async (req, res) => {
   const tokenRecord = tokens[0];
   if (!tokenRecord || tokenRecord.usedAt) {
     res.status(400).json({ error: "Bad Request", message: "Invalid or expired reset token. Please request a new one." });
+    return;
+  }
+
+  // Verify token belongs to the same org as the user it targets
+  const [tokenOwner] = await db.select().from(usersTable).where(eq(usersTable.id, tokenRecord.userId)).limit(1);
+  if (!tokenOwner) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid reset token." });
+    return;
+  }
+  if (tokenRecord.organizationId !== null && tokenRecord.organizationId !== tokenOwner.organizationId) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid reset token." });
     return;
   }
 

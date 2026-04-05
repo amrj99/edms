@@ -5,7 +5,7 @@ import {
   meetingAttachmentsTable, usersTable, projectsTable, notificationsTable,
 } from "@workspace/db";
 import { eq, desc, and, or, ilike, inArray, lt, ne, count } from "drizzle-orm";
-import { requireAuth, requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
@@ -156,6 +156,11 @@ router.get("/:id", async (req: Request, res: Response) => {
 
   if (!row) return res.status(404).json({ error: "Meeting not found" });
 
+  // Org isolation check
+  if (!isSysAdmin(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   const attendees = await db
     .select({
       id: meetingAttendeesTable.id,
@@ -207,9 +212,12 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
   const count = await db.select({ id: meetingsTable.id }).from(meetingsTable);
   const ref = fmtRef(count.length + 1);
 
+  const orgId = req.user!.organizationId ?? null;
+
   const [meeting] = await db.insert(meetingsTable).values({
     title: title.trim(),
     projectId: projectId || null,
+    organizationId: orgId,
     organizedById: req.user!.id,
     meetingDate: new Date(meetingDate),
     duration: duration || null,
@@ -224,6 +232,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     await db.insert(meetingAttendeesTable).values(
       attendees.map((a: any) => ({
         meetingId: meeting.id,
+        organizationId: orgId,
         userId: a.userId || null,
         name: a.name || null,
         email: a.email || null,
@@ -274,9 +283,14 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   const id = parseInt(req.params.id);
   const { title, projectId, meetingDate, duration, location, meetingLink, agenda, minutes, status } = req.body;
 
-  // Fetch old state for transition detection
-  const [before] = await db.select({ status: meetingsTable.status, minutes: meetingsTable.minutes })
+  // Fetch old state for transition detection and org verification
+  const [before] = await db.select({ status: meetingsTable.status, minutes: meetingsTable.minutes, organizationId: meetingsTable.organizationId })
     .from(meetingsTable).where(eq(meetingsTable.id, id));
+
+  if (!before) return res.status(404).json({ error: "Meeting not found" });
+  if (!isSysAdmin(req.user!) && before.organizationId !== null && before.organizationId !== req.user!.organizationId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   const [meeting] = await db.update(meetingsTable).set({
     ...(title        !== undefined && { title: title.trim() }),
@@ -319,6 +333,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
           await db.insert(meetingActionItemsTable).values(
             actionLines.map(title => ({
               meetingId: id,
+              organizationId: req.user!.organizationId ?? null,
               title,
               status: "open" as const,
               dueDate: defaultDue,
@@ -351,8 +366,17 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: "title required" });
 
+  // Verify parent meeting belongs to user's org
+  const [parentMeeting] = await db.select({ organizationId: meetingsTable.organizationId })
+    .from(meetingsTable).where(eq(meetingsTable.id, meetingId)).limit(1);
+  if (!parentMeeting) return res.status(404).json({ error: "Meeting not found" });
+  if (!isSysAdmin(req.user!) && parentMeeting.organizationId !== null && parentMeeting.organizationId !== req.user!.organizationId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
   const [item] = await db.insert(meetingActionItemsTable).values({
     meetingId,
+    organizationId: req.user!.organizationId ?? null,
     title: title.trim(),
     assignedToId: assignedToId || null,
     assignedToName: assignedToName?.trim() || null,

@@ -2,21 +2,25 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable } from "@workspace/db";
 import { eq, count, and } from "drizzle-orm";
-import { requireAuth, hashPassword } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 
 const router = Router();
 
 router.get("/", requireAuth, async (req, res) => {
-  const orgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
-  let query = db.select({
+  // sysAdmin may pass an explicit orgId filter; all other roles are locked to their own org
+  const requestedOrgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
+  const orgId = isSysAdmin(req.user!)
+    ? requestedOrgId
+    : req.user!.organizationId ?? undefined;
+
+  const results = await db.select({
     user: usersTable,
     orgName: organizationsTable.name,
   }).from(usersTable).leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id));
 
-  const results = await query;
-  const filtered = orgId ? results.filter(r => r.user.organizationId === orgId) : results;
+  const filtered = orgId !== undefined ? results.filter(r => r.user.organizationId === orgId) : results;
 
   res.json({
     users: filtered.map(r => ({
