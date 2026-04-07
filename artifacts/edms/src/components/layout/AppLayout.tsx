@@ -13,7 +13,7 @@ import {
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
   CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
-  ExternalLink, Menu, MoreHorizontal, Eye, EyeOff, Trash2, CreditCard,
+  ExternalLink, Menu, MoreHorizontal, Eye, EyeOff, Trash2, CreditCard, Layers,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
@@ -363,6 +363,7 @@ export function AppSidebar() {
     },
     { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
+    { title: "Workflows", url: "/workflow-engine", icon: Layers },
     {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),

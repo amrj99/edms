@@ -27,6 +27,7 @@ export type NotificationEvent =
   | "itr_submitted"
   | "ncr_submitted"
   | "noc_submitted"
+  | "workflow_stage_reached"
   | "welcome"
   | "password_reset";
 

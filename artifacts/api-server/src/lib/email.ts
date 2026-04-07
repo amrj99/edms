@@ -512,6 +512,39 @@ export async function sendWorkflowApprovalEmail(opts: {
   return sendEmail(opts.to, `[Approval] ${opts.documentNumber} — ${opts.documentTitle}`, html);
 }
 
+// ─── Workflow Stage Notification ──────────────────────────────────────────────
+export async function sendWorkflowStageEmail(opts: {
+  to: string | string[];
+  stageName: string;
+  stageRole?: string;
+  documentTitle: string;
+  documentNumber: string;
+  workflowName: string;
+  submittedByName: string;
+  comment?: string;
+  projectName?: string;
+  instanceId: number;
+}) {
+  const url = `${APP_URL}/workflow-engine`;
+  const html = baseLayout(`
+    <h2>Workflow Action Required</h2>
+    <p>A document has reached <strong>${opts.stageName}</strong>${opts.stageRole ? ` (${opts.stageRole})` : ""} and requires your approval.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Document</span><span class="value">${opts.documentNumber} — ${opts.documentTitle}</span></div>
+      <div class="info-row"><span class="label">Workflow</span><span class="value">${opts.workflowName}</span></div>
+      <div class="info-row"><span class="label">Current Stage</span><span class="value"><span class="badge badge-blue">${opts.stageName}</span></span></div>
+      ${opts.stageRole ? `<div class="info-row"><span class="label">Responsible</span><span class="value">${opts.stageRole}</span></div>` : ""}
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+      ${opts.submittedByName ? `<div class="info-row"><span class="label">Moved by</span><span class="value">${opts.submittedByName}</span></div>` : ""}
+      ${opts.comment ? `<div class="info-row"><span class="label">Comment</span><span class="value">${opts.comment}</span></div>` : ""}
+    </div>
+    <a class="btn" href="${url}">Review in Workflow Dashboard →</a>
+    <p style="color:#6b7280;font-size:13px;">Please log in to ArcScale EDMS to review and take action on this document.</p>
+  `, "Workflow Action Required");
+
+  return sendEmail(opts.to, `[Workflow] Action required — ${opts.documentNumber} at ${opts.stageName}`, html);
+}
+
 // ─── Email / Resend Connection Test ──────────────────────────────────────────
 export async function testSmtpConnection(): Promise<{ success: boolean; message: string }> {
   const client = getResend();

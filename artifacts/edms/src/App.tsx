@@ -43,6 +43,7 @@ import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
 import BillingPage from "@/pages/billing";
+import WorkflowEnginePage from "@/pages/workflow-engine";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -156,6 +157,9 @@ function Router() {
       </Route>
       <Route path="/billing">
         <ProtectedRoute component={BillingPage} />
+      </Route>
+      <Route path="/workflow-engine">
+        <ProtectedRoute component={WorkflowEnginePage} />
       </Route>
       <Route path="/correspondence">
         <ProtectedRoute component={CorrespondencePage} />

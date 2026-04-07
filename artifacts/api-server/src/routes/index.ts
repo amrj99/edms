@@ -39,6 +39,7 @@ import rulesRouter from "./rules.js";
 import skillsRouter from "./skills.js";
 import migrationsRouter from "./migrations.js";
 import billingRouter from "./billing.js";
+import workflowEngineRouter from "./workflow-engine.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 const router: IRouter = Router();
@@ -99,5 +100,6 @@ router.use("/rules", rulesRouter);
 router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
 router.use("/billing", billingRouter);
+router.use("/workflow-engine", workflowEngineRouter);
 
 export default router;
