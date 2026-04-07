@@ -7,6 +7,8 @@ import {
 import { eq, desc, and, or, ilike, inArray, lt, ne, count } from "drizzle-orm";
 import { requireAuth, requireRole, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -272,6 +274,29 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
           }))
         );
       } catch (_) {}
+      try {
+        const attendeeUsers = await db
+          .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable).where(inArray(usersTable.id, userAttendees.map((a: any) => a.userId as number)));
+        const [proj] = projectId
+          ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1)
+          : [null];
+        await dispatchNotification({
+          event: "meeting_created",
+          recipients: attendeeUsers.map(r => ({ userId: r.id, email: r.email, name: `${r.firstName} ${r.lastName}`.trim() })),
+          sendEmail: (to) => sendMeetingCreatedEmail({
+            to,
+            meetingTitle: title,
+            organizerName,
+            meetingDate: meetDate,
+            location: location?.trim() || undefined,
+            meetingLink: meetingLink?.trim() || undefined,
+            projectName: proj?.name,
+            referenceNumber: ref,
+            agenda: agenda?.trim() || undefined,
+          }),
+        });
+      } catch (_) {}
     }
   }
 
@@ -402,6 +427,24 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
         entityId: meetingId,
         actionUrl: `/meetings`,
       });
+      const [assigneeUser] = await db
+        .select({ email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
+      if (assigneeUser?.email) {
+        await dispatchNotification({
+          event: "action_item_assigned",
+          recipients: [{ userId: assignedToId, email: assigneeUser.email, name: `${assigneeUser.firstName} ${assigneeUser.lastName}`.trim() }],
+          sendEmail: (to) => sendActionItemAssignedEmail({
+            to: to[0],
+            assigneeName: `${assigneeUser.firstName} ${assigneeUser.lastName}`.trim(),
+            assignerName: actorName,
+            actionItemTitle: title.trim(),
+            meetingTitle: meeting?.title ?? "",
+            dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : undefined,
+            priority: item.priority ?? undefined,
+          }),
+        });
+      }
     } catch (_) {}
   }
 

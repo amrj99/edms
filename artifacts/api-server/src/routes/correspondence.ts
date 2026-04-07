@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { correspondenceTable, correspondenceRecipientsTable, correspondenceAttachmentsTable, usersTable, notificationsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { correspondenceTable, correspondenceRecipientsTable, correspondenceAttachmentsTable, usersTable, projectsTable, notificationsTable } from "@workspace/db";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
+import { sendCorrespondenceReceivedEmail } from "../lib/email.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
 
 const router = Router({ mergeParams: true });
 
@@ -171,6 +173,28 @@ router.post("/", requireAuth, async (req, res) => {
           actionUrl: `/correspondence`,
         }))
       );
+    } catch (_) {}
+    try {
+      const recipientUsers = await db
+        .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(inArray(usersTable.id, toUserIds as number[]));
+      const [project] = await db
+        .select({ name: projectsTable.name })
+        .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      await dispatchNotification({
+        event: "correspondence_received",
+        recipients: recipientUsers.map(r => ({ userId: r.id, email: r.email, name: `${r.firstName} ${r.lastName}`.trim() })),
+        sendEmail: (to) => sendCorrespondenceReceivedEmail({
+          to,
+          subject: corr.subject,
+          correspondenceType: corr.type,
+          senderName,
+          priority: corr.priority ?? undefined,
+          projectName: project?.name,
+          referenceNumber: corr.referenceNumber ?? undefined,
+          projectId,
+        }),
+      });
     } catch (_) {}
   }
 

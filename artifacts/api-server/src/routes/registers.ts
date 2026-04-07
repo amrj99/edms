@@ -8,6 +8,9 @@ import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
+import { sendRecordSubmittedEmail } from "../lib/email.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
+import { getProjectRecipientsByRole } from "../lib/notifications/recipients.js";
 
 const router = Router({ mergeParams: true });
 
@@ -104,6 +107,25 @@ router.post(
       userId: req.user!.id, action: "approval_submitted", entityType: "itr",
       entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
     });
+    const itrSubmitterId = req.user!.id;
+    getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
+      if (!recipients.length) return;
+      const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, itrSubmitterId)).limit(1);
+      return dispatchNotification({
+        event: "itr_submitted",
+        recipients,
+        sendEmail: (to) => sendRecordSubmittedEmail({
+          to,
+          recordType: "ITR",
+          recordNumber: row.requestNumber,
+          submittedByName: submitter ? `${submitter.firstName} ${submitter.lastName}`.trim() : "Someone",
+          projectName: project?.name ?? "Unknown Project",
+          description: row.description ?? undefined,
+          projectId,
+        }),
+      });
+    }).catch(() => {});
     res.json(row);
   }
 );
@@ -279,6 +301,25 @@ router.post(
       userId: req.user!.id, action: "approval_submitted", entityType: "ncr",
       entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
     });
+    const ncrSubmitterId = req.user!.id;
+    getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
+      if (!recipients.length) return;
+      const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, ncrSubmitterId)).limit(1);
+      return dispatchNotification({
+        event: "ncr_submitted",
+        recipients,
+        sendEmail: (to) => sendRecordSubmittedEmail({
+          to,
+          recordType: "NCR",
+          recordNumber: row.reportNumber,
+          submittedByName: submitter ? `${submitter.firstName} ${submitter.lastName}`.trim() : "Someone",
+          projectName: project?.name ?? "Unknown Project",
+          description: row.description ?? undefined,
+          projectId,
+        }),
+      });
+    }).catch(() => {});
     res.json(row);
   }
 );
@@ -370,6 +411,25 @@ router.post("/noc-records", requireAuth, requireRole("admin", "project_manager",
     organizationId: req.user!.organizationId ?? null,
     projectId, createdById: req.user!.id,
   }).returning();
+  const nocCreatorId = req.user!.id;
+  getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
+    if (!recipients.length) return;
+    const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, nocCreatorId)).limit(1);
+    return dispatchNotification({
+      event: "noc_submitted",
+      recipients,
+      sendEmail: (to) => sendRecordSubmittedEmail({
+        to,
+        recordType: "NOC",
+        recordNumber: nocNumber,
+        submittedByName: creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone",
+        projectName: project?.name ?? "Unknown Project",
+        description: remarks ?? undefined,
+        projectId,
+      }),
+    });
+  }).catch(() => {});
   res.status(201).json(row);
 });
 

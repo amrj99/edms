@@ -23,6 +23,10 @@ export type NotificationEvent =
   | "correspondence_received"
   | "meeting_created"
   | "action_item_assigned"
+  | "task_assigned"
+  | "itr_submitted"
+  | "ncr_submitted"
+  | "noc_submitted"
   | "welcome"
   | "password_reset";
 

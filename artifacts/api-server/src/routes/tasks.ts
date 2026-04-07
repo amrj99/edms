@@ -5,6 +5,7 @@ import { eq, and, desc, isNull, or } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { sendTaskAssignedEmail } from "../lib/email.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { triggerSkillEvent } from "../lib/skill-engine.js";
 
@@ -114,16 +115,20 @@ router.post("/", requireAuth, requireOrgScope, async (req, res) => {
         ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1)
         : [null];
       if (assignee?.email) {
-        sendTaskAssignedEmail({
-          to: assignee.email,
-          assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
-          assignerName: creatorName,
-          taskTitle: title,
-          description,
-          priority,
-          dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
-          projectName: project?.name ?? null,
-          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+        dispatchNotification({
+          event: "task_assigned",
+          recipients: [{ userId: assignedToId, email: assignee.email, name: `${assignee.firstName} ${assignee.lastName}`.trim() }],
+          sendEmail: (to) => sendTaskAssignedEmail({
+            to: to[0],
+            assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+            assignerName: creatorName,
+            taskTitle: title,
+            description,
+            priority,
+            dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
+            projectName: project?.name ?? null,
+            taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+          }),
         }).catch(() => {});
       }
     } catch (_) {}
@@ -185,15 +190,19 @@ router.put("/:id", requireAuth, async (req, res) => {
         ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, task.projectId)).limit(1)
         : [null];
       if (assignee?.email) {
-        sendTaskAssignedEmail({
-          to: assignee.email,
-          assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
-          assignerName: actorName,
-          taskTitle: task.title,
-          priority: task.priority,
-          dueDate: task.dueDate ? task.dueDate.toLocaleDateString() : null,
-          projectName: project?.name ?? null,
-          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+        dispatchNotification({
+          event: "task_assigned",
+          recipients: [{ userId: assignedToId, email: assignee.email, name: `${assignee.firstName} ${assignee.lastName}`.trim() }],
+          sendEmail: (to) => sendTaskAssignedEmail({
+            to: to[0],
+            assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+            assignerName: actorName,
+            taskTitle: task.title,
+            priority: task.priority,
+            dueDate: task.dueDate ? task.dueDate.toLocaleDateString() : null,
+            projectName: project?.name ?? null,
+            taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+          }),
         }).catch(() => {});
       }
     }

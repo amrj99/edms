@@ -244,6 +244,132 @@ export async function sendDocumentUploadedEmail(opts: {
   return sendEmail(opts.to, `[Uploaded] ${opts.documentNumber} — ${opts.documentTitle}`, html);
 }
 
+// ─── Correspondence Received ──────────────────────────────────────────────────
+export async function sendCorrespondenceReceivedEmail(opts: {
+  to: string | string[];
+  subject: string;
+  correspondenceType: string;
+  senderName: string;
+  priority?: string;
+  projectName?: string;
+  referenceNumber?: string;
+  projectId: number;
+}) {
+  const priorityBadge: Record<string, string> = {
+    high: '<span class="badge badge-red">High</span>',
+    medium: '<span class="badge badge-blue">Medium</span>',
+    low: '<span class="badge badge-gray">Low</span>',
+  };
+  const url = `${APP_URL}/projects/${opts.projectId}`;
+  const html = baseLayout(`
+    <h2>New Correspondence Received</h2>
+    <p>You have received new correspondence from <strong>${opts.senderName}</strong>.</p>
+    <div class="info-box">
+      ${opts.referenceNumber ? `<div class="info-row"><span class="label">Reference</span><span class="value">${opts.referenceNumber}</span></div>` : ""}
+      <div class="info-row"><span class="label">Subject</span><span class="value">${opts.subject}</span></div>
+      <div class="info-row"><span class="label">Type</span><span class="value">${opts.correspondenceType.replace(/_/g, " ")}</span></div>
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+      ${opts.priority ? `<div class="info-row"><span class="label">Priority</span><span class="value">${priorityBadge[opts.priority] ?? opts.priority}</span></div>` : ""}
+    </div>
+    <a class="btn" href="${url}">View Correspondence →</a>
+  `, "New Correspondence Received");
+
+  return sendEmail(opts.to, `[Correspondence] ${opts.subject}`, html);
+}
+
+// ─── Meeting Created ──────────────────────────────────────────────────────────
+export async function sendMeetingCreatedEmail(opts: {
+  to: string | string[];
+  meetingTitle: string;
+  organizerName: string;
+  meetingDate: string;
+  location?: string;
+  meetingLink?: string;
+  projectName?: string;
+  referenceNumber?: string;
+  agenda?: string;
+}) {
+  const html = baseLayout(`
+    <h2>Meeting Invitation</h2>
+    <p>You have been invited to a meeting by <strong>${opts.organizerName}</strong>.</p>
+    <div class="info-box">
+      ${opts.referenceNumber ? `<div class="info-row"><span class="label">Reference</span><span class="value">${opts.referenceNumber}</span></div>` : ""}
+      <div class="info-row"><span class="label">Title</span><span class="value">${opts.meetingTitle}</span></div>
+      <div class="info-row"><span class="label">Date</span><span class="value">${opts.meetingDate}</span></div>
+      ${opts.location ? `<div class="info-row"><span class="label">Location</span><span class="value">${opts.location}</span></div>` : ""}
+      ${opts.meetingLink ? `<div class="info-row"><span class="label">Link</span><span class="value"><a href="${opts.meetingLink}">${opts.meetingLink}</a></span></div>` : ""}
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+    </div>
+    ${opts.agenda ? `<p style="color:#374151;"><strong>Agenda:</strong> ${opts.agenda}</p>` : ""}
+    <a class="btn" href="${APP_URL}/meetings">View Meeting →</a>
+  `, "Meeting Invitation");
+
+  return sendEmail(opts.to, `[Meeting] ${opts.meetingTitle}`, html);
+}
+
+// ─── Action Item Assigned ─────────────────────────────────────────────────────
+export async function sendActionItemAssignedEmail(opts: {
+  to: string;
+  assigneeName: string;
+  assignerName: string;
+  actionItemTitle: string;
+  meetingTitle: string;
+  dueDate?: string;
+  priority?: string;
+}) {
+  const priorityBadge: Record<string, string> = {
+    high: '<span class="badge badge-red">High</span>',
+    medium: '<span class="badge badge-blue">Medium</span>',
+    low: '<span class="badge badge-gray">Low</span>',
+  };
+  const html = baseLayout(`
+    <h2>Action Item Assigned</h2>
+    <p>Hi ${opts.assigneeName}, <strong>${opts.assignerName}</strong> assigned you an action item from a meeting.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Action Item</span><span class="value">${opts.actionItemTitle}</span></div>
+      <div class="info-row"><span class="label">Meeting</span><span class="value">${opts.meetingTitle}</span></div>
+      ${opts.priority ? `<div class="info-row"><span class="label">Priority</span><span class="value">${priorityBadge[opts.priority] ?? opts.priority}</span></div>` : ""}
+      ${opts.dueDate ? `<div class="info-row"><span class="label">Due Date</span><span class="value">${opts.dueDate}</span></div>` : ""}
+    </div>
+    <a class="btn" href="${APP_URL}/meetings">View Action Items →</a>
+    <p style="color:#6b7280;font-size:13px;">Please complete this action item by the due date and update its status in EDMS.</p>
+  `, "Action Item Assigned");
+
+  return sendEmail(opts.to, `[Action Item] ${opts.actionItemTitle}`, html);
+}
+
+// ─── Record Submitted (ITR / NCR / NOC) ───────────────────────────────────────
+export async function sendRecordSubmittedEmail(opts: {
+  to: string | string[];
+  recordType: "ITR" | "NCR" | "NOC";
+  recordNumber: string;
+  submittedByName: string;
+  projectName: string;
+  description?: string;
+  projectId: number;
+}) {
+  const typeLabels: Record<string, string> = {
+    ITR: "Inspection Test Request",
+    NCR: "Non-Conformance Report",
+    NOC: "Notice of Commencement",
+  };
+  const url = `${APP_URL}/projects/${opts.projectId}`;
+  const html = baseLayout(`
+    <h2>${typeLabels[opts.recordType] ?? opts.recordType} Submitted</h2>
+    <p>A <strong>${typeLabels[opts.recordType] ?? opts.recordType}</strong> has been submitted for review in <strong>${opts.projectName}</strong> by <strong>${opts.submittedByName}</strong>.</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Record Number</span><span class="value">${opts.recordNumber}</span></div>
+      <div class="info-row"><span class="label">Type</span><span class="value">${typeLabels[opts.recordType] ?? opts.recordType}</span></div>
+      <div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>
+      <div class="info-row"><span class="label">Status</span><span class="value"><span class="badge badge-blue">Pending Review</span></span></div>
+      ${opts.description ? `<div class="info-row"><span class="label">Description</span><span class="value">${opts.description}</span></div>` : ""}
+    </div>
+    <a class="btn" href="${url}">Review Record →</a>
+  `, `${opts.recordType} Submitted`);
+
+  return sendEmail(opts.to, `[${opts.recordType}] ${opts.recordNumber} submitted for review`, html);
+}
+
 // ─── Transmittal Sent ─────────────────────────────────────────────────────────
 export async function sendTransmittalEmail(opts: {
   to: string | string[];
