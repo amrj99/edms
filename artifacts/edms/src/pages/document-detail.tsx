@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { DocumentWorkflowPanel } from "@/components/workflow/DocumentWorkflowPanel";
 import { useAuth } from "@/lib/auth";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -194,6 +195,14 @@ export default function DocumentDetailPage() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Approval Workflow Panel */}
+      <div className="bg-card border rounded-xl shadow-sm">
+        <DocumentWorkflowPanel
+          documentId={parseInt(id!)}
+          documentType={doc.documentType}
+        />
       </div>
 
       {/* Files Panel */}

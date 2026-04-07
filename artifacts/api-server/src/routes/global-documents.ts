@@ -109,7 +109,7 @@ router.get("/:id", requireAuth, async (req, res) => {
     .from(documentFilesTable)
     .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
     .where(eq(documentFilesTable.documentId, id))
-    .orderBy(desc(documentFilesTable.uploadedAt));
+    .orderBy(desc(documentFilesTable.createdAt));
 
   res.json({
     ...result.doc,

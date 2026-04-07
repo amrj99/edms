@@ -21,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   GitBranch, CheckCircle2, XCircle, AlertCircle, Clock, Loader2,
   ChevronRight, RefreshCw, Plus, Workflow, SkipForward, ArrowLeft, Layers,
+  Play, Search, FileText, Settings2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -272,6 +273,15 @@ export default function WorkflowEnginePage() {
   const [seeding, setSeeding] = useState(false);
   const [showSeedConfirm, setShowSeedConfirm] = useState(false);
 
+  // Start workflow dialog state
+  const [showStartDialog, setShowStartDialog] = useState(false);
+  const [docSearch, setDocSearch] = useState("");
+  const [docResults, setDocResults] = useState<Array<{ id: number; title: string; documentNumber: string; documentType: string }>>([]);
+  const [docSearchLoading, setDocSearchLoading] = useState(false);
+  const [selectedDoc, setSelectedDoc] = useState<{ id: number; title: string; documentNumber: string; documentType: string } | null>(null);
+  const [startTemplateId, setStartTemplateId] = useState<number | null>(null);
+  const [startingWorkflow, setStartingWorkflow] = useState(false);
+
   const isAdmin = ["admin", "system_owner"].includes(user?.role ?? "");
 
   const load = useCallback(async () => {
@@ -325,6 +335,58 @@ export default function WorkflowEnginePage() {
     } finally { setSeeding(false); setShowSeedConfirm(false); }
   };
 
+  const seedDefaults = async () => {
+    setSeeding(true);
+    try {
+      const res = await api.post("/workflow-engine/seed-defaults", {});
+      if (res.error) throw new Error(res.error);
+      const created = res.results?.filter((r: any) => r.status === "created").length ?? 0;
+      toast({ title: created > 0 ? `${created} workflow template(s) created` : "All default templates already exist" });
+      await load();
+    } catch (e: any) {
+      toast({ title: e.message ?? "Setup failed", variant: "destructive" });
+    } finally { setSeeding(false); setShowSeedConfirm(false); }
+  };
+
+  // Document search for start-workflow dialog
+  const searchDocs = useCallback(async (q: string) => {
+    if (!q.trim()) { setDocResults([]); return; }
+    setDocSearchLoading(true);
+    try {
+      const res = await api.get(`/documents?search=${encodeURIComponent(q)}&limit=10`);
+      setDocResults(res.documents ?? res.data ?? []);
+    } catch { setDocResults([]); }
+    finally { setDocSearchLoading(false); }
+  }, []);
+
+  // Auto-select template when doc changes
+  // Exact type match first; fall back to all active templates so the user can still pick one
+  const exactTemplatesForDoc = selectedDoc
+    ? templates.filter(t => t.documentType.toLowerCase() === selectedDoc.documentType?.toLowerCase())
+    : [];
+  const templatesForDoc = exactTemplatesForDoc.length > 0 ? exactTemplatesForDoc : (selectedDoc ? templates : []);
+  const isExactMatch = exactTemplatesForDoc.length > 0;
+
+  const startWorkflow = async () => {
+    if (!selectedDoc) return;
+    const templateId = startTemplateId ?? templatesForDoc[0]?.id;
+    if (!templateId) { toast({ title: "No workflow template found for this document type", variant: "destructive" }); return; }
+    setStartingWorkflow(true);
+    try {
+      const res = await api.post("/workflow-engine/instances", { documentId: selectedDoc.id, templateId });
+      if (res.error) throw new Error(res.error);
+      toast({ title: "Workflow started", description: `Stage: ${res.currentStageName}` });
+      setShowStartDialog(false);
+      setSelectedDoc(null);
+      setDocSearch("");
+      setDocResults([]);
+      setStartTemplateId(null);
+      await load();
+    } catch (e: any) {
+      toast({ title: e.message ?? "Failed to start workflow", variant: "destructive" });
+    } finally { setStartingWorkflow(false); }
+  };
+
   const invoiceTemplate = templates.find(t => t.documentType === "Invoice");
 
   // ── Stats ──────────────────────────────────────────────────────────────────
@@ -348,17 +410,21 @@ export default function WorkflowEnginePage() {
             Configurable multi-stage document approval workflows
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4 mr-2", loading && "animate-spin")} />
             Refresh
           </Button>
-          {isAdmin && !invoiceTemplate && (
-            <Button size="sm" onClick={() => setShowSeedConfirm(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Setup Invoice Workflow
+          {isAdmin && (
+            <Button variant="outline" size="sm" onClick={seedDefaults} disabled={seeding}>
+              {seeding ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Settings2 className="h-4 w-4 mr-2" />}
+              Setup Default Templates
             </Button>
           )}
+          <Button size="sm" onClick={() => setShowStartDialog(true)}>
+            <Play className="h-4 w-4 mr-2" />
+            Start Workflow
+          </Button>
         </div>
       </div>
 
@@ -517,49 +583,71 @@ export default function WorkflowEnginePage() {
         </Card>
       )}
 
-      {/* Templates panel (admin only) */}
-      {isAdmin && templates.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
+      {/* Template configuration panel */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <GitBranch className="h-4 w-4" /> Configured Templates
+              <GitBranch className="h-4 w-4" /> Workflow Templates by Document Type
             </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {templates.map(tpl => (
-              <div key={tpl.id} className="flex items-start justify-between gap-4 p-3 rounded-lg border bg-muted/30">
-                <div>
-                  <div className="font-medium text-sm flex items-center gap-2">
-                    {tpl.name}
-                    <Badge variant={tpl.isActive ? "default" : "secondary"} className="text-xs">
-                      {tpl.isActive ? "Active" : "Inactive"}
-                    </Badge>
+            {isAdmin && (
+              <Button variant="outline" size="sm" onClick={seedDefaults} disabled={seeding}>
+                {seeding ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
+                Setup Missing Templates
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {templates.length === 0 ? (
+            <div className="text-center py-6 space-y-3">
+              <Settings2 className="h-10 w-10 mx-auto text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">No workflow templates configured yet.</p>
+              {isAdmin && (
+                <Button size="sm" onClick={seedDefaults} disabled={seeding}>
+                  {seeding ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                  Setup All Default Templates
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {templates.map(tpl => (
+                <div key={tpl.id} className="flex items-start gap-4 p-3 rounded-lg border bg-muted/30">
+                  <div className="shrink-0 mt-0.5">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Document type: <strong>{tpl.documentType}</strong> · {tpl.stages.length} stages
-                  </div>
-                  <div className="flex items-center gap-1 mt-2 flex-wrap">
-                    {tpl.stages.map((s, i) => (
-                      <span key={s.id} className="flex items-center gap-1 text-xs">
-                        {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
-                        <span className={cn(
-                          "px-2 py-0.5 rounded-full",
-                          s.isTerminal
-                            ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
-                            : "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300",
-                        )}>
-                          {s.name}
-                          {s.responsibleRole && <span className="opacity-70 ml-1">({s.responsibleRole})</span>}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{tpl.name}</span>
+                      <Badge variant="outline" className="text-xs capitalize">{tpl.documentType}</Badge>
+                      <Badge variant={tpl.isActive ? "default" : "secondary"} className="text-xs">
+                        {tpl.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1 mt-2 flex-wrap">
+                      {tpl.stages.map((s, i) => (
+                        <span key={s.id} className="flex items-center gap-1 text-xs">
+                          {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-full",
+                            s.isTerminal
+                              ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+                              : "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300",
+                          )}>
+                            {s.name}
+                            {s.responsibleRole && <span className="opacity-60 ml-1">({s.responsibleRole})</span>}
+                          </span>
                         </span>
-                      </span>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Detail modal */}
       {selected && (
@@ -568,6 +656,125 @@ export default function WorkflowEnginePage() {
           onClose={() => setSelected(null)}
           onAction={handleAction}
         />
+      )}
+
+      {/* Start Workflow dialog */}
+      {showStartDialog && (
+        <Dialog open onOpenChange={v => { if (!v) { setShowStartDialog(false); setSelectedDoc(null); setDocSearch(""); setDocResults([]); } }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Play className="h-4 w-4 text-primary" />
+                Start New Workflow
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {/* Document search */}
+              {!selectedDoc ? (
+                <div>
+                  <Label className="text-sm font-medium">Search for a document</Label>
+                  <div className="relative mt-1.5">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      className="pl-8"
+                      placeholder="Document number or title…"
+                      value={docSearch}
+                      onChange={e => {
+                        setDocSearch(e.target.value);
+                        searchDocs(e.target.value);
+                      }}
+                    />
+                    {docSearchLoading && (
+                      <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-muted-foreground" />
+                    )}
+                  </div>
+
+                  {docResults.length > 0 && (
+                    <div className="mt-2 border rounded-lg divide-y max-h-48 overflow-y-auto">
+                      {docResults.map(doc => (
+                        <button
+                          key={doc.id}
+                          className="w-full text-left px-3 py-2.5 hover:bg-muted/60 transition-colors"
+                          onClick={() => { setSelectedDoc(doc); setDocSearch(""); setDocResults([]); setStartTemplateId(null); }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs text-primary font-semibold">{doc.documentNumber}</span>
+                            <Badge variant="outline" className="text-xs capitalize">{doc.documentType}</Badge>
+                          </div>
+                          <div className="text-sm mt-0.5 text-muted-foreground truncate">{doc.title}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {docSearch && !docSearchLoading && docResults.length === 0 && (
+                    <p className="text-sm text-muted-foreground mt-2">No documents found.</p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <Label className="text-sm font-medium">Selected document</Label>
+                  <div className="mt-1.5 rounded-lg border bg-muted/30 px-3 py-2.5 flex items-start gap-3">
+                    <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-sm font-bold text-primary">{selectedDoc.documentNumber}</span>
+                        <Badge variant="outline" className="text-xs capitalize">{selectedDoc.documentType}</Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground truncate mt-0.5">{selectedDoc.title}</div>
+                    </div>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0" onClick={() => { setSelectedDoc(null); setStartTemplateId(null); }}>
+                      Change
+                    </Button>
+                  </div>
+
+                  {/* Template selector */}
+                  <div className="mt-3">
+                    <Label className="text-sm font-medium">Workflow template</Label>
+                    {!isExactMatch && templatesForDoc.length > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 mb-1.5">
+                        No specific template for <strong className="capitalize">{selectedDoc.documentType}</strong> — select from all available:
+                      </p>
+                    )}
+                    {templatesForDoc.length > 0 ? (
+                      <Select
+                        value={String(startTemplateId ?? templatesForDoc[0].id)}
+                        onValueChange={v => setStartTemplateId(Number(v))}
+                      >
+                        <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {templatesForDoc.map(t => (
+                            <SelectItem key={t.id} value={String(t.id)}>
+                              {t.name} <span className="text-muted-foreground capitalize ml-1">({t.documentType})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="mt-1 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5 text-sm text-amber-700 dark:text-amber-300">
+                        No templates configured yet. Use "Setup Default Templates" first.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setShowStartDialog(false); setSelectedDoc(null); setDocSearch(""); setDocResults([]); }}>
+                Cancel
+              </Button>
+              <Button
+                onClick={startWorkflow}
+                disabled={!selectedDoc || templatesForDoc.length === 0 || startingWorkflow}
+              >
+                {startingWorkflow && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Start Workflow
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Seed confirm dialog */}

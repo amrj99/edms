@@ -105,6 +105,16 @@ async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
   };
 }
 
+// ─── Document status sync ─────────────────────────────────────────────────────
+
+async function syncDocumentStatus(docId: number, newStatus: "under_review" | "approved" | "issued" | "draft") {
+  try {
+    await db.update(documentsTable)
+      .set({ status: newStatus, updatedAt: new Date() })
+      .where(eq(documentsTable.id, docId));
+  } catch (_) {}
+}
+
 // ─── Notification helper: notify stage responsible when stage changes ──────────
 async function notifyStageReached(inst: typeof wfInstancesTable.$inferSelect, stage: typeof wfTemplateStagesTable.$inferSelect, actorId: number) {
   try {
@@ -415,6 +425,9 @@ router.post("/instances", async (req, res) => {
 
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "wf_instance", entityId: inst.id, entityTitle: doc.title });
 
+  // Sync document status → under_review
+  syncDocumentStatus(documentId, "under_review");
+
   // Notify stage responsible
   if (firstStage) notifyStageReached(inst, firstStage, req.user!.id);
 
@@ -469,6 +482,13 @@ router.post("/instances/:id/advance", async (req, res) => {
 
   await createAuditLog({ userId: req.user!.id, action: "workflow_advance", entityType: "wf_instance", entityId: id });
 
+  // Sync document status when workflow completes
+  if (newStatus === "completed") {
+    const terminalName = currentStage?.name?.toLowerCase() ?? "";
+    const docStatus = terminalName.includes("issued") ? "issued" : "approved";
+    syncDocumentStatus(inst.documentId, docStatus);
+  }
+
   // Notify next stage responsible
   if (nextStage && newStatus === "active") notifyStageReached(updated, nextStage, req.user!.id);
 
@@ -518,7 +538,137 @@ router.post("/instances/:id/reject", async (req, res) => {
 
   await createAuditLog({ userId: req.user!.id, action: `workflow_${finalAction}`, entityType: "wf_instance", entityId: id });
 
+  // Sync document status on hard reject or cancel; returned stays under_review
+  if (finalAction === "rejected" || finalAction === "cancelled") {
+    syncDocumentStatus(inst.documentId, "draft");
+  }
+
   res.json(await enrichInstance(updated));
 });
 
+
+// ─── Get template(s) for a document type ─────────────────────────────────────
+
+router.get("/templates/for-type/:docType", async (req, res) => {
+  const org = orgId(req);
+  const { docType } = req.params;
+  // Case-insensitive match against documentType
+  const templates = await db.select().from(wfTemplatesTable)
+    .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.isActive, true)));
+  const matched = templates.filter(t => t.documentType.toLowerCase() === docType.toLowerCase());
+  const enriched = await Promise.all(matched.map(async t => {
+    const stages = await db.select().from(wfTemplateStagesTable)
+      .where(eq(wfTemplateStagesTable.templateId, t.id))
+      .orderBy(asc(wfTemplateStagesTable.stageOrder));
+    return { ...t, stages };
+  }));
+  res.json({ templates: enriched });
+});
+
+// ─── Get instances for a specific document ───────────────────────────────────
+
+router.get("/instances/for-document/:docId", async (req, res) => {
+  const org = orgId(req);
+  const docId = parseInt(req.params.docId);
+  const instances = await db.select().from(wfInstancesTable)
+    .where(and(eq(wfInstancesTable.documentId, docId), eq(wfInstancesTable.organizationId, org)))
+    .orderBy(desc(wfInstancesTable.updatedAt));
+  const enriched = await Promise.all(instances.map(enrichInstance));
+  res.json({ instances: enriched });
+});
+
+// ─── Seed Default Templates ───────────────────────────────────────────────────
+
+router.post("/seed-defaults", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+  const org = orgId(req);
+  const userId = req.user!.id;
+
+  const defaults: Array<{
+    name: string;
+    documentType: string;
+    description: string;
+    stages: Array<{ stageOrder: number; name: string; responsibleRole: string | null; isTerminal: boolean }>;
+  }> = [
+    {
+      name: "General Document Approval",
+      documentType: "general",
+      description: "Standard approval for general documents",
+      stages: [
+        { stageOrder: 1, name: "Internal Review",     responsibleRole: "Reviewer",      isTerminal: false },
+        { stageOrder: 2, name: "Senior Review",        responsibleRole: "Senior Engineer", isTerminal: false },
+        { stageOrder: 3, name: "Approved for Issue",   responsibleRole: null,            isTerminal: true  },
+      ],
+    },
+    {
+      name: "Correspondence Workflow",
+      documentType: "correspondence",
+      description: "Action tracking for incoming and outgoing correspondence",
+      stages: [
+        { stageOrder: 1, name: "Acknowledged",      responsibleRole: "Document Controller", isTerminal: false },
+        { stageOrder: 2, name: "Manager Review",    responsibleRole: "Manager",             isTerminal: false },
+        { stageOrder: 3, name: "Actioned",          responsibleRole: null,                  isTerminal: true  },
+      ],
+    },
+    {
+      name: "Contract Approval Workflow",
+      documentType: "contract",
+      description: "Multi-stage approval for contracts and agreements",
+      stages: [
+        { stageOrder: 1, name: "Legal Review",          responsibleRole: "Legal",           isTerminal: false },
+        { stageOrder: 2, name: "Commercial Review",     responsibleRole: "Commercial",      isTerminal: false },
+        { stageOrder: 3, name: "Management Approval",   responsibleRole: "Management",      isTerminal: false },
+        { stageOrder: 4, name: "Executed",              responsibleRole: null,              isTerminal: true  },
+      ],
+    },
+    {
+      name: "Drawing Approval Workflow",
+      documentType: "drawing",
+      description: "Engineering review and approval for drawings",
+      stages: [
+        { stageOrder: 1, name: "Checker Review",              responsibleRole: "Checker",           isTerminal: false },
+        { stageOrder: 2, name: "Senior Engineer Review",      responsibleRole: "Senior Engineer",   isTerminal: false },
+        { stageOrder: 3, name: "Approved for Construction",   responsibleRole: null,                isTerminal: true  },
+      ],
+    },
+  ];
+
+  const results: Array<{ documentType: string; status: "created" | "already_exists"; templateName: string }> = [];
+
+  for (const def of defaults) {
+    const [existing] = await db.select().from(wfTemplatesTable)
+      .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.documentType, def.documentType)))
+      .limit(1);
+
+    if (existing) {
+      results.push({ documentType: def.documentType, status: "already_exists", templateName: existing.name });
+      continue;
+    }
+
+    const [tpl] = await db.insert(wfTemplatesTable).values({
+      organizationId: org, name: def.name, documentType: def.documentType,
+      description: def.description, isActive: true, createdById: userId,
+    }).returning();
+
+    await db.insert(wfTemplateStagesTable).values(
+      def.stages.map(s => ({ ...s, templateId: tpl.id, responsibleUserId: null })),
+    );
+
+    await createAuditLog({ userId, action: "create", entityType: "wf_template", entityId: tpl.id, entityTitle: tpl.name });
+    results.push({ documentType: def.documentType, status: "created", templateName: tpl.name });
+  }
+
+  // Return full template list after seeding
+  const allTemplates = await db.select().from(wfTemplatesTable)
+    .where(eq(wfTemplatesTable.organizationId, org));
+  const enriched = await Promise.all(allTemplates.map(async t => {
+    const stages = await db.select().from(wfTemplateStagesTable)
+      .where(eq(wfTemplateStagesTable.templateId, t.id))
+      .orderBy(asc(wfTemplateStagesTable.stageOrder));
+    return { ...t, stages };
+  }));
+
+  res.status(201).json({ results, templates: enriched });
+});
+
 export default router;
+
