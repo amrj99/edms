@@ -1,23 +1,61 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, usersTable, projectsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { documentsTable, documentFilesTable, foldersTable, usersTable, projectsTable, projectMembersTable } from "@workspace/db";
+import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
 
-// GET /api/documents — all documents visible to the authenticated user (scoped to their org)
+/**
+ * Resolve the set of project IDs a user is allowed to see documents from.
+ *
+ * Rules (enforced server-side):
+ *  - system_owner → all projects in their organisation (platform-wide admin bypass)
+ *  - Everyone else → only projects where they appear in project_members
+ *
+ * In both cases the org boundary is always enforced: projects from other
+ * organisations are never included.
+ */
+async function getAllowedProjectIds(userId: number, organizationId: number, sysAdmin: boolean): Promise<number[]> {
+  if (sysAdmin) {
+    const rows = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, organizationId));
+    return rows.map(r => r.id);
+  }
+
+  // Regular users: only projects they are explicitly a member of, within their org
+  const rows = await db
+    .select({ projectId: projectMembersTable.projectId })
+    .from(projectMembersTable)
+    .innerJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
+    .where(
+      and(
+        eq(projectMembersTable.userId, userId),
+        eq(projectsTable.organizationId, organizationId),
+      ),
+    );
+  return rows.map(r => r.projectId);
+}
+
+// GET /api/documents — documents visible to the authenticated user
+// Scoped to: user's org AND projects the user is a member of (sys_owner bypasses)
 router.get("/", requireAuth, async (req, res) => {
   const { projectId, discipline, documentType, status, source, issuedBy, search, page, limit } = req.query;
   const lim = Math.min(parseInt(limit as string || "100"), 500);
   const pg = Math.max(1, parseInt(page as string || "1"));
 
-  // Fetch all projects the user can see (org-scoped)
-  const orgProjects = await db.select({ id: projectsTable.id }).from(projectsTable)
-    .where(eq(projectsTable.organizationId, req.user!.organizationId));
-  const orgProjectIds = orgProjects.map(p => p.id);
+  const user = req.user!;
 
-  if (!orgProjectIds.length) {
+  const allowedProjectIds = await getAllowedProjectIds(
+    user.id,
+    user.organizationId,
+    isSysAdmin(user),
+  );
+
+  // User has no accessible projects → return empty immediately
+  if (!allowedProjectIds.length) {
     res.json({ documents: [], total: 0, page: pg, totalPages: 0 });
     return;
   }
@@ -33,7 +71,12 @@ router.get("/", requireAuth, async (req, res) => {
     .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
     .orderBy(desc(documentsTable.updatedAt));
 
-  let filtered = docs.filter(d => orgProjectIds.includes(d.doc.projectId));
+  // Primary security filter: restrict to allowed projects
+  // Documents without a projectId (org-level only) are shown only if the org matches
+  let filtered = docs.filter(d => {
+    if (d.doc.projectId) return allowedProjectIds.includes(d.doc.projectId);
+    return d.doc.organizationId === user.organizationId;
+  });
 
   if (projectId) filtered = filtered.filter(d => d.doc.projectId === parseInt(projectId as string));
   if (discipline) filtered = filtered.filter(d => d.doc.discipline === discipline);
@@ -77,7 +120,7 @@ router.get("/", requireAuth, async (req, res) => {
   });
 });
 
-// GET /api/documents/:id — single document detail (org-scoped)
+// GET /api/documents/:id — single document (org + project-membership scoped)
 router.get("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document ID" }); return; }
@@ -99,9 +142,29 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   if (!result) { res.status(404).json({ error: "Document not found" }); return; }
 
-  // Enforce org scope (sys admins bypass)
-  if (!isSysAdmin(user) && result.project?.organizationId !== user.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
+  // Org boundary check (sys admin bypasses all below)
+  if (!isSysAdmin(user)) {
+    if (result.project?.organizationId !== user.organizationId) {
+      res.status(403).json({ error: "Forbidden" }); return;
+    }
+
+    // Project membership check: user must be a member of the document's project
+    if (result.doc.projectId) {
+      const [membership] = await db
+        .select({ id: projectMembersTable.id })
+        .from(projectMembersTable)
+        .where(
+          and(
+            eq(projectMembersTable.projectId, result.doc.projectId),
+            eq(projectMembersTable.userId, user.id),
+          ),
+        )
+        .limit(1);
+
+      if (!membership) {
+        res.status(403).json({ error: "Forbidden: not a member of this project" }); return;
+      }
+    }
   }
 
   // Fetch attached files
