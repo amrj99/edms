@@ -18,6 +18,7 @@ export const notificationTypeEnum = pgEnum("notification_type", [
   "transmittal_received",
   "transmittal_acknowledged",
   "workflow_action_required",
+  "workflow_sla_reminder",
   "rfi_opened",
   "rfi_responded",
   "submittal_returned",

@@ -12,9 +12,10 @@ import { extractRealIp } from "./middlewares/real-ip.js";
 import { db } from "@workspace/db";
 import {
   tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable, projectsTable,
+  wfInstancesTable, wfTemplateStagesTable,
 } from "@workspace/db";
 import { and, eq, lt, isNotNull, sql, ne } from "drizzle-orm";
-import { sendOverdueTaskEmail } from "./lib/email.js";
+import { sendOverdueTaskEmail, sendWorkflowStageEmail } from "./lib/email.js";
 
 const app: Express = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -268,6 +269,158 @@ async function sendDueDateReminders() {
         entityId: item.id,
         actionUrl: `/meetings`,
       });
+    }
+
+    // ─── Workflow SLA: overdue stages ─────────────────────────────────────
+    // Find active wf_instances whose stage_due_at has passed
+    const overdueInstances = await db
+      .select({
+        id: wfInstancesTable.id,
+        organizationId: wfInstancesTable.organizationId,
+        documentId: wfInstancesTable.documentId,
+        currentStageId: wfInstancesTable.currentStageId,
+        stageDueAt: wfInstancesTable.stageDueAt,
+      })
+      .from(wfInstancesTable)
+      .where(and(
+        eq(wfInstancesTable.status, "active"),
+        isNotNull(wfInstancesTable.stageDueAt),
+        lt(wfInstancesTable.stageDueAt, now),
+      ));
+
+    for (const inst of overdueInstances) {
+      if (!inst.currentStageId) continue;
+      const [stage] = await db.select().from(wfTemplateStagesTable).where(eq(wfTemplateStagesTable.id, inst.currentStageId)).limit(1);
+      if (!stage) continue;
+
+      // Resolve recipients: specific user or org admins/PMs
+      let recipientIds: number[] = [];
+      if (stage.responsibleUserId) {
+        recipientIds = [stage.responsibleUserId];
+      } else {
+        const admins = await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(and(
+            eq(usersTable.organizationId, inst.organizationId),
+            eq(usersTable.isActive, true),
+            sql`${usersTable.role} IN ('admin', 'project_manager', 'system_owner')`,
+          ));
+        recipientIds = admins.map(a => a.id);
+      }
+
+      for (const userId of recipientIds) {
+        // Dedup: skip if we sent an overdue notification for this instance in last 24h
+        const [existing] = await db
+          .select({ id: notificationsTable.id })
+          .from(notificationsTable)
+          .where(and(
+            eq(notificationsTable.userId, userId),
+            eq(notificationsTable.type, "workflow_action_required"),
+            eq(notificationsTable.entityType, "workflow"),
+            eq(notificationsTable.entityId, inst.id),
+            sql`${notificationsTable.createdAt} > ${yesterday}`,
+          ))
+          .limit(1);
+        if (existing) continue;
+
+        await db.insert(notificationsTable).values({
+          userId,
+          type: "workflow_action_required",
+          title: `Workflow stage overdue: ${stage.name}`,
+          message: `A document workflow has exceeded its SLA deadline at stage "${stage.name}".`,
+          entityType: "workflow",
+          entityId: inst.id,
+          actionUrl: `/workflow-engine`,
+        }).catch(() => {});
+
+        // Email
+        const [recipient] = await db.select({ email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+        if (recipient?.email) {
+          sendWorkflowStageEmail({
+            to: recipient.email,
+            stageName: `${stage.name} (OVERDUE)`,
+            stageRole: stage.responsibleRole ?? undefined,
+            documentTitle: `Document #${inst.documentId}`,
+            documentNumber: "",
+            workflowName: `Workflow Instance #${inst.id}`,
+            submittedByName: "System",
+            instanceId: inst.id,
+          }).catch(() => {});
+        }
+      }
+    }
+
+    // ─── Workflow SLA: upcoming reminders ─────────────────────────────────
+    // Find active wf_instances where due date is within reminderDays
+    // (stageDueAt - reminderDays * 86400s <= now < stageDueAt)
+    const upcomingInstances = await db
+      .select({
+        id: wfInstancesTable.id,
+        organizationId: wfInstancesTable.organizationId,
+        documentId: wfInstancesTable.documentId,
+        currentStageId: wfInstancesTable.currentStageId,
+        stageDueAt: wfInstancesTable.stageDueAt,
+      })
+      .from(wfInstancesTable)
+      .where(and(
+        eq(wfInstancesTable.status, "active"),
+        isNotNull(wfInstancesTable.stageDueAt),
+        sql`${wfInstancesTable.stageDueAt} > ${now}`, // not yet overdue
+      ));
+
+    for (const inst of upcomingInstances) {
+      if (!inst.currentStageId || !inst.stageDueAt) continue;
+      const [stage] = await db.select().from(wfTemplateStagesTable).where(eq(wfTemplateStagesTable.id, inst.currentStageId)).limit(1);
+      if (!stage?.reminderDays) continue; // no reminder configured
+
+      // Check if due date is within reminderDays
+      const dueMs = new Date(inst.stageDueAt).getTime();
+      const reminderWindowMs = stage.reminderDays * 24 * 60 * 60 * 1000;
+      if (dueMs - now.getTime() > reminderWindowMs) continue; // too far in future
+
+      let recipientIds: number[] = [];
+      if (stage.responsibleUserId) {
+        recipientIds = [stage.responsibleUserId];
+      } else {
+        const admins = await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(and(
+            eq(usersTable.organizationId, inst.organizationId),
+            eq(usersTable.isActive, true),
+            sql`${usersTable.role} IN ('admin', 'project_manager', 'system_owner')`,
+          ));
+        recipientIds = admins.map(a => a.id);
+      }
+
+      for (const userId of recipientIds) {
+        // Dedup: skip if we already sent an SLA reminder today for this instance
+        const [existing] = await db
+          .select({ id: notificationsTable.id })
+          .from(notificationsTable)
+          .where(and(
+            eq(notificationsTable.userId, userId),
+            eq(notificationsTable.type, "workflow_sla_reminder"),
+            eq(notificationsTable.entityType, "workflow"),
+            eq(notificationsTable.entityId, inst.id),
+            sql`${notificationsTable.createdAt} > ${yesterday}`,
+          ))
+          .limit(1);
+        if (existing) continue;
+
+        const daysLeft = Math.ceil((dueMs - now.getTime()) / (24 * 60 * 60 * 1000));
+        await db.insert(notificationsTable).values({
+          userId,
+          type: "workflow_sla_reminder",
+          title: `Workflow SLA reminder: ${stage.name}`,
+          message: `Document workflow stage "${stage.name}" is due in ${daysLeft} day${daysLeft !== 1 ? "s" : ""}.`,
+          entityType: "workflow",
+          entityId: inst.id,
+          actionUrl: `/workflow-engine`,
+        }).catch(() => {});
+      }
     }
 
     logger.info("Due-date reminder job completed");

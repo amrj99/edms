@@ -63,8 +63,13 @@ interface WfInstance {
   initiatedByName?: string;
   currentStageName?: string;
   currentStageRole?: string;
+  currentStageSla?: number | null;
+  currentStageReminderDays?: number | null;
   stagesTotal: number;
   stagesCurrent: number;
+  stageDueAt?: string | null;
+  isOverdue?: boolean;
+  daysRemaining?: number | null;
   transitions: Transition[];
   createdAt: string;
   updatedAt: string;
@@ -611,6 +616,7 @@ export default function WorkflowEnginePage() {
                   <TableHead>Responsible</TableHead>
                   <TableHead>Progress</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Due</TableHead>
                   <TableHead>Updated</TableHead>
                   <TableHead />
                 </TableRow>
@@ -646,6 +652,29 @@ export default function WorkflowEnginePage() {
                       <ProgressBar current={inst.stagesCurrent} total={inst.stagesTotal} status={inst.status} />
                     </TableCell>
                     <TableCell><StatusBadge status={inst.status} /></TableCell>
+                    <TableCell className="text-xs whitespace-nowrap">
+                      {inst.status === "active" && inst.stageDueAt ? (
+                        inst.isOverdue ? (
+                          <Badge variant="destructive" className="text-xs font-normal gap-1">
+                            Overdue {Math.abs(inst.daysRemaining ?? 0)}d
+                          </Badge>
+                        ) : (
+                          <span className={inst.daysRemaining !== null && inst.daysRemaining <= 2
+                            ? "text-amber-600 dark:text-amber-400 font-medium"
+                            : "text-muted-foreground"
+                          }>
+                            {format(new Date(inst.stageDueAt), "dd MMM yy")}
+                            {inst.daysRemaining !== null && (
+                              <span className="ml-1 text-xs opacity-75">
+                                ({inst.daysRemaining}d)
+                              </span>
+                            )}
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                       {format(new Date(inst.updatedAt), "dd MMM yy")}
                     </TableCell>

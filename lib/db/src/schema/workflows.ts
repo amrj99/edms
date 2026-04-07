@@ -98,6 +98,9 @@ export const wfTemplateStagesTable = pgTable("wf_template_stages", {
   responsibleRole: text("responsible_role"),
   responsibleUserId: integer("responsible_user_id").references(() => usersTable.id),
   isTerminal: boolean("is_terminal").notNull().default(false),
+  // SLA: null means no SLA for this stage (no due date, no reminder, no overdue flag)
+  slaDays: integer("sla_days"),          // calendar days allowed for this stage
+  reminderDays: integer("reminder_days"), // days before due to send first reminder
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -116,6 +119,8 @@ export const wfInstancesTable = pgTable("wf_instances", {
   currentStageId: integer("current_stage_id").references(() => wfTemplateStagesTable.id),
   status: text("status").notNull().default("active"),
   initiatedById: integer("initiated_by_id").references(() => usersTable.id).notNull(),
+  // SLA tracking: set when a stage with slaDays is entered; null = no SLA on current stage
+  stageDueAt: timestamp("stage_due_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -63,6 +63,8 @@ export interface WfStage {
   responsibleRole?: string;
   responsibleUserId?: number | null;
   isTerminal: boolean;
+  slaDays?: number | null;
+  reminderDays?: number | null;
 }
 
 interface LocalStage {
@@ -73,6 +75,8 @@ interface LocalStage {
   responsibleRole: string;
   responsibleUserId: number | null;
   isTerminal: boolean;
+  slaDays: number | null;
+  reminderDays: number | null;
 }
 
 interface OrgUser {
@@ -114,6 +118,8 @@ function stageToLocal(s: WfStage): LocalStage {
     responsibleRole: s.responsibleRole ?? "",
     responsibleUserId: s.responsibleUserId ?? null,
     isTerminal: s.isTerminal,
+    slaDays: s.slaDays ?? null,
+    reminderDays: s.reminderDays ?? null,
   };
 }
 
@@ -126,6 +132,8 @@ function emptyStage(): LocalStage {
     responsibleRole: "",
     responsibleUserId: null,
     isTerminal: false,
+    slaDays: null,
+    reminderDays: null,
   };
 }
 
@@ -242,6 +250,43 @@ function SortableStageRow({
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      {/* SLA row */}
+      <div className="flex gap-2 pl-9 items-center">
+        <div className="flex items-center gap-1.5 flex-1">
+          <label className="text-xs text-muted-foreground whitespace-nowrap">SLA days</label>
+          <Input
+            type="number"
+            min={1}
+            className="h-7 text-xs w-20"
+            placeholder="None"
+            value={stage.slaDays ?? ""}
+            onChange={e => {
+              const v = e.target.value === "" ? null : parseInt(e.target.value, 10);
+              onChange(stage.localId, { slaDays: v && v > 0 ? v : null });
+            }}
+          />
+        </div>
+        <div className="flex items-center gap-1.5 flex-1">
+          <label className="text-xs text-muted-foreground whitespace-nowrap">Remind days before</label>
+          <Input
+            type="number"
+            min={1}
+            className="h-7 text-xs w-20"
+            placeholder="None"
+            value={stage.reminderDays ?? ""}
+            onChange={e => {
+              const v = e.target.value === "" ? null : parseInt(e.target.value, 10);
+              onChange(stage.localId, { reminderDays: v && v > 0 ? v : null });
+            }}
+          />
+        </div>
+        {stage.slaDays !== null && (
+          <span className="text-xs text-muted-foreground">
+            ≈ {stage.slaDays} calendar day{stage.slaDays !== 1 ? "s" : ""} allowed
+          </span>
+        )}
       </div>
 
       {/* Terminal badge */}
@@ -383,6 +428,8 @@ export function TemplateEditorDialog({
             responsibleUserId: s.responsibleUserId ?? undefined,
             isTerminal: s.isTerminal,
             stageOrder: i + 1,
+            slaDays: s.slaDays ?? undefined,
+            reminderDays: s.reminderDays ?? undefined,
           });
         }
       } else {
@@ -411,6 +458,8 @@ export function TemplateEditorDialog({
             responsibleUserId: s.responsibleUserId ?? undefined,
             isTerminal: s.isTerminal,
             stageOrder: i + 1,
+            slaDays: s.slaDays ?? null,
+            reminderDays: s.reminderDays ?? null,
           };
           if (s.dbId) {
             await apiPut(`/workflow-engine/templates/${tplId}/stages/${s.dbId}`, payload);

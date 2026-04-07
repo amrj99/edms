@@ -61,8 +61,13 @@ interface WfInstance {
   workflowName?: string;
   currentStageName?: string;
   currentStageRole?: string;
+  currentStageSla?: number | null;
+  currentStageReminderDays?: number | null;
   stagesTotal: number;
   stagesCurrent: number;
+  stageDueAt?: string | null;
+  isOverdue?: boolean;
+  daysRemaining?: number | null;
   initiatedByName?: string;
   transitions: Transition[];
   createdAt: string;
@@ -157,14 +162,47 @@ function ActiveWorkflowWidget({
 
       {/* Current stage highlight */}
       {instance.status === "active" && instance.currentStageName && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3">
-          <div className="text-xs text-blue-500 dark:text-blue-400 font-medium uppercase tracking-wide mb-0.5">
+        <div className={cn(
+          "rounded-lg border p-3",
+          instance.isOverdue
+            ? "border-red-300 bg-red-50 dark:bg-red-900/20 dark:border-red-800"
+            : "border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800",
+        )}>
+          <div className={cn(
+            "text-xs font-medium uppercase tracking-wide mb-0.5",
+            instance.isOverdue ? "text-red-500 dark:text-red-400" : "text-blue-500 dark:text-blue-400",
+          )}>
             Current Stage
           </div>
-          <div className="font-semibold text-blue-900 dark:text-blue-200">{instance.currentStageName}</div>
+          <div className={cn(
+            "font-semibold",
+            instance.isOverdue ? "text-red-900 dark:text-red-200" : "text-blue-900 dark:text-blue-200",
+          )}>
+            {instance.currentStageName}
+          </div>
           {instance.currentStageRole && (
-            <div className="text-sm text-blue-700 dark:text-blue-300 mt-0.5">
+            <div className={cn(
+              "text-sm mt-0.5",
+              instance.isOverdue ? "text-red-700 dark:text-red-300" : "text-blue-700 dark:text-blue-300",
+            )}>
               Responsible: {instance.currentStageRole}
+            </div>
+          )}
+          {/* SLA due date */}
+          {instance.stageDueAt && (
+            <div className={cn(
+              "text-xs mt-1.5 flex items-center gap-1",
+              instance.isOverdue
+                ? "text-red-700 dark:text-red-300 font-semibold"
+                : instance.daysRemaining !== null && instance.daysRemaining <= 2
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "text-blue-600 dark:text-blue-400",
+            )}>
+              <Clock className="h-3 w-3 shrink-0" />
+              {instance.isOverdue
+                ? `SLA overdue by ${Math.abs(instance.daysRemaining ?? 0)} day${Math.abs(instance.daysRemaining ?? 0) !== 1 ? "s" : ""}`
+                : `Due ${format(new Date(instance.stageDueAt), "dd MMM yyyy")}${instance.daysRemaining !== null ? ` (${instance.daysRemaining}d remaining)` : ""}`
+              }
             </div>
           )}
         </div>

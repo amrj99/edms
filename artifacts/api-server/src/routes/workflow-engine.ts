@@ -43,6 +43,14 @@ function orgId(req: any): number {
   return req.user!.organizationId;
 }
 
+/** Compute the due timestamp for a stage based on its slaDays. Returns null if no SLA. */
+function computeStageDueAt(stage: typeof wfTemplateStagesTable.$inferSelect | null | undefined): Date | null {
+  if (!stage?.slaDays) return null;
+  const due = new Date();
+  due.setDate(due.getDate() + stage.slaDays);
+  return due;
+}
+
 async function getTemplateWithStages(templateId: number, organizationId: number) {
   const [tpl] = await db.select().from(wfTemplatesTable)
     .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, organizationId)))
@@ -83,6 +91,14 @@ async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
 
   const stageMap = new Map(allStages.map(s => [s.id, s.name]));
 
+  // SLA computed fields
+  const now = new Date();
+  const stageDueAt = inst.stageDueAt ? new Date(inst.stageDueAt) : null;
+  const isOverdue = stageDueAt !== null && inst.status === "active" && stageDueAt < now;
+  const daysRemaining = stageDueAt !== null && inst.status === "active"
+    ? Math.ceil((stageDueAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
   return {
     ...inst,
     documentTitle: doc?.title,
@@ -94,6 +110,11 @@ async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
     initiatedByName: initiatedBy ? `${initiatedBy.firstName} ${initiatedBy.lastName}`.trim() : undefined,
     currentStageName: currentStage?.name,
     currentStageRole: currentStage?.responsibleRole,
+    currentStageSla: currentStage?.slaDays ?? null,
+    currentStageReminderDays: currentStage?.reminderDays ?? null,
+    stageDueAt: inst.stageDueAt,
+    isOverdue,
+    daysRemaining,
     stagesTotal: allStages.length,
     stagesCurrent: currentStage ? allStages.findIndex(s => s.id === currentStage.id) + 1 : (inst.status === "completed" ? allStages.length : 0),
     transitions: transitions.map(t => ({
@@ -239,7 +260,7 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
     .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
   if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
 
-  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder } = req.body;
+  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
   if (!name) { res.status(400).json({ error: "name is required" }); return; }
 
   // Validate responsibleUserId belongs to same org
@@ -257,6 +278,7 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
   const [stage] = await db.insert(wfTemplateStagesTable).values({
     templateId, name, description, responsibleRole, responsibleUserId: responsibleUserId ?? null,
     isTerminal: isTerminal ?? false, stageOrder: stageOrder ?? maxOrder + 1,
+    slaDays: slaDays ?? null, reminderDays: reminderDays ?? null,
   }).returning();
   await db.update(wfTemplatesTable).set({ updatedAt: new Date() }).where(eq(wfTemplatesTable.id, templateId));
   res.status(201).json(stage);
@@ -270,7 +292,7 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
     .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
   if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
 
-  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder } = req.body;
+  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
   if (responsibleUserId) {
     const [u] = await db.select({ id: usersTable.id }).from(usersTable)
       .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
@@ -284,6 +306,8 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
       ...(responsibleUserId !== undefined && { responsibleUserId: responsibleUserId ?? null }),
       ...(isTerminal !== undefined && { isTerminal }),
       ...(stageOrder !== undefined && { stageOrder }),
+      ...(slaDays !== undefined && { slaDays: slaDays ?? null }),
+      ...(reminderDays !== undefined && { reminderDays: reminderDays ?? null }),
       updatedAt: new Date(),
     })
     .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId)))
@@ -415,6 +439,7 @@ router.post("/instances", async (req, res) => {
     currentStageId: firstStage?.id ?? null,
     status: "active",
     initiatedById: req.user!.id,
+    stageDueAt: computeStageDueAt(firstStage),
   }).returning();
 
   // Record "started" transition
@@ -467,7 +492,13 @@ router.post("/instances/:id/advance", async (req, res) => {
   }
 
   const [updated] = await db.update(wfInstancesTable)
-    .set({ currentStageId: newStageId, status: newStatus, updatedAt: new Date() })
+    .set({
+      currentStageId: newStageId,
+      status: newStatus,
+      // Compute new due date for the next stage; clear when workflow completes
+      stageDueAt: newStatus === "active" && nextStage ? computeStageDueAt(nextStage) : null,
+      updatedAt: new Date(),
+    })
     .where(eq(wfInstancesTable.id, id))
     .returning();
 
@@ -512,18 +543,26 @@ router.post("/instances/:id/reject", async (req, res) => {
 
   // If returned, go back to previous stage
   let newStageId: number | null = inst.currentStageId;
+  let returnStage: typeof wfTemplateStagesTable.$inferSelect | null = null;
   if (finalAction === "returned") {
     const stages = await db.select().from(wfTemplateStagesTable)
       .where(eq(wfTemplateStagesTable.templateId, inst.templateId))
       .orderBy(asc(wfTemplateStagesTable.stageOrder));
     const currentIdx = stages.findIndex(s => s.id === inst.currentStageId);
-    newStageId = stages[currentIdx - 1]?.id ?? stages[0]?.id ?? inst.currentStageId;
+    returnStage = stages[currentIdx - 1] ?? stages[0] ?? null;
+    newStageId = returnStage?.id ?? inst.currentStageId;
   } else {
     newStageId = null;
   }
 
   const [updated] = await db.update(wfInstancesTable)
-    .set({ currentStageId: newStageId, status: newStatus, updatedAt: new Date() })
+    .set({
+      currentStageId: newStageId,
+      status: newStatus,
+      // If returning to a previous stage, compute fresh SLA due date for that stage
+      stageDueAt: finalAction === "returned" ? computeStageDueAt(returnStage) : null,
+      updatedAt: new Date(),
+    })
     .where(eq(wfInstancesTable.id, id))
     .returning();
 
