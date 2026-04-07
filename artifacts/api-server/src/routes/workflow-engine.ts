@@ -547,6 +547,45 @@ router.post("/instances/:id/reject", async (req, res) => {
 });
 
 
+// ─── Duplicate template ───────────────────────────────────────────────────────
+
+router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+  const org = orgId(req);
+  const id = parseInt(req.params.id);
+  const [orig] = await db.select().from(wfTemplatesTable)
+    .where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org))).limit(1);
+  if (!orig) { res.status(404).json({ error: "Template not found" }); return; }
+
+  const stages = await db.select().from(wfTemplateStagesTable)
+    .where(eq(wfTemplateStagesTable.templateId, id))
+    .orderBy(asc(wfTemplateStagesTable.stageOrder));
+
+  const [copy] = await db.insert(wfTemplatesTable).values({
+    organizationId: org,
+    name: `${orig.name} (Copy)`,
+    documentType: orig.documentType,
+    description: orig.description,
+    isActive: false,
+    createdById: req.user!.id,
+  }).returning();
+
+  if (stages.length) {
+    await db.insert(wfTemplateStagesTable).values(
+      stages.map(s => ({
+        templateId: copy.id,
+        name: s.name,
+        description: s.description,
+        responsibleRole: s.responsibleRole,
+        responsibleUserId: null,
+        isTerminal: s.isTerminal,
+        stageOrder: s.stageOrder,
+      })),
+    );
+  }
+
+  res.status(201).json(await getTemplateWithStages(copy.id, org));
+});
+
 // ─── Get template(s) for a document type ─────────────────────────────────────
 
 router.get("/templates/for-type/:docType", async (req, res) => {

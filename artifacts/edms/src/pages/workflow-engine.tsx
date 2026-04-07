@@ -21,10 +21,11 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   GitBranch, CheckCircle2, XCircle, AlertCircle, Clock, Loader2,
   ChevronRight, RefreshCw, Plus, Workflow, SkipForward, ArrowLeft, Layers,
-  Play, Search, FileText, Settings2,
+  Play, Search, FileText, Settings2, Pencil, Copy, Power, PowerOff, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { TemplateEditorDialog, WfTemplate as EditorTemplate } from "@/components/workflow/TemplateEditorDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,12 @@ const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).then(r => r.json()),
+  put: (path: string, body: object) => fetch(`/api${path}`, {
+    method: "PUT", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(r => r.json()),
+  del: (path: string) => fetch(`/api${path}`, { method: "DELETE", credentials: "include" }).then(r => r.json()),
 };
 
 // ─── Status badges ────────────────────────────────────────────────────────────
@@ -282,6 +289,10 @@ export default function WorkflowEnginePage() {
   const [startTemplateId, setStartTemplateId] = useState<number | null>(null);
   const [startingWorkflow, setStartingWorkflow] = useState(false);
 
+  // Template editor state
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorTemplate, setEditorTemplate] = useState<EditorTemplate | null>(null);
+
   const isAdmin = ["admin", "system_owner"].includes(user?.role ?? "");
 
   const load = useCallback(async () => {
@@ -389,6 +400,66 @@ export default function WorkflowEnginePage() {
 
   const invoiceTemplate = templates.find(t => t.documentType === "Invoice");
 
+  // ── Template editor handlers ────────────────────────────────────────────────
+
+  const openNewTemplate = () => { setEditorTemplate(null); setEditorOpen(true); };
+  const openEditTemplate = (tpl: WfTemplate) => {
+    const mapped: EditorTemplate = { ...tpl, stages: tpl.stages as any };
+    setEditorTemplate(mapped);
+    setEditorOpen(true);
+  };
+
+  const handleEditorSaved = (saved: EditorTemplate) => {
+    setEditorOpen(false);
+    setTemplates(prev => {
+      const idx = prev.findIndex(t => t.id === saved.id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = saved as unknown as WfTemplate;
+        return updated;
+      }
+      return [...prev, saved as unknown as WfTemplate];
+    });
+  };
+
+  const duplicateTemplate = async (tpl: WfTemplate) => {
+    try {
+      const copy = await api.post(`/workflow-engine/templates/${tpl.id}/duplicate`, {});
+      if (copy.error) throw new Error(copy.error);
+      toast({ title: `Duplicated as "${copy.name}"` });
+      setTemplates(prev => [...prev, copy]);
+    } catch (e: any) {
+      toast({ title: e.message ?? "Duplicate failed", variant: "destructive" });
+    }
+  };
+
+  const toggleActiveTemplate = async (tpl: WfTemplate) => {
+    try {
+      const updated = await api.put(`/workflow-engine/templates/${tpl.id}`, {
+        name: tpl.name,
+        documentType: tpl.documentType,
+        description: tpl.description,
+        isActive: !tpl.isActive,
+      });
+      if (updated.error) throw new Error(updated.error);
+      setTemplates(prev => prev.map(t => t.id === tpl.id ? { ...t, isActive: !tpl.isActive } : t));
+      toast({ title: !tpl.isActive ? "Template activated" : "Template deactivated" });
+    } catch (e: any) {
+      toast({ title: e.message ?? "Update failed", variant: "destructive" });
+    }
+  };
+
+  const deleteTemplate = async (tpl: WfTemplate) => {
+    if (!window.confirm(`Delete "${tpl.name}"? This cannot be undone.`)) return;
+    try {
+      await api.del(`/workflow-engine/templates/${tpl.id}`);
+      setTemplates(prev => prev.filter(t => t.id !== tpl.id));
+      toast({ title: "Template deleted" });
+    } catch (e: any) {
+      toast({ title: e.message ?? "Delete failed", variant: "destructive" });
+    }
+  };
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
     total: instances.length,
@@ -419,6 +490,12 @@ export default function WorkflowEnginePage() {
             <Button variant="outline" size="sm" onClick={seedDefaults} disabled={seeding}>
               {seeding ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Settings2 className="h-4 w-4 mr-2" />}
               Setup Default Templates
+            </Button>
+          )}
+          {isAdmin && (
+            <Button variant="outline" size="sm" onClick={openNewTemplate}>
+              <Plus className="h-4 w-4 mr-2" />
+              New Template
             </Button>
           )}
           <Button size="sm" onClick={() => setShowStartDialog(true)}>
@@ -613,7 +690,7 @@ export default function WorkflowEnginePage() {
           ) : (
             <div className="space-y-2">
               {templates.map(tpl => (
-                <div key={tpl.id} className="flex items-start gap-4 p-3 rounded-lg border bg-muted/30">
+                <div key={tpl.id} className={cn("flex items-start gap-4 p-3 rounded-lg border bg-muted/30 transition-opacity", !tpl.isActive && "opacity-60")}>
                   <div className="shrink-0 mt-0.5">
                     <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
@@ -642,6 +719,42 @@ export default function WorkflowEnginePage() {
                       ))}
                     </div>
                   </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        title="Edit template"
+                        onClick={() => openEditTemplate(tpl)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        title="Duplicate template"
+                        onClick={() => duplicateTemplate(tpl)}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon"
+                        className={cn("h-7 w-7", tpl.isActive ? "text-green-600 hover:text-orange-500" : "text-muted-foreground hover:text-green-600")}
+                        title={tpl.isActive ? "Deactivate template" : "Activate template"}
+                        onClick={() => toggleActiveTemplate(tpl)}
+                      >
+                        {tpl.isActive ? <Power className="h-3.5 w-3.5" /> : <PowerOff className="h-3.5 w-3.5" />}
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        title="Delete template"
+                        onClick={() => deleteTemplate(tpl)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -776,6 +889,14 @@ export default function WorkflowEnginePage() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Template Editor Dialog */}
+      <TemplateEditorDialog
+        template={editorTemplate}
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        onSaved={handleEditorSaved}
+      />
 
       {/* Seed confirm dialog */}
       {showSeedConfirm && (
