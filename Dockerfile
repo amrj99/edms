@@ -45,7 +45,7 @@ RUN pnpm run build
 
 # ── Stage 4: Production Frontend Image (nginx, small) ─────────
 FROM nginx:alpine AS frontend
-COPY --from=frontend-builder /app/artifacts/edms/dist /usr/share/nginx/html
+COPY --from=frontend-builder /app/artifacts/edms/dist/public /usr/share/nginx/html
 # nginx.conf is mounted at runtime via docker-compose volume
 
 # ── Stage 5: Production API Image (alpine, small) ─────────────
