@@ -1,3 +1,4 @@
+// Layout v2
 import { ReactNode, useEffect, useState } from "react";
 import { TermsGate } from "@/components/legal/TermsGate";
 import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
