@@ -1,0 +1,105 @@
+root@edms-server:/var/www/edms# cd /var/www/edms && git pull && docker compose build --no-cache && docker compose up -d
+remote: Enumerating objects: 10, done.
+remote: Counting objects: 100% (10/10), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 7 (delta 4), reused 7 (delta 4), pack-reused 0 (from 0)
+Unpacking objects: 100% (7/7), 3.33 KiB | 851.00 KiB/s, done.
+From github.com:amrj99/edms
+   0e2ce9b..d1d698d  main       -> origin/main
+Updating 0e2ce9b..d1d698d
+Fast-forward
+ Dockerfile                                         |   2 +
+ ...dms-cd-var-www-edms-git-pull-_1775658310626.txt | 126 +++++++++++++++++++++
+ 2 files changed, 128 insertions(+)
+ create mode 100644 attached_assets/Pasted-root-edms-server-var-www-edms-cd-var-www-edms-git-pull-_1775658310626.txt
+WARN[0000] /var/www/edms/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
+[+] Building 39.5s (57/57) FINISHED
+ => [internal] load local bake definitions                                 0.0s
+ => => reading from stdin 952B                                             0.0s
+ => [api internal] load build definition from Dockerfile                   0.0s
+ => => transferring dockerfile: 2.75kB                                     0.0s
+ => [api internal] load metadata for docker.io/library/node:22-slim        0.4s
+ => [frontend internal] load metadata for docker.io/library/nginx:alpine   0.0s
+ => [api internal] load metadata for docker.io/library/node:22-alpine      0.0s
+ => [api internal] load .dockerignore                                      0.0s
+ => => transferring context: 2B                                            0.0s
+ => [api deps  1/11] FROM docker.io/library/node:22-slim@sha256:f3a68cf41  0.1s
+ => => resolve docker.io/library/node:22-slim@sha256:f3a68cf41a855d227d1b  0.0s
+ => CACHED [frontend frontend 1/2] FROM docker.io/library/nginx:alpine@sh  0.1s
+ => => resolve docker.io/library/nginx:alpine@sha256:e7257f1ef28ba17cf7c2  0.0s
+ => [frontend internal] load build context                                 0.0s
+ => => transferring context: 42.13kB                                       0.0s
+ => [api internal] load build context                                      0.0s
+ => => transferring context: 28.31kB                                       0.0s
+ => [api api  1/12] FROM docker.io/library/node:22-alpine@sha256:4d64b49e  0.1s
+ => => resolve docker.io/library/node:22-alpine@sha256:4d64b49e6c891c8fc8  0.0s
+ => CACHED [frontend deps  2/11] WORKDIR /app                              0.0s
+ => [api deps  3/11] RUN npm install -g pnpm@10                            1.8s
+ => CACHED [api api  2/12] WORKDIR /app                                    0.0s
+ => [api api  3/12] RUN npm install -g pnpm@10                             2.2s
+ => [api deps  4/11] COPY package.json pnpm-workspace.yaml pnpm-lock.yaml  0.1s
+ => [api deps  5/11] COPY lib/db/package.json ./lib/db/                    0.0s
+ => [frontend deps  6/11] COPY lib/api-spec/package.json ./lib/api-spec/   0.0s
+ => [frontend deps  7/11] COPY lib/api-zod/package.json ./lib/api-zod/     0.0s
+ => [frontend deps  8/11] COPY lib/api-client-react/package.json ./lib/ap  0.0s
+ => [api deps  9/11] COPY artifacts/api-server/package.json ./artifacts/a  0.0s
+ => [frontend deps 10/11] COPY artifacts/edms/package.json ./artifacts/ed  0.0s
+ => [frontend deps 11/11] RUN pnpm install --frozen-lockfile              14.8s
+ => [api api  4/12] COPY package.json pnpm-workspace.yaml pnpm-lock.yaml   0.1s
+ => [api api  5/12] COPY lib/db/package.json ./lib/db/                     0.0s
+ => [api api  6/12] COPY lib/api-zod/package.json ./lib/api-zod/           0.0s
+ => [api api  7/12] COPY artifacts/api-server/package.json ./artifacts/ap  0.0s
+ => [api api  8/12] RUN pnpm install --frozen-lockfile --prod              7.2s
+ => [frontend api-builder 1/6] WORKDIR /app                                0.7s
+ => [frontend api-builder 2/6] COPY tsconfig.base.json ./                  0.0s
+ => [frontend api-builder 3/6] COPY lib/ ./lib/                            0.1s
+ => CACHED [frontend deps  4/11] COPY package.json pnpm-workspace.yaml pn  0.0s
+ => CACHED [frontend deps  5/11] COPY lib/db/package.json ./lib/db/        0.0s
+ => CACHED [frontend deps  6/11] COPY lib/api-spec/package.json ./lib/api  0.0s
+ => CACHED [frontend deps  7/11] COPY lib/api-zod/package.json ./lib/api-  0.0s
+ => CACHED [frontend deps  8/11] COPY lib/api-client-react/package.json .  0.0s
+ => CACHED [frontend deps  9/11] COPY artifacts/api-server/package.json .  0.0s
+ => CACHED [frontend deps 10/11] COPY artifacts/edms/package.json ./artif  0.0s
+ => CACHED [frontend deps 11/11] RUN pnpm install --frozen-lockfile        0.0s
+ => CACHED [frontend frontend-builder 1/6] WORKDIR /app                    0.0s
+ => CACHED [frontend frontend-builder 2/6] COPY tsconfig.base.json ./      0.0s
+ => CACHED [frontend frontend-builder 3/6] COPY lib/ ./lib/                0.0s
+ => [frontend frontend-builder 4/6] COPY artifacts/edms/ ./artifacts/edms  0.1s
+ => [api api-builder 4/6] COPY artifacts/api-server/ ./artifacts/api-serv  0.1s
+ => [api api-builder 5/6] WORKDIR /app/artifacts/api-server                0.0s
+ => [frontend frontend-builder 5/6] WORKDIR /app/artifacts/edms            0.0s
+ => [api api-builder 6/6] RUN pnpm run build                               2.0s
+ => [frontend frontend-builder 6/6] RUN pnpm run build                    14.2s
+ => [api api  9/12] COPY --from=api-builder /app/artifacts/api-server/dis  1.5s
+ => [api api 10/12] COPY --from=api-builder /app/lib/db/src ./lib/db/src   0.1s
+ => [api api 11/12] COPY lib/db/drizzle.config.ts ./lib/db/                0.0s
+ => [api api 12/12] COPY lib/db/src ./lib/db/src                           0.1s
+ => [api] exporting to image                                              17.4s
+ => => exporting layers                                                   11.8s
+ => => exporting manifest sha256:57c0dc5c99112d08786bee861c727111d4ac1684  0.0s
+ => => exporting config sha256:77342d68ca5b9991cd04adbb82bcca0ee3ae66b762  0.0s
+ => => exporting attestation manifest sha256:e5ebdc872cd83dcac4266c7c4954  0.0s
+ => => exporting manifest list sha256:716d5b5266eb114f0a3d5dd42e710bd5a1e  0.0s
+ => => naming to docker.io/library/edms-api:latest                         0.0s
+ => => unpacking to docker.io/library/edms-api:latest                      5.5s
+ => [frontend frontend 2/2] COPY --from=frontend-builder /app/artifacts/e  0.0s
+ => [frontend] exporting to image                                          0.6s
+ => => exporting layers                                                    0.4s
+ => => exporting manifest sha256:934b7a3fb6b376f5d70e015090aea798a8c8745d  0.0s
+ => => exporting config sha256:09413666115c3e9677c127775c246d34e56ddd3c4b  0.0s
+ => => exporting attestation manifest sha256:d5ebd63f5c1a551267fadc7797b0  0.0s
+ => => exporting manifest list sha256:f9ee788a8a4feb6ac6b147956d6617f09c0  0.0s
+ => => naming to docker.io/library/edms-frontend:latest                    0.0s
+ => => unpacking to docker.io/library/edms-frontend:latest                 0.1s
+ => [frontend] resolving provenance for metadata file                      0.0s
+ => [api] resolving provenance for metadata file                           0.0s
+[+] build 2/2
+ ✔ Image edms-frontend Built                                               39.6s
+ ✔ Image edms-api      Built                                               39.6s
+WARN[0000] /var/www/edms/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
+[+] up 3/3
+ ✔ Container edms_postgres Healthy                                         13.3s
+ ✔ Container edms_api      Started                                         13.5s
+ ✔ Container edms_frontend Started                                         1.2s
+root@edms-server:/var/www/edms# ^C
+root@edms-server:/var/www/edms#
