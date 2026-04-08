@@ -256,9 +256,17 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
   const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
-  // Send for Workflow state
+  // Send for Workflow (Transmittal) state
   const [wfDoc, setWfDoc] = useState<any>(null);
   const [wfForm, setWfForm] = useState({ subject: "", purpose: "for_review", toUserIds: [] as number[], externalEmails: "", description: "" });
+
+  // Start Workflow Engine state
+  const [wfEngineDoc, setWfEngineDoc] = useState<any>(null);
+  const [wfEngineTemplates, setWfEngineTemplates] = useState<any[]>([]);
+  const [wfEngineTemplateId, setWfEngineTemplateId] = useState<number | null>(null);
+  const [wfEngineLoading, setWfEngineLoading] = useState(false);
+  const [wfEngineStarting, setWfEngineStarting] = useState(false);
+
   // Document share state
   const [shareDoc, setShareDoc] = useState<any>(null);
   const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
@@ -351,6 +359,53 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
     },
     onSuccess: () => { setDocShareResult(null); toast({ title: "Share link revoked" }); },
   });
+
+  const openStartWorkflow = async (doc: any) => {
+    setWfEngineDoc(doc);
+    setWfEngineTemplateId(null);
+    setWfEngineLoading(true);
+    try {
+      const r = await fetch("/api/workflow-engine/templates", { credentials: "include" });
+      if (!r.ok) throw new Error();
+      const data = await r.json();
+      const all: any[] = data.templates ?? data ?? [];
+      const active = all.filter((t: any) => t.isActive !== false);
+      const exact = active.filter((t: any) => t.documentType?.toLowerCase() === doc.documentType?.toLowerCase());
+      const list = exact.length > 0 ? exact : active;
+      setWfEngineTemplates(list);
+      if (list.length === 1) setWfEngineTemplateId(list[0].id);
+    } catch {
+      setWfEngineTemplates([]);
+    } finally {
+      setWfEngineLoading(false);
+    }
+  };
+
+  const startWorkflowEngine = async () => {
+    if (!wfEngineDoc) return;
+    const templateId = wfEngineTemplateId ?? wfEngineTemplates[0]?.id;
+    if (!templateId) {
+      toast({ title: "No workflow template available", variant: "destructive" });
+      return;
+    }
+    setWfEngineStarting(true);
+    try {
+      const r = await fetch("/api/workflow-engine/instances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ documentId: wfEngineDoc.id, templateId }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error ?? "Failed to start workflow");
+      toast({ title: "Workflow started", description: `Stage: ${data.currentStageName ?? "—"}` });
+      setWfEngineDoc(null);
+    } catch (e: any) {
+      toast({ title: e.message ?? "Failed to start workflow", variant: "destructive" });
+    } finally {
+      setWfEngineStarting(false);
+    }
+  };
 
   const sendForWorkflow = useMutation({
     mutationFn: async () => {
@@ -849,11 +904,14 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       }}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Send for Workflow" onClick={() => {
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Create Transmittal" onClick={() => {
                         setWfDoc(doc);
                         setWfForm({ subject: `For Review: ${doc.documentNumber} — ${doc.title}`, purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
                       }}>
                         <Send className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Start Workflow" onClick={() => openStartWorkflow(doc)}>
+                        <Layers className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Generate share link" onClick={() => {
                         setShareDoc(doc);
@@ -1126,11 +1184,11 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
         </DialogContent>
       </Dialog>
 
-      {/* Send for Workflow Dialog */}
+      {/* Create Transmittal Dialog */}
       <Dialog open={!!wfDoc} onOpenChange={v => { if (!v) setWfDoc(null); }}>
         <DialogContent className="sm:max-w-[540px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Send className="h-4 w-4" /> Send for Workflow</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><Send className="h-4 w-4" /> Create Transmittal</DialogTitle>
           </DialogHeader>
           {wfDoc && (
             <div className="space-y-4 py-2">
@@ -1184,7 +1242,77 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               disabled={sendForWorkflow.isPending || (!wfForm.toUserIds.length && !wfForm.externalEmails)}
               className="gap-1.5"
             >
-              {sendForWorkflow.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</> : <><Send className="h-3.5 w-3.5" /> Send for Workflow</>}
+              {sendForWorkflow.isPending ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending…</> : <><Send className="h-3.5 w-3.5" /> Create Transmittal</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Start Workflow Dialog */}
+      <Dialog open={!!wfEngineDoc} onOpenChange={v => { if (!v) setWfEngineDoc(null); }}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4" /> Start Workflow</DialogTitle>
+          </DialogHeader>
+          {wfEngineDoc && (
+            <div className="space-y-4 py-2">
+              <div className="bg-muted/40 rounded-lg px-3 py-2 flex items-center gap-3">
+                <FileText className="h-5 w-5 text-primary shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-none truncate">{wfEngineDoc.title}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{wfEngineDoc.documentNumber} · Rev {wfEngineDoc.revision ?? "01"}</p>
+                  {wfEngineDoc.documentType && (
+                    <p className="text-xs text-muted-foreground">Type: {wfEngineDoc.documentType}</p>
+                  )}
+                </div>
+              </div>
+              {wfEngineLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading templates…
+                </div>
+              ) : wfEngineTemplates.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No active workflow templates found.{" "}
+                  <a href="/workflow-engine" className="text-primary hover:underline">
+                    Create one in the Workflow Engine.
+                  </a>
+                </p>
+              ) : (
+                <div>
+                  <Label className="text-xs">Workflow Template</Label>
+                  <Select
+                    value={wfEngineTemplateId ? String(wfEngineTemplateId) : (wfEngineTemplates[0] ? String(wfEngineTemplates[0].id) : "")}
+                    onValueChange={v => setWfEngineTemplateId(parseInt(v))}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {wfEngineTemplates.map((t: any) => (
+                        <SelectItem key={t.id} value={String(t.id)}>
+                          {t.name}{t.documentType ? ` (${t.documentType})` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(() => {
+                    const selected = wfEngineTemplates.find((t: any) => t.id === (wfEngineTemplateId ?? wfEngineTemplates[0]?.id));
+                    return selected?.stages?.length ? (
+                      <p className="text-xs text-muted-foreground mt-1.5">
+                        Stages: {selected.stages.map((s: any) => s.name).join(" → ")}
+                      </p>
+                    ) : null;
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWfEngineDoc(null)}>Cancel</Button>
+            <Button
+              onClick={startWorkflowEngine}
+              disabled={wfEngineStarting || wfEngineLoading || wfEngineTemplates.length === 0}
+              className="gap-1.5"
+            >
+              {wfEngineStarting ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</> : <><Layers className="h-3.5 w-3.5" /> Start Workflow</>}
             </Button>
           </DialogFooter>
         </DialogContent>

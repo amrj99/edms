@@ -403,8 +403,6 @@ export default function WorkflowEnginePage() {
     } finally { setStartingWorkflow(false); }
   };
 
-  const invoiceTemplate = templates.find(t => t.documentType === "Invoice");
-
   // ── Template editor handlers ────────────────────────────────────────────────
 
   const openNewTemplate = () => { setEditorTemplate(null); setEditorOpen(true); };
@@ -527,31 +525,6 @@ export default function WorkflowEnginePage() {
         ))}
       </div>
 
-      {/* Invoice template info banner */}
-      {invoiceTemplate && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="py-3 flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-3">
-              <GitBranch className="h-5 w-5 text-primary" />
-              <div>
-                <div className="font-medium text-sm">{invoiceTemplate.name}</div>
-                <div className="text-xs text-muted-foreground flex items-center gap-2">
-                  {invoiceTemplate.stages.map((s, i) => (
-                    <span key={s.id} className="flex items-center gap-1">
-                      {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
-                      <span>{s.name}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => setActiveTab("Invoice")}>
-              View Invoice Workflows
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -596,9 +569,9 @@ export default function WorkflowEnginePage() {
                 ? "No workflow instances found. Start a workflow by linking a document to a template."
                 : "No workflows match the current filters."}
             </div>
-            {instances.length === 0 && isAdmin && !invoiceTemplate && (
+            {instances.length === 0 && isAdmin && (
               <Button size="sm" onClick={() => setShowSeedConfirm(true)}>
-                <Plus className="h-4 w-4 mr-2" />Setup Invoice Workflow Template
+                <Plus className="h-4 w-4 mr-2" />Setup Default Workflow Templates
               </Button>
             )}
           </CardContent>
