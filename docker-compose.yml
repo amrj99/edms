@@ -35,6 +35,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,3 +64,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:
