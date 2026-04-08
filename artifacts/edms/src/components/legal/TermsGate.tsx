@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -6,9 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Shield, FileText, Loader2 } from "lucide-react";
+import { Shield, FileText, Loader2, ChevronsDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 const TERMS_VERSION = "1.0";
 const OWNER = import.meta.env.VITE_OWNER_NAME ?? "ArcScale EDMS";
@@ -21,12 +21,25 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
   const [, setLocation] = useLocation();
   const [accepted, setAccepted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const userAny = user as any;
   const needsAcceptance = userAny && !userAny.acceptedTermsAt;
 
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 32;
+    if (atBottom) setHasScrolledToBottom(true);
+  }, []);
+
+  const scrollDown = () => {
+    scrollRef.current?.scrollBy({ top: 300, behavior: "smooth" });
+  };
+
   const handleAccept = async () => {
-    if (!accepted) return;
+    if (!accepted || !hasScrolledToBottom) return;
     setSubmitting(true);
     try {
       const r = await fetch("/api/auth/accept-terms", {
@@ -35,7 +48,6 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ version: TERMS_VERSION }),
       });
       if (!r.ok) throw new Error("Failed to accept terms");
-      // Refetch user so needsAcceptance becomes false and modal closes
       await qc.invalidateQueries({ queryKey: ["/api/auth/me"] });
       await qc.refetchQueries({ queryKey: ["/api/auth/me"] });
       toast({ title: "Terms accepted. Welcome to the system." });
@@ -51,104 +63,203 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
     return (
       <Dialog open modal>
         <DialogContent
-          className="max-w-2xl max-h-[90vh] flex flex-col"
+          className="max-w-2xl flex flex-col gap-0 p-0 overflow-hidden"
+          style={{ height: "min(90vh, 760px)" }}
           onInteractOutside={e => e.preventDefault()}
           onEscapeKeyDown={e => e.preventDefault()}
         >
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
+          {/* Header */}
+          <div className="flex items-center gap-3 px-6 py-4 border-b shrink-0">
+            <div className="flex items-center justify-center w-9 h-9 rounded-full bg-primary/10 shrink-0">
               <Shield className="h-5 w-5 text-primary" />
-              Terms of Use & Data Protection Notice
-            </DialogTitle>
-          </DialogHeader>
-
-          <div className="text-sm text-muted-foreground">
-            Before accessing {OWNER}, please read and accept the following Terms of Use.
+            </div>
+            <div>
+              <h2 className="text-base font-semibold leading-tight">Terms of Use & Data Protection Notice</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Version {TERMS_VERSION} · Please read the full terms before accepting
+              </p>
+            </div>
           </div>
 
-          <ScrollArea className="flex-1 border rounded-lg p-4 max-h-[50vh]">
-            <div className="space-y-4 text-sm leading-relaxed">
-              <p className="text-xs text-muted-foreground">Version {TERMS_VERSION} · © {CURRENT_YEAR} {OWNER}</p>
-
-              <section>
-                <h3 className="font-semibold mb-1">1. System Ownership</h3>
-                <p>
-                  All intellectual property within {OWNER} — including workflows, templates, configurations, and customizations — belongs exclusively to the System owner. © {CURRENT_YEAR} {OWNER}. All rights reserved.
-                </p>
-              </section>
-
-              <section>
-                <h3 className="font-semibold mb-1">2. Authorized Use Only</h3>
-                <p>
-                  You may only access data and documents that your organization administrator has explicitly authorized for your role. Access to data belonging to other organizations or unauthorized projects is strictly prohibited.
-                </p>
-              </section>
-
-              <section>
-                <h3 className="font-semibold mb-1">3. Prohibited Activities</h3>
-                <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                  <li>Copying, reverse engineering, or redistributing System components</li>
-                  <li>Sharing login credentials with unauthorized persons</li>
-                  <li>Attempting to access other organizations' data</li>
-                  <li>Circumventing security controls or audit mechanisms</li>
-                  <li>Uploading malicious or unauthorized content</li>
-                </ul>
-              </section>
-
-              <section>
-                <h3 className="font-semibold mb-1">4. Activity Monitoring</h3>
-                <p>
-                  All actions — logins, document access, downloads, workflow operations, and administrative changes — are logged with your identity, timestamp, and IP address. By using this System you consent to this monitoring.
-                </p>
-              </section>
-
-              <section>
-                <h3 className="font-semibold mb-1">5. Data Isolation</h3>
-                <p>
-                  This System is multi-tenant. Your organization's data is completely isolated from all other organizations. Cross-tenant access is technically prevented and constitutes a material breach of these Terms.
-                </p>
-              </section>
-
-              <section>
-                <h3 className="font-semibold mb-1">6. Legal Liability</h3>
-                <p>
-                  Unauthorized access, misuse, or deliberate circumvention of controls may result in account suspension and legal proceedings. The System owner reserves all rights to pursue remedies to the fullest extent of applicable law.
-                </p>
-              </section>
-
-              <div className="flex items-start gap-2 p-3 border rounded-lg bg-muted/40">
-                <FileText className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+          {/* Scroll area */}
+          <div className="relative flex-1 min-h-0">
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="h-full overflow-y-auto px-6 py-4 scroll-smooth"
+            >
+              <div className="space-y-5 text-sm leading-relaxed pb-4">
                 <p className="text-xs text-muted-foreground">
-                  <strong>Privacy:</strong> Your data is stored securely and isolated per organization. Audit logs record access attempts and system actions for compliance. We do not share your organization's data with third parties except as required by law.
+                  Before accessing {OWNER}, you must read and accept these Terms of Use in full.
+                </p>
+
+                <section>
+                  <h3 className="font-semibold mb-1">1. System Ownership</h3>
+                  <p>
+                    All intellectual property within {OWNER} — including workflows, templates,
+                    configurations, and customizations — belongs exclusively to the System owner.
+                    © {CURRENT_YEAR} {OWNER}. All rights reserved. Unauthorized copying,
+                    redistribution, or reproduction of any part of this System is strictly prohibited.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">2. Authorized Use Only</h3>
+                  <p>
+                    You are granted a limited, non-exclusive, non-transferable right to access and
+                    use this System solely for its intended purpose within your authorized
+                    organization. You may only access data and documents that your organization
+                    administrator has explicitly authorized for your role. Access to data belonging
+                    to other organizations or unauthorized projects is strictly prohibited and
+                    constitutes a material breach of these Terms.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">3. Prohibited Activities</h3>
+                  <p className="mb-2">The following are strictly prohibited:</p>
+                  <ul className="list-disc list-inside space-y-1.5 text-muted-foreground">
+                    <li>Copying, reverse engineering, decompiling, or redistributing System components</li>
+                    <li>Sharing login credentials or granting unauthorized access to third parties</li>
+                    <li>Attempting to access data belonging to other organizations or tenants</li>
+                    <li>Circumventing security controls, access restrictions, or audit mechanisms</li>
+                    <li>Uploading malicious content, scripts, or unauthorized executables</li>
+                    <li>Interfering with system availability, integrity, or security</li>
+                    <li>Using automated tools to scrape, harvest, or extract system data</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">4. Activity Monitoring & Audit Logging</h3>
+                  <p>
+                    All activity within this System — including logins (successful and failed),
+                    document access, downloads, edits, workflow actions, and administrative changes
+                    — is logged with your identity, timestamp, and IP address. These logs are
+                    immutable and may be used for security audits, compliance reporting, or legal
+                    proceedings. By using this System you expressly consent to this monitoring.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">5. Multi-Tenant Data Isolation</h3>
+                  <p>
+                    This System operates as a multi-tenant platform. Each organization's data is
+                    strictly isolated at both the application and database layers and is inaccessible
+                    to users of other organizations. Attempting to access, query, or infer data
+                    belonging to another tenant is a material breach of these Terms and may
+                    constitute a violation of applicable data protection laws.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">6. Legal Liability</h3>
+                  <p>
+                    Unauthorized access, misuse, data theft, or deliberate circumvention of this
+                    System's controls may result in immediate account suspension, civil claims,
+                    and/or referral to relevant law enforcement authorities. The System owner
+                    reserves all rights to pursue legal remedies to the fullest extent permitted
+                    by applicable law.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">7. Privacy & Data Protection</h3>
+                  <p>
+                    Your organization's data is stored securely and is never shared with other
+                    organizations or third parties except as required by law. Audit logs record
+                    all system access and actions for compliance purposes. Personal data (name,
+                    email, role) is retained for as long as your account is active. You may
+                    request access to or deletion of your personal data via your administrator.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">8. Changes to These Terms</h3>
+                  <p>
+                    These Terms may be updated at any time. Administrators may require all users
+                    to re-accept updated Terms before continued access is permitted. Continued use
+                    of the System after notification of updated Terms constitutes acceptance of the
+                    revised Terms.
+                  </p>
+                </section>
+
+                <section>
+                  <h3 className="font-semibold mb-1">9. Governing Law</h3>
+                  <p>
+                    These Terms are governed by and construed in accordance with applicable laws.
+                    Any disputes arising under these Terms shall be subject to the exclusive
+                    jurisdiction of the relevant courts.
+                  </p>
+                </section>
+
+                <div className="flex items-start gap-2 p-3 border rounded-lg bg-muted/40 mt-2">
+                  <FileText className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Summary:</strong> Use this System only as authorized, do not share credentials
+                    or attempt cross-tenant access, and understand that all activity is permanently logged.
+                    Violations may result in account termination and legal action.
+                  </p>
+                </div>
+
+                <p className="text-xs text-muted-foreground border-t pt-3">
+                  © {CURRENT_YEAR} {OWNER}. All rights reserved. Version {TERMS_VERSION}.
                 </p>
               </div>
             </div>
-          </ScrollArea>
 
-          <div className="flex items-start gap-3 pt-1">
-            <Checkbox
-              id="terms-accept"
-              checked={accepted}
-              onCheckedChange={v => setAccepted(!!v)}
-            />
-            <Label htmlFor="terms-accept" className="text-sm leading-snug cursor-pointer">
-              I have read and agree to the Terms of Use and Privacy Policy for {OWNER}. I understand that my activity is monitored and logged, and that unauthorized use may result in legal action.
-            </Label>
+            {/* Scroll-down nudge — fades out once user reaches bottom */}
+            {!hasScrolledToBottom && (
+              <button
+                onClick={scrollDown}
+                className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-full px-3 py-1.5 transition-colors shadow-sm"
+              >
+                <ChevronsDown className="h-3.5 w-3.5 animate-bounce" />
+                Scroll to read all terms
+              </button>
+            )}
           </div>
 
-          <DialogFooter>
-            <Button
-              onClick={handleAccept}
-              disabled={!accepted || submitting}
-              className="w-full sm:w-auto"
-            >
-              {submitting ? (
-                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording acceptance…</>
-              ) : (
-                <><Shield className="h-4 w-4 mr-2" />Accept & Continue</>
-              )}
-            </Button>
-          </DialogFooter>
+          {/* Footer */}
+          <div className="border-t px-6 py-4 space-y-4 shrink-0 bg-card">
+            <div className={cn(
+              "flex items-start gap-3 transition-opacity",
+              !hasScrolledToBottom && "opacity-40 pointer-events-none select-none"
+            )}>
+              <Checkbox
+                id="terms-accept"
+                checked={accepted}
+                onCheckedChange={v => setAccepted(!!v)}
+                disabled={!hasScrolledToBottom}
+              />
+              <Label
+                htmlFor="terms-accept"
+                className={cn("text-sm leading-snug", hasScrolledToBottom ? "cursor-pointer" : "cursor-not-allowed")}
+              >
+                I have read and agree to the Terms of Use and Privacy Policy for {OWNER}. I understand
+                that my activity is monitored and logged, and that unauthorized use may result in legal action.
+              </Label>
+            </div>
+
+            {!hasScrolledToBottom && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                ↑ Please scroll through and read all the terms above before accepting.
+              </p>
+            )}
+
+            <div className="flex justify-end">
+              <Button
+                onClick={handleAccept}
+                disabled={!accepted || !hasScrolledToBottom || submitting}
+                className="min-w-[160px]"
+              >
+                {submitting ? (
+                  <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording…</>
+                ) : (
+                  <><Shield className="h-4 w-4 mr-2" />Accept & Continue</>
+                )}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     );
