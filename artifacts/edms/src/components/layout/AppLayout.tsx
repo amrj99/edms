@@ -1,4 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
+import { TermsGate } from "@/components/legal/TermsGate";
+import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
 import { useRealtime } from "@/hooks/use-realtime";
 import { AICommandAssistant } from "@/components/AICommandAssistant";
 import { Link, useLocation } from "wouter";
@@ -340,6 +342,8 @@ export function AppSidebar() {
   const [recentOpen, setRecentOpen] = useState(true);
   const { modules } = useModules();
   const { t, isRtl } = useI18n();
+  const [showTerms, setShowTerms] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
@@ -509,7 +513,30 @@ export function AppSidebar() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        <div className="mt-3 border-t border-sidebar-border/40 pt-3 space-y-1">
+          <div className="flex items-center gap-2 px-1">
+            <button
+              onClick={() => setShowTerms(true)}
+              className="text-[10px] text-sidebar-foreground/50 hover:text-sidebar-foreground/80 transition-colors"
+            >
+              Terms of Use
+            </button>
+            <span className="text-[10px] text-sidebar-foreground/30">·</span>
+            <button
+              onClick={() => setShowPrivacy(true)}
+              className="text-[10px] text-sidebar-foreground/50 hover:text-sidebar-foreground/80 transition-colors"
+            >
+              Privacy
+            </button>
+          </div>
+          <p className="text-[10px] text-sidebar-foreground/30 px-1">
+            © {new Date().getFullYear()} ArcScale EDMS
+          </p>
+        </div>
       </SidebarFooter>
+
+      <TermsOfUseModal open={showTerms} onOpenChange={setShowTerms} />
+      <PrivacyPolicyModal open={showPrivacy} onOpenChange={setShowPrivacy} />
     </Sidebar>
   );
 }
@@ -798,7 +825,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </header>
           <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">
-              {children}
+              <TermsGate>
+                {children}
+              </TermsGate>
             </div>
           </main>
         </div>

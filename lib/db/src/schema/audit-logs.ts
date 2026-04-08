@@ -15,6 +15,7 @@ export const auditLogsTable = pgTable("audit_logs", {
   entityTitle: text("entity_title"),
   details: jsonb("details").default({}),
   projectId: integer("project_id").references(() => projectsTable.id),
+  ipAddress: text("ip_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
   index("idx_audit_logs_organization_id").on(t.organizationId),

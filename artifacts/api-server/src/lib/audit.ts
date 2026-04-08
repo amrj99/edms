@@ -10,6 +10,7 @@ export async function createAuditLog(params: {
   entityTitle?: string;
   details?: Record<string, unknown>;
   projectId?: number;
+  ipAddress?: string;
 }): Promise<void> {
   try {
     await db.insert(auditLogsTable).values({
@@ -21,6 +22,7 @@ export async function createAuditLog(params: {
       entityTitle: params.entityTitle,
       details: params.details ?? {},
       projectId: params.projectId,
+      ipAddress: params.ipAddress,
     });
   } catch {
     // Audit logs should never break the main flow

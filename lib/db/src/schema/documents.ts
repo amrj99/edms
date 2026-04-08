@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -49,6 +49,9 @@ export const documentsTable = pgTable("documents", {
   additionalFiles: jsonb("additional_files").default([]),
   source: text("source"),
   issuedBy: text("issued_by"),
+  isConfidential: boolean("is_confidential").default(false),
+  downloadRestricted: boolean("download_restricted").default(false),
+  watermarkText: text("watermark_text"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [

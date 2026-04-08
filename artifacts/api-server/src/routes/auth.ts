@@ -14,6 +14,7 @@ import {
   requireAuth,
 } from "../lib/auth.js";
 import { sendWelcomeEmail, sendPasswordResetEmail, APP_URL } from "../lib/email.js";
+import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
@@ -28,6 +29,8 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
     organizationName: orgName,
     isActive: user.isActive,
     createdAt: user.createdAt,
+    acceptedTermsAt: user.acceptedTermsAt,
+    acceptedTermsVersion: user.acceptedTermsVersion,
   };
 }
 
@@ -46,18 +49,23 @@ router.post("/login", async (req, res) => {
     .limit(1);
 
   const user = users[0];
+  const ip = (req as any).realIp ?? req.ip ?? "unknown";
+
   if (!user) {
+    createAuditLog({ action: "login_failure", entityType: "auth", entityId: 0, entityTitle: email, details: { reason: "user_not_found" }, ipAddress: ip });
     res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
     return;
   }
 
   const passwordValid = await verifyPassword(password, user.passwordHash);
   if (!passwordValid) {
+    createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_failure", entityType: "auth", entityId: user.id, entityTitle: email, details: { reason: "invalid_password" }, ipAddress: ip });
     res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
     return;
   }
 
   if (!user.isActive) {
+    createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_failure", entityType: "auth", entityId: user.id, entityTitle: email, details: { reason: "account_disabled" }, ipAddress: ip });
     res.status(403).json({ error: "Forbidden", message: "Your account has been disabled. Please contact your administrator." });
     return;
   }
@@ -79,6 +87,8 @@ router.post("/login", async (req, res) => {
     token: refreshToken,
     expiresAt: getRefreshTokenExpiryDate(),
   });
+
+  createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_success", entityType: "auth", entityId: user.id, entityTitle: email, ipAddress: ip });
 
   res.json({
     token: accessToken,
@@ -170,6 +180,39 @@ router.get("/me", requireAuth, async (req, res) => {
   }
 
   res.json(buildUserResponse(user, orgName));
+});
+
+// ── Terms acceptance ──────────────────────────────────────────────────────────
+
+router.post("/accept-terms", requireAuth, async (req, res) => {
+  const { version = "1.0" } = req.body ?? {};
+  const ip = (req as any).realIp ?? req.ip ?? "unknown";
+  const [updated] = await db.update(usersTable)
+    .set({ acceptedTermsAt: new Date(), acceptedTermsVersion: String(version), updatedAt: new Date() })
+    .where(eq(usersTable.id, req.user!.id))
+    .returning();
+  createAuditLog({ userId: req.user!.id, organizationId: req.user!.organizationId ?? undefined, action: "terms_accepted", entityType: "user", entityId: req.user!.id, details: { version }, ipAddress: ip });
+  res.json({ acceptedTermsAt: updated.acceptedTermsAt, acceptedTermsVersion: updated.acceptedTermsVersion });
+});
+
+// Admin endpoint — force all org users to re-accept terms
+router.post("/require-terms-reacceptance", requireAuth, async (req, res) => {
+  const user = req.user!;
+  if (!["system_owner", "admin"].includes(user.role)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+  const orgId = user.organizationId;
+  if (!orgId && user.role !== "system_owner") {
+    res.status(400).json({ error: "No organization context" });
+    return;
+  }
+  let updateQuery = db.update(usersTable).set({ acceptedTermsAt: null, acceptedTermsVersion: null, updatedAt: new Date() });
+  const affected = orgId
+    ? await (updateQuery as any).where(eq(usersTable.organizationId, orgId)).returning()
+    : await (updateQuery as any).returning();
+  createAuditLog({ userId: user.id, organizationId: orgId ?? undefined, action: "terms_reacceptance_required", entityType: "organization", entityId: orgId ?? 0, details: { affectedUsers: affected.length } });
+  res.json({ message: `${affected.length} users will be prompted to re-accept terms.` });
 });
 
 router.post("/refresh-token", async (req, res) => {

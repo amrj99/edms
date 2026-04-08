@@ -22,6 +22,8 @@ export const usersTable = pgTable("users", {
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   department: text("department"),
   isActive: boolean("is_active").notNull().default(true),
+  acceptedTermsAt: timestamp("accepted_terms_at"),
+  acceptedTermsVersion: text("accepted_terms_version"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [

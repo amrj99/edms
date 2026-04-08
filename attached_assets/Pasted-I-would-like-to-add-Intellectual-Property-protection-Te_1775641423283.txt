@@ -1,0 +1,106 @@
+I would like to add Intellectual Property protection, Terms of Use, Privacy Policy,
+and data protection controls across the entire system. Please implement the following
+as a structured, non-breaking enhancement.
+
+1. Ownership & Copyright
+- Add a global copyright notice in the footer:
+  "© ArcScale EDMS. All rights reserved."
+- Add optional environment-configurable owner name
+- Ensure footer appears on all authenticated pages
+
+2. Terms of Use & Privacy Policy Pages
+Create two modal-accessible pages:
+- /terms-of-use
+- /privacy-policy
+
+They must open as modal dialogs (not full navigation away from the system)
+
+Terms of Use must include:
+- System ownership statement
+- All ideas, workflows, and customizations belong to system owner
+- No copying, reverse engineering, or redistribution allowed
+- Users may only access authorized data
+- Unauthorized sharing is prohibited
+- All activity is logged
+- System is multi-tenant isolated
+- Legal liability for misuse
+
+Privacy Policy must include:
+- Data isolation between organizations
+- No cross-organization data access
+- Logging of access attempts
+- Storage of audit trail
+- Protection against accidental data exposure
+
+3. User Acceptance on First Login
+- Add "Accept Terms" checkbox on first login
+- Block system access until accepted
+- Store in DB:
+  acceptedTermsAt
+  acceptedTermsVersion
+- Admins must be able to re-require acceptance if terms change
+
+4. Multi-Tenant Data Isolation (Critical)
+Ensure:
+- All queries filtered by organizationId
+- No cross-tenant document access
+- No cross-tenant workflow access
+- No cross-tenant transmittals
+- No cross-tenant search results
+
+Add defensive server-side checks even if UI filtering exists.
+
+5. Audit Logs (Full Traceability)
+Create audit log entries for:
+- document view
+- document download
+- document edit
+- workflow start
+- workflow approve/reject
+- transmittal send
+- login success/failure
+- permission denied attempts
+
+Audit log fields:
+- userId
+- organizationId
+- action
+- entityType
+- entityId
+- timestamp
+- ipAddress (if available)
+
+6. Document Protection
+Add optional document protection features:
+- "Confidential" flag
+- watermark support (configurable text)
+- read-only enforcement
+- download restriction (optional flag)
+
+7. Permission Enforcement
+Ensure:
+- Only authorized users see documents
+- Project-based access enforced
+- Folder-based access enforced
+- Workflow access restricted to participants
+- Any unauthorized access attempt logged
+
+8. Security Safeguards
+Add:
+- server-side permission checks (not UI only)
+- fail-safe checks if organizationId missing
+- deny-by-default behavior
+
+9. Footer Links
+Footer must include:
+- Terms of Use link
+- Privacy Policy link
+- Copyright notice
+
+10. Non-breaking requirement
+Do NOT:
+- modify existing workflows
+- change database relationships
+- remove any current features
+
+This should be implemented as additive security and legal layer.
