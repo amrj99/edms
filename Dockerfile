@@ -25,6 +25,7 @@ RUN pnpm install --frozen-lockfile
 FROM deps AS api-builder
 WORKDIR /app
 
+COPY tsconfig.base.json ./
 COPY lib/ ./lib/
 COPY artifacts/api-server/ ./artifacts/api-server/
 
@@ -35,6 +36,7 @@ RUN pnpm run build
 FROM deps AS frontend-builder
 WORKDIR /app
 
+COPY tsconfig.base.json ./
 COPY lib/ ./lib/
 COPY artifacts/edms/ ./artifacts/edms/
 
