@@ -42,7 +42,12 @@ COPY artifacts/edms/ ./artifacts/edms/
 WORKDIR /app/artifacts/edms
 RUN pnpm run build
 
-# ── Stage 4: Production API Image ────────────────────────────
+# ── Stage 4: Production Frontend Image ───────────────────────
+FROM nginx:alpine AS frontend
+COPY --from=frontend-builder /app/artifacts/edms/dist /usr/share/nginx/html
+# nginx.conf is mounted at runtime via docker-compose volume
+
+# ── Stage 5: Production API Image ────────────────────────────
 FROM node:22-alpine AS api
 WORKDIR /app
 
