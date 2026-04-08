@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,6 +18,7 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [accepted, setAccepted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -33,8 +35,11 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ version: TERMS_VERSION }),
       });
       if (!r.ok) throw new Error("Failed to accept terms");
-      await qc.invalidateQueries({ queryKey: ["getMe"] });
+      // Refetch user so needsAcceptance becomes false and modal closes
+      await qc.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      await qc.refetchQueries({ queryKey: ["/api/auth/me"] });
       toast({ title: "Terms accepted. Welcome to the system." });
+      setLocation("/");
     } catch {
       toast({ title: "Failed to record terms acceptance. Please try again.", variant: "destructive" });
     } finally {
