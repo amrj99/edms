@@ -47,3 +47,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Pasted log/asset files from Replit chat (should never be committed)
+attached_assets/
