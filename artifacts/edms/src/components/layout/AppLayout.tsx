@@ -1,4 +1,3 @@
-// Layout v2
 import { ReactNode, useEffect, useState } from "react";
 import { TermsGate } from "@/components/legal/TermsGate";
 import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
@@ -368,7 +367,7 @@ export function AppSidebar() {
     },
     { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
-    { title: "Workflows", url: "/workflow-engine", icon: Layers },
+    { title: "Workflow Engine", url: "/workflow-engine", icon: Layers },
     {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
