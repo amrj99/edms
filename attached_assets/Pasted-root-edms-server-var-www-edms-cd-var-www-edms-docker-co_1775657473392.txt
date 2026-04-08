@@ -1,0 +1,73 @@
+root@edms-server:/var/www/edms# cd /var/www/edms && docker compose up -d --build frontend
+WARN[0000] /var/www/edms/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
+[+] Building 0.8s (30/30) FINISHED
+ => [internal] load local bake definitions                                 0.0s
+ => => reading from stdin 483B                                             0.0s
+ => [internal] load build definition from Dockerfile                       0.0s
+ => => transferring dockerfile: 2.52kB                                     0.0s
+ => [internal] load metadata for docker.io/library/node:22-alpine          0.5s
+ => [internal] load .dockerignore                                          0.0s
+ => => transferring context: 2B                                            0.0s
+ => [internal] load build context                                          0.0s
+ => => transferring context: 27.60kB                                       0.0s
+ => [deps  1/11] FROM docker.io/library/node:22-alpine@sha256:4d64b49e6c8  0.0s
+ => => resolve docker.io/library/node:22-alpine@sha256:4d64b49e6c891c8fc8  0.0s
+ => CACHED [deps  2/11] WORKDIR /app                                       0.0s
+ => CACHED [deps  3/11] RUN npm install -g pnpm@10                         0.0s
+ => CACHED [deps  4/11] COPY package.json pnpm-workspace.yaml pnpm-lock.y  0.0s
+ => CACHED [deps  5/11] COPY lib/db/package.json ./lib/db/                 0.0s
+ => CACHED [api  6/12] COPY lib/api-zod/package.json ./lib/api-zod/        0.0s
+ => CACHED [api  7/12] COPY artifacts/api-server/package.json ./artifacts  0.0s
+ => CACHED [api  8/12] RUN pnpm install --frozen-lockfile --prod           0.0s
+ => CACHED [deps  6/11] COPY lib/api-spec/package.json ./lib/api-spec/     0.0s
+ => CACHED [deps  7/11] COPY lib/api-zod/package.json ./lib/api-zod/       0.0s
+ => CACHED [deps  8/11] COPY lib/api-client-react/package.json ./lib/api-  0.0s
+ => CACHED [deps  9/11] COPY artifacts/api-server/package.json ./artifact  0.0s
+ => CACHED [deps 10/11] COPY artifacts/edms/package.json ./artifacts/edms  0.0s
+ => CACHED [deps 11/11] RUN pnpm install --frozen-lockfile                 0.0s
+ => CACHED [api-builder 1/5] WORKDIR /app                                  0.0s
+ => CACHED [api-builder 2/5] COPY lib/ ./lib/                              0.0s
+ => CACHED [api-builder 3/5] COPY artifacts/api-server/ ./artifacts/api-s  0.0s
+ => CACHED [api-builder 4/5] WORKDIR /app/artifacts/api-server             0.0s
+ => CACHED [api-builder 5/5] RUN pnpm run build                            0.0s
+ => CACHED [api  9/12] COPY --from=api-builder /app/artifacts/api-server/  0.0s
+ => CACHED [api 10/12] COPY --from=api-builder /app/lib/db/src ./lib/db/s  0.0s
+ => CACHED [api 11/12] COPY lib/db/drizzle.config.ts ./lib/db/             0.0s
+ => CACHED [api 12/12] COPY lib/db/src ./lib/db/src                        0.0s
+ => exporting to image                                                     0.1s
+ => => exporting layers                                                    0.0s
+ => => exporting manifest sha256:cdac609fad1ee8d269c9a0ae208ed7d6d9eaf620  0.0s
+ => => exporting config sha256:e1f86d5456b1508735ba6ea0b89f7d118580cbbfa9  0.0s
+ => => exporting attestation manifest sha256:24d0e771de35546ee7dcfd1d623d  0.0s
+ => => exporting manifest list sha256:90dba4d4cad41169c2ba912d01a529b85c4  0.0s
+ => => naming to docker.io/library/edms-api:latest                         0.0s
+ => => unpacking to docker.io/library/edms-api:latest                      0.0s
+ => resolving provenance for metadata file                                 0.0s
+[+] up 4/4
+ ✔ Image edms-api          Built                                           0.9ss
+ ✔ Container edms_postgres Healthy                                         10.8s
+ ✔ Container edms_api      Started                                         11.0s
+ ✔ Container edms_frontend Running                                         0.0s
+root@edms-server:/var/www/edms# root@edms-server:/var/www/edms# cd /var/www/edms && docker compose up -d --build frontend
+WARN[0000] /var/www/edms/docker-compose.yml: the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
+[+] Building 0.8s (30/30) FINISHED
+ => [internal] load local bake definitions                                 0.0s
+ => => reading from stdin 483B                                             0.0s
+ => [internal] load build definition from Dockerfile                       0.0s
+ => => transferring dockerfile: 2.52kB                                     0.0s
+ => [internal] load metadata for docker.io/library/node:22-alpine          0.5s
+ => [internal] load .dockerignore                                          0.0s
+ => => transferring context: 2B                                            0.0s
+ => [internal] load build context                                          0.0s
+ => => transferring context: 27.60kB                                       0.0s
+ => [deps  1/11] FROM docker.io/library/node:22-alpine@sha256:4d64b49e6c8  0.0s
+ => => resolve docker.io/library/node:22-alpine@sha256:4d64b49e6c891c8fc8  0.0s
+ => CACHED [deps  2/11] WORKDIR /app                                       0.0s
+ => CACHED [deps  3/11] RUN npm install -g pnpm@10                         0.0s
+ => CACHED [deps  4/11] COPY package.json pnpm-workspace.yaml pnpm-lock.y  0.0s
+ => CACHED [deps  5/11] COPY lib/db/package.json ./lib/db/                 0.0s
+ => CACHED [api  6/12] COPY lib/api-zod/package.json ./lib/api-zod/        0.0s
+ => CACHED [api  7/12] COPY artifacts/api-server/package.json ./artifacts  0.0s
+ => CACHED [api  8/12] RUN pnpm install --frozen-lockfile --prod           0.0s
+ => CACHED [deps  6/11] COPY lib/api-spec/package.json ./lib/api-spec/     0.0s
+
