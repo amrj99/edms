@@ -72,7 +72,8 @@ export default function CorrespondencePage() {
   const [compose, setCompose] = useState<{
     subject: string; type: string; body: string; priority: string; dueDate: string;
     projectId: string; toUserIds: number[]; cc: string; bcc: string; taskToId: string;
-  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
+    scope: string; referenceNumber: string;
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "", scope: "project", referenceNumber: "" });
   const [toPickUser, setToPickUser] = useState("");
   type UploadAttachment = { kind: "upload"; url: string; name: string; size: number };
   type RefAttachment = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
@@ -97,7 +98,7 @@ export default function CorrespondencePage() {
   // Fetch all correspondence (general + all projects)
   const { data: generalData, isLoading: genLoading } = useQuery({
     queryKey: ["correspondence", "general"],
-    queryFn: async () => { const r = await fetch("/api/general/correspondence"); return r.json(); },
+    queryFn: async () => { const r = await fetch("/api/correspondence"); return r.json(); },
   });
   const generalItems = generalData?.items ?? [];
 
@@ -221,7 +222,10 @@ export default function CorrespondencePage() {
   const createCorr = useMutation({
     mutationFn: async ({ data, sendNow }: { data: typeof compose; sendNow: boolean }) => {
       const projectId = data.projectId && data.projectId !== "_none" ? parseInt(data.projectId) : null;
-      const url = projectId ? `/api/projects/${projectId}/correspondence` : "/api/general/correspondence";
+      const effectiveScope = projectId ? "project" : data.scope;
+      const url = projectId
+        ? `/api/projects/${projectId}/correspondence`
+        : `/api/correspondence`;
       const payload = {
         subject: data.subject,
         type: data.type,
@@ -237,29 +241,34 @@ export default function CorrespondencePage() {
             ? { fileName: a.name, fileUrl: a.fileUrl, documentNumber: a.documentNumber }
             : { fileName: a.name, fileUrl: a.url, fileSize: a.size }
         ) : undefined,
+        scope: effectiveScope,
+        referenceNumber: data.referenceNumber?.trim() || undefined,
         sendNow,
         folder: "inbox",
       };
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error("Failed");
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to create correspondence");
+      }
       return r.json();
     },
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "", scope: "project", referenceNumber: "" });
       setToPickUser("");
       setComposeAttachments([]);
       setShowBcc(false);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
     },
-    onError: () => toast({ title: "Failed to create", variant: "destructive" }),
+    onError: (e: any) => toast({ title: e?.message ?? "Failed to create correspondence", variant: "destructive" }),
   });
 
   const createCorrShare = useMutation({
     mutationFn: async ({ id, source, expiresInDays, password }: { id: number; source: string; expiresInDays: string; password: string }) => {
       const url = source === "general"
-        ? `/api/general/correspondence/${id}/share`
+        ? `/api/correspondence/${id}/share`
         : `/api/projects/${selected?.projectId}/correspondence/${id}/share`;
       const r = await fetch(url, {
         method: "POST",
@@ -276,7 +285,7 @@ export default function CorrespondencePage() {
   const revokeCorrShare = useMutation({
     mutationFn: async ({ id, source }: { id: number; source: string }) => {
       const url = source === "general"
-        ? `/api/general/correspondence/${id}/share`
+        ? `/api/correspondence/${id}/share`
         : `/api/projects/${selected?.projectId}/correspondence/${id}/share`;
       await fetch(url, { method: "DELETE" });
     },
@@ -286,7 +295,7 @@ export default function CorrespondencePage() {
   const sendReply = useMutation({
     mutationFn: async ({ id, source, projectId, body }: { id: number; source: string; projectId?: number | null; body: string }) => {
       const url = source === "general"
-        ? `/api/general/correspondence/${id}/reply`
+        ? `/api/correspondence/${id}/reply`
         : `/api/projects/${projectId}/correspondence/${id}/reply`;
       const r = await fetch(url, {
         method: "POST",
@@ -313,7 +322,7 @@ export default function CorrespondencePage() {
       const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
       await Promise.all(targets.map((item: any) => {
         const endpoint = item._source === "general"
-          ? `/api/general/correspondence/${item.id}/read`
+          ? `/api/correspondence/${item.id}/read`
           : `/api/projects/${item.projectId}/correspondence/${item.id}/read`;
         return fetch(endpoint, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isRead }) });
       }));
@@ -331,7 +340,7 @@ export default function CorrespondencePage() {
       const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
       await Promise.all(targets.map((item: any) => {
         if (item._source === "general") {
-          return fetch(`/api/general/correspondence/${item.id}/move`, {
+          return fetch(`/api/correspondence/${item.id}/move`, {
             method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder: "archive" }),
           });
         }
@@ -352,7 +361,7 @@ export default function CorrespondencePage() {
       const targets = filteredItems.filter((i: any) => bulkSelected.has(bulkKey(i)));
       await Promise.all(targets.map((item: any) => {
         if (item._source === "general") {
-          return fetch(`/api/general/correspondence/${item.id}`, { method: "DELETE" });
+          return fetch(`/api/correspondence/${item.id}`, { method: "DELETE" });
         }
         return fetch(`/api/projects/${item.projectId}/correspondence/${item.id}`, { method: "DELETE" });
       }));
@@ -370,7 +379,7 @@ export default function CorrespondencePage() {
     queryFn: async () => {
       if (!selected) return { items: [] };
       const url = selected._source === "general"
-        ? `/api/general/correspondence?parentId=${selected.id}`
+        ? `/api/correspondence?parentId=${selected.id}`
         : `/api/projects/${selected.projectId}/correspondence?parentId=${selected.id}`;
       const r = await fetch(url);
       if (!r.ok) return { items: [] };
@@ -403,7 +412,7 @@ export default function CorrespondencePage() {
     setLocalReadIds(s => { const n = new Set(s); n.add(item.id); return n; });
     try {
       const endpoint = item._source === "general"
-        ? `/api/general/correspondence/${item.id}/read`
+        ? `/api/correspondence/${item.id}/read`
         : `/api/projects/${item.projectId}/correspondence/${item.id}/read`;
       await fetch(endpoint, {
         method: "PUT",
@@ -1027,22 +1036,70 @@ export default function CorrespondencePage() {
                 </Select>
               </div>
             </div>
-            {/* Project */}
-            <div>
-              <Label>Project (optional)</Label>
-              <div className="mt-1">
-                <SearchableSelect
-                  options={[
-                    { value: "_none", label: "General (no project)" },
-                    ...projects.map((p: any) => ({ value: String(p.id), label: p.code, sublabel: p.name })),
-                  ]}
-                  value={compose.projectId || "_none"}
-                  onValueChange={v => setCompose(f => ({ ...f, projectId: v }))}
-                  placeholder="General (no project)"
-                  searchPlaceholder="Search projects..."
-                  emptyText="No projects found."
-                />
+            {/* Scope + Project */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Scope *</Label>
+                <Select
+                  value={compose.projectId && compose.projectId !== "_none" ? "project" : compose.scope}
+                  onValueChange={v => {
+                    setCompose(f => ({
+                      ...f,
+                      scope: v,
+                      projectId: v === "internal" ? "_none" : f.projectId,
+                    }));
+                  }}
+                  disabled={!!(compose.projectId && compose.projectId !== "_none")}
+                >
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="project">Project</SelectItem>
+                    <SelectItem value="internal">Internal</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+              <div>
+                <Label>Project {compose.scope === "internal" && !compose.projectId ? "(N/A)" : "(optional)"}</Label>
+                <div className="mt-1">
+                  <SearchableSelect
+                    options={[
+                      { value: "_none", label: "General (no project)" },
+                      ...projects.map((p: any) => ({ value: String(p.id), label: p.code, sublabel: p.name })),
+                    ]}
+                    value={compose.projectId || "_none"}
+                    onValueChange={v => {
+                      setCompose(f => ({
+                        ...f,
+                        projectId: v,
+                        scope: v && v !== "_none" ? "project" : f.scope,
+                      }));
+                    }}
+                    placeholder="No project"
+                    searchPlaceholder="Search projects..."
+                    emptyText="No projects found."
+                    disabled={compose.scope === "internal"}
+                  />
+                </div>
+              </div>
+            </div>
+            {/* Reference Number (optional) */}
+            <div>
+              <Label>
+                Reference Number
+                <span className="ml-1 text-xs text-muted-foreground font-normal">
+                  (leave blank to auto-generate)
+                </span>
+              </Label>
+              <Input
+                value={compose.referenceNumber}
+                onChange={e => setCompose(f => ({ ...f, referenceNumber: e.target.value }))}
+                placeholder={
+                  compose.scope === "internal"
+                    ? "e.g. INT-2026-0001 or leave blank"
+                    : "e.g. PROJA-2026-0001 or leave blank"
+                }
+                className="mt-1 font-mono text-sm"
+              />
             </div>
             {/* To Recipients */}
             <div>

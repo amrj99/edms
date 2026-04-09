@@ -71,6 +71,7 @@ router.use("/users", usersRouter);
 router.use("/projects", projectsRouter);
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", correspondenceRouter);
+router.use("/correspondence", correspondenceRouter);
 router.use("/projects/:projectId/workflows", workflowsRouter);
 router.use("/projects/:projectId/packages", packagesRouter);
 router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);

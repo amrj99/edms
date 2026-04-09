@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -50,6 +50,7 @@ export const correspondenceTable = pgTable("correspondence", {
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   fromUserId: integer("from_user_id").references(() => usersTable.id).notNull(),
   projectId: integer("project_id").references(() => projectsTable.id),
+  scope: text("scope").notNull().default("project"),
   parentId: integer("parent_id"),
   referenceNumber: text("reference_number"),
   status: correspondenceStatusEnum("status").notNull().default("draft"),
@@ -85,6 +86,26 @@ export const correspondenceAttachmentsTable = pgTable("correspondence_attachment
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
 });
 
+// ─── Correspondence numbering sequences ───────────────────────────────────────
+// One row per (orgId, scope, projectId, year).
+// projectId is null for internal scope, set for project scope.
+// lastSeq is incremented atomically inside a transaction.
+export const correspondenceSequencesTable = pgTable(
+  "correspondence_sequences",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id").notNull().references(() => organizationsTable.id),
+    scope: text("scope").notNull(),
+    projectId: integer("project_id").references(() => projectsTable.id),
+    year: integer("year").notNull(),
+    lastSeq: integer("last_seq").notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("correspondence_seq_uniq").on(t.organizationId, t.scope, t.projectId, t.year),
+  ]
+);
+
 export const insertCorrespondenceSchema = createInsertSchema(correspondenceTable).omit({
   id: true,
   createdAt: true,
@@ -93,3 +114,4 @@ export const insertCorrespondenceSchema = createInsertSchema(correspondenceTable
 
 export type InsertCorrespondence = z.infer<typeof insertCorrespondenceSchema>;
 export type Correspondence = typeof correspondenceTable.$inferSelect;
+export type CorrespondenceSequence = typeof correspondenceSequencesTable.$inferSelect;
