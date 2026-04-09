@@ -35,6 +35,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # Default storage for self-hosted VPS deployments.
+      # Override per-org via Admin → Storage settings.
+      # Change DEFAULT_STORAGE_TYPE to "s3" and set S3_* vars to use MinIO / S3.
+      DEFAULT_STORAGE_TYPE: ${DEFAULT_STORAGE_TYPE:-onpremise}
+      DEFAULT_STORAGE_PATH: ${DEFAULT_STORAGE_PATH:-/app/uploads}
     volumes:
       - uploads_data:/app/uploads
     depends_on:

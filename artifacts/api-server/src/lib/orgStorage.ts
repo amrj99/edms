@@ -90,25 +90,33 @@ export async function requestUpload(params: {
 }): Promise<UploadResult> {
   const { organizationId, projectId, fileType = "general", name, contentType } = params;
   const cfg = await getOrgConfig(organizationId);
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? "cloud";
+
+  // env-var defaults (set in docker-compose for self-hosted VPS deployments)
+  const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
+  const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
+
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? "cloud";
 
   // ── On-Premise ─────────────────────────────────────────────────────────────
-  if (storageType === "onpremise" && cfg?.storagePath) {
-    const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    const absPath = buildOnPremPath(
-      cfg.storagePath,
-      organizationId,
-      projectId ?? null,
-      fileType,
-      safeFile,
-    );
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    return {
-      mode: "onpremise",
-      filePath: absPath,
-      objectPath: absPath,
-      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-    };
+  if (storageType === "onpremise") {
+    const basePath = cfg?.storagePath || envStoragePath;
+    if (basePath) {
+      const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const absPath = buildOnPremPath(
+        basePath,
+        organizationId,
+        projectId ?? null,
+        fileType,
+        safeFile,
+      );
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      return {
+        mode: "onpremise",
+        filePath: absPath,
+        objectPath: absPath,
+        serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+      };
+    }
   }
 
   // ── Amazon S3 / S3-Compatible (MinIO, DigitalOcean Spaces, Backblaze …) ────
@@ -211,18 +219,26 @@ export async function uploadBuffer(params: {
   }
 
   const cfg = await getOrgConfig(organizationId);
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? "cloud";
+
+  // env-var defaults (set in docker-compose for self-hosted VPS deployments)
+  const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
+  const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
+
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? "cloud";
 
   // ── On-Premise ─────────────────────────────────────────────────────────────
-  if (storageType === "onpremise" && cfg?.storagePath) {
-    const absPath = buildOnPremPath(cfg.storagePath, organizationId, projectId ?? null, fileType, safeFile);
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, buffer);
-    return {
-      mode: "onpremise",
-      objectPath: absPath,
-      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-    };
+  if (storageType === "onpremise") {
+    const basePath = cfg?.storagePath || envStoragePath;
+    if (basePath) {
+      const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
+      fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      fs.writeFileSync(absPath, buffer);
+      return {
+        mode: "onpremise",
+        objectPath: absPath,
+        serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+      };
+    }
   }
 
   // ── Amazon S3 / S3-Compatible ───────────────────────────────────────────────
