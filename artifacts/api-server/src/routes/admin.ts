@@ -720,11 +720,11 @@ router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, 
     .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
 
   const update = {
-    subscriptionTier: tier,
-    aiProvider:   preset.aiProvider,
-    aiModel:      preset.aiModel,
-    aiDailyLimit: preset.aiDailyLimit,
-    updatedAt:    new Date(),
+    subscriptionTier:    tier,
+    aiProvider:          preset.aiProvider,
+    aiModel:             preset.aiModel,
+    aiDailyLimit:        preset.aiDailyLimit,
+    updatedAt:           new Date(),
   };
 
   if (existing.length === 0) {
@@ -734,6 +734,46 @@ router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, 
   }
 
   res.json({ organizationId: orgId, tier, applied: preset });
+});
+
+// ─── Per-org AI usage limits ──────────────────────────────────────────────────
+
+/**
+ * PUT /api/admin/ai-limits/:orgId
+ * Set custom per-org AI usage limits without changing the subscription tier.
+ * Body: { aiDailyLimit?: number, aiMonthlyTokenLimit?: number }
+ * Both values are optional; 0 means unlimited.
+ */
+router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
+  if (!isSysAdmin(req.user!)) return res.status(403).json({ error: "System owner access required" });
+
+  const orgId = parseInt(req.params.orgId);
+  if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });
+
+  const { aiDailyLimit, aiMonthlyTokenLimit } = req.body as {
+    aiDailyLimit?: number;
+    aiMonthlyTokenLimit?: number;
+  };
+
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+  if (aiDailyLimit       !== undefined) update.aiDailyLimit       = Math.max(0, Number(aiDailyLimit));
+  if (aiMonthlyTokenLimit !== undefined) update.aiMonthlyTokenLimit = Math.max(0, Number(aiMonthlyTokenLimit));
+
+  if (Object.keys(update).length === 1) {
+    return res.status(400).json({ error: "Provide at least one of: aiDailyLimit, aiMonthlyTokenLimit" });
+  }
+
+  const existing = await db.select().from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
+
+  if (existing.length === 0) {
+    await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
+  } else {
+    await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
+  }
+
+  const quota = await getOrgAiQuota(orgId);
+  res.json({ organizationId: orgId, limits: { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit } });
 });
 
 export default router;

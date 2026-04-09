@@ -115,6 +115,50 @@ export async function getAIProviderForOrg(organizationId?: number | null): Promi
 }
 
 /**
+ * Ordered list of free providers to try during automatic fallback.
+ * This is exported so ai-service.ts can reference the canonical order.
+ */
+export const FALLBACK_PROVIDER_CHAIN: ProviderKey[] = [
+  "openrouter",
+  "together",
+  "huggingface",
+  "ollama",
+];
+
+/**
+ * Call an AI provider with automatic fallback.
+ *
+ * Tries each provider in `chain` order until one succeeds.
+ * If `chain` is not provided, uses FALLBACK_PROVIDER_CHAIN.
+ * Returns the first successful result along with the provider key used.
+ *
+ * Transparent fallback — never throws if at least one provider succeeds.
+ */
+export async function callWithFallback(
+  messages: import("./types.js").ChatMessage[],
+  options?: import("./types.js").ChatOptions,
+  chain?: string[],
+): Promise<{ result: import("./types.js").ChatResult; provider: string; model: string }> {
+  const tryChain = chain ?? FALLBACK_PROVIDER_CHAIN;
+  let lastError: Error | null = null;
+
+  for (const key of tryChain) {
+    const p = PROVIDERS[key];
+    if (!p?.isAvailable()) continue;
+
+    const model = options?.model ?? p.defaultModel;
+    try {
+      const result = await p.chat(messages, { ...options, model });
+      return { result, provider: key, model };
+    } catch (err: any) {
+      lastError = err as Error;
+    }
+  }
+
+  throw lastError ?? new Error("All providers in fallback chain failed or unavailable");
+}
+
+/**
  * Get effective model for an org, falling back to provider defaults.
  */
 export async function getEffectiveModel(

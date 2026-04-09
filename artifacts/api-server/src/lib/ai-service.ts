@@ -1,7 +1,8 @@
 /**
  * EDMS AI Service
- * Multi-provider AI analysis with support for OpenAI, Groq, and Ollama.
- * Provider and models are configurable from the admin AI Settings dashboard.
+ * Multi-provider AI with automatic fallback: configured provider → OpenRouter → Together → HuggingFace → Ollama.
+ * Provider/models are configurable from the admin AI Settings dashboard.
+ * All calls are logged with provider, model, tokens, latency, and success/failure.
  */
 import OpenAI from "openai";
 import { db } from "@workspace/db";
@@ -53,8 +54,9 @@ async function getSystemSettingValue(key: string): Promise<string | null> {
 }
 
 export async function getAIProviderConfig(): Promise<AIProviderConfig> {
-  const provider = (await getSystemSettingValue("ai_provider") ?? "openai_replit") as AIProvider;
-  const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openai_replit;
+  // Default to openrouter (free) when no provider is configured.
+  const provider = (await getSystemSettingValue("ai_provider") ?? "openrouter") as AIProvider;
+  const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openrouter;
   const fastModel  = await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
   const smartModel = await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
   return { provider, fastModel, smartModel };
@@ -235,24 +237,33 @@ export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
 // ─── Per-org AI quota ─────────────────────────────────────────────────────────
 
 export interface OrgAiQuota {
-  provider: string | null;   // org-level override or null (inherits global)
-  model: string | null;      // org-level model override or null
-  dailyLimit: number;        // 0 = unlimited
-  usedToday: number;         // successful AI calls since 00:00 UTC today
-  remaining: number | null;  // null = unlimited; otherwise dailyLimit - usedToday
+  provider: string | null;           // org-level override or null (inherits global)
+  model: string | null;              // org-level model override or null
+  dailyLimit: number;                // 0 = unlimited
+  usedToday: number;                 // successful AI calls since 00:00 UTC today
+  remaining: number | null;          // null = unlimited; otherwise dailyLimit - usedToday
+  monthlyTokenLimit: number;         // 0 = unlimited
+  usedTokensThisMonth: number;       // total tokens consumed since 1st of current month
+  remainingTokens: number | null;    // null = unlimited; otherwise monthlyTokenLimit - usedTokensThisMonth
 }
 
 export async function getOrgAiQuota(organizationId: number): Promise<OrgAiQuota> {
   const [cfg] = await db
-    .select({ aiProvider: orgConfigTable.aiProvider, aiModel: orgConfigTable.aiModel, aiDailyLimit: orgConfigTable.aiDailyLimit })
+    .select({
+      aiProvider:          orgConfigTable.aiProvider,
+      aiModel:             orgConfigTable.aiModel,
+      aiDailyLimit:        orgConfigTable.aiDailyLimit,
+      aiMonthlyTokenLimit: orgConfigTable.aiMonthlyTokenLimit,
+    })
     .from(orgConfigTable)
     .where(eq(orgConfigTable.organizationId, organizationId));
 
-  const provider   = cfg?.aiProvider   ?? null;
-  const model      = cfg?.aiModel      ?? null;
-  const dailyLimit = cfg?.aiDailyLimit ?? 0;
+  const provider           = cfg?.aiProvider          ?? null;
+  const model              = cfg?.aiModel             ?? null;
+  const dailyLimit         = cfg?.aiDailyLimit        ?? 0;
+  const monthlyTokenLimit  = cfg?.aiMonthlyTokenLimit ?? 0;
 
-  // Count successful AI calls for this org since 00:00 UTC today
+  // Count successful calls today
   const todayUtc = new Date();
   todayUtc.setUTCHours(0, 0, 0, 0);
 
@@ -265,10 +276,26 @@ export async function getOrgAiQuota(organizationId: number): Promise<OrgAiQuota>
       gte(aiLogsTable.createdAt, todayUtc),
     ));
 
-  const usedToday = Number(countRow?.count ?? 0);
-  const remaining = dailyLimit > 0 ? Math.max(0, dailyLimit - usedToday) : null;
+  // Sum tokens consumed this month
+  const startOfMonth = new Date();
+  startOfMonth.setUTCDate(1);
+  startOfMonth.setUTCHours(0, 0, 0, 0);
 
-  return { provider, model, dailyLimit, usedToday, remaining };
+  const [tokenRow] = await db
+    .select({ total: sql<number>`coalesce(sum(tokens_used), 0)::int` })
+    .from(aiLogsTable)
+    .where(and(
+      eq(aiLogsTable.organizationId, organizationId),
+      eq(aiLogsTable.success, true),
+      gte(aiLogsTable.createdAt, startOfMonth),
+    ));
+
+  const usedToday          = Number(countRow?.count ?? 0);
+  const usedTokensThisMonth = Number(tokenRow?.total ?? 0);
+  const remaining          = dailyLimit > 0 ? Math.max(0, dailyLimit - usedToday) : null;
+  const remainingTokens    = monthlyTokenLimit > 0 ? Math.max(0, monthlyTokenLimit - usedTokensThisMonth) : null;
+
+  return { provider, model, dailyLimit, usedToday, remaining, monthlyTokenLimit, usedTokensThisMonth, remainingTokens };
 }
 
 // ─── Build a one-shot AI client for a specific provider (no global cache) ────
@@ -311,6 +338,76 @@ async function buildProviderClient(provider: string): Promise<OpenAI | null> {
     return new OpenAI({ apiKey, baseURL });
   }
   return null;
+}
+
+// ─── Fallback chain & core AI call ────────────────────────────────────────────
+
+/** Transparent fallback order when the primary provider fails. */
+const FALLBACK_CHAIN: string[] = ["openrouter", "together", "huggingface", "ollama"];
+
+/** Result returned by callAI — includes metadata for structured logging. */
+export interface AICallResult {
+  data: unknown;
+  provider: string;
+  model: string;
+  tokensUsed?: number;
+  latencyMs: number;
+  usedFallback: boolean;
+}
+
+/**
+ * Execute a single chat completion on a specific provider.
+ * HuggingFace uses its own API class; all other providers are OpenAI-compatible.
+ */
+async function executeOnProvider(
+  providerKey: string,
+  model: string,
+  systemPrompt: string,
+  prompt: string,
+): Promise<{ content: string; tokensUsed?: number; latencyMs: number }> {
+  const start = Date.now();
+
+  if (providerKey === "huggingface") {
+    const { getProviderByKey } = await import("./ai-providers/index.js");
+    const hf = getProviderByKey("huggingface");
+    if (!hf?.isAvailable()) throw new Error("HuggingFace provider not available (missing HUGGINGFACE_API_KEY)");
+    const res = await hf.chat(
+      [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
+      { model },
+    );
+    return { content: res.content, tokensUsed: res.tokensUsed, latencyMs: res.latencyMs ?? Date.now() - start };
+  }
+
+  const client = await buildProviderClient(providerKey);
+  if (!client) throw new Error(`Provider '${providerKey}' is not configured (missing API key)`);
+
+  const response = await client.chat.completions.create({
+    model,
+    max_completion_tokens: 8192,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: prompt },
+    ],
+  });
+
+  return {
+    content:    response.choices[0]?.message?.content ?? "",
+    tokensUsed: response.usage?.total_tokens,
+    latencyMs:  Date.now() - start,
+  };
+}
+
+/** Parse JSON from AI output, stripping markdown fences if present. */
+function parseAIContent(content: string, jsonMode: boolean): unknown {
+  if (!jsonMode) return content;
+  const safe = (content === null || content === undefined || content === "") ? "{}" : content;
+  try {
+    const match = safe.match(/```json\s*([\s\S]*?)```/) || safe.match(/```\s*([\s\S]*?)```/);
+    return JSON.parse(match ? match[1].trim() : safe.trim());
+  } catch {
+    logger.warn({ content: safe.substring(0, 200) }, "Failed to parse AI JSON response");
+    return { raw: safe };
+  }
 }
 
 // ─── Cache helpers ───────────────────────────────────────────────────────────
@@ -377,6 +474,8 @@ async function logAiAction(opts: {
   action: string;
   entityType?: string;
   entityId?: number;
+  provider?: string;
+  model?: string;
   tokensUsed?: number;
   latencyMs?: number;
   success: boolean;
@@ -384,58 +483,87 @@ async function logAiAction(opts: {
 }) {
   await db.insert(aiLogsTable).values({
     organizationId: opts.organizationId ?? null,
-    userId: opts.userId,
-    module: opts.module as any,
-    action: opts.action,
-    entityType: opts.entityType,
-    entityId: opts.entityId,
-    tokensUsed: opts.tokensUsed,
-    latencyMs: opts.latencyMs,
-    success: opts.success,
-    errorMessage: opts.errorMessage,
-  }).catch(() => {}); // Non-blocking
+    userId:         opts.userId,
+    module:         opts.module as any,
+    action:         opts.action,
+    entityType:     opts.entityType,
+    entityId:       opts.entityId,
+    provider:       opts.provider,
+    model:          opts.model,
+    tokensUsed:     opts.tokensUsed,
+    latencyMs:      opts.latencyMs,
+    success:        opts.success,
+    errorMessage:   opts.errorMessage,
+  }).catch(() => {}); // Non-blocking — logging must never throw
 }
 
-async function callAI(prompt: string, systemPrompt: string, modelKey: "fast" | "smart" = "fast", jsonMode = true): Promise<unknown> {
-  const start = Date.now();
-  const { provider, fastModel, smartModel } = await getAIProviderConfig();
-  const model = modelKey === "smart" ? smartModel : fastModel;
-  const client = await getAIClient();
+/**
+ * Execute an AI call with automatic transparent fallback.
+ *
+ * Resolution order:
+ *   1. Configured provider (system or org-level)
+ *   2. OpenRouter (free)
+ *   3. Together AI (free)
+ *   4. HuggingFace (free)
+ *   5. Ollama (local, if available)
+ *
+ * Callers receive the same data regardless of which provider was used.
+ * Fallback is logged at INFO level; failures at WARN level.
+ */
+async function callAI(
+  prompt: string,
+  systemPrompt: string,
+  modelKey: "fast" | "smart" = "fast",
+  jsonMode = true,
+): Promise<AICallResult> {
+  const { provider: primaryProvider, fastModel, smartModel } = await getAIProviderConfig();
+  const primaryModel = modelKey === "smart" ? smartModel : fastModel;
 
-  // Groq and Ollama don't support json_object response_format reliably
-  const useJsonMode = jsonMode && provider === "openai_replit";
+  // Build ordered provider chain: configured primary, then free fallbacks (deduped)
+  const chain: string[] = primaryProvider && primaryProvider !== "none"
+    ? [primaryProvider, ...FALLBACK_CHAIN.filter(p => p !== primaryProvider)]
+    : [...FALLBACK_CHAIN];
 
-  const response = await client.chat.completions.create({
-    model,
-    max_completion_tokens: 8192,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: prompt },
-    ],
-    ...(useJsonMode ? { response_format: { type: "json_object" } } : {}),
-  });
+  let lastError: Error | null = null;
 
-  const rawContent = response.choices[0]?.message?.content;
-  const content = (rawContent === null || rawContent === undefined || rawContent === "")
-    ? "{}"
-    : rawContent;
-  const latency = Date.now() - start;
-  const tokens = response.usage?.total_tokens;
+  for (let i = 0; i < chain.length; i++) {
+    const providerKey = chain[i];
+    const provDefaults = PROVIDER_DEFAULTS[providerKey as AIProvider];
+    const model = i === 0
+      ? primaryModel
+      : ((modelKey === "smart" ? provDefaults?.smartModel : provDefaults?.fastModel) ?? primaryModel);
 
-  logger.debug({ model, latency, tokens, contentLength: content.length }, "AI call completed");
-
-  if (jsonMode) {
     try {
-      // Extract JSON from possible markdown code blocks
-      const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/```\s*([\s\S]*?)```/);
-      const jsonStr = jsonMatch ? jsonMatch[1].trim() : content.trim();
-      return JSON.parse(jsonStr);
-    } catch {
-      logger.warn({ content: content.substring(0, 200) }, "Failed to parse AI JSON response");
-      return { raw: content };
+      const raw = await executeOnProvider(providerKey, model, systemPrompt, prompt);
+
+      if (i > 0) {
+        logger.info(
+          { usedProvider: providerKey, primaryProvider: chain[0], model },
+          "[AI] Fallback provider used — primary provider failed",
+        );
+      } else {
+        logger.debug({ provider: providerKey, model, latencyMs: raw.latencyMs, tokens: raw.tokensUsed }, "AI call completed");
+      }
+
+      return {
+        data:         parseAIContent(raw.content, jsonMode),
+        provider:     providerKey,
+        model,
+        tokensUsed:   raw.tokensUsed,
+        latencyMs:    raw.latencyMs,
+        usedFallback: i > 0,
+      };
+    } catch (err: any) {
+      if (i < chain.length - 1) {
+        logger.warn({ provider: providerKey, error: err.message }, "[AI] Provider failed — trying next in fallback chain");
+      } else {
+        logger.error({ provider: providerKey, error: err.message }, "[AI] All providers in fallback chain exhausted");
+      }
+      lastError = err as Error;
     }
   }
-  return content;
+
+  throw lastError ?? new Error("All AI providers failed");
 }
 
 // ─── Module: AI Settings ─────────────────────────────────────────────────────
@@ -508,7 +636,7 @@ export async function analyzeDocument(doc: {
 
   const start = Date.now();
   try {
-    const result = await callAI(
+    const { data: result, provider, model, tokensUsed } = await callAI(
       `Analyze this engineering document:
 Title: ${doc.title}
 Document Number: ${doc.documentNumber}
@@ -532,16 +660,17 @@ Respond ONLY with valid JSON in this exact schema:
   "recommendations": ["action1", "action2"],
   "confidence": 0.0-1.0
 }`,
-    ) as DocumentAnalysis;
+    );
 
     await setCache("document", doc.id, "analyze", result, "fast", organizationId);
     await logAiAction({
       organizationId, userId, module: "documents", action: "analyze",
       entityType: "document", entityId: doc.id,
+      provider, model, tokensUsed,
       latencyMs: Date.now() - start, success: true,
     });
 
-    return result;
+    return result as DocumentAnalysis;
   } catch (err) {
     await logAiAction({
       organizationId, userId, module: "documents", action: "analyze",
@@ -583,7 +712,7 @@ export async function analyzeCorrespondence(corr: {
 
   const start = Date.now();
   try {
-    const result = await callAI(
+    const { data: result, provider, model, tokensUsed } = await callAI(
       `Analyze this engineering project correspondence:
 Subject: ${corr.subject}
 Type: ${corr.type}
@@ -605,16 +734,17 @@ Respond ONLY with valid JSON in this exact schema:
   "sentiment": "one of: positive, neutral, negative, urgent",
   "relatedTopics": ["topic1", "topic2"]
 }`,
-    ) as CorrespondenceAnalysis;
+    );
 
     await setCache("correspondence", corr.id, "analyze", result, "fast", organizationId);
     await logAiAction({
       organizationId, userId, module: "correspondence", action: "analyze",
       entityType: "correspondence", entityId: corr.id,
+      provider, model, tokensUsed,
       latencyMs: Date.now() - start, success: true,
     });
 
-    return result;
+    return result as CorrespondenceAnalysis;
   } catch (err) {
     await logAiAction({
       organizationId, userId, module: "correspondence", action: "analyze",
@@ -669,7 +799,7 @@ export async function prioritizeTasks(tasks: Array<{
   }));
 
   try {
-    const result = await callAI(
+    const { data: result, provider, model, tokensUsed } = await callAI(
       `Analyze and prioritize these engineering project tasks. Today's date: ${new Date().toISOString().split("T")[0]}
 
 Tasks: ${JSON.stringify(tasksJson, null, 2)}
@@ -692,14 +822,15 @@ Respond ONLY with valid JSON in this exact schema:
   "topRecommendations": ["action1", "action2", "action3"]
 }`,
       "smart",
-    ) as TaskListInsights;
+    );
 
     await logAiAction({
       userId, module: "tasks", action: "prioritize",
+      provider, model, tokensUsed,
       latencyMs: Date.now() - start, success: true,
     });
 
-    return result;
+    return result as TaskListInsights;
   } catch (err) {
     await logAiAction({
       userId, module: "tasks", action: "prioritize",
@@ -724,7 +855,7 @@ export interface NaturalLanguageSearchResult {
 }
 
 export async function parseNaturalLanguageSearch(query: string): Promise<NaturalLanguageSearchResult> {
-  const result = await callAI(
+  const { data: result } = await callAI(
     `Parse this natural language search query from an engineering document management system:
 "${query}"
 
@@ -742,9 +873,9 @@ Respond ONLY with valid JSON in this exact schema:
   "keywords": ["keyword1", "keyword2"],
   "suggestions": ["related search 1", "related search 2"]
 }`,
-  ) as NaturalLanguageSearchResult;
+  );
 
-  return { ...result, query };
+  return { ...(result as NaturalLanguageSearchResult), query };
 }
 
 // ─── Module: AI Document Management & Coding ─────────────────────────────────
@@ -773,7 +904,7 @@ export async function suggestDocumentProcedure(input: {
 }, userId?: number): Promise<DocumentProcedureSuggestion> {
   const start = Date.now();
   try {
-    const result = await callAI(
+    const { data: rawData, provider, model, tokensUsed } = await callAI(
       `Generate a document numbering suggestion. Return JSON with these fields:
 - suggestedDocumentNumber: the document number (e.g. "${input.projectCode ?? "PRJ"}-ELE-DWG-001")
 - numberingReason: brief explanation
@@ -795,15 +926,17 @@ Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
       `You are an engineering document management expert. Respond with valid JSON only.`,
       "fast",
       false,
-    ) as string;
+    );
+
+    const result = rawData as string;
 
     // Parse JSON from the text response
     let parsed: DocumentProcedureSuggestion;
     try {
-      const jsonMatch = (result as string).match(/```json\s*([\s\S]*?)```/) ||
-                        (result as string).match(/```\s*([\s\S]*?)```/) ||
-                        (result as string).match(/(\{[\s\S]*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[1].trim() : (result as string).trim();
+      const jsonMatch = result.match(/```json\s*([\s\S]*?)```/) ||
+                        result.match(/```\s*([\s\S]*?)```/) ||
+                        result.match(/(\{[\s\S]*\})/);
+      const jsonStr = jsonMatch ? jsonMatch[1].trim() : result.trim();
       parsed = JSON.parse(jsonStr);
     } catch {
       logger.warn({ result: String(result).substring(0, 200) }, "Failed to parse procedure suggestion");
@@ -822,6 +955,7 @@ Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
 
     await logAiAction({
       userId, module: "documents", action: "suggest_procedure",
+      provider, model, tokensUsed,
       latencyMs: Date.now() - start, success: true,
     });
 
@@ -846,16 +980,16 @@ export async function scoreNotificationUrgency(notifications: Array<{
 }>): Promise<Array<{ id: number | string; urgency: number; reason: string }>> {
   if (notifications.length === 0) return [];
 
-  const result = await callAI(
+  const { data: result } = await callAI(
     `Score the urgency of these engineering project notifications (0=not urgent, 100=critical):
 ${JSON.stringify(notifications.map(n => ({ id: n.id, type: n.type, message: n.message })))},
 
 Respond with JSON only.`,
     `You are an engineering project AI assistant. Score notification urgency.
 Respond ONLY with JSON: {"scores": [{"id": <id>, "urgency": <0-100>, "reason": "<brief>"}]}`,
-  ) as { scores: Array<{ id: number | string; urgency: number; reason: string }> };
+  );
 
-  return result.scores ?? [];
+  return (result as any).scores ?? [];
 }
 
 // ─── Classification (used by rules engine pipeline) ───────────────────────────
@@ -905,7 +1039,16 @@ export async function classifyItem(input: {
       return null;
     }
 
-    // Gate 2.6: Org-level AI provider override.
+    // Gate 2.6: Monthly token limit check.
+    if (quota.monthlyTokenLimit > 0 && quota.usedTokensThisMonth >= quota.monthlyTokenLimit) {
+      logger.warn(
+        { organizationId: input.organizationId, usedTokensThisMonth: quota.usedTokensThisMonth, monthlyTokenLimit: quota.monthlyTokenLimit },
+        "classifyItem skipped — org AI monthly token quota reached",
+      );
+      return null;
+    }
+
+    // Gate 2.7: Org-level AI provider override.
     // If the org has an explicit provider configured, use it (or skip if "none").
     if (quota.provider !== null) {
       if (quota.provider === "none") return null;
@@ -958,7 +1101,7 @@ export async function classifyItem(input: {
     ? `Document: "${input.title ?? ""}" | Type: ${input.documentType ?? "unknown"} | Discipline: ${input.discipline ?? "unknown"}`
     : `Correspondence subject: "${input.subject ?? ""}" | Body preview: ${(input.body ?? "").slice(0, 200)}`;
 
-  const result = await callAI(
+  const { data: result } = await callAI(
     `Classify this engineering document/correspondence for an EDMS system.
 ${context}
 
@@ -966,9 +1109,9 @@ Respond with JSON only: {"category": "<one of: Drawing|Report|Procedure|Specific
     "You are an engineering document classification AI. Classify documents concisely.",
     "fast",
     true,
-  ) as ClassificationResult | null;
+  );
 
-  return result ?? null;
+  return (result as ClassificationResult | null) ?? null;
 }
 
 // ── Migration wizard helpers ──────────────────────────────────────────────────
@@ -1027,13 +1170,14 @@ Extract the following metadata (leave empty string if not determinable):
 Return JSON only.`;
 
   try {
-    const result = await callAI(
+    const { data: rawResult } = await callAI(
       prompt,
       "You extract structured metadata from engineering document paths. Return valid JSON only.",
       "fast",
       true,
-    ) as ExtractedDocMeta["metadata"] & { confidence?: number };
+    );
 
+    const result = rawResult as ExtractedDocMeta["metadata"] & { confidence?: number };
     const confidence = typeof result?.confidence === "number" ? result.confidence : 50;
     const { confidence: _, ...metadata } = result as any;
     return { metadata, confidence };

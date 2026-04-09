@@ -47,6 +47,8 @@ export const aiLogsTable = pgTable("ai_logs", {
   action: text("action").notNull(),
   entityType: text("entity_type"),
   entityId: integer("entity_id"),
+  provider: text("provider"),
+  model: text("model"),
   tokensUsed: integer("tokens_used"),
   latencyMs: integer("latency_ms"),
   success: boolean("success").notNull().default(true),

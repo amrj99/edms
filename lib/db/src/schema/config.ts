@@ -68,6 +68,8 @@ export const orgConfigTable = pgTable("org_config", {
   aiModel: text("ai_model"),
   // Max AI calls per calendar day (UTC). 0 = unlimited.
   aiDailyLimit: integer("ai_daily_limit").default(0),
+  // Max AI tokens consumed per calendar month (UTC). 0 = unlimited.
+  aiMonthlyTokenLimit: integer("ai_monthly_token_limit").default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
