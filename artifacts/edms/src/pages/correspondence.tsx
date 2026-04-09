@@ -702,6 +702,11 @@ export default function CorrespondencePage() {
                           {item.projectName && (
                             <span className="text-[10px] text-muted-foreground truncate max-w-[100px]" title={`Project: ${item.projectName}`}>📁 {item.projectName}</span>
                           )}
+                          {item.scope === "internal" && item.projectId && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 font-medium shrink-0">
+                              Internal · Project Ref
+                            </span>
+                          )}
                           {item.referenceNumber && (
                             <span className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</span>
                           )}
