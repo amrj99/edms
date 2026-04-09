@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Shield, FileText, Loader2, ChevronsDown } from "lucide-react";
+import { Shield, FileText, Loader2, ChevronsDown, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const { logout } = useAuth();
   const userAny = user as any;
   const needsAcceptance = userAny && !userAny.acceptedTermsAt;
 
@@ -73,12 +74,22 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
             <div className="flex items-center justify-center w-9 h-9 rounded-full bg-primary/10 shrink-0">
               <Shield className="h-5 w-5 text-primary" />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <h2 className="text-base font-semibold leading-tight">Terms of Use & Data Protection Notice</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Version {TERMS_VERSION} · Please read the full terms before accepting
               </p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={logout}
+              className="shrink-0 text-muted-foreground hover:text-foreground gap-1.5"
+              title="Sign out and switch account"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="text-xs">Sign out</span>
+            </Button>
           </div>
 
           {/* Scroll area */}

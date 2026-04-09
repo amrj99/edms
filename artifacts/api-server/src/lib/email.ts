@@ -2,9 +2,15 @@ import { Resend } from "resend";
 
 // ─── Transport ────────────────────────────────────────────────────────────────
 // Email is sent via Resend (RESEND_API_KEY env var).
+// FROM address defaults to Resend sandbox (onboarding@resend.dev) which only
+// delivers to verified addresses in the Resend account.
+// For production: set FROM_EMAIL=noreply@yourdomain.com (after verifying the
+// domain in the Resend dashboard) and optionally set FROM_NAME.
 // If the key is absent the service logs and skips — no silent data loss.
 
-const FROM = "ArcScale EDMS <onboarding@resend.dev>";
+const FROM_NAME = process.env.FROM_NAME ?? "ArcScale EDMS";
+const FROM_ADDR = process.env.FROM_EMAIL ?? "onboarding@resend.dev";
+const FROM = `${FROM_NAME} <${FROM_ADDR}>`;
 export const APP_URL = process.env.APP_URL ?? "https://your-edms.replit.app";
 
 let _resend: Resend | null = null;
@@ -14,12 +20,31 @@ function getResend(): Resend | null {
   return _resend;
 }
 
+// ─── Email diagnostics (logged once at startup) ───────────────────────────────
+// Runs when module is first loaded — surfaced in docker/server logs.
+(function logEmailConfig() {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn("[email] RESEND_API_KEY is not set — all emails will be skipped. Set RESEND_API_KEY in your .env to enable email delivery.");
+    return;
+  }
+  const usingDefaultFrom = !process.env.FROM_EMAIL;
+  if (usingDefaultFrom) {
+    console.warn(
+      `[email] FROM_EMAIL not set — using Resend sandbox address (${FROM}). ` +
+      "Sandbox mode only delivers to verified email addresses in your Resend account. " +
+      "For production, verify a domain at resend.com/domains and set FROM_EMAIL=noreply@yourdomain.com"
+    );
+  } else {
+    console.info(`[email] Configured — FROM: ${FROM}`);
+  }
+})();
+
 // ─── Generic Send ─────────────────────────────────────────────────────────────
 export async function sendEmail(to: string | string[], subject: string, html: string, text?: string) {
   const client = getResend();
   if (!client) {
-    console.info(`[email] RESEND_API_KEY not configured — skipping email to ${Array.isArray(to) ? to.join(", ") : to}: ${subject}`);
-    return { skipped: true };
+    console.info(`[email] RESEND_API_KEY not set — skipped: "${subject}" to ${Array.isArray(to) ? to.join(", ") : to}`);
+    return { skipped: true, reason: "RESEND_API_KEY not configured" };
   }
   try {
     const toArr = Array.isArray(to) ? to : [to];
@@ -31,10 +56,14 @@ export async function sendEmail(to: string | string[], subject: string, html: st
       ...(text && { text }),
     });
     if (error) {
-      console.error(`[email] Resend error for "${subject}":`, error.message);
+      console.error(`[email] Resend rejected "${subject}" → ${error.message}`);
+      if (error.message?.toLowerCase().includes("domain")) {
+        console.error("[email] Domain hint: The FROM address domain is not verified in Resend. " +
+          "Go to resend.com/domains, add your domain, and set FROM_EMAIL in your .env");
+      }
       return { sent: false, error: error.message };
     }
-    console.info(`[email] sent via Resend to ${toArr.join(", ")}: ${subject} (id=${data?.id})`);
+    console.info(`[email] Sent "${subject}" to ${toArr.join(", ")} (id=${data?.id})`);
     return { sent: true, id: data?.id };
   } catch (err: any) {
     console.error(`[email] send failed: ${err.message}`);

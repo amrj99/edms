@@ -60,22 +60,29 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : [];
 
-app.use(
-  cors({
-    origin: isProd
-      ? (origin, callback) => {
-          if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
-            callback(null, true);
-          } else {
-            callback(new Error("Not allowed by CORS"));
-          }
+const corsOptions: cors.CorsOptions = {
+  origin: isProd
+    ? (origin, callback) => {
+        if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
         }
-      : true,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
+      }
+    : true,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  exposedHeaders: ["Content-Disposition"],
+  optionsSuccessStatus: 204,
+};
+
+// Explicit pre-flight handler — must come BEFORE any route so nginx/proxies
+// forwarding OPTIONS requests get a 204 response immediately without hitting
+// auth middleware (which would 401 a pre-flight and cause a 405 on the browser side).
+// Note: Express 5 requires named wildcards — "/*path" instead of "*".
+app.options("/*path", cors(corsOptions));
+app.use(cors(corsOptions));
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
 // Global IP-based limiter acts as a baseline safety net for unrecognised routes.
