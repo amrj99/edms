@@ -15,7 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
 import { UploadWithAIDialog, type AIUploadResult } from "@/components/upload-with-ai-dialog";
-import { RecipientAutocomplete } from "@/components/recipient-autocomplete";
+import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -2067,6 +2067,14 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
   });
   const correspondence = corrData?.items ?? [];
 
+  const { data: usersData } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
+  });
+  const corrUsers: RecipientUser[] = (usersData?.users ?? []).map((u: any) => ({
+    id: u.id, name: u.name ?? u.email, email: u.email,
+  }));
+
   const create = useMutation({
     mutationFn: async (data: any) => {
       const r = await fetch(`/api/projects/${projectId}/correspondence`, {
@@ -2222,17 +2230,35 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Enter subject..." className="mt-1" />
             </div>
             <div>
-              <Label>To <span className="text-muted-foreground font-normal">(email addresses, comma-separated)</span></Label>
-              <Input value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} placeholder="recipient@company.com, another@company.com..." className="mt-1" type="email" multiple />
+              <Label>To</Label>
+              <EmailChipInput
+                users={corrUsers}
+                value={form.to}
+                onChange={v => setForm(f => ({ ...f, to: v }))}
+                placeholder="Add recipient email…"
+                className="mt-1"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>CC</Label>
-                <Input value={form.cc} onChange={e => setForm(f => ({ ...f, cc: e.target.value }))} placeholder="cc@company.com" className="mt-1" />
+                <EmailChipInput
+                  users={corrUsers}
+                  value={form.cc}
+                  onChange={v => setForm(f => ({ ...f, cc: v }))}
+                  placeholder="Add CC…"
+                  className="mt-1"
+                />
               </div>
               <div>
                 <Label>BCC</Label>
-                <Input value={form.bcc} onChange={e => setForm(f => ({ ...f, bcc: e.target.value }))} placeholder="bcc@company.com" className="mt-1" />
+                <EmailChipInput
+                  users={corrUsers}
+                  value={form.bcc}
+                  onChange={v => setForm(f => ({ ...f, bcc: v }))}
+                  placeholder="Add BCC…"
+                  className="mt-1"
+                />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">

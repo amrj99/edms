@@ -271,14 +271,18 @@ function ProjectSwitcher() {
         <Button
           variant="outline"
           size="sm"
-          className="h-auto py-1 px-2.5 gap-1.5 text-xs hidden md:flex flex-col items-start max-w-[200px] hover:border-primary/50"
+          className={`h-auto py-1 px-2.5 gap-1.5 text-xs hidden md:flex flex-col items-start max-w-[200px] transition-colors ${
+            currentProject
+              ? "border-primary/40 bg-primary/5 hover:bg-primary/10 hover:border-primary/60"
+              : "hover:border-primary/50"
+          }`}
         >
-          <span className="text-[10px] text-muted-foreground leading-none font-normal w-full">
-            {currentProject ? "Current Project" : t("switchProject")}
+          <span className={`text-[10px] leading-none font-normal w-full ${currentProject ? "text-primary/70" : "text-muted-foreground"}`}>
+            {currentProject ? "Active Project" : t("switchProject")}
           </span>
           <span className="flex items-center gap-1.5 w-full">
-            <FolderKanban className="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span className="truncate font-medium text-foreground leading-none">
+            <FolderKanban className={`h-3.5 w-3.5 shrink-0 ${currentProject ? "text-primary" : "text-muted-foreground"}`} />
+            <span className={`truncate font-medium leading-none ${currentProject ? "text-primary" : "text-foreground"}`}>
               {currentProject
                 ? `${currentProject.name} (${currentProject.code})`
                 : t("switchProject")}

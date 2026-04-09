@@ -283,7 +283,6 @@ export default function WorkflowEnginePage() {
   const [activeTab, setActiveTab] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [seeding, setSeeding] = useState(false);
-  const [showSeedConfirm, setShowSeedConfirm] = useState(false);
 
   // Start workflow dialog state
   const [showStartDialog, setShowStartDialog] = useState(false);
@@ -339,18 +338,6 @@ export default function WorkflowEnginePage() {
     }
   };
 
-  const seedInvoice = async () => {
-    setSeeding(true);
-    try {
-      const res = await api.post("/workflow-engine/seed-invoice", {});
-      if (res.error) throw new Error(res.error);
-      toast({ title: "Invoice workflow template created" });
-      await load();
-    } catch (e: any) {
-      toast({ title: e.message ?? "Seeding failed", variant: "destructive" });
-    } finally { setSeeding(false); setShowSeedConfirm(false); }
-  };
-
   const seedDefaults = async () => {
     setSeeding(true);
     try {
@@ -361,7 +348,7 @@ export default function WorkflowEnginePage() {
       await load();
     } catch (e: any) {
       toast({ title: e.message ?? "Setup failed", variant: "destructive" });
-    } finally { setSeeding(false); setShowSeedConfirm(false); }
+    } finally { setSeeding(false); }
   };
 
   // Document search for start-workflow dialog
@@ -570,8 +557,9 @@ export default function WorkflowEnginePage() {
                 : "No workflows match the current filters."}
             </div>
             {instances.length === 0 && isAdmin && (
-              <Button size="sm" onClick={() => setShowSeedConfirm(true)}>
-                <Plus className="h-4 w-4 mr-2" />Setup Default Workflow Templates
+              <Button size="sm" onClick={seedDefaults} disabled={seeding}>
+                {seeding ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                Setup Default Workflow Templates
               </Button>
             )}
           </CardContent>
@@ -900,36 +888,6 @@ export default function WorkflowEnginePage() {
         onSaved={handleEditorSaved}
       />
 
-      {/* Seed confirm dialog */}
-      {showSeedConfirm && (
-        <Dialog open onOpenChange={() => setShowSeedConfirm(false)}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Setup Invoice Workflow</DialogTitle>
-            </DialogHeader>
-            <p className="text-sm text-muted-foreground">
-              This will create a 5-stage Invoice Approval Workflow for your organization:
-            </p>
-            <ol className="text-sm list-decimal list-inside space-y-1 text-muted-foreground">
-              <li>Finance Review</li>
-              <li>Contracts Review</li>
-              <li>Operations Review</li>
-              <li>GM Approval</li>
-              <li>Issued (Terminal)</li>
-            </ol>
-            <p className="text-xs text-muted-foreground">
-              You can assign specific users to each stage and add or remove stages later without any code changes.
-            </p>
-            <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => setShowSeedConfirm(false)}>Cancel</Button>
-              <Button onClick={seedInvoice} disabled={seeding}>
-                {seeding && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                Create Template
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      )}
     </div>
   );
 }

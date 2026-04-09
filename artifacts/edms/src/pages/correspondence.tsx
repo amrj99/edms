@@ -96,14 +96,14 @@ export default function CorrespondencePage() {
   const projects = projectsData?.projects ?? [];
 
   // Fetch all correspondence (general + all projects)
-  const { data: generalData, isLoading: genLoading } = useQuery({
+  const { data: generalData, isLoading: genLoading, refetch: refetchGeneral } = useQuery({
     queryKey: ["correspondence", "general"],
     queryFn: async () => { const r = await fetch("/api/correspondence"); return r.json(); },
   });
   const generalItems = generalData?.items ?? [];
 
   // Fetch project correspondence based on selected project or all
-  const { data: projectCorrData } = useQuery({
+  const { data: projectCorrData, refetch: refetchProject } = useQuery({
     queryKey: ["correspondence", "all-projects", selectedProjectId],
     queryFn: async () => {
       if (selectedProjectId) {
@@ -633,6 +633,15 @@ export default function CorrespondencePage() {
                 {CORR_TYPES.map(t => <SelectItem key={t} value={t}>{CORR_TYPE_LABELS[t]}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 shrink-0"
+              title="Refresh"
+              onClick={() => { refetchGeneral(); refetchProject(); }}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
 
