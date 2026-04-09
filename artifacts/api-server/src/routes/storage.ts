@@ -6,13 +6,65 @@ import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { requestUpload, streamOnPremFile, getS3PresignedGetUrl } from "../lib/orgStorage.js";
 import { requireAuth } from "../lib/auth.js";
+import { createAuditLog } from "../lib/audit.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
 
+// ─── Security helpers ─────────────────────────────────────────────────────────
+
 /**
- * POST /uploads/request-url  (→ /api/storage/uploads/request-url)
- * Org-aware: routes to cloud (GCS), S3, or on-prem based on org config.
+ * Log an unauthorized storage access attempt and return false.
+ * Returns true when access is permitted.
+ */
+async function assertOrgAccess(
+  req: Request,
+  res: Response,
+  targetOrgId: number,
+  context: { route: string; key?: string },
+): Promise<boolean> {
+  const userOrgId = req.user?.organizationId;
+  const isSysOwner = req.user?.role === "system_owner";
+
+  if (isSysOwner || userOrgId === targetOrgId) return true;
+
+  // Log unauthorized attempt
+  await createAuditLog({
+    userId: req.user?.id,
+    organizationId: userOrgId ?? undefined,
+    action: "UNAUTHORIZED_STORAGE_ACCESS",
+    entityType: "file",
+    entityId: 0,
+    entityTitle: context.key ?? context.route,
+    details: {
+      route: context.route,
+      targetOrgId,
+      requestingOrgId: userOrgId ?? null,
+      objectKey: context.key ?? null,
+      ip: req.ip,
+      userAgent: req.headers["user-agent"] ?? null,
+    },
+    ipAddress: req.ip,
+  });
+
+  res.status(403).json({ error: "Access denied: file belongs to a different organization" });
+  return false;
+}
+
+/**
+ * Validate that an S3 object key belongs to the requesting org.
+ * Key format: {orgId}/{projectId}/{fileType}/{filename}
+ */
+function s3KeyBelongsToOrg(objectKey: string, orgId: number): boolean {
+  const prefix = `${orgId}/`;
+  return objectKey.startsWith(prefix);
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+/**
+ * POST /uploads/request-url
+ * Org-aware: routes to S3 (default), on-prem, or cloud based on org config.
  */
 router.post("/uploads/request-url", requireAuth, async (req: Request, res: Response) => {
   const { name, size, contentType, projectId, fileType } = req.body ?? {};
@@ -58,8 +110,8 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
 });
 
 /**
- * GET /public-objects/*  (→ /api/storage/public-objects/*)
- * Serve public assets — no auth checks.
+ * GET /public-objects/*
+ * Serve public assets — no auth required (logos, etc.)
  */
 router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
   try {
@@ -86,10 +138,10 @@ router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
 });
 
 /**
- * GET /objects/*  (→ /api/storage/objects/*)
- * Serve private object entities from cloud storage.
+ * GET /objects/*
+ * Serve private objects from cloud storage. Requires authentication.
  */
-router.get("/objects/*path", async (req: Request, res: Response) => {
+router.get("/objects/*path", requireAuth, async (req: Request, res: Response) => {
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -116,39 +168,70 @@ router.get("/objects/*path", async (req: Request, res: Response) => {
 
 /**
  * GET /onpremise/:orgId/:projectId/:fileType/:filename
- * Serve on-premise files stored on the local filesystem.
+ * Serve on-premise files. Enforces strict org ownership.
  */
 router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
   requireAuth,
   async (req: Request, res: Response) => {
     const { orgId, projectId, fileType, filename } = req.params;
+    const targetOrgId = parseInt(orgId);
+
+    // ── Ownership check ───────────────────────────────────────────────────────
+    const allowed = await assertOrgAccess(req, res, targetOrgId, {
+      route: "onpremise",
+      key: `${orgId}/${projectId}/${fileType}/${filename}`,
+    });
+    if (!allowed) return;
 
     const [cfg] = await db
       .select()
       .from(orgConfigTable)
-      .where(eq(orgConfigTable.organizationId, parseInt(orgId)));
+      .where(eq(orgConfigTable.organizationId, targetOrgId));
 
     if (!cfg?.storagePath) {
       res.status(404).json({ error: "On-premise storage not configured" });
       return;
     }
 
-    const absPath = path.join(cfg.storagePath, orgId, projectId, fileType, filename);
+    // Path traversal guard — prevent ../../ attacks
+    const safeFilename = path.basename(filename);
+    if (safeFilename !== filename) {
+      res.status(400).json({ error: "Invalid filename" });
+      return;
+    }
+
+    const absPath = path.join(cfg.storagePath, orgId, projectId, fileType, safeFilename);
+    // Ensure final path stays within configured base directory
+    if (!absPath.startsWith(path.resolve(cfg.storagePath))) {
+      await createAuditLog({
+        userId: req.user?.id,
+        organizationId: req.user?.organizationId ?? undefined,
+        action: "PATH_TRAVERSAL_ATTEMPT",
+        entityType: "file",
+        entityId: 0,
+        entityTitle: filename,
+        details: { attemptedPath: absPath, basePath: cfg.storagePath },
+        ipAddress: req.ip,
+      });
+      res.status(400).json({ error: "Invalid file path" });
+      return;
+    }
+
     const stream = streamOnPremFile(absPath);
     if (!stream) {
       res.status(404).json({ error: "File not found" });
       return;
     }
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
     stream.pipe(res);
   },
 );
 
 /**
- * GET /s3-object/:objectKey  (→ /api/storage/s3-object/:objectKey?orgId=N)
- * Serve S3-stored files by generating a presigned GET URL and redirecting.
- * The object key is URL-encoded. orgId is required as a query param.
+ * GET /s3-object/:objectKey?orgId=N
+ * Serve S3-stored files via presigned URL. Enforces strict org ownership.
+ * Object key format: {orgId}/{projectId}/{fileType}/{filename}
  */
 router.get("/s3-object/:objectKey", requireAuth, async (req: Request, res: Response) => {
   const rawKey = req.params.objectKey;
@@ -162,17 +245,80 @@ router.get("/s3-object/:objectKey", requireAuth, async (req: Request, res: Respo
 
   try {
     const objectKey = decodeURIComponent(rawKey);
+
+    // ── Ownership check: key must start with orgId/ ───────────────────────────
+    if (!s3KeyBelongsToOrg(objectKey, orgId)) {
+      // Key prefix doesn't match — could be spoofing attempt
+      await createAuditLog({
+        userId: req.user?.id,
+        organizationId: req.user?.organizationId ?? undefined,
+        action: "UNAUTHORIZED_STORAGE_ACCESS",
+        entityType: "file",
+        entityId: 0,
+        entityTitle: objectKey,
+        details: {
+          route: "s3-object",
+          claimedOrgId: orgId,
+          objectKey,
+          ip: req.ip,
+        },
+        ipAddress: req.ip,
+      });
+      res.status(403).json({ error: "Access denied: object key does not belong to the specified organization" });
+      return;
+    }
+
+    // If user belongs to a different org (and is not system_owner), deny
+    const allowed = await assertOrgAccess(req, res, orgId, {
+      route: "s3-object",
+      key: objectKey,
+    });
+    if (!allowed) return;
+
     const presignedUrl = await getS3PresignedGetUrl(orgId, objectKey, 600);
     if (!presignedUrl) {
       res.status(404).json({ error: "S3 not configured or object not found" });
       return;
     }
-    // Redirect the browser to the presigned URL (valid for 10 min)
     res.redirect(302, presignedUrl);
   } catch (err: any) {
     console.error("S3 serve error:", err.message);
     res.status(500).json({ error: "Failed to serve S3 object" });
   }
+});
+
+/**
+ * GET /storage-types
+ * Returns available storage provider options for the UI.
+ * Hides cloud/Replit storage unless ENABLE_REPLIT_STORAGE=true.
+ */
+router.get("/storage-types", requireAuth, (_req: Request, res: Response) => {
+  const showReplit = process.env.ENABLE_REPLIT_STORAGE === "true";
+
+  const types = [
+    {
+      value: "s3",
+      label: "S3-Compatible (AWS, Cloudflare R2, MinIO, DigitalOcean Spaces…)",
+      description: "Recommended for production. Store files in any S3-compatible bucket.",
+      recommended: true,
+    },
+    {
+      value: "onpremise",
+      label: "On-Premise / NAS / NFS",
+      description: "Store files on a mounted network share or local filesystem path.",
+      recommended: false,
+    },
+    ...(showReplit
+      ? [{
+          value: "cloud",
+          label: "Replit Object Storage (Development Only)",
+          description: "Built-in cloud storage. Only works inside the Replit environment.",
+          recommended: false,
+        }]
+      : []),
+  ];
+
+  res.json({ types });
 });
 
 export default router;

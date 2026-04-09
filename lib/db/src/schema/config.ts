@@ -45,7 +45,7 @@ export const orgConfigTable = pgTable("org_config", {
   primaryColor: text("primary_color").default("#2563eb"),
   storageQuotaMb: integer("storage_quota_mb").default(10240),
   storagePath: text("storage_path"),
-  storageType: text("storage_type").default("cloud"), // 'cloud' | 'onpremise' | 's3'
+  storageType: text("storage_type").default("s3"), // 's3' | 'onpremise' | 'cloud'
   s3Endpoint: text("s3_endpoint"),
   s3Bucket: text("s3_bucket"),
   s3Region: text("s3_region"),

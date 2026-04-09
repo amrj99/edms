@@ -31,7 +31,7 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **Multi-Organization Isolation:** Ensures data separation between different organizations, with a focus on project and user data isolation.
 - **Module Licensing:** Per-organization feature flags control module access (e.g., dashboard, deliverables, registers, notifications), enforced via API middleware and UI components.
 - **Workflow Approvals:** Implements submit/approve/reject workflows for various records (e.g., NCR, ITR, Transmittal) with associated UI components and audit logging.
-- **Flexible File Storage (S3):** Supports `onpremise` (Replit Object Storage), `cloud` (Replit Object Storage alias), and `s3` (AWS S3 presigned URLs) modes, configurable per organization.
+- **Pluggable File Storage:** Default is `s3` (S3-compatible — AWS, Cloudflare R2, MinIO, DigitalOcean Spaces). Also supports `onpremise` (NAS/NFS mounted path). Replit cloud storage hidden in production unless `ENABLE_REPLIT_STORAGE=true`. Strict tenant isolation: S3 object keys are prefixed with orgId, on-premise paths include path traversal guards. Unauthorized access attempts logged via audit log.
 - **Real-Time WebSockets (Socket.io):** Enables real-time updates for notifications, chat, document, and task events.
 - **Circuit Breaker for Rules:** Implements a circuit breaker pattern for automation rules to prevent continuous execution of failing rules.
 - **Usage Monitoring Dashboard:** Provides per-organization metrics for documents, correspondence, AI calls, rule executions, and user seats.
@@ -62,14 +62,14 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 
 - **Database:** PostgreSQL
 - **ORM:** Drizzle ORM
-- **AI Provider:** Replit AI Integrations (proxy for OpenAI models)
+- **AI Providers (Pluggable):** Free defaults: OpenRouter (OPENROUTER_API_KEY), Together AI (TOGETHER_API_KEY), HuggingFace (HUGGINGFACE_API_KEY), Ollama (local). Paid optional: OpenAI (OPENAI_API_KEY), Anthropic (ANTHROPIC_API_KEY). Legacy: Groq, Replit OpenAI proxy. Provider selected per-org via admin UI; falls back to system setting then first available free provider. Architecture: `artifacts/api-server/src/lib/ai-providers/` (one file per provider + factory in index.ts).
 - **Frontend Framework:** React
 - **Build Tool (Frontend):** Vite
 - **Backend Framework:** Express 5
 - **Package Manager:** pnpm
 - **API Client Generation:** Orval
 - **Charting Library:** Recharts
-- **Object Storage:** Replit Object Storage, AWS S3
+- **Object Storage:** AWS S3-compatible (default), Replit Object Storage (dev only), On-Premise NAS/NFS
 - **Email:** SMTP (for email notifications)
 - **Search:** Elasticsearch (optional, falls back to SQL full-text search)
 - **Real-time Communication:** Socket.io

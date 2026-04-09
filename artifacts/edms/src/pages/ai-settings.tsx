@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   Brain, FileText, Mail, CheckSquare, Search, Bell, Users, Clipboard,
   Loader2, Save, Sparkles, Info, Check, AlertTriangle, Server, Zap,
-  ChevronDown, ChevronUp, Settings2, Ban,
+  ChevronDown, ChevronUp, Settings2, Ban, Globe, Cloud, DollarSign, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -73,35 +73,66 @@ const AI_MODULES: AiModuleConfig[] = [
   },
 ];
 
-type AIProvider = "openai_replit" | "groq" | "ollama" | "none";
+type AIProvider =
+  | "openrouter" | "huggingface" | "together" | "ollama"
+  | "openai" | "anthropic"
+  | "openai_replit" | "groq" | "none";
 
 interface ProviderInfo {
   configured: boolean;
+  isFree: boolean;
   label: string;
   description: string;
   envVarsRequired: string[];
+  docsUrl: string | null;
 }
 
 interface ProviderData {
   provider: AIProvider;
   fastModel: string;
   smartModel: string;
-  providerStatus: Record<AIProvider, ProviderInfo>;
+  providerStatus: Record<string, ProviderInfo>;
 }
 
-const PROVIDER_ICONS: Record<AIProvider, React.ComponentType<{ className?: string }>> = {
-  openai_replit: Sparkles,
-  groq: Zap,
-  ollama: Server,
-  none: Ban,
+const PROVIDER_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  openrouter:    Globe,
+  huggingface:   Sparkles,
+  together:      Zap,
+  ollama:        Server,
+  openai:        Sparkles,
+  anthropic:     Brain,
+  openai_replit: Cloud,
+  groq:          Zap,
+  none:          Ban,
 };
 
-const PROVIDER_COLORS: Record<AIProvider, string> = {
+const PROVIDER_COLORS: Record<string, string> = {
+  openrouter:    "text-blue-500",
+  huggingface:   "text-yellow-500",
+  together:      "text-purple-500",
+  ollama:        "text-green-600",
+  openai:        "text-violet-600",
+  anthropic:     "text-orange-500",
   openai_replit: "text-violet-600",
-  groq: "text-orange-500",
-  ollama: "text-green-600",
-  none: "text-muted-foreground",
+  groq:          "text-orange-500",
+  none:          "text-muted-foreground",
 };
+
+const PROVIDER_DEFAULTS: Record<string, { fast: string; smart: string }> = {
+  openrouter:    { fast: "meta-llama/llama-3.2-3b-instruct:free", smart: "mistralai/mistral-7b-instruct:free" },
+  huggingface:   { fast: "mistralai/Mistral-7B-Instruct-v0.3",   smart: "meta-llama/Meta-Llama-3-8B-Instruct" },
+  together:      { fast: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smart: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
+  openai_replit: { fast: "gpt-4o-mini", smart: "gpt-4o" },
+  groq:          { fast: "llama-3.1-8b-instant", smart: "llama-3.3-70b-versatile" },
+  ollama:        { fast: "llama3.2", smart: "llama3.1" },
+  openai:        { fast: "gpt-4o-mini", smart: "gpt-4o" },
+  anthropic:     { fast: "claude-3-haiku-20240307", smart: "claude-3-5-sonnet-20241022" },
+  none:          { fast: "", smart: "" },
+};
+
+const FREE_PROVIDERS  = ["openrouter", "huggingface", "together", "ollama"];
+const PAID_PROVIDERS  = ["openai", "anthropic"];
+const LEGACY_PROVIDERS = ["openai_replit", "groq"];
 
 export default function AISettings() {
   const { user } = useAuth();
@@ -112,15 +143,16 @@ export default function AISettings() {
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerSaving, setProviderSaving] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<AIProvider>("openai_replit");
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider>("openrouter");
   const [fastModel, setFastModel] = useState("");
   const [smartModel, setSmartModel] = useState("");
   const [showModels, setShowModels] = useState(false);
+  const [showLegacy, setShowLegacy] = useState(false);
   const [classificationEnabled, setClassificationEnabled] = useState(true);
   const [classificationLoading, setClassificationLoading] = useState(true);
   const [classificationSaving, setClassificationSaving] = useState(false);
 
-  const isSysAdmin = (user as any)?.isSysAdmin === true || (user as any)?.role === "sysadmin";
+  const isSysAdmin = (user as any)?.isSysAdmin === true || (user as any)?.role === "sysadmin" || (user as any)?.role === "system_owner";
 
   useEffect(() => {
     fetch("/api/ai/settings", { credentials: "include" })
@@ -213,26 +245,83 @@ export default function AISettings() {
 
   const handleSelectProvider = (p: AIProvider) => {
     setSelectedProvider(p);
-    if (providerData) {
-      const defaults: Record<AIProvider, { fast: string; smart: string }> = {
-        openai_replit: { fast: "gpt-4o-mini", smart: "gpt-4o" },
-        groq:          { fast: "llama-3.1-8b-instant", smart: "llama-3.3-70b-versatile" },
-        ollama:        { fast: "llama3.2", smart: "llama3.1" },
-        none:          { fast: "", smart: "" },
-      };
-      if (p !== providerData.provider) {
-        setFastModel(defaults[p]?.fast ?? "");
-        setSmartModel(defaults[p]?.smart ?? "");
-      } else {
-        setFastModel(providerData.fastModel);
-        setSmartModel(providerData.smartModel);
-      }
+    if (providerData && p !== providerData.provider) {
+      setFastModel(PROVIDER_DEFAULTS[p]?.fast ?? "");
+      setSmartModel(PROVIDER_DEFAULTS[p]?.smart ?? "");
+    } else if (providerData) {
+      setFastModel(providerData.fastModel);
+      setSmartModel(providerData.smartModel);
     }
   };
 
   const enabledCount = Object.values(settings).filter(Boolean).length;
-  const currentProviderInfo = providerData?.providerStatus[selectedProvider];
   const activeProviderInfo = providerData?.providerStatus[providerData.provider];
+
+  const renderProviderCard = (key: string, info: ProviderInfo) => {
+    const Icon = PROVIDER_ICONS[key] ?? Globe;
+    const colorCls = PROVIDER_COLORS[key] ?? "text-muted-foreground";
+    const isSelected = selectedProvider === key;
+    const isActive = providerData?.provider === key;
+
+    return (
+      <button
+        key={key}
+        onClick={() => isSysAdmin ? handleSelectProvider(key as AIProvider) : undefined}
+        disabled={!isSysAdmin}
+        className={`w-full text-left rounded-lg border p-4 transition-all ${
+          isSelected
+            ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+            : "border-border hover:border-primary/40 hover:bg-muted/30"
+        } ${!isSysAdmin ? "cursor-default" : "cursor-pointer"}`}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${
+            isSelected ? "bg-primary/10" : "bg-muted"
+          }`}>
+            <Icon className={`h-4 w-4 ${isSelected ? colorCls : "text-muted-foreground"}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium">{info.label}</span>
+              {isActive && (
+                <Badge className="text-[10px] py-0 px-1.5 h-4 bg-primary/10 text-primary border-0">Active</Badge>
+              )}
+              {info.isFree && (
+                <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4 border-green-500/40 text-green-600">Free</Badge>
+              )}
+              {!info.isFree && (
+                <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4 border-amber-500/40 text-amber-600 gap-0.5">
+                  <DollarSign className="h-2.5 w-2.5" />Paid
+                </Badge>
+              )}
+              <span className={`ml-auto flex items-center gap-1 text-xs ${info.configured ? "text-green-600" : "text-amber-500"}`}>
+                {info.configured ? <><Check className="h-3 w-3" />Configured</> : <><AlertTriangle className="h-3 w-3" />Not set up</>}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{info.description}</p>
+            {!info.configured && info.envVarsRequired.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                <span className="text-[10px] text-muted-foreground">Required:</span>
+                {info.envVarsRequired.map((v) => (
+                  <code key={v} className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">{v}</code>
+                ))}
+                {info.docsUrl && (
+                  <a href={info.docsUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary flex items-center gap-0.5 hover:underline ml-1" onClick={e => e.stopPropagation()}>
+                    Get key <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+          {isSelected && (
+            <div className="flex-shrink-0 text-primary">
+              <Check className="h-4 w-4" />
+            </div>
+          )}
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -257,13 +346,13 @@ export default function AISettings() {
             <h2 className="font-semibold text-sm">AI Provider</h2>
             {providerData && (
               <Badge variant="outline" className="ml-auto text-xs gap-1">
-                {(() => { const I = PROVIDER_ICONS[providerData.provider]; return <I className="h-3 w-3" />; })()}
+                {(() => { const I = PROVIDER_ICONS[providerData.provider] ?? Globe; return <I className="h-3 w-3" />; })()}
                 {activeProviderInfo?.label ?? providerData.provider}
               </Badge>
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Choose between a paid cloud provider or a free/open-source alternative. All use the same OpenAI-compatible API.
+            Free providers are recommended for self-hosted production deployments. Paid providers offer higher accuracy.
           </p>
         </div>
 
@@ -280,71 +369,53 @@ export default function AISettings() {
           </div>
         ) : (
           <div className="p-5 space-y-4">
-            {/* Provider cards */}
-            <div className="grid gap-3">
-              {(Object.entries(providerData.providerStatus) as [AIProvider, ProviderInfo][]).map(([key, info]) => {
-                const Icon = PROVIDER_ICONS[key];
-                const colorCls = PROVIDER_COLORS[key];
-                const isSelected = selectedProvider === key;
-                const isActive = providerData.provider === key;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => !isSysAdmin ? undefined : handleSelectProvider(key)}
-                    disabled={!isSysAdmin}
-                    className={`w-full text-left rounded-lg border p-4 transition-all ${
-                      isSelected
-                        ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                        : "border-border hover:border-primary/40 hover:bg-muted/30"
-                    } ${!isSysAdmin ? "cursor-default" : "cursor-pointer"}`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${
-                        isSelected ? "bg-primary/10" : "bg-muted"
-                      }`}>
-                        <Icon className={`h-4 w-4 ${isSelected ? colorCls : "text-muted-foreground"}`} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium">{info.label}</span>
-                          {isActive && (
-                            <Badge className="text-[10px] py-0 px-1.5 h-4 bg-primary/10 text-primary border-0">
-                              Active
-                            </Badge>
-                          )}
-                          <span className={`ml-auto flex items-center gap-1 text-xs ${
-                            info.configured ? "text-green-600" : "text-amber-500"
-                          }`}>
-                            {info.configured
-                              ? <><Check className="h-3 w-3" /> Configured</>
-                              : <><AlertTriangle className="h-3 w-3" /> Not configured</>
-                            }
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">{info.description}</p>
-                        {!info.configured && info.envVarsRequired.length > 0 && (
-                          <div className="mt-1.5 flex flex-wrap gap-1">
-                            {info.envVarsRequired.map((v) => (
-                              <code key={v} className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                                {v}
-                              </code>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      {isSelected && (
-                        <div className="flex-shrink-0 text-primary">
-                          <Check className="h-4 w-4" />
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
+            {/* Free providers */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Free Providers — Recommended for Production
+              </p>
+              <div className="grid gap-2">
+                {FREE_PROVIDERS.map(k => {
+                  const info = providerData.providerStatus[k];
+                  return info ? renderProviderCard(k, info) : null;
+                })}
+              </div>
+            </div>
+
+            {/* Paid providers */}
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Paid Providers — Higher Accuracy (Optional)
+              </p>
+              <div className="grid gap-2">
+                {PAID_PROVIDERS.map(k => {
+                  const info = providerData.providerStatus[k];
+                  return info ? renderProviderCard(k, info) : null;
+                })}
+              </div>
+            </div>
+
+            {/* Legacy / Disable */}
+            <div>
+              <button
+                onClick={() => setShowLegacy(v => !v)}
+                className="text-xs text-muted-foreground flex items-center gap-1 hover:text-foreground mb-2"
+              >
+                {showLegacy ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                Legacy & Disable options
+              </button>
+              {showLegacy && (
+                <div className="grid gap-2">
+                  {[...LEGACY_PROVIDERS, "none"].map(k => {
+                    const info = providerData.providerStatus[k];
+                    return info ? renderProviderCard(k, info) : null;
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Advanced model settings */}
-            {isSysAdmin && (
+            {isSysAdmin && selectedProvider !== "none" && (
               <div className="border rounded-lg overflow-hidden">
                 <button
                   onClick={() => setShowModels((v) => !v)}
@@ -363,7 +434,7 @@ export default function AISettings() {
                       <Input
                         value={fastModel}
                         onChange={(e) => setFastModel(e.target.value)}
-                        placeholder="e.g. gpt-4o-mini"
+                        placeholder={PROVIDER_DEFAULTS[selectedProvider]?.fast ?? "e.g. llama-3.2-3b"}
                         className="h-8 text-xs font-mono"
                       />
                     </div>
@@ -372,7 +443,7 @@ export default function AISettings() {
                       <Input
                         value={smartModel}
                         onChange={(e) => setSmartModel(e.target.value)}
-                        placeholder="e.g. gpt-4o"
+                        placeholder={PROVIDER_DEFAULTS[selectedProvider]?.smart ?? "e.g. mistral-7b"}
                         className="h-8 text-xs font-mono"
                       />
                     </div>
@@ -390,12 +461,7 @@ export default function AISettings() {
 
             {isSysAdmin && (
               <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  onClick={handleSaveProvider}
-                  disabled={providerSaving}
-                  className="gap-1.5"
-                >
+                <Button size="sm" onClick={handleSaveProvider} disabled={providerSaving} className="gap-1.5">
                   {providerSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   Save Provider
                 </Button>
@@ -405,17 +471,14 @@ export default function AISettings() {
         )}
       </div>
 
-      {/* ── AI Classification Section ───────────────────────────────── */}
+      {/* ── AI Classification Section ─────────────────────────────── */}
       <div className="rounded-xl border bg-card overflow-hidden">
         <div className="px-5 py-4 border-b bg-muted/30">
           <div className="flex items-center gap-2">
             <Brain className="h-4 w-4 text-primary" />
             <h2 className="font-semibold text-sm">AI Classification</h2>
             {!classificationLoading && (
-              <Badge
-                variant="outline"
-                className={`ml-auto text-xs ${classificationEnabled ? "border-green-500 text-green-600" : "border-muted text-muted-foreground"}`}
-              >
+              <Badge variant="outline" className={`ml-auto text-xs ${classificationEnabled ? "border-green-500 text-green-600" : "border-muted text-muted-foreground"}`}>
                 {classificationEnabled ? "Enabled" : "Disabled"}
               </Badge>
             )}
@@ -433,11 +496,7 @@ export default function AISettings() {
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-2 flex-1">
                 <div className="flex items-center gap-2">
-                  <Switch
-                    checked={classificationEnabled}
-                    onCheckedChange={handleSaveClassification}
-                    disabled={classificationSaving}
-                  />
+                  <Switch checked={classificationEnabled} onCheckedChange={handleSaveClassification} disabled={classificationSaving} />
                   <Label className="text-sm">
                     {classificationEnabled ? "Classification active" : "Classification disabled (rules-only mode)"}
                   </Label>
@@ -449,10 +508,7 @@ export default function AISettings() {
                     { label: "Tags", desc: "Keywords for search & filtering" },
                     { label: "Priority", desc: "Urgency level (low/medium/high)" },
                   ].map(({ label, desc }) => (
-                    <div
-                      key={label}
-                      className={`rounded-lg border p-3 text-xs transition-opacity ${classificationEnabled ? "" : "opacity-40"}`}
-                    >
+                    <div key={label} className={`rounded-lg border p-3 text-xs transition-opacity ${classificationEnabled ? "" : "opacity-40"}`}>
                       <p className="font-semibold">{label}</p>
                       <p className="text-muted-foreground mt-0.5">{desc}</p>
                     </div>
@@ -513,23 +569,16 @@ export default function AISettings() {
             return (
               <div
                 key={mod.key}
-                className={`rounded-xl border p-4 transition-all ${
-                  enabled ? "border-border bg-card" : "border-border/40 bg-muted/20 opacity-60"
-                }`}
+                className={`rounded-xl border p-4 transition-all ${enabled ? "border-border bg-card" : "border-border/40 bg-muted/20 opacity-60"}`}
               >
                 <div className="flex items-start gap-4">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg flex-shrink-0 ${
-                    enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-                  }`}>
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg flex-shrink-0 ${enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <h3 className="font-semibold text-sm">{mod.label}</h3>
-                      <Switch
-                        checked={enabled}
-                        onCheckedChange={(v) => handleToggle(mod.key, v)}
-                      />
+                      <Switch checked={enabled} onCheckedChange={(v) => handleToggle(mod.key, v)} />
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">{mod.description}</p>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">

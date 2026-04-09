@@ -1700,6 +1700,16 @@ function StorageTab() {
   });
   const usage = storageData?.usage ?? [];
 
+  const { data: storageTypesData } = useQuery({
+    queryKey: ["storage-types"],
+    queryFn: async () => { const r = await fetch("/api/storage/storage-types"); return r.json(); },
+  });
+  const availableStorageTypes: Array<{ value: string; label: string; description: string; recommended: boolean }> =
+    storageTypesData?.types ?? [
+      { value: "s3", label: "S3-Compatible (AWS, Cloudflare R2, MinIO…)", description: "Recommended for production.", recommended: true },
+      { value: "onpremise", label: "On-Premise / NAS / NFS", description: "Store on a mounted path.", recommended: false },
+    ];
+
   const [editQuota, setEditQuota] = useState<{
     orgId: number; quotaMb: number; storagePath: string;
     storageType: string; s3Endpoint: string; s3Bucket: string; s3Region: string; s3AccessKey: string; s3SecretKey: string;
@@ -1757,7 +1767,7 @@ function StorageTab() {
                   {isOwner && (
                     <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => setEditQuota({
                         orgId: org.orgId, quotaMb: org.quotaMb, storagePath: org.storagePath ?? "",
-                        storageType: org.storageType ?? "cloud", s3Endpoint: org.s3Endpoint ?? "",
+                        storageType: org.storageType ?? "s3", s3Endpoint: org.s3Endpoint ?? "",
                         s3Bucket: org.s3Bucket ?? "", s3Region: org.s3Region ?? "",
                         s3AccessKey: org.s3AccessKey ?? "", s3SecretKey: "",
                       })}>
@@ -1792,11 +1802,18 @@ function StorageTab() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="cloud">Cloud (Replit Object Storage)</SelectItem>
-                    <SelectItem value="s3">Custom S3-Compatible</SelectItem>
-                    <SelectItem value="onpremise">On-Premise (Mounted Path)</SelectItem>
+                    {availableStorageTypes.map(t => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}{t.recommended ? " ★" : ""}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                {editQuota.storageType && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {availableStorageTypes.find(t => t.value === editQuota.storageType)?.description}
+                  </p>
+                )}
               </div>
 
               {editQuota.storageType === "s3" && (

@@ -13,7 +13,16 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // ─── Provider types ───────────────────────────────────────────────────────────
 
-export type AIProvider = "openai_replit" | "groq" | "ollama" | "none";
+export type AIProvider =
+  | "openrouter"    // free default: OpenRouter free models
+  | "huggingface"   // free: HuggingFace Inference API
+  | "together"      // free: Together AI free tier
+  | "ollama"        // self-hosted local Ollama
+  | "openai"        // paid optional: OpenAI direct
+  | "anthropic"     // paid optional: Anthropic Claude
+  | "openai_replit" // legacy: Replit OpenAI proxy
+  | "groq"          // legacy: Groq Cloud
+  | "none";
 
 export interface AIProviderConfig {
   provider: AIProvider;
@@ -22,10 +31,15 @@ export interface AIProviderConfig {
 }
 
 const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: string }> = {
-  openai_replit: { fastModel: "gpt-4o-mini", smartModel: "gpt-4o" },
-  groq:          { fastModel: "llama-3.1-8b-instant", smartModel: "llama-3.3-70b-versatile" },
-  ollama:        { fastModel: "llama3.2", smartModel: "llama3.1" },
-  none:          { fastModel: "", smartModel: "" },
+  openrouter:    { fastModel: "meta-llama/llama-3.2-3b-instruct:free", smartModel: "mistralai/mistral-7b-instruct:free" },
+  huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",   smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
+  together:      { fastModel: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smartModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
+  openai_replit: { fastModel: "gpt-4o-mini",              smartModel: "gpt-4o" },
+  groq:          { fastModel: "llama-3.1-8b-instant",      smartModel: "llama-3.3-70b-versatile" },
+  ollama:        { fastModel: "llama3.2",                  smartModel: "llama3.1" },
+  openai:        { fastModel: "gpt-4o-mini",               smartModel: "gpt-4o" },
+  anthropic:     { fastModel: "claude-3-haiku-20240307",   smartModel: "claude-3-5-sonnet-20241022" },
+  none:          { fastModel: "",                          smartModel: "" },
 };
 
 // ─── Dynamic AI client ────────────────────────────────────────────────────────
@@ -57,6 +71,21 @@ export async function getAIClient(): Promise<OpenAI> {
 
   if (provider === "none") {
     throw new Error("AI provider is set to 'none'. Enable an AI provider in Admin → AI Settings.");
+  } else if (provider === "openrouter") {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set. Get a free key at https://openrouter.ai/keys");
+    _cachedClient = new OpenAI({
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.APP_URL ?? "https://arcscale.app",
+        "X-Title": "ArcScale EDMS",
+      },
+    });
+  } else if (provider === "together") {
+    const apiKey = process.env.TOGETHER_API_KEY;
+    if (!apiKey) throw new Error("TOGETHER_API_KEY is not set. Get a free key at https://api.together.ai");
+    _cachedClient = new OpenAI({ apiKey, baseURL: "https://api.together.xyz/v1" });
   } else if (provider === "groq") {
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) throw new Error("GROQ_API_KEY is not set. Add it to your environment or .env file.");
@@ -64,14 +93,19 @@ export async function getAIClient(): Promise<OpenAI> {
   } else if (provider === "ollama") {
     const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
     _cachedClient = new OpenAI({ apiKey: "ollama", baseURL });
+  } else if (provider === "openai") {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
+    _cachedClient = new OpenAI({ apiKey });
   } else {
-    // openai_replit (default)
+    // openai_replit (default / legacy)
     const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
     const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
     if (!baseURL || !apiKey) {
       throw new Error(
-        "OpenAI not configured. Set AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY " +
-        "(or switch to Groq/Ollama from the AI Settings dashboard).",
+        "OpenAI Replit proxy not configured. " +
+        "For production VPS use: set OPENROUTER_API_KEY, TOGETHER_API_KEY, or OPENAI_API_KEY " +
+        "and switch the provider in Admin → AI Settings.",
       );
     }
     _cachedClient = new OpenAI({ apiKey, baseURL });
@@ -108,29 +142,81 @@ export async function updateAIProviderConfig(config: Partial<AIProviderConfig>) 
 
 export function getProviderStatus() {
   return {
+    // ── Free providers (recommended for production VPS) ───────────────────────
+    openrouter: {
+      configured: !!process.env.OPENROUTER_API_KEY,
+      isFree: true,
+      label: "OpenRouter (Free Models — Recommended)",
+      description: "Access free open-source models (Llama 3, Mistral, Gemma). Get a free API key at openrouter.ai.",
+      envVarsRequired: ["OPENROUTER_API_KEY"],
+      docsUrl: "https://openrouter.ai/keys",
+    },
+    huggingface: {
+      configured: !!process.env.HUGGINGFACE_API_KEY,
+      isFree: true,
+      label: "HuggingFace Inference API (Free Tier)",
+      description: "Run Mistral, Llama, and thousands of open-source models via HuggingFace. Free tier available.",
+      envVarsRequired: ["HUGGINGFACE_API_KEY"],
+      docsUrl: "https://huggingface.co/settings/tokens",
+    },
+    together: {
+      configured: !!process.env.TOGETHER_API_KEY,
+      isFree: true,
+      label: "Together AI (Free Tier)",
+      description: "Fast inference for open-source models. Free tier with generous quota.",
+      envVarsRequired: ["TOGETHER_API_KEY"],
+      docsUrl: "https://api.together.ai",
+    },
+    ollama: {
+      configured: true,
+      isFree: true,
+      label: "Ollama (Local / Self-Hosted)",
+      description: "Run open-source models locally on the same server. No API key needed. Requires Ollama installed.",
+      envVarsRequired: ["OLLAMA_BASE_URL"],
+      docsUrl: "https://ollama.com",
+    },
+    // ── Paid providers (optional, for higher accuracy) ─────────────────────────
+    openai: {
+      configured: !!process.env.OPENAI_API_KEY,
+      isFree: false,
+      label: "OpenAI (Paid — GPT-4o)",
+      description: "Highest accuracy. Requires paid OpenAI account. Set OPENAI_API_KEY.",
+      envVarsRequired: ["OPENAI_API_KEY"],
+      docsUrl: "https://platform.openai.com/api-keys",
+    },
+    anthropic: {
+      configured: !!process.env.ANTHROPIC_API_KEY,
+      isFree: false,
+      label: "Anthropic Claude (Paid)",
+      description: "Claude models for high-quality reasoning. Requires paid Anthropic account.",
+      envVarsRequired: ["ANTHROPIC_API_KEY"],
+      docsUrl: "https://console.anthropic.com",
+    },
+    // ── Legacy providers ───────────────────────────────────────────────────────
     openai_replit: {
       configured: !!(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
-      label: "OpenAI (Replit Integration)",
-      description: "Uses the Replit-managed OpenAI proxy. Recommended for Replit deployments.",
+      isFree: true,
+      label: "OpenAI via Replit Proxy (Development Only)",
+      description: "Replit-managed OpenAI proxy. Only works inside the Replit environment, not on VPS.",
       envVarsRequired: ["AI_INTEGRATIONS_OPENAI_BASE_URL", "AI_INTEGRATIONS_OPENAI_API_KEY"],
+      docsUrl: null,
     },
     groq: {
       configured: !!process.env.GROQ_API_KEY,
-      label: "Groq (Free Tier Available)",
-      description: "Fast open-source models via Groq Cloud. Free tier available at console.groq.com.",
+      isFree: false,
+      label: "Groq Cloud",
+      description: "Ultra-fast inference for open-source models. Free tier available at console.groq.com.",
       envVarsRequired: ["GROQ_API_KEY"],
+      docsUrl: "https://console.groq.com",
     },
-    ollama: {
-      configured: true, // Always accessible locally — no key needed
-      label: "Ollama (Local / Self-Hosted)",
-      description: "Run open-source models locally. Requires Ollama running at OLLAMA_BASE_URL.",
-      envVarsRequired: ["OLLAMA_BASE_URL"],
-    },
+    // ── Disable AI ─────────────────────────────────────────────────────────────
     none: {
-      configured: true, // No configuration needed — AI is simply disabled
-      label: "None (Disable AI)",
-      description: "Disables all AI features. Rules engine and manual workflows still operate normally.",
+      configured: true,
+      isFree: true,
+      label: "None (Disable AI Features)",
+      description: "Disables all AI features. Rules engine and manual workflows continue to work normally.",
       envVarsRequired: [],
+      docsUrl: null,
     },
   };
 }
@@ -138,10 +224,10 @@ export function getProviderStatus() {
 // ─── Subscription tier definitions ──────────────────────────────────────────
 
 export const SUBSCRIPTION_TIERS = {
-  free:         { aiProvider: "none",   aiModel: null,          aiDailyLimit: 0 },
-  basic:        { aiProvider: "groq",   aiModel: null,          aiDailyLimit: 30 },
-  professional: { aiProvider: "openai", aiModel: "gpt-4o-mini", aiDailyLimit: 500 },
-  enterprise:   { aiProvider: "openai", aiModel: "gpt-4o",      aiDailyLimit: 0 },
+  free:         { aiProvider: "none",        aiModel: null,                                        aiDailyLimit: 0 },
+  basic:        { aiProvider: "openrouter",  aiModel: "meta-llama/llama-3.2-3b-instruct:free",    aiDailyLimit: 30 },
+  professional: { aiProvider: "openrouter",  aiModel: "mistralai/mistral-7b-instruct:free",        aiDailyLimit: 500 },
+  enterprise:   { aiProvider: "openrouter",  aiModel: null,                                        aiDailyLimit: 0 },
 } as const;
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
@@ -188,26 +274,41 @@ export async function getOrgAiQuota(organizationId: number): Promise<OrgAiQuota>
 // ─── Build a one-shot AI client for a specific provider (no global cache) ────
 
 async function buildProviderClient(provider: string): Promise<OpenAI | null> {
+  if (provider === "openrouter") {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) { logger.warn("Org uses openrouter but OPENROUTER_API_KEY is not set"); return null; }
+    return new OpenAI({
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: { "HTTP-Referer": process.env.APP_URL ?? "https://arcscale.app", "X-Title": "ArcScale EDMS" },
+    });
+  }
+  if (provider === "together") {
+    const apiKey = process.env.TOGETHER_API_KEY;
+    if (!apiKey) { logger.warn("Org uses together but TOGETHER_API_KEY is not set"); return null; }
+    return new OpenAI({ apiKey, baseURL: "https://api.together.xyz/v1" });
+  }
   if (provider === "groq") {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      logger.warn("Org uses groq provider but GROQ_API_KEY is not set");
-      return null;
-    }
+    if (!apiKey) { logger.warn("Org uses groq provider but GROQ_API_KEY is not set"); return null; }
     return new OpenAI({ apiKey, baseURL: "https://api.groq.com/openai/v1" });
   }
   if (provider === "openai") {
+    const apiKey = process.env.OPENAI_API_KEY
+      ?? process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!apiKey) { logger.warn("Org uses openai but no OPENAI_API_KEY set"); return null; }
     const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-    if (!baseURL || !apiKey) {
-      logger.warn("Org uses openai provider but Replit OpenAI integration is not configured");
-      return null;
-    }
-    return new OpenAI({ apiKey, baseURL });
+    return new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
   }
   if (provider === "ollama") {
     const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
     return new OpenAI({ apiKey: "ollama", baseURL });
+  }
+  if (provider === "openai_replit") {
+    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!baseURL || !apiKey) { logger.warn("Org uses openai_replit but Replit proxy is not configured"); return null; }
+    return new OpenAI({ apiKey, baseURL });
   }
   return null;
 }
