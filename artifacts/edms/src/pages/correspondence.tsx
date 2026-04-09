@@ -7,7 +7,7 @@ import {
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
   Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen, ExternalLink,
-  Download, FileText, LinkIcon,
+  Download, FileText, LinkIcon, Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,8 +222,11 @@ export default function CorrespondencePage() {
   const createCorr = useMutation({
     mutationFn: async ({ data, sendNow }: { data: typeof compose; sendNow: boolean }) => {
       const projectId = data.projectId && data.projectId !== "_none" ? parseInt(data.projectId) : null;
-      const effectiveScope = projectId ? "project" : data.scope;
-      const url = projectId
+      // Respect the user's explicit scope choice — never override based on projectId alone.
+      // internal + projectId → still internal (INT numbering), projectId stored as reference.
+      // project + projectId  → project scope, routed through project endpoint.
+      const effectiveScope = data.scope;
+      const url = effectiveScope === "project" && projectId
         ? `/api/projects/${projectId}/correspondence`
         : `/api/correspondence`;
       const payload = {
@@ -242,6 +245,9 @@ export default function CorrespondencePage() {
             : { fileName: a.name, fileUrl: a.url, fileSize: a.size }
         ) : undefined,
         scope: effectiveScope,
+        // For internal scope with a project reference, pass projectId in the body
+        // so the API stores it as a contextual reference (no scope override).
+        projectId: effectiveScope === "internal" && projectId ? projectId : undefined,
         referenceNumber: data.referenceNumber?.trim() || undefined,
         sendNow,
         folder: "inbox",
@@ -1050,15 +1056,8 @@ export default function CorrespondencePage() {
               <div>
                 <Label>Scope *</Label>
                 <Select
-                  value={compose.projectId && compose.projectId !== "_none" ? "project" : compose.scope}
-                  onValueChange={v => {
-                    setCompose(f => ({
-                      ...f,
-                      scope: v,
-                      projectId: v === "internal" ? "_none" : f.projectId,
-                    }));
-                  }}
-                  disabled={!!(compose.projectId && compose.projectId !== "_none")}
+                  value={compose.scope}
+                  onValueChange={v => setCompose(f => ({ ...f, scope: v }))}
                 >
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -1068,11 +1067,14 @@ export default function CorrespondencePage() {
                 </Select>
               </div>
               <div>
-                <Label>Project {compose.scope === "internal" && !compose.projectId ? "(N/A)" : "(optional)"}</Label>
+                <Label>
+                  Related Project{" "}
+                  <span className="text-muted-foreground font-normal text-[11px]">(optional)</span>
+                </Label>
                 <div className="mt-1">
                   <SearchableSelect
                     options={[
-                      { value: "_none", label: "General (no project)" },
+                      { value: "_none", label: "None" },
                       ...projects.map((p: any) => ({ value: String(p.id), label: p.code, sublabel: p.name })),
                     ]}
                     value={compose.projectId || "_none"}
@@ -1080,15 +1082,23 @@ export default function CorrespondencePage() {
                       setCompose(f => ({
                         ...f,
                         projectId: v,
-                        scope: v && v !== "_none" ? "project" : f.scope,
+                        // Only auto-set scope to "project" when picking a project in project scope;
+                        // leave scope unchanged if already "internal".
+                        scope: v && v !== "_none" && f.scope !== "internal" ? "project" : f.scope,
                       }));
                     }}
                     placeholder="No project"
                     searchPlaceholder="Search projects..."
                     emptyText="No projects found."
-                    disabled={compose.scope === "internal"}
                   />
                 </div>
+                {/* Contextual hint when internal scope + project selected */}
+                {compose.scope === "internal" && compose.projectId && compose.projectId !== "_none" && (
+                  <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-muted-foreground leading-tight">
+                    <Info className="h-3 w-3 shrink-0 mt-0.5 text-blue-500" />
+                    Internal correspondence related to project (reference only) — uses INT numbering, visible when filtering by this project.
+                  </p>
+                )}
               </div>
             </div>
             {/* Reference Number (optional) */}

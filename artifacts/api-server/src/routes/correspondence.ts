@@ -9,7 +9,7 @@ import {
   projectsTable,
   notificationsTable,
 } from "@workspace/db";
-import { eq, and, desc, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, or, desc, inArray, isNull, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
@@ -332,10 +332,18 @@ router.get("/", requireAuth, async (req, res) => {
   const orgId = req.user!.organizationId;
 
   const baseFilter = projectId !== null
-    ? and(eq(correspondenceTable.projectId, projectId))
+    // Project-specific view: all items (any scope) whose projectId matches
+    ? and(
+        eq(correspondenceTable.organizationId, orgId!),
+        eq(correspondenceTable.projectId, projectId)
+      )
+    // Global view: items with no projectId, PLUS internal items that carry a project reference
     : and(
         eq(correspondenceTable.organizationId, orgId!),
-        isNull(correspondenceTable.projectId)
+        or(
+          isNull(correspondenceTable.projectId),
+          eq(correspondenceTable.scope, "internal")
+        )
       );
 
   const sent = await db.select().from(correspondenceTable)
