@@ -221,7 +221,7 @@ export default function Admin() {
       if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: t("orgCreated") }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: t("orgCreated") }); },
     onError: (e: any) => toast({ title: e.message || "Failed to create organization", variant: "destructive" }),
   });
 
@@ -231,7 +231,7 @@ export default function Admin() {
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setEditOrg(null); toast({ title: t("orgUpdated") }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setEditOrg(null); toast({ title: t("orgUpdated") }); },
     onError: () => toast({ title: "Failed to update organization", variant: "destructive" }),
   });
 
@@ -240,7 +240,7 @@ export default function Admin() {
       const r = await fetch(`/api/organizations/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error("Failed");
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); setDeleteOrg(null); toast({ title: t("orgDeleted") }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setDeleteOrg(null); toast({ title: t("orgDeleted") }); },
     onError: () => toast({ title: "Failed to delete organization", variant: "destructive" }),
   });
 
@@ -1021,8 +1021,8 @@ export default function Admin() {
                   </Button>
                 </div>
               ))}
-              <Button variant="outline" className="gap-1 w-full" onClick={() => window.location.href = "/config"}>
-                <GitBranch className="h-4 w-4" /> Manage in Configuration Panel
+              <Button variant="outline" className="gap-1 w-full" onClick={() => window.location.href = "/workflow-engine"}>
+                <GitBranch className="h-4 w-4" /> Open Workflow Engine
               </Button>
             </CardContent>
           </Card>
