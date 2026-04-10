@@ -65,6 +65,8 @@ COPY --from=api-builder /app/artifacts/api-server/dist ./artifacts/api-server/di
 COPY --from=api-builder /app/lib/db/src ./lib/db/src
 COPY lib/db/drizzle.config.ts ./lib/db/
 COPY lib/db/src ./lib/db/src
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
 ENV NODE_ENV=production
 ENV PORT=8080
@@ -74,4 +76,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/health || exit 1
 
-CMD ["node", "--enable-source-maps", "./artifacts/api-server/dist/index.mjs"]
+# The entrypoint runs drizzle-kit push (schema sync) then starts the API.
+# This ensures any newly added columns are applied on every deploy.
+CMD ["./docker-entrypoint.sh"]
