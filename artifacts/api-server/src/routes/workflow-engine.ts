@@ -739,6 +739,10 @@ router.get("/instances/for-document/:docId", async (req, res) => {
 
 router.post("/seed-defaults", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
+  if (!org) {
+    res.status(400).json({ error: "No organization context. Pass ?orgOverride=<id> as system_owner." });
+    return;
+  }
   const userId = req.user!.id;
 
   const defaults: Array<{
@@ -790,42 +794,60 @@ router.post("/seed-defaults", requireRole("admin", "project_manager", "system_ow
     },
   ];
 
-  const results: Array<{ documentType: string; status: "created" | "already_exists"; templateName: string }> = [];
+  try {
+    const results: Array<{ documentType: string; status: "created" | "already_exists"; templateName: string }> = [];
 
-  for (const def of defaults) {
-    const [existing] = await db.select().from(wfTemplatesTable)
-      .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.documentType, def.documentType)))
-      .limit(1);
+    for (const def of defaults) {
+      const [existing] = await db.select().from(wfTemplatesTable)
+        .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.documentType, def.documentType)))
+        .limit(1);
 
-    if (existing) {
-      results.push({ documentType: def.documentType, status: "already_exists", templateName: existing.name });
-      continue;
+      if (existing) {
+        results.push({ documentType: def.documentType, status: "already_exists", templateName: existing.name });
+        continue;
+      }
+
+      const [tpl] = await db.insert(wfTemplatesTable).values({
+        organizationId: org, name: def.name, documentType: def.documentType,
+        description: def.description, isActive: true, createdById: userId,
+      }).returning();
+
+      await db.insert(wfTemplateStagesTable).values(
+        def.stages.map(s => ({ ...s, templateId: tpl.id, responsibleUserId: null })),
+      );
+
+      await createAuditLog({ userId, action: "create", entityType: "wf_template", entityId: tpl.id, entityTitle: tpl.name });
+      results.push({ documentType: def.documentType, status: "created", templateName: tpl.name });
     }
 
-    const [tpl] = await db.insert(wfTemplatesTable).values({
-      organizationId: org, name: def.name, documentType: def.documentType,
-      description: def.description, isActive: true, createdById: userId,
-    }).returning();
+    // Return full template list after seeding
+    const allTemplates = await db.select().from(wfTemplatesTable)
+      .where(eq(wfTemplatesTable.organizationId, org));
+    const enriched = await Promise.all(allTemplates.map(async t => {
+      const stages = await db.select().from(wfTemplateStagesTable)
+        .where(eq(wfTemplateStagesTable.templateId, t.id))
+        .orderBy(asc(wfTemplateStagesTable.stageOrder));
+      return { ...t, stages };
+    }));
 
-    await db.insert(wfTemplateStagesTable).values(
-      def.stages.map(s => ({ ...s, templateId: tpl.id, responsibleUserId: null })),
-    );
-
-    await createAuditLog({ userId, action: "create", entityType: "wf_template", entityId: tpl.id, entityTitle: tpl.name });
-    results.push({ documentType: def.documentType, status: "created", templateName: tpl.name });
+    res.status(201).json({ results, templates: enriched });
+  } catch (err: any) {
+    logger.error({
+      err,
+      orgId: org,
+      userId,
+      route: "POST /workflow-engine/seed-defaults",
+      pgCode: err?.code,
+      pgDetail: err?.detail,
+      pgConstraint: err?.constraint,
+    }, "Failed to seed default workflow templates");
+    res.status(500).json({
+      error: "Failed to seed default workflow templates",
+      detail: err?.detail ?? err?.message ?? "Unknown error",
+      code: err?.code ?? null,
+      constraint: err?.constraint ?? null,
+    });
   }
-
-  // Return full template list after seeding
-  const allTemplates = await db.select().from(wfTemplatesTable)
-    .where(eq(wfTemplatesTable.organizationId, org));
-  const enriched = await Promise.all(allTemplates.map(async t => {
-    const stages = await db.select().from(wfTemplateStagesTable)
-      .where(eq(wfTemplateStagesTable.templateId, t.id))
-      .orderBy(asc(wfTemplateStagesTable.stageOrder));
-    return { ...t, stages };
-  }));
-
-  res.status(201).json({ results, templates: enriched });
 });
 
 export default router;

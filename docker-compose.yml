@@ -32,8 +32,8 @@ services:
       NODE_ENV: production
       PORT: 8080
       DATABASE_URL: postgresql://edms:${POSTGRES_PASSWORD:-edms_dev_password}@postgres:5432/edms
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-in-production}
+      JWT_SECRET: ${JWT_SECRET:-edms-secret-key-change-in-production}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-edms-refresh-key-change-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       # Default storage for self-hosted VPS deployments.
       # Override per-org via Admin → Storage settings.
