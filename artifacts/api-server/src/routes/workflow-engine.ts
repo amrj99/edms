@@ -33,6 +33,7 @@ import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendWorkflowStageEmail } from "../lib/email.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -226,29 +227,68 @@ router.post("/templates", requireRole("admin", "project_manager", "system_owner"
   const org = orgId(req);
   const { name, documentType, description } = req.body;
   if (!name || !documentType) { res.status(400).json({ error: "name and documentType are required" }); return; }
-  const [tpl] = await db.insert(wfTemplatesTable).values({
-    organizationId: org, name, documentType, description, isActive: true, createdById: req.user!.id,
-  }).returning();
-  res.status(201).json({ ...tpl, stages: [] });
+  try {
+    const [tpl] = await db.insert(wfTemplatesTable).values({
+      organizationId: org, name, documentType, description: description ?? null,
+      isActive: true, createdById: req.user!.id,
+    }).returning();
+    res.status(201).json({ ...tpl, stages: [] });
+  } catch (err: any) {
+    logger.error({
+      err,
+      body: req.body,
+      orgId: org,
+      userId: req.user?.id,
+      route: "POST /workflow-engine/templates",
+      pgCode: err?.code,
+      pgDetail: err?.detail,
+      pgConstraint: err?.constraint,
+    }, "Failed to create workflow template");
+    res.status(500).json({
+      error: "Failed to create workflow template",
+      detail: err?.detail ?? err?.message ?? "Unknown error",
+      code: err?.code ?? null,
+      constraint: err?.constraint ?? null,
+    });
+  }
 });
 
 router.put("/templates/:id", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
   const id = parseInt(req.params.id);
   const { name, documentType, description, isActive } = req.body;
-  const [tpl] = await db.update(wfTemplatesTable)
-    .set({ ...(name && { name }), ...(documentType && { documentType }), ...(description !== undefined && { description }), ...(isActive !== undefined && { isActive }), updatedAt: new Date() })
-    .where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)))
-    .returning();
-  if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
-  res.json(tpl);
+  try {
+    const [tpl] = await db.update(wfTemplatesTable)
+      .set({ ...(name && { name }), ...(documentType && { documentType }), ...(description !== undefined && { description }), ...(isActive !== undefined && { isActive }), updatedAt: new Date() })
+      .where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)))
+      .returning();
+    if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(tpl);
+  } catch (err: any) {
+    logger.error({
+      err, body: req.body, orgId: org, templateId: id,
+      route: "PUT /workflow-engine/templates/:id",
+      pgCode: err?.code, pgDetail: err?.detail, pgConstraint: err?.constraint,
+    }, "Failed to update workflow template");
+    res.status(500).json({
+      error: "Failed to update workflow template",
+      detail: err?.detail ?? err?.message ?? "Unknown error",
+      code: err?.code ?? null,
+      constraint: err?.constraint ?? null,
+    });
+  }
 });
 
 router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req, res) => {
   const org = orgId(req);
   const id = parseInt(req.params.id);
-  await db.delete(wfTemplatesTable).where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)));
-  res.json({ ok: true });
+  try {
+    await db.delete(wfTemplatesTable).where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)));
+    res.json({ ok: true });
+  } catch (err: any) {
+    logger.error({ err, orgId: org, templateId: id, route: "DELETE /workflow-engine/templates/:id", pgCode: err?.code }, "Failed to delete workflow template");
+    res.status(500).json({ error: "Failed to delete workflow template", detail: err?.detail ?? err?.message ?? "Unknown error", code: err?.code ?? null });
+  }
 });
 
 // ─── Stages ───────────────────────────────────────────────────────────────────
@@ -256,76 +296,116 @@ router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req
 router.post("/templates/:id/stages", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
   const templateId = parseInt(req.params.id);
-  const [tpl] = await db.select().from(wfTemplatesTable)
-    .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
-  if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
+  try {
+    const [tpl] = await db.select().from(wfTemplatesTable)
+      .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
+    if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
 
-  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
-  if (!name) { res.status(400).json({ error: "name is required" }); return; }
+    const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
+    if (!name) { res.status(400).json({ error: "name is required" }); return; }
 
-  // Validate responsibleUserId belongs to same org
-  if (responsibleUserId) {
-    const [u] = await db.select({ id: usersTable.id }).from(usersTable)
-      .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
-    if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
+    // Validate responsibleUserId belongs to same org
+    if (responsibleUserId) {
+      const [u] = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
+      if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
+    }
+
+    // Default stageOrder to max+1
+    const existing = await db.select({ stageOrder: wfTemplateStagesTable.stageOrder })
+      .from(wfTemplateStagesTable).where(eq(wfTemplateStagesTable.templateId, templateId));
+    const maxOrder = existing.length ? Math.max(...existing.map(s => s.stageOrder)) : 0;
+
+    const [stage] = await db.insert(wfTemplateStagesTable).values({
+      templateId, name, description: description ?? null, responsibleRole: responsibleRole ?? null,
+      responsibleUserId: responsibleUserId ?? null,
+      isTerminal: isTerminal ?? false, stageOrder: stageOrder ?? maxOrder + 1,
+      slaDays: slaDays ?? null, reminderDays: reminderDays ?? null,
+    }).returning();
+    await db.update(wfTemplatesTable).set({ updatedAt: new Date() }).where(eq(wfTemplatesTable.id, templateId));
+    res.status(201).json(stage);
+  } catch (err: any) {
+    logger.error({
+      err,
+      body: req.body,
+      orgId: org,
+      templateId,
+      userId: req.user?.id,
+      route: "POST /workflow-engine/templates/:id/stages",
+      pgCode: err?.code,
+      pgDetail: err?.detail,
+      pgConstraint: err?.constraint,
+    }, "Failed to create workflow template stage");
+    res.status(500).json({
+      error: "Failed to create workflow template stage",
+      detail: err?.detail ?? err?.message ?? "Unknown error",
+      code: err?.code ?? null,
+      constraint: err?.constraint ?? null,
+    });
   }
-
-  // Default stageOrder to max+1
-  const existing = await db.select({ stageOrder: wfTemplateStagesTable.stageOrder })
-    .from(wfTemplateStagesTable).where(eq(wfTemplateStagesTable.templateId, templateId));
-  const maxOrder = existing.length ? Math.max(...existing.map(s => s.stageOrder)) : 0;
-
-  const [stage] = await db.insert(wfTemplateStagesTable).values({
-    templateId, name, description, responsibleRole, responsibleUserId: responsibleUserId ?? null,
-    isTerminal: isTerminal ?? false, stageOrder: stageOrder ?? maxOrder + 1,
-    slaDays: slaDays ?? null, reminderDays: reminderDays ?? null,
-  }).returning();
-  await db.update(wfTemplatesTable).set({ updatedAt: new Date() }).where(eq(wfTemplatesTable.id, templateId));
-  res.status(201).json(stage);
 });
 
 router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
   const templateId = parseInt(req.params.id);
   const stageId = parseInt(req.params.stageId);
-  const [tpl] = await db.select().from(wfTemplatesTable)
-    .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
-  if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
+  try {
+    const [tpl] = await db.select().from(wfTemplatesTable)
+      .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
+    if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
 
-  const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
-  if (responsibleUserId) {
-    const [u] = await db.select({ id: usersTable.id }).from(usersTable)
-      .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
-    if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
+    const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
+    if (responsibleUserId) {
+      const [u] = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
+      if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
+    }
+    const [stage] = await db.update(wfTemplateStagesTable)
+      .set({
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+        ...(responsibleRole !== undefined && { responsibleRole }),
+        ...(responsibleUserId !== undefined && { responsibleUserId: responsibleUserId ?? null }),
+        ...(isTerminal !== undefined && { isTerminal }),
+        ...(stageOrder !== undefined && { stageOrder }),
+        ...(slaDays !== undefined && { slaDays: slaDays ?? null }),
+        ...(reminderDays !== undefined && { reminderDays: reminderDays ?? null }),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId)))
+      .returning();
+    if (!stage) { res.status(404).json({ error: "Stage not found" }); return; }
+    res.json(stage);
+  } catch (err: any) {
+    logger.error({
+      err, body: req.body, orgId: org, templateId, stageId,
+      route: "PUT /workflow-engine/templates/:id/stages/:stageId",
+      pgCode: err?.code, pgDetail: err?.detail, pgConstraint: err?.constraint,
+    }, "Failed to update workflow template stage");
+    res.status(500).json({
+      error: "Failed to update workflow template stage",
+      detail: err?.detail ?? err?.message ?? "Unknown error",
+      code: err?.code ?? null,
+      constraint: err?.constraint ?? null,
+    });
   }
-  const [stage] = await db.update(wfTemplateStagesTable)
-    .set({
-      ...(name !== undefined && { name }),
-      ...(description !== undefined && { description }),
-      ...(responsibleRole !== undefined && { responsibleRole }),
-      ...(responsibleUserId !== undefined && { responsibleUserId: responsibleUserId ?? null }),
-      ...(isTerminal !== undefined && { isTerminal }),
-      ...(stageOrder !== undefined && { stageOrder }),
-      ...(slaDays !== undefined && { slaDays: slaDays ?? null }),
-      ...(reminderDays !== undefined && { reminderDays: reminderDays ?? null }),
-      updatedAt: new Date(),
-    })
-    .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId)))
-    .returning();
-  if (!stage) { res.status(404).json({ error: "Stage not found" }); return; }
-  res.json(stage);
 });
 
 router.delete("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
   const templateId = parseInt(req.params.id);
   const stageId = parseInt(req.params.stageId);
-  const [tpl] = await db.select().from(wfTemplatesTable)
-    .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
-  if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
-  await db.delete(wfTemplateStagesTable)
-    .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId)));
-  res.json({ ok: true });
+  try {
+    const [tpl] = await db.select().from(wfTemplatesTable)
+      .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
+    if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
+    await db.delete(wfTemplateStagesTable)
+      .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId)));
+    res.json({ ok: true });
+  } catch (err: any) {
+    logger.error({ err, orgId: org, templateId, stageId, route: "DELETE /workflow-engine/templates/:id/stages/:stageId", pgCode: err?.code }, "Failed to delete workflow template stage");
+    res.status(500).json({ error: "Failed to delete workflow template stage", detail: err?.detail ?? err?.message ?? "Unknown error", code: err?.code ?? null });
+  }
 });
 
 // ─── Seed Invoice Template ────────────────────────────────────────────────────

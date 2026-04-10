@@ -92,7 +92,12 @@ interface OrgUser {
 const apiFetch = (path: string, opts?: RequestInit) =>
   fetch(`/api${path}`, { credentials: "include", ...opts }).then(async r => {
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error ?? "Request failed");
+    if (!r.ok) {
+      const base = j.error ?? "Request failed";
+      const detail = j.detail ? ` — ${j.detail}` : "";
+      const code = j.code ? ` [${j.code}]` : "";
+      throw new Error(`${base}${detail}${code}`);
+    }
     return j;
   });
 
