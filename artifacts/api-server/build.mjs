@@ -69,6 +69,14 @@ async function buildAll() {
     outdir: distDir,
     plugins: [],
   });
+
+  // Build workflow-defaults seed script (runs during container startup)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/scripts/seed-wf-defaults.ts")],
+    outdir: distDir,
+    plugins: [],
+  });
 }
 
 buildAll().catch((err) => {
