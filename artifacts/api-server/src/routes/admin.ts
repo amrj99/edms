@@ -93,7 +93,7 @@ router.get("/storage-usage", async (req, res) => {
       docCount: usage?.docCount ?? 0,
       percentUsed: quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0,
       storagePath: config?.storagePath ?? null,
-      storageType: config?.storageType ?? "s3",
+      storageType: config?.storageType ?? (process.env.DEFAULT_STORAGE_TYPE ?? "s3"),
       s3Endpoint: config?.s3Endpoint ?? null,
       s3Bucket: config?.s3Bucket ?? null,
       s3Region: config?.s3Region ?? null,

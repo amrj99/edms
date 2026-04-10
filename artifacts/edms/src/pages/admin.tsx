@@ -1791,7 +1791,7 @@ function StorageTab() {
       </Card>
 
       <Dialog open={!!editQuota} onOpenChange={v => { if (!v) setEditQuota(null); }}>
-        <DialogContent className="sm:max-w-[380px]">
+        <DialogContent className="sm:max-w-[560px]">
           <DialogHeader><DialogTitle>Edit Storage Config</DialogTitle></DialogHeader>
           {editQuota && (
             <div className="space-y-4 py-2">
@@ -1818,19 +1818,19 @@ function StorageTab() {
 
               {editQuota.storageType === "s3" && (
                 <>
+                  <div>
+                    <Label className="text-xs">S3 Endpoint</Label>
+                    <Input value={editQuota.s3Endpoint} onChange={e => setEditQuota(q => q ? { ...q, s3Endpoint: e.target.value } : null)} placeholder="https://s3.amazonaws.com" className="mt-1 text-sm" />
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <Label className="text-xs">S3 Endpoint</Label>
-                      <Input value={editQuota.s3Endpoint} onChange={e => setEditQuota(q => q ? { ...q, s3Endpoint: e.target.value } : null)} placeholder="https://s3.amazonaws.com" className="mt-1 text-sm" />
-                    </div>
                     <div>
                       <Label className="text-xs">Region</Label>
                       <Input value={editQuota.s3Region} onChange={e => setEditQuota(q => q ? { ...q, s3Region: e.target.value } : null)} placeholder="us-east-1" className="mt-1 text-sm" />
                     </div>
-                  </div>
-                  <div>
-                    <Label className="text-xs">Bucket Name</Label>
-                    <Input value={editQuota.s3Bucket} onChange={e => setEditQuota(q => q ? { ...q, s3Bucket: e.target.value } : null)} placeholder="my-edms-bucket" className="mt-1 text-sm" />
+                    <div>
+                      <Label className="text-xs">Bucket Name</Label>
+                      <Input value={editQuota.s3Bucket} onChange={e => setEditQuota(q => q ? { ...q, s3Bucket: e.target.value } : null)} placeholder="my-edms-bucket" className="mt-1 text-sm" />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
