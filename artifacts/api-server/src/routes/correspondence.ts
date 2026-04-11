@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import {
   correspondenceTable,
   correspondenceRecipientsTable,
+  correspondenceCcTable,
   correspondenceAttachmentsTable,
   correspondenceSequencesTable,
   usersTable,
@@ -15,7 +16,7 @@ import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
-import { sendCorrespondenceReceivedEmail } from "../lib/email.js";
+import { sendCorrespondenceDeliveryEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 
 const router = Router({ mergeParams: true });
@@ -35,6 +36,14 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
     .leftJoin(usersTable, eq(correspondenceRecipientsTable.userId, usersTable.id))
     .where(inArray(correspondenceRecipientsTable.correspondenceId, itemIds));
 
+  const ccRows = await db.select({
+    corrId: correspondenceCcTable.correspondenceId,
+    userId: correspondenceCcTable.userId,
+    user: usersTable,
+  }).from(correspondenceCcTable)
+    .leftJoin(usersTable, eq(correspondenceCcTable.userId, usersTable.id))
+    .where(inArray(correspondenceCcTable.correspondenceId, itemIds));
+
   const attachments = await db.select().from(correspondenceAttachmentsTable)
     .where(inArray(correspondenceAttachmentsTable.correspondenceId, itemIds));
 
@@ -44,12 +53,26 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
     : [];
   const fromUserMap = new Map(fromUsers.map(u => [u.id, u]));
 
-  const recipientMap = new Map<number, { ids: number[]; names: string[] }>();
+  const recipientMap = new Map<number, { ids: number[]; names: string[]; emails: string[] }>();
   for (const r of recipients) {
-    if (!recipientMap.has(r.corrId)) recipientMap.set(r.corrId, { ids: [], names: [] });
+    if (!recipientMap.has(r.corrId)) recipientMap.set(r.corrId, { ids: [], names: [], emails: [] });
     const entry = recipientMap.get(r.corrId)!;
     entry.ids.push(r.userId);
-    if (r.user) entry.names.push(`${r.user.firstName} ${r.user.lastName}`);
+    if (r.user) {
+      entry.names.push(`${r.user.firstName} ${r.user.lastName}`);
+      entry.emails.push(r.user.email);
+    }
+  }
+
+  const ccMap = new Map<number, { ids: number[]; names: string[]; emails: string[] }>();
+  for (const r of ccRows) {
+    if (!ccMap.has(r.corrId)) ccMap.set(r.corrId, { ids: [], names: [], emails: [] });
+    const entry = ccMap.get(r.corrId)!;
+    entry.ids.push(r.userId);
+    if (r.user) {
+      entry.names.push(`${r.user.firstName} ${r.user.lastName}`);
+      entry.emails.push(r.user.email);
+    }
   }
 
   const attachmentMap = new Map<number, typeof attachments>();
@@ -60,13 +83,19 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
 
   return items.map(item => {
     const fromUser = fromUserMap.get(item.fromUserId);
-    const recs = recipientMap.get(item.id) || { ids: [], names: [] };
+    const recs = recipientMap.get(item.id) || { ids: [], names: [], emails: [] };
+    const ccs = ccMap.get(item.id) || { ids: [], names: [], emails: [] };
     const atts = attachmentMap.get(item.id) || [];
     return {
       ...item,
       fromUserName: fromUser ? `${fromUser.firstName} ${fromUser.lastName}` : undefined,
+      fromUserEmail: fromUser?.email,
       toUserIds: recs.ids,
       toUserNames: recs.names,
+      toUserEmails: recs.emails,
+      ccUserIds: ccs.ids,
+      ccUserNames: ccs.names,
+      ccUserEmails: ccs.emails,
       attachments: atts.map(a => ({ id: a.id, fileName: a.fileName, fileUrl: a.fileUrl, fileSize: a.fileSize, uploadedAt: a.uploadedAt })),
     };
   });
@@ -74,13 +103,6 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
 
 /**
  * Generate or validate a correspondence reference number.
- *
- * Rules:
- *  - If caller provides manualRef → validate uniqueness within the org, return it.
- *  - Otherwise auto-generate:
- *      internal scope → INT-{YYYY}-{SEQ:04d}
- *      project scope  → {ProjectCode}-{YYYY}-{SEQ:04d}
- *  - Sequence is per (org + scope + projectId + year) and incremented atomically.
  */
 async function resolveReferenceNumber(opts: {
   orgId: number;
@@ -178,10 +200,10 @@ async function createCorrespondence(
     type,
     body,
     toUserIds,
+    ccUserIds,
     sendNow,
     priority,
     dueDate,
-    cc,
     taskToId,
     attachments,
     referenceNumber: manualRef,
@@ -229,13 +251,18 @@ async function createCorrespondence(
     sentAt: sendNow ? new Date() : undefined,
     priority: priority || "medium",
     dueDate: dueDate ? new Date(dueDate) : undefined,
-    cc: cc || null,
     assignedToId: taskToId ? parseInt(taskToId) : undefined,
   }).returning();
 
   if (toUserIds?.length > 0) {
     await db.insert(correspondenceRecipientsTable).values(
-      toUserIds.map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
+      (toUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
+    );
+  }
+
+  if (ccUserIds?.length > 0) {
+    await db.insert(correspondenceCcTable).values(
+      (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
     );
   }
 
@@ -274,53 +301,89 @@ async function createCorrespondence(
     });
   } catch (_) {}
 
-  if (sendNow && toUserIds?.length > 0) {
-    const [sender] = await db
-      .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-      .from(usersTable)
-      .where(eq(usersTable.id, req.user!.id));
-    const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone";
+  // ─── Delivery: Outlook-style email to To + CC recipients ──────────────────
+  if (sendNow) {
+    const allDeliveryIds = [
+      ...(toUserIds as number[] ?? []),
+      ...(ccUserIds as number[] ?? []),
+    ];
+    if (allDeliveryIds.length > 0) {
+      const [sender] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+        .from(usersTable)
+        .where(eq(usersTable.id, req.user!.id));
+      const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone";
+      const senderEmail = sender?.email ?? "";
 
-    try {
-      await db.insert(notificationsTable).values(
-        (toUserIds as number[]).map((uid: number) => ({
-          userId: uid,
-          type: "correspondence_received" as const,
-          title: `New correspondence: ${corr.subject}`,
-          message: `${senderName} sent you a ${corr.type} — ${corr.subject}`,
-          projectId: effectiveProjectId,
-          entityType: "correspondence",
-          entityId: corr.id,
-          actionUrl: `/correspondence`,
-        }))
-      );
-    } catch (_) {}
-
-    try {
-      const recipientUsers = await db
+      const allRecipientUsers = await db
         .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable)
-        .where(inArray(usersTable.id, toUserIds as number[]));
+        .where(inArray(usersTable.id, allDeliveryIds));
 
       const project = effectiveProjectId
         ? (await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, effectiveProjectId)).limit(1))[0]
         : null;
 
-      await dispatchNotification({
-        event: "correspondence_received",
-        recipients: recipientUsers.map(r => ({ userId: r.id, email: r.email, name: `${r.firstName} ${r.lastName}`.trim() })),
-        sendEmail: (to) => sendCorrespondenceReceivedEmail({
-          to,
-          subject: corr.subject,
-          correspondenceType: corr.type,
-          senderName,
-          priority: corr.priority ?? undefined,
-          projectName: project?.name,
-          referenceNumber: corr.referenceNumber ?? undefined,
-          projectId: effectiveProjectId ?? 0,
-        }),
-      });
-    } catch (_) {}
+      const toUsers = allRecipientUsers.filter(u => (toUserIds as number[] ?? []).includes(u.id));
+      const ccUsers = allRecipientUsers.filter(u => (ccUserIds as number[] ?? []).includes(u.id));
+
+      // In-app notifications for To recipients
+      try {
+        await db.insert(notificationsTable).values(
+          (toUserIds as number[] ?? []).map((uid: number) => ({
+            userId: uid,
+            type: "correspondence_received" as const,
+            title: `New correspondence: ${corr.subject}`,
+            message: `${senderName} sent you a ${corr.type} — ${corr.subject}`,
+            projectId: effectiveProjectId,
+            entityType: "correspondence",
+            entityId: corr.id,
+            actionUrl: `/correspondence`,
+          }))
+        );
+      } catch (_) {}
+
+      // Email delivery — mandatory, direct delivery, no opt-out
+      try {
+        await dispatchNotification({
+          event: "correspondence.delivered",
+          mandatory: true,
+          recipients: allRecipientUsers.map(r => ({
+            userId: r.id,
+            email: r.email,
+            name: `${r.firstName} ${r.lastName}`.trim(),
+          })),
+          sendEmail: async (toEmails) => {
+            // Build indexed maps for this email send
+            const toEmailSet = new Set(toUsers.map(u => u.email));
+            const ccEmailSet = new Set(ccUsers.map(u => u.email));
+
+            const toNames = toUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
+            const ccNames = ccUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
+
+            await sendCorrespondenceDeliveryEmail({
+              to: toEmails.filter(e => toEmailSet.has(e)),
+              cc: toEmails.filter(e => ccEmailSet.has(e)),
+              senderName,
+              senderEmail,
+              toNames,
+              ccNames,
+              subject: corr.subject,
+              correspondenceType: corr.type,
+              referenceNumber: corr.referenceNumber ?? undefined,
+              priority: corr.priority ?? undefined,
+              projectName: project?.name,
+              bodyPreview: corr.body?.substring(0, 300),
+              correspondenceId: corr.id,
+              projectId: effectiveProjectId ?? undefined,
+            });
+          },
+          entityType: "correspondence",
+          entityId: corr.id,
+          organizationId: orgId,
+        });
+      } catch (_) {}
+    }
   }
 
   const enriched = await enrichCorrespondence([corr]);
@@ -336,12 +399,10 @@ router.get("/", requireAuth, async (req, res) => {
   const orgId = req.user!.organizationId;
 
   const baseFilter = projectId !== null
-    // Project-specific view: all items (any scope) whose projectId matches
     ? and(
         eq(correspondenceTable.organizationId, orgId!),
         eq(correspondenceTable.projectId, projectId)
       )
-    // Global view: items with no projectId, PLUS internal items that carry a project reference
     : and(
         eq(correspondenceTable.organizationId, orgId!),
         or(
@@ -461,7 +522,7 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
   const orgId = req.user!.organizationId;
   if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
 
-  const { subject, type, body, toUserIds } = req.body;
+  const { subject, type, body, toUserIds, ccUserIds } = req.body;
 
   const parent = await db.select({ projectId: correspondenceTable.projectId, scope: correspondenceTable.scope })
     .from(correspondenceTable)
@@ -503,6 +564,12 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
     );
   }
 
+  if (ccUserIds?.length > 0) {
+    await db.insert(correspondenceCcTable).values(
+      (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
+    );
+  }
+
   const enriched = await enrichCorrespondence([corr]);
   res.status(201).json(enriched[0]);
 });
@@ -531,6 +598,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
+  await db.delete(correspondenceCcTable).where(eq(correspondenceCcTable.correspondenceId, id));
   const [deleted] = await db.delete(correspondenceTable)
     .where(eq(correspondenceTable.id, id))
     .returning();

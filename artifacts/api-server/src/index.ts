@@ -2,6 +2,7 @@ import { createServer } from "http";
 import app from "./app.js";
 import { initSocket } from "./lib/socket.js";
 import { logger } from "./lib/logger.js";
+import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
 
 const rawPort = process.env["PORT"];
 
@@ -26,4 +27,5 @@ server.listen(port, (err?: Error) => {
     process.exit(1);
   }
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
+  startNotificationScheduler();
 });

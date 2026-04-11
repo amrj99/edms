@@ -62,8 +62,6 @@ export const correspondenceTable = pgTable("correspondence", {
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
   isRead: boolean("is_read").notNull().default(false),
-  cc: text("cc"),
-  bcc: text("bcc"),
   shareToken: text("share_token"),
   shareExpiresAt: timestamp("share_expires_at"),
   sharePasswordHash: text("share_password_hash"),
@@ -72,6 +70,12 @@ export const correspondenceTable = pgTable("correspondence", {
 });
 
 export const correspondenceRecipientsTable = pgTable("correspondence_recipients", {
+  id: serial("id").primaryKey(),
+  correspondenceId: integer("correspondence_id").references(() => correspondenceTable.id).notNull(),
+  userId: integer("user_id").references(() => usersTable.id).notNull(),
+});
+
+export const correspondenceCcTable = pgTable("correspondence_cc", {
   id: serial("id").primaryKey(),
   correspondenceId: integer("correspondence_id").references(() => correspondenceTable.id).notNull(),
   userId: integer("user_id").references(() => usersTable.id).notNull(),
@@ -87,9 +91,6 @@ export const correspondenceAttachmentsTable = pgTable("correspondence_attachment
 });
 
 // ─── Correspondence numbering sequences ───────────────────────────────────────
-// One row per (orgId, scope, projectId, year).
-// projectId is null for internal scope, set for project scope.
-// lastSeq is incremented atomically inside a transaction.
 export const correspondenceSequencesTable = pgTable(
   "correspondence_sequences",
   {

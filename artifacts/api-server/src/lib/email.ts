@@ -306,6 +306,137 @@ export async function sendCorrespondenceReceivedEmail(opts: {
   return sendEmail(opts.to, `[Correspondence] ${opts.subject}`, html);
 }
 
+// ─── Correspondence Delivery (Outlook-style) ──────────────────────────────────
+// Primary delivery function — mirrors how email works: shows From/To/CC clearly,
+// includes direct link to the correspondence record, transmittal link, and
+// document references. This is the authoritative delivery notification.
+export async function sendCorrespondenceDeliveryEmail(opts: {
+  to: string[];
+  cc?: string[];
+  senderName: string;
+  senderEmail: string;
+  toNames: string[];
+  ccNames?: string[];
+  subject: string;
+  correspondenceType: string;
+  referenceNumber?: string;
+  priority?: string;
+  projectName?: string;
+  bodyPreview?: string;
+  correspondenceId: number;
+  projectId?: number;
+  transmittalId?: number;
+  transmittalNumber?: string;
+  documentLinks?: Array<{ name: string; documentId: number; projectId: number }>;
+}) {
+  const typeLabel: Record<string, string> = {
+    transmittal: "Transmittal", letter: "Letter", memo: "Memo", rfi: "RFI",
+    notice: "Notice", email: "Email", internal: "Internal", submittal: "Submittal",
+    ncr: "NCR", technical_query: "Technical Query",
+  };
+
+  const priorityBadge: Record<string, string> = {
+    urgent: '<span class="badge badge-red">Urgent</span>',
+    high:   '<span class="badge badge-red">High</span>',
+    medium: '<span class="badge badge-blue">Medium</span>',
+    low:    '<span class="badge badge-gray">Low</span>',
+  };
+
+  const corrUrl = opts.projectId
+    ? `${APP_URL}/projects/${opts.projectId}/correspondence/${opts.correspondenceId}`
+    : `${APP_URL}/correspondence/${opts.correspondenceId}`;
+
+  const toList = opts.toNames.length > 0
+    ? opts.toNames.map(n => `<span style="margin-right:8px;">${n}</span>`).join("")
+    : "<span style='color:#6b7280;'>—</span>";
+
+  const ccList = (opts.ccNames ?? []).length > 0
+    ? (opts.ccNames ?? []).map(n => `<span style="margin-right:8px;">${n}</span>`).join("")
+    : null;
+
+  const docLinksHtml = (opts.documentLinks ?? []).length > 0
+    ? `<div style="margin-top:16px;">
+        <p style="font-size:13px;font-weight:600;color:#374151;margin:0 0 8px;">Referenced Documents</p>
+        ${(opts.documentLinks ?? []).map(d =>
+          `<div style="padding:4px 0;font-size:13px;">
+            <a href="${APP_URL}/projects/${d.projectId}/documents/${d.documentId}" style="color:#1e40af;">${d.name}</a>
+            <span style="color:#9ca3af;font-size:11px;"> (permission-controlled)</span>
+          </div>`
+        ).join("")}
+      </div>`
+    : "";
+
+  const transmittalHtml = opts.transmittalId
+    ? `<div class="info-row">
+        <span class="label">Linked Transmittal</span>
+        <span class="value">
+          <a href="${APP_URL}/projects/${opts.projectId}/transmittals/${opts.transmittalId}" style="color:#1e40af;">
+            ${opts.transmittalNumber ?? `TRN-${opts.transmittalId}`}
+          </a>
+        </span>
+      </div>`
+    : "";
+
+  const bodyPreviewHtml = opts.bodyPreview?.trim()
+    ? `<div style="margin:20px 0;padding:16px;background:#f8fafc;border-left:3px solid #1e40af;border-radius:0 6px 6px 0;">
+        <p style="margin:0;font-size:14px;color:#374151;line-height:1.6;">${opts.bodyPreview.replace(/\n/g, "<br>")}${opts.bodyPreview.length >= 300 ? "…" : ""}</p>
+      </div>`
+    : "";
+
+  const html = baseLayout(`
+    <h2 style="margin:0 0 4px;">New ${typeLabel[opts.correspondenceType] ?? opts.correspondenceType}</h2>
+    <p style="margin:0 0 20px;color:#6b7280;font-size:13px;">You have received a new correspondence item</p>
+
+    <div class="info-box">
+      <div class="info-row"><span class="label">From</span><span class="value">${opts.senderName}</span></div>
+      <div class="info-row"><span class="label">To</span><span class="value" style="flex-wrap:wrap;">${toList}</span></div>
+      ${ccList ? `<div class="info-row"><span class="label">CC</span><span class="value" style="flex-wrap:wrap;">${ccList}</span></div>` : ""}
+      <div class="info-row"><span class="label">Subject</span><span class="value"><strong>${opts.subject}</strong></span></div>
+      <div class="info-row"><span class="label">Type</span><span class="value"><span class="badge badge-blue">${typeLabel[opts.correspondenceType] ?? opts.correspondenceType}</span></span></div>
+      ${opts.referenceNumber ? `<div class="info-row"><span class="label">Reference No.</span><span class="value" style="font-family:monospace;">${opts.referenceNumber}</span></div>` : ""}
+      ${opts.projectName ? `<div class="info-row"><span class="label">Project</span><span class="value">${opts.projectName}</span></div>` : ""}
+      ${opts.priority ? `<div class="info-row"><span class="label">Priority</span><span class="value">${priorityBadge[opts.priority] ?? opts.priority}</span></div>` : ""}
+      ${transmittalHtml}
+    </div>
+
+    ${bodyPreviewHtml}
+
+    <a class="btn" href="${corrUrl}">View Full Correspondence →</a>
+
+    ${docLinksHtml}
+
+    <p style="color:#9ca3af;font-size:12px;margin-top:24px;">Document links are permission-controlled — access depends on your role in the system.</p>
+  `, `[${typeLabel[opts.correspondenceType] ?? opts.correspondenceType}] ${opts.subject}`);
+
+  const allTo = [...(opts.to ?? [])];
+  const allCc = [...(opts.cc ?? [])];
+
+  const client = getResend();
+  if (!client) {
+    console.info(`[email] RESEND_API_KEY not set — skipped correspondence delivery: "${opts.subject}"`);
+    return { skipped: true };
+  }
+
+  try {
+    const { data, error } = await client.emails.send({
+      from: FROM,
+      to: allTo.length > 0 ? allTo : ["noreply@placeholder.invalid"],
+      ...(allCc.length > 0 ? { cc: allCc } : {}),
+      subject: `[${typeLabel[opts.correspondenceType] ?? opts.correspondenceType}] ${opts.subject}`,
+      html,
+    });
+    if (error) {
+      console.error(`[email] Resend rejected correspondence delivery "${opts.subject}" → ${error.message}`);
+      return { sent: false, error: error.message };
+    }
+    console.info(`[email] Correspondence delivered "${opts.subject}" (id=${data?.id})`);
+    return { sent: true, id: data?.id };
+  } catch (err: any) {
+    console.error(`[email] correspondence delivery failed: ${err.message}`);
+    return { sent: false, error: err.message };
+  }
+}
+
 // ─── Meeting Created ──────────────────────────────────────────────────────────
 export async function sendMeetingCreatedEmail(opts: {
   to: string | string[];

@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { FileDropZone } from "@/components/file-drop-zone";
-import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
+import { RecipientAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
@@ -71,16 +71,15 @@ export default function CorrespondencePage() {
   const [replyingToId, setReplyingToId] = useState<number | null>(null);
   const [compose, setCompose] = useState<{
     subject: string; type: string; body: string; priority: string; dueDate: string;
-    projectId: string; toUserIds: number[]; cc: string; bcc: string; taskToId: string;
+    projectId: string; toUserIds: number[]; ccUserIds: number[]; taskToId: string;
     scope: string; referenceNumber: string;
-  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "", scope: "project", referenceNumber: "" });
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "" });
   const [toPickUser, setToPickUser] = useState("");
   type UploadAttachment = { kind: "upload"; url: string; name: string; size: number };
   type RefAttachment = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
   type ComposeAttachment = UploadAttachment | RefAttachment;
 
   const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
-  const [showBcc, setShowBcc] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [projectPickerSearch, setProjectPickerSearch] = useState("");
   const [corrShareOpen, setCorrShareOpen] = useState(false);
@@ -236,8 +235,7 @@ export default function CorrespondencePage() {
         priority: data.priority,
         dueDate: data.dueDate || undefined,
         toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
-        cc: data.cc || undefined,
-        bcc: data.bcc || undefined,
+        ccUserIds: data.ccUserIds.length > 0 ? data.ccUserIds : undefined,
         taskToId: data.taskToId && data.taskToId !== "_none" ? data.taskToId : undefined,
         attachments: composeAttachments.length > 0 ? composeAttachments.map(a =>
           a.kind === "ref"
@@ -262,10 +260,9 @@ export default function CorrespondencePage() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], cc: "", bcc: "", taskToId: "", scope: "project", referenceNumber: "" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "" });
       setToPickUser("");
       setComposeAttachments([]);
-      setShowBcc(false);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
     },
     onError: (e: any) => toast({ title: e?.message ?? "Failed to create correspondence", variant: "destructive" }),
@@ -443,19 +440,19 @@ export default function CorrespondencePage() {
       priority: selected.priority ?? "medium",
       dueDate: "",
       projectId: selected.projectId ? String(selected.projectId) : "_none",
+      scope: selected.scope ?? "project",
+      referenceNumber: "",
       toUserIds: [],
-      cc: "",
-      bcc: "",
+      ccUserIds: [],
       taskToId: "",
     });
     setComposeAttachments([]);
-    setShowBcc(false);
     setComposeOpen(true);
   };
 
   const handleReplyAll = () => {
     if (!selected) return;
-    // Include original sender + all recipients in "To"
+    // Include original sender + all recipients in "To"; CC carries through
     const allRecipientIds: number[] = [
       ...(selected.fromUserId ? [selected.fromUserId] : []),
       ...(selected.toUserIds ?? []),
@@ -467,13 +464,13 @@ export default function CorrespondencePage() {
       priority: selected.priority ?? "medium",
       dueDate: "",
       projectId: selected.projectId ? String(selected.projectId) : "_none",
+      scope: selected.scope ?? "project",
+      referenceNumber: "",
       toUserIds: allRecipientIds,
-      cc: selected.cc ?? "",
-      bcc: "",
+      ccUserIds: selected.ccUserIds ?? [],
       taskToId: "",
     });
     setComposeAttachments([]);
-    setShowBcc(false);
     setReplyingToId(selected.id);
     setComposeOpen(true);
   };
@@ -805,6 +802,32 @@ export default function CorrespondencePage() {
             {/* Body */}
             <ScrollArea className="flex-1 p-4">
               <div className="max-w-2xl">
+                {/* Mail-style From/To/CC header */}
+                <div className="mb-4 pb-4 border-b space-y-1 text-xs">
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground w-8 shrink-0">From</span>
+                    <span className="font-medium">{selected.fromUserName ?? selected.fromName ?? "Unknown"}</span>
+                  </div>
+                  {(selected.toUserNames?.length > 0 || selected.toUserIds?.length > 0) && (
+                    <div className="flex gap-2">
+                      <span className="text-muted-foreground w-8 shrink-0">To</span>
+                      <span>{selected.toUserNames?.join(", ") || `${selected.toUserIds?.length} recipient(s)`}</span>
+                    </div>
+                  )}
+                  {selected.ccUserNames?.length > 0 && (
+                    <div className="flex gap-2">
+                      <span className="text-muted-foreground w-8 shrink-0">CC</span>
+                      <span className="text-muted-foreground">{selected.ccUserNames.join(", ")}</span>
+                    </div>
+                  )}
+                  {selected.assignedToId && (
+                    <div className="flex gap-2">
+                      <span className="text-muted-foreground w-8 shrink-0">Task</span>
+                      <span className="text-amber-600 font-medium">Assigned to responsible</span>
+                    </div>
+                  )}
+                </div>
+
                 {selected.body ? (
                   <div className="prose prose-sm dark:prose-invert max-w-none">
                     <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
@@ -1139,44 +1162,14 @@ export default function CorrespondencePage() {
             {/* CC */}
             <div>
               <Label>CC</Label>
-              <EmailChipInput
+              <RecipientAutocomplete
                 users={allUsers as RecipientUser[]}
-                value={compose.cc}
-                onChange={v => setCompose(f => ({ ...f, cc: v }))}
-                placeholder="Add email, press Enter or comma…"
+                selectedIds={compose.ccUserIds}
+                onChange={ids => setCompose(f => ({ ...f, ccUserIds: ids }))}
+                placeholder="Search by name or email…"
                 className="mt-1"
               />
             </div>
-            {/* BCC — hidden by default, toggle with link */}
-            {!showBcc ? (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground hover:text-primary transition-colors w-fit -mt-1"
-                onClick={() => setShowBcc(true)}
-              >
-                + Add BCC
-              </button>
-            ) : (
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label>BCC</Label>
-                  <button
-                    type="button"
-                    className="text-xs text-muted-foreground hover:text-destructive transition-colors"
-                    onClick={() => { setShowBcc(false); setCompose(f => ({ ...f, bcc: "" })); }}
-                  >
-                    Remove BCC
-                  </button>
-                </div>
-                <EmailChipInput
-                  users={allUsers as RecipientUser[]}
-                  value={compose.bcc}
-                  onChange={v => setCompose(f => ({ ...f, bcc: v }))}
-                  placeholder="Add email, press Enter or comma…"
-                  className="mt-1"
-                />
-              </div>
-            )}
             {/* Subject */}
             <div>
               <Label>Subject *</Label>

@@ -1,0 +1,276 @@
+/**
+ * Scheduled Notifications Worker
+ *
+ * Polls the scheduled_notifications table every 5 minutes and fires
+ * any pending jobs whose fire_at has passed.
+ *
+ * Handles:
+ *   - governance.delegation_expiry  (48h warning before expiry)
+ *   - sla.due_soon                  (X hours before due date)
+ *   - sla.breached                  (due date passed without close)
+ *   - correspondence.unread_reminder (unread after threshold hours)
+ *   - correspondence.no_response    (no reply after threshold hours)
+ *
+ * New event types: add a handler below and schedule rows from the relevant
+ * API route when records are created or updated.
+ */
+
+import { db } from "@workspace/db";
+import {
+  scheduledNotificationsTable,
+  notificationLogsTable,
+  usersTable,
+} from "@workspace/db";
+import { and, isNull, lte, eq, inArray } from "drizzle-orm";
+import { sendNotificationEmail } from "../email.js";
+import { APP_URL } from "../email.js";
+import { dispatchNotification } from "./index.js";
+
+const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function processBatch() {
+  const now = new Date();
+
+  const pending = await db
+    .select()
+    .from(scheduledNotificationsTable)
+    .where(
+      and(
+        lte(scheduledNotificationsTable.fireAt, now),
+        isNull(scheduledNotificationsTable.sentAt),
+        isNull(scheduledNotificationsTable.cancelledAt),
+      )
+    )
+    .limit(50);
+
+  if (pending.length === 0) return;
+
+  console.info(`[scheduler] Processing ${pending.length} scheduled notification(s)`);
+
+  for (const job of pending) {
+    try {
+      await handleJob(job);
+      await db
+        .update(scheduledNotificationsTable)
+        .set({ sentAt: new Date() })
+        .where(eq(scheduledNotificationsTable.id, job.id));
+    } catch (err: any) {
+      console.error(`[scheduler] Job ${job.id} (${job.eventKey}) failed:`, err?.message ?? err);
+      // Mark sent anyway to prevent infinite retry loops — log the error
+      await db
+        .update(scheduledNotificationsTable)
+        .set({ sentAt: new Date() })
+        .where(eq(scheduledNotificationsTable.id, job.id));
+      try {
+        await db.insert(notificationLogsTable).values({
+          eventKey: job.eventKey,
+          recipientUserId: job.targetUserId ?? undefined,
+          recipientEmail: job.targetEmail ?? undefined,
+          organizationId: job.organizationId ?? undefined,
+          entityType: job.entityType ?? undefined,
+          entityId: job.entityId ?? undefined,
+          channel: "email",
+          status: "failed",
+          errorMessage: err?.message,
+        });
+      } catch (_) {}
+    }
+  }
+}
+
+async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
+  const meta = (job.metadata ?? {}) as Record<string, unknown>;
+
+  switch (job.eventKey) {
+    case "governance.delegation_expiry": {
+      if (!job.targetUserId) return;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
+      if (!user) return;
+      await dispatchNotification({
+        event: "governance.delegation_expiry",
+        mandatory: false,
+        recipients: [{ userId: user.id, email: user.email, name: `${user.firstName} ${user.lastName}` }],
+        organizationId: job.organizationId ?? undefined,
+        entityType: job.entityType ?? undefined,
+        entityId: job.entityId ?? undefined,
+        sendEmail: async (emails) => sendNotificationEmail({
+          to: emails[0],
+          title: "Delegation Expiring Soon",
+          message: `Your delegation${meta.scope ? ` (${meta.scope})` : ""} will expire ${meta.expiresAt ? `on ${new Date(meta.expiresAt as string).toLocaleDateString()}` : "soon"}. Please renew it if still required.`,
+          link: `${APP_URL}/delegations`,
+          linkLabel: "Manage Delegations →",
+        }),
+      });
+      break;
+    }
+
+    case "sla.due_soon": {
+      if (!job.targetUserId) return;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
+      if (!user) return;
+      await dispatchNotification({
+        event: "sla.due_soon",
+        mandatory: false,
+        recipients: [{ userId: user.id, email: user.email, name: `${user.firstName} ${user.lastName}` }],
+        organizationId: job.organizationId ?? undefined,
+        entityType: job.entityType ?? undefined,
+        entityId: job.entityId ?? undefined,
+        sendEmail: async (emails) => sendNotificationEmail({
+          to: emails[0],
+          title: `Due Soon: ${meta.title ?? "Record"}`,
+          message: `The ${job.entityType ?? "item"} "${meta.title ?? ""}" is due ${meta.dueDate ? `on ${new Date(meta.dueDate as string).toLocaleDateString()}` : "soon"}. Please take action.`,
+          link: meta.link as string | undefined,
+          linkLabel: "View Record →",
+        }),
+      });
+      break;
+    }
+
+    case "sla.breached": {
+      if (!job.targetUserId) return;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
+      if (!user) return;
+      await dispatchNotification({
+        event: "sla.breached",
+        mandatory: false,
+        recipients: [{ userId: user.id, email: user.email, name: `${user.firstName} ${user.lastName}` }],
+        organizationId: job.organizationId ?? undefined,
+        entityType: job.entityType ?? undefined,
+        entityId: job.entityId ?? undefined,
+        sendEmail: async (emails) => sendNotificationEmail({
+          to: emails[0],
+          title: `SLA Breached: ${meta.title ?? "Record Overdue"}`,
+          message: `The ${job.entityType ?? "item"} "${meta.title ?? ""}" is overdue. It was due on ${meta.dueDate ? new Date(meta.dueDate as string).toLocaleDateString() : "a past date"}. Immediate action is required.`,
+          link: meta.link as string | undefined,
+          linkLabel: "View Overdue Record →",
+        }),
+      });
+      break;
+    }
+
+    case "correspondence.unread_reminder": {
+      if (!job.targetUserId) return;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
+      if (!user) return;
+      await dispatchNotification({
+        event: "correspondence.unread_reminder",
+        mandatory: false,
+        recipients: [{ userId: user.id, email: user.email, name: `${user.firstName} ${user.lastName}` }],
+        organizationId: job.organizationId ?? undefined,
+        entityType: "correspondence",
+        entityId: job.entityId ?? undefined,
+        sendEmail: async (emails) => sendNotificationEmail({
+          to: emails[0],
+          title: "Unread Correspondence",
+          message: `You have unread correspondence: "${meta.subject ?? ""}" — it has been waiting for your attention.`,
+          link: `${APP_URL}/correspondence`,
+          linkLabel: "View Correspondence →",
+        }),
+      });
+      break;
+    }
+
+    case "correspondence.no_response": {
+      if (!job.targetUserId) return;
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
+      if (!user) return;
+      await dispatchNotification({
+        event: "correspondence.no_response",
+        mandatory: false,
+        recipients: [{ userId: user.id, email: user.email, name: `${user.firstName} ${user.lastName}` }],
+        organizationId: job.organizationId ?? undefined,
+        entityType: "correspondence",
+        entityId: job.entityId ?? undefined,
+        sendEmail: async (emails) => sendNotificationEmail({
+          to: emails[0],
+          title: "No Response on Correspondence",
+          message: `The correspondence "${meta.subject ?? ""}" has not received a response. Please follow up.`,
+          link: `${APP_URL}/correspondence`,
+          linkLabel: "View Correspondence →",
+        }),
+      });
+      break;
+    }
+
+    default:
+      console.warn(`[scheduler] No handler for event key: ${job.eventKey}`);
+  }
+}
+
+let _started = false;
+
+export function startNotificationScheduler() {
+  if (_started) return;
+  _started = true;
+
+  console.info("[scheduler] Notification scheduler started — polling every 5 minutes");
+
+  // Initial run shortly after startup
+  setTimeout(() => processBatch().catch(err => console.error("[scheduler] Initial batch failed:", err)), 10_000);
+
+  // Regular interval
+  setInterval(() => {
+    processBatch().catch(err => console.error("[scheduler] Batch failed:", err));
+  }, POLL_INTERVAL_MS);
+}
+
+/**
+ * scheduleNotification — helper to create a scheduled notification job.
+ * Call this from API routes when records with SLA dates are created/updated.
+ */
+export async function scheduleNotification(opts: {
+  eventKey: string;
+  fireAt: Date;
+  targetUserId?: number;
+  targetEmail?: string;
+  entityType?: string;
+  entityId?: number;
+  metadata?: Record<string, unknown>;
+  organizationId?: number;
+  projectId?: number;
+}) {
+  try {
+    await db.insert(scheduledNotificationsTable).values({
+      eventKey: opts.eventKey,
+      fireAt: opts.fireAt,
+      targetUserId: opts.targetUserId,
+      targetEmail: opts.targetEmail,
+      entityType: opts.entityType,
+      entityId: opts.entityId,
+      metadata: opts.metadata,
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+  } catch (err: any) {
+    console.warn(`[scheduler] Failed to schedule notification "${opts.eventKey}":`, err?.message);
+  }
+}
+
+/**
+ * cancelScheduledNotifications — cancel pending jobs for a specific entity.
+ * Call when a record is resolved, closed, or deleted.
+ */
+export async function cancelScheduledNotifications(opts: {
+  entityType: string;
+  entityId: number;
+  eventKeys?: string[];
+  reason?: string;
+}) {
+  try {
+    const conditions = [
+      eq(scheduledNotificationsTable.entityType, opts.entityType),
+      eq(scheduledNotificationsTable.entityId, opts.entityId),
+      isNull(scheduledNotificationsTable.sentAt),
+      isNull(scheduledNotificationsTable.cancelledAt),
+    ];
+    if (opts.eventKeys?.length) {
+      conditions.push(inArray(scheduledNotificationsTable.eventKey, opts.eventKeys));
+    }
+    await db
+      .update(scheduledNotificationsTable)
+      .set({ cancelledAt: new Date(), cancelReason: opts.reason ?? "entity resolved" })
+      .where(and(...conditions));
+  } catch (err: any) {
+    console.warn(`[scheduler] Failed to cancel notifications:`, err?.message);
+  }
+}
