@@ -168,8 +168,17 @@ export async function dispatchNotification(opts: {
   entityType?: string;
   entityId?: number;
 }): Promise<void> {
-  const { event, recipients, sendEmail, organizationId, entityType, entityId } = opts;
+  const { event, sendEmail, organizationId, entityType, entityId } = opts;
   const isMandatory = opts.mandatory === true || MANDATORY_EVENTS.has(event);
+
+  // Deduplicate recipients — userId wins; email used as fallback key
+  const seen = new Set<string>();
+  const recipients = opts.recipients.filter(r => {
+    const key = r.userId != null ? `uid:${r.userId}` : `email:${r.email}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   // Check org-level setting (skipped for mandatory events)
   if (!isMandatory && organizationId) {

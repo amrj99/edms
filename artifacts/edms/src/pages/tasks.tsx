@@ -1,11 +1,11 @@
 import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useListTasks, useListProjects, getListTasksQueryKey } from "@workspace/api-client-react";
 import {
   CheckSquare, Clock, AlertCircle, Loader2, Brain,
-  ArrowUp, ArrowDown, Plus, Calendar, FolderKanban,
+  ArrowUp, ArrowDown, Plus, FolderKanban, Mail, ExternalLink,
 } from "lucide-react";
-import { format } from "date-fns";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { format, isPast, differenceInDays } from "date-fns";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +81,16 @@ export default function Tasks() {
 
   const { data, isLoading } = useListTasks({ assignedToMe: true });
   const { data: projectsData } = useListProjects();
+
+  const { data: corrTasksData } = useQuery({
+    queryKey: ["correspondence-assigned-to-me"],
+    queryFn: async () => {
+      const r = await fetch("/api/correspondence/assigned-to-me", { credentials: "include" });
+      if (!r.ok) return { items: [] };
+      return r.json();
+    },
+  });
+  const corrTasks: any[] = corrTasksData?.items ?? [];
 
   const [showAI, setShowAI] = useState(false);
   const [aiInsights, setAiInsights] = useState<Record<number, AIPriorityInsight>>({});
@@ -331,6 +341,84 @@ export default function Tasks() {
               </Card>
             );
           })}
+        </div>
+      )}
+
+      {/* Correspondence assigned to me */}
+      {corrTasks.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Correspondence Requiring Action
+            </h2>
+            <Badge variant="outline" className="text-xs">{corrTasks.length}</Badge>
+          </div>
+          <div className="grid gap-3">
+            {corrTasks.map((c: any) => {
+              const isOverdue = c.dueDate && isPast(new Date(c.dueDate)) && c.status !== "closed";
+              const daysUntilDue = c.dueDate ? differenceInDays(new Date(c.dueDate), new Date()) : null;
+              const dueSoon = daysUntilDue !== null && daysUntilDue >= 0 && daysUntilDue <= 3;
+
+              return (
+                <Card key={c.id} className={cn("hover:shadow-md transition-shadow", isOverdue && "border-red-300 dark:border-red-800")}>
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div className={cn(
+                      "h-9 w-9 rounded-full flex items-center justify-center shrink-0 text-sm font-bold",
+                      isOverdue ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
+                        : PRIORITY_COLORS[c.priority] ?? "bg-slate-100 text-slate-600",
+                    )}>
+                      {isOverdue ? <AlertCircle className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                        {c.projectName && (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <FolderKanban className="h-3 w-3" /> {c.projectName}
+                          </span>
+                        )}
+                        <Badge variant="outline" className="text-[10px] capitalize">{c.type?.replace("_", " ")}</Badge>
+                        {c.referenceNumber && (
+                          <span className="text-[10px] text-muted-foreground font-mono">{c.referenceNumber}</span>
+                        )}
+                      </div>
+                      <h3 className="text-sm font-semibold truncate">{c.subject}</h3>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">
+                        From: {c.fromName ?? "Unknown"}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <Badge variant="outline" className={cn(
+                        "text-[10px] capitalize",
+                        isOverdue ? "border-red-400 text-red-600 bg-red-50 dark:bg-red-900/20"
+                          : dueSoon ? "border-orange-400 text-orange-600 bg-orange-50 dark:bg-orange-900/20"
+                          : "",
+                      )}>
+                        {isOverdue ? "Overdue" : c.status}
+                      </Badge>
+                      {c.dueDate && (
+                        <div className={cn(
+                          "flex items-center text-[11px] font-medium",
+                          isOverdue ? "text-red-500" : dueSoon ? "text-orange-500" : "text-muted-foreground",
+                        )}>
+                          <Clock className="mr-1 h-3 w-3" />
+                          {isOverdue
+                            ? `${Math.abs(daysUntilDue!)} day${Math.abs(daysUntilDue!) === 1 ? "" : "s"} overdue`
+                            : `Due ${format(new Date(c.dueDate), "MMM d, yyyy")}`}
+                        </div>
+                      )}
+                      <a
+                        href="/correspondence"
+                        className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+                      >
+                        <ExternalLink className="h-3 w-3" /> Open
+                      </a>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
         </div>
       )}
 

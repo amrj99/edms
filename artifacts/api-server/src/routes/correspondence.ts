@@ -10,7 +10,7 @@ import {
   projectsTable,
   notificationsTable,
 } from "@workspace/db";
-import { eq, and, or, desc, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
@@ -303,10 +303,10 @@ async function createCorrespondence(
 
   // ─── Delivery: Outlook-style email to To + CC recipients ──────────────────
   if (sendNow) {
-    const allDeliveryIds = [
-      ...(toUserIds as number[] ?? []),
-      ...(ccUserIds as number[] ?? []),
-    ];
+    // Deduplicate: a user in both To and CC receives one email (as To)
+    const toSet = new Set<number>((toUserIds as number[] ?? []));
+    const ccDeduped = (ccUserIds as number[] ?? []).filter(id => !toSet.has(id));
+    const allDeliveryIds = [...toSet, ...ccDeduped];
     if (allDeliveryIds.length > 0) {
       const [sender] = await db
         .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
@@ -392,6 +392,23 @@ async function createCorrespondence(
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
+// ─── Correspondence items assigned to me (Task To) ────────────────────────────
+router.get("/assigned-to-me", requireAuth, async (req, res) => {
+  const userId = req.user!.id;
+  const orgId  = req.user!.organizationId;
+
+  const items = await db.select().from(correspondenceTable)
+    .where(and(
+      eq(correspondenceTable.organizationId, orgId!),
+      eq(correspondenceTable.assignedToId, userId),
+      sql`${correspondenceTable.status} NOT IN ('closed')`,
+    ))
+    .orderBy(asc(correspondenceTable.dueDate), desc(correspondenceTable.updatedAt));
+
+  const enriched = await enrichCorrespondence(items);
+  res.json({ items: enriched, total: enriched.length });
+});
+
 router.get("/", requireAuth, async (req, res) => {
   const projectId = req.params.projectId ? parseInt(req.params.projectId) : null;
   const { folder, type, scope } = req.query;
@@ -458,10 +475,16 @@ router.get("/:id", requireAuth, async (req, res) => {
   if (!items[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   if (!items[0].isRead && items[0].fromUserId !== userId) {
+    const now = new Date();
     await db.update(correspondenceTable)
-      .set({ isRead: true, updatedAt: new Date() })
+      .set({
+        isRead: true,
+        firstReadAt: items[0].firstReadAt ?? now,
+        updatedAt: now,
+      })
       .where(eq(correspondenceTable.id, id));
     items[0].isRead = true;
+    if (!items[0].firstReadAt) items[0].firstReadAt = now;
   }
 
   const enriched = await enrichCorrespondence(items);

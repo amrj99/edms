@@ -62,6 +62,7 @@ export const correspondenceTable = pgTable("correspondence", {
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
   isRead: boolean("is_read").notNull().default(false),
+  firstReadAt: timestamp("first_read_at"),
   shareToken: text("share_token"),
   shareExpiresAt: timestamp("share_expires_at"),
   sharePasswordHash: text("share_password_hash"),
