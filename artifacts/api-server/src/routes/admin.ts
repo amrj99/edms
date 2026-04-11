@@ -21,6 +21,7 @@ router.use(requireAuth);
 
 // ─── System Info ──────────────────────────────────────────────────────────────
 router.get("/system-info", async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const user = req.user!;
   const countRow = async (table: any) => {
     const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(table);
@@ -50,6 +51,7 @@ router.get("/system-info", async (req, res) => {
 
 // ─── SMTP Test ────────────────────────────────────────────────────────────────
 router.post("/smtp/test", async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const result = await testSmtpConnection();
   res.json(result);
 });
@@ -324,6 +326,7 @@ router.get("/backup", async (req, res) => {
 
 // ─── Restore validation (dry-run) ─────────────────────────────────────────────
 router.post("/restore/validate", async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const { backup } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
     res.status(400).json({ error: "Invalid backup format. Expected {version, exportedAt, tables}." });

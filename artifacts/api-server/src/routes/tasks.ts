@@ -11,10 +11,25 @@ import { triggerSkillEvent } from "../lib/skill-engine.js";
 
 const router = Router();
 
-async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[]) {
+async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[], callerOrgId?: number) {
   if (!tasks.length) return [];
-  const users = await db.select().from(usersTable);
-  const projects = await db.select().from(projectsTable);
+
+  // Collect only the user/project IDs referenced by these tasks (avoids cross-org leakage)
+  const userIds = [...new Set([
+    ...tasks.map(t => t.assignedToId).filter(Boolean) as number[],
+    ...tasks.map(t => t.createdById).filter(Boolean) as number[],
+  ])];
+  const projectIds = [...new Set(tasks.map(t => t.projectId).filter(Boolean) as number[])];
+
+  const { inArray: drizzleInArray } = await import("drizzle-orm");
+
+  const users = userIds.length > 0
+    ? await db.select().from(usersTable).where(drizzleInArray(usersTable.id, userIds))
+    : [];
+  const projects = projectIds.length > 0
+    ? await db.select().from(projectsTable).where(drizzleInArray(projectsTable.id, projectIds))
+    : [];
+
   const userMap = new Map(users.map(u => [u.id, u]));
   const projectMap = new Map(projects.map(p => [p.id, p]));
 

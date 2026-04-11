@@ -4,7 +4,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
-import { requireAuth, hashPassword } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail, sendDocumentUploadedEmail } from "../lib/email.js";
@@ -389,11 +389,23 @@ router.get("/:id", requireAuth, async (req, res) => {
 router.put("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
+  const caller = req.user!;
 
   const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy } = req.body;
 
   const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Only admins or the document creator may edit a document; status changes require project_manager+
+  const canEdit = isSysAdmin(caller) || caller.role === "project_manager" || existing[0].createdById === caller.id;
+  if (!canEdit) { res.status(403).json({ error: "Forbidden", message: "You do not have permission to edit this document" }); return; }
+
+  // Only project managers or admins may change document status
+  if (status !== undefined && status !== existing[0].status) {
+    if (!isSysAdmin(caller) && caller.role !== "project_manager") {
+      res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can change document status" }); return;
+    }
+  }
 
   const [doc] = await db.update(documentsTable)
     .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, updatedAt: new Date() })
@@ -420,6 +432,16 @@ router.put("/:id", requireAuth, async (req, res) => {
 router.delete("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
+  const caller = req.user!;
+
+  // Only project managers, admins, or the document creator can delete a document
+  const [existing] = await db.select({ createdById: documentsTable.createdById }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const canDelete = isSysAdmin(caller) || caller.role === "project_manager" || existing.createdById === caller.id;
+  if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only project managers, admins, or the document creator can delete documents" }); return; }
+
   await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
   await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
   res.status(204).send();
@@ -494,6 +516,11 @@ router.get("/:id/reviews", requireAuth, async (req, res) => {
 });
 
 router.post("/:id/approve", requireAuth, async (req, res) => {
+  const caller = req.user!;
+  if (!isSysAdmin(caller) && caller.role !== "project_manager") {
+    res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can approve documents" }); return;
+  }
+
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
   const { comment, decision: rawDecision } = req.body;
@@ -552,6 +579,11 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
 });
 
 router.post("/:id/reject", requireAuth, async (req, res) => {
+  const caller = req.user!;
+  if (!isSysAdmin(caller) && caller.role !== "project_manager") {
+    res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can reject documents" }); return;
+  }
+
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
   const { comment, decision: rawDecision } = req.body;

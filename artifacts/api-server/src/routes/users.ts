@@ -88,9 +88,17 @@ router.post("/", requireAuth, async (req, res) => {
 
 router.get("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const caller = req.user!;
+
   const users = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
   const user = users[0];
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // sysAdmins can fetch any user; others can only fetch users within their own org
+  if (!isSysAdmin(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
+
   let orgName: string | undefined;
   if (user.organizationId) {
     const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
@@ -101,6 +109,22 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const caller = req.user!;
+  const isSelf = caller.id === id;
+
+  // sysAdmins can edit any user; regular users can only edit themselves
+  if (!isSysAdmin(caller) && !isSelf) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
+
+  // Non-admins cannot change privileged fields on their own profile
+  if (!isSysAdmin(caller) && isSelf) {
+    const forbidden = ["role", "isActive", "organizationId"];
+    if (forbidden.some(f => f in req.body)) {
+      res.status(403).json({ error: "Forbidden", message: "Cannot change role, organization, or activation status" }); return;
+    }
+  }
+
   const { firstName, lastName, role, isActive, organizationId, department } = req.body;
   const updateSet: Record<string, any> = { updatedAt: new Date() };
   if (firstName !== undefined) updateSet.firstName = firstName;
@@ -119,13 +143,19 @@ router.put("/:id", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const id = parseInt(req.params.id);
   await db.delete(usersTable).where(eq(usersTable.id, id));
   res.status(204).send();
 });
 
 router.post("/:id/reset-password", requireAuth, async (req, res) => {
+  const caller = req.user!;
   const id = parseInt(req.params.id);
+  // Only sysAdmins can reset other users' passwords; users may reset their own
+  if (!isSysAdmin(caller) && caller.id !== id) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
   const { newPassword } = req.body;
   if (!newPassword || newPassword.length < 6) {
     res.status(400).json({ error: "Password must be at least 6 characters" });

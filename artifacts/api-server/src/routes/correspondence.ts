@@ -25,14 +25,18 @@ const router = Router({ mergeParams: true });
 async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSelect)[]) {
   if (items.length === 0) return [];
 
+  const itemIds = items.map(i => i.id);
+
   const recipients = await db.select({
     corrId: correspondenceRecipientsTable.correspondenceId,
     userId: correspondenceRecipientsTable.userId,
     user: usersTable,
   }).from(correspondenceRecipientsTable)
-    .leftJoin(usersTable, eq(correspondenceRecipientsTable.userId, usersTable.id));
+    .leftJoin(usersTable, eq(correspondenceRecipientsTable.userId, usersTable.id))
+    .where(inArray(correspondenceRecipientsTable.correspondenceId, itemIds));
 
-  const attachments = await db.select().from(correspondenceAttachmentsTable);
+  const attachments = await db.select().from(correspondenceAttachmentsTable)
+    .where(inArray(correspondenceAttachmentsTable.correspondenceId, itemIds));
 
   const fromUserIds = [...new Set(items.map(i => i.fromUserId))];
   const fromUsers = fromUserIds.length > 0
