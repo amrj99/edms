@@ -44,7 +44,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const SOURCE_OPTIONS = ["internal", "external", "client", "contractor", "consultant", "supplier"];
 
-type SortKey = "documentNumber" | "title" | "projectName" | "discipline" | "source" | "issuedBy" | "revision" | "status" | "updatedAt";
+type SortKey = "documentNumber" | "title" | "projectName" | "discipline" | "source" | "issuedBy" | "revision" | "status" | "updatedAt" | "direction";
 type SortDir = "asc" | "desc";
 
 function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
@@ -55,11 +55,12 @@ function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; s
 }
 
 // ─── Column definitions for resizable table ───────────────────────────────────
-const DOC_COLS = [
+const DOC_COLS_BASE = [
   { key: "documentNumber", defaultWidth: 120, minWidth: 80 },
   { key: "title",          defaultWidth: 240, minWidth: 120 },
   { key: "projectName",    defaultWidth: 140, minWidth: 80 },
   { key: "discipline",     defaultWidth: 110, minWidth: 70 },
+  { key: "direction",      defaultWidth: 90,  minWidth: 60 },
   { key: "source",         defaultWidth: 100, minWidth: 70 },
   { key: "issuedBy",       defaultWidth: 120, minWidth: 70 },
   { key: "revision",       defaultWidth: 65,  minWidth: 50 },
@@ -72,6 +73,9 @@ export default function DocumentsPage() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
+  // Column visibility
+  const [showDirectionCol, setShowDirectionCol] = useState(true);
+
   // Filters
   const [search, setSearch] = useState("");
   const [filterProject, setFilterProject] = useState("_all");
@@ -79,6 +83,7 @@ export default function DocumentsPage() {
   const [filterStatus, setFilterStatus] = useState("_all");
   const [filterSource, setFilterSource] = useState("_all");
   const [filterIssuedBy, setFilterIssuedBy] = useState("");
+  const [filterDirection, setFilterDirection] = useState("_all");
 
   // Sorting
   const [sortKey, setSortKey] = useState<SortKey>("updatedAt");
@@ -173,6 +178,7 @@ export default function DocumentsPage() {
       if (filterDiscipline !== "_all" && d.discipline !== filterDiscipline) return false;
       if (filterStatus !== "_all" && d.status !== filterStatus) return false;
       if (filterSource !== "_all" && d.source !== filterSource) return false;
+      if (filterDirection !== "_all" && (d.direction ?? "") !== filterDirection) return false;
       if (filterIssuedBy && !d.issuedBy?.toLowerCase().includes(filterIssuedBy.toLowerCase())) return false;
       if (search) {
         const q = search.toLowerCase();
@@ -205,15 +211,15 @@ export default function DocumentsPage() {
     });
 
     return docs;
-  }, [allDocs, filterProject, filterDiscipline, filterStatus, filterSource, filterIssuedBy, search, sortKey, sortDir]);
+  }, [allDocs, filterProject, filterDiscipline, filterStatus, filterSource, filterIssuedBy, filterDirection, search, sortKey, sortDir]);
 
   const hasFilters = filterProject !== "_all" || filterDiscipline !== "_all" || filterStatus !== "_all" ||
-    filterSource !== "_all" || filterIssuedBy || search;
+    filterSource !== "_all" || filterIssuedBy || filterDirection !== "_all" || !!search;
 
   const clearFilters = () => {
     setFilterProject("_all"); setFilterDiscipline("_all");
     setFilterStatus("_all"); setFilterSource("_all");
-    setFilterIssuedBy(""); setSearch("");
+    setFilterIssuedBy(""); setSearch(""); setFilterDirection("_all");
   };
 
   // Project docs for the workflow attachment picker
@@ -350,6 +356,8 @@ export default function DocumentsPage() {
   });
   const pickerFolders: any[] = folderPickData?.folders ?? [];
 
+  const DOC_COLS = DOC_COLS_BASE.filter(c => c.key !== "direction" || showDirectionCol);
+
   const { getThStyle, startResize, resetWidths } = useResizableColumns("global-documents", DOC_COLS);
 
   const COLS: { key: SortKey; label: string }[] = [
@@ -357,6 +365,7 @@ export default function DocumentsPage() {
     { key: "title",          label: "Title" },
     { key: "projectName",    label: "Project" },
     { key: "discipline",     label: "Discipline" },
+    ...(showDirectionCol ? [{ key: "direction" as SortKey, label: "Direction" }] : []),
     { key: "source",         label: "Source" },
     { key: "issuedBy",       label: "Issued By" },
     { key: "revision",       label: "Rev" },
@@ -491,6 +500,19 @@ export default function DocumentsPage() {
             className="h-9 w-[130px] text-sm"
           />
 
+          {/* Direction filter chips */}
+          <div className="flex items-center rounded-md border overflow-hidden h-9">
+            {([["_all", "All"], ["incoming", "↓ In"], ["outgoing", "↑ Out"]] as [string, string][]).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setFilterDirection(val)}
+                className={`px-2.5 h-full text-xs font-medium transition-colors border-r last:border-r-0 ${filterDirection === val ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {hasFilters && (
             <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 gap-1 text-muted-foreground">
               <X className="h-3.5 w-3.5" /> Clear
@@ -523,7 +545,14 @@ export default function DocumentsPage() {
 
       {/* Table */}
       <div className={`bg-card border rounded-xl shadow-sm overflow-hidden ${viewMode === "folders" && folderViewProjectId ? "flex-1 min-w-0" : ""}`}>
-        <div className="flex items-center justify-end px-3 py-1.5 border-b bg-muted/20">
+        <div className="flex items-center justify-between px-3 py-1.5 border-b bg-muted/20">
+          <button
+            onClick={() => setShowDirectionCol(v => !v)}
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${showDirectionCol ? "bg-primary/10 text-primary border-primary/30" : "text-muted-foreground hover:bg-muted border-transparent"}`}
+            title="Toggle Direction column visibility"
+          >
+            {showDirectionCol ? "↓↑ Hide Direction" : "↓↑ Show Direction"}
+          </button>
           <button
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
             onClick={resetWidths}
@@ -589,6 +618,15 @@ export default function DocumentsPage() {
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground truncate">{doc.projectName || "—"}</TableCell>
                   <TableCell className="text-xs truncate">{doc.discipline || "—"}</TableCell>
+                  {showDirectionCol && (
+                    <TableCell>
+                      {doc.direction ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${doc.direction === "incoming" ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400"}`}>
+                          {doc.direction === "incoming" ? "↓ In" : "↑ Out"}
+                        </span>
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                  )}
                   <TableCell className="text-xs capitalize truncate">{doc.source || "—"}</TableCell>
                   <TableCell className="text-xs truncate">{doc.issuedBy || "—"}</TableCell>
                   <TableCell className="text-xs font-mono">{doc.revision || "—"}</TableCell>

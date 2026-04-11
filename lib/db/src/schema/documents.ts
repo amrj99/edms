@@ -51,6 +51,7 @@ export const documentsTable = pgTable("documents", {
   additionalFiles: jsonb("additional_files").default([]),
   source: text("source"),
   issuedBy: text("issued_by"),
+  direction: text("direction", { enum: ["incoming", "outgoing"] }),
   isConfidential: boolean("is_confidential").default(false),
   downloadRestricted: boolean("download_restricted").default(false),
   watermarkText: text("watermark_text"),

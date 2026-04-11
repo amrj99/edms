@@ -58,6 +58,7 @@ export default function CorrespondencePage() {
   const [selectedFolder, setSelectedFolder] = useState<string>("inbox");
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>("all");
+  const [filterDirection, setFilterDirection] = useState<string>("all");
   const [searchQ, setSearchQ] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -72,8 +73,8 @@ export default function CorrespondencePage() {
   const [compose, setCompose] = useState<{
     subject: string; type: string; body: string; priority: string; dueDate: string;
     projectId: string; toUserIds: number[]; ccUserIds: number[]; taskToId: string;
-    scope: string; referenceNumber: string;
-  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "" });
+    scope: string; referenceNumber: string; direction: string;
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing" });
   const [toPickUser, setToPickUser] = useState("");
   type UploadAttachment = { kind: "upload"; url: string; name: string; size: number };
   type RefAttachment = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
@@ -164,6 +165,7 @@ export default function CorrespondencePage() {
 
     if (selectedProjectId && selectedFolder !== "general") items = items.filter((i: any) => i.projectId === selectedProjectId);
     if (selectedTypeFilter !== "all") items = items.filter((i: any) => i.type === selectedTypeFilter);
+    if (filterDirection !== "all") items = items.filter((i: any) => (i.direction ?? "") === filterDirection);
     if (searchQ) items = items.filter((i: any) =>
       i.subject?.toLowerCase().includes(searchQ.toLowerCase()) ||
       i.referenceNumber?.toLowerCase().includes(searchQ.toLowerCase()) ||
@@ -247,6 +249,7 @@ export default function CorrespondencePage() {
         // so the API stores it as a contextual reference (no scope override).
         projectId: effectiveScope === "internal" && projectId ? projectId : undefined,
         referenceNumber: data.referenceNumber?.trim() || undefined,
+        direction: data.direction || undefined,
         sendNow,
         folder: "inbox",
       };
@@ -260,7 +263,7 @@ export default function CorrespondencePage() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing" });
       setToPickUser("");
       setComposeAttachments([]);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
@@ -445,6 +448,7 @@ export default function CorrespondencePage() {
       toUserIds: [],
       ccUserIds: [],
       taskToId: "",
+      direction: selected.direction ?? "outgoing",
     });
     setComposeAttachments([]);
     setComposeOpen(true);
@@ -469,6 +473,7 @@ export default function CorrespondencePage() {
       toUserIds: allRecipientIds,
       ccUserIds: selected.ccUserIds ?? [],
       taskToId: "",
+      direction: selected.direction ?? "outgoing",
     });
     setComposeAttachments([]);
     setReplyingToId(selected.id);
@@ -646,6 +651,18 @@ export default function CorrespondencePage() {
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
+          {/* Direction quick filter */}
+          <div className="flex items-center rounded-md border overflow-hidden h-6">
+            {([["all", "All"], ["incoming", "↓ In"], ["outgoing", "↑ Out"]] as [string, string][]).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setFilterDirection(val)}
+                className={`px-2 h-full text-[10px] font-medium transition-colors border-r last:border-r-0 ${filterDirection === val ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <ScrollArea className="flex-1">
@@ -708,11 +725,16 @@ export default function CorrespondencePage() {
                             <span className="text-[10px] font-mono text-muted-foreground">{item.referenceNumber}</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 mt-1">
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
                           {isOverdue && <span className="text-[10px] text-red-500 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />Overdue</span>}
                           {isFlagged && <Flag className="h-3 w-3 text-orange-500" />}
                           {isStarred && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />}
                           {item._source === "general" && <Globe className="h-3 w-3 text-muted-foreground" />}
+                          {item.direction && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${item.direction === "incoming" ? "bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400"}`}>
+                              {item.direction === "incoming" ? "↓ In" : "↑ Out"}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-col gap-1 shrink-0">
@@ -1077,6 +1099,22 @@ export default function CorrespondencePage() {
                     {["low", "medium", "high", "urgent"].map(p => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+            {/* Direction */}
+            <div>
+              <Label>Direction</Label>
+              <div className="flex gap-2 mt-1">
+                {(["outgoing", "incoming"] as const).map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setCompose(f => ({ ...f, direction: d }))}
+                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${compose.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
+                  >
+                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
+                  </button>
+                ))}
               </div>
             </div>
             {/* Scope + Project */}

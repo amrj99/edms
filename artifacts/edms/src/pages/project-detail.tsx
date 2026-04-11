@@ -293,6 +293,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             documentType: u.meta.docType || "general",
             source: u.meta.source || undefined,
             issuedBy: u.meta.issuedBy || undefined,
+            direction: u.meta.direction || undefined,
             fileUrl: u.fileUrl,
             fileName: u.fileName,
             fileSize: u.fileSize,

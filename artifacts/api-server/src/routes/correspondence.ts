@@ -209,6 +209,7 @@ async function createCorrespondence(
     referenceNumber: manualRef,
     scope: rawScope,
     projectId: bodyProjectId,
+    direction,
   } = req.body;
 
   const orgId = req.user!.organizationId;
@@ -252,6 +253,7 @@ async function createCorrespondence(
     priority: priority || "medium",
     dueDate: dueDate ? new Date(dueDate) : undefined,
     assignedToId: taskToId ? parseInt(taskToId) : undefined,
+    direction: direction === "incoming" || direction === "outgoing" ? direction : null,
   }).returning();
 
   if (toUserIds?.length > 0) {

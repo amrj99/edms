@@ -26,6 +26,7 @@ export interface DocMeta {
   status: string;
   source: string;
   issuedBy: string;
+  direction?: string;
 }
 
 interface StagedFile {
@@ -576,6 +577,21 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                           className="mt-1 h-8 text-sm"
                           disabled={entry.uploadStatus === "uploading"}
                         />
+                      </div>
+                      <div>
+                        <Label className="text-xs font-medium">Direction</Label>
+                        <Select
+                          value={entry.meta.direction || "_none"}
+                          onValueChange={v => updateMeta(entry.id, { direction: v === "_none" ? undefined : v })}
+                          disabled={entry.uploadStatus === "uploading"}
+                        >
+                          <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="None" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="_none">— None —</SelectItem>
+                            <SelectItem value="incoming">↓ Incoming</SelectItem>
+                            <SelectItem value="outgoing">↑ Outgoing</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     </div>
                     {aiPanelOpen[entry.id] && (

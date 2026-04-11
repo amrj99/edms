@@ -137,7 +137,7 @@ router.get("/", requireAuth, async (req, res) => {
   if (!await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller))) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
-  const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy } = req.query;
+  const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy, direction } = req.query;
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
 
@@ -157,6 +157,7 @@ router.get("/", requireAuth, async (req, res) => {
   if (status) filtered = filtered.filter(d => d.doc.status === status);
   if (folderId) filtered = filtered.filter(d => d.doc.folderId === parseInt(folderId as string));
   if (source) filtered = filtered.filter(d => d.doc.source === source);
+  if (direction && (direction === "incoming" || direction === "outgoing")) filtered = filtered.filter(d => d.doc.direction === direction);
   if (issuedBy) {
     const ib = (issuedBy as string).toLowerCase();
     filtered = filtered.filter(d => d.doc.issuedBy?.toLowerCase().includes(ib));
@@ -198,7 +199,7 @@ router.post("/", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
     return;
   }
-  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy } = req.body;
+  const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy, direction } = req.body;
 
   if (!title?.trim()) {
     res.status(400).json({ error: "title is required" });
@@ -233,6 +234,7 @@ router.post("/", requireAuth, async (req, res) => {
     fileUrl, fileName, fileSize,
     metadata: metadata || {},
     source, issuedBy,
+    direction: direction === "incoming" || direction === "outgoing" ? direction : null,
   }).returning();
 
   // Save initial revision
@@ -416,7 +418,7 @@ router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const caller = req.user!;
 
-  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy } = req.body;
+  const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy, direction } = req.body;
 
   const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
@@ -433,7 +435,7 @@ router.put("/:id", requireAuth, async (req, res) => {
   }
 
   const [doc] = await db.update(documentsTable)
-    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, updatedAt: new Date() })
+    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, direction: direction === "incoming" || direction === "outgoing" ? direction : (direction === null ? null : existing[0].direction), updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
     .returning();
 
