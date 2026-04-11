@@ -2383,22 +2383,6 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Enter subject..." className="mt-1" />
             </div>
-            {/* Direction */}
-            <div>
-              <Label>Direction</Label>
-              <div className="flex gap-2 mt-1">
-                {(["outgoing", "incoming"] as const).map(d => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setForm(f => ({ ...f, direction: d }))}
-                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${form.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
-                  >
-                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div>
               <Label>To (Recipients)</Label>
               <RecipientAutocomplete

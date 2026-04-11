@@ -448,7 +448,7 @@ export default function CorrespondencePage() {
       toUserIds: [],
       ccUserIds: [],
       taskToId: "",
-      direction: selected.direction ?? "outgoing",
+      direction: "outgoing",
     });
     setComposeAttachments([]);
     setComposeOpen(true);
@@ -473,7 +473,7 @@ export default function CorrespondencePage() {
       toUserIds: allRecipientIds,
       ccUserIds: selected.ccUserIds ?? [],
       taskToId: "",
-      direction: selected.direction ?? "outgoing",
+      direction: "outgoing",
     });
     setComposeAttachments([]);
     setReplyingToId(selected.id);
@@ -1031,7 +1031,39 @@ export default function CorrespondencePage() {
               </div>
             </ScrollArea>
 
-            {/* Quick Reply */}
+            {/* Quick Reply — disabled for drafts */}
+            {selected?.folder === "draft" ? (
+              <div className="p-4 border-t bg-muted/20">
+                <div className="flex items-start gap-3 rounded-lg border border-dashed bg-card px-4 py-3">
+                  <Archive className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground">This is a draft</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Drafts have no recipients. Add recipients and send from the compose view.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1.5 shrink-0"
+                    onClick={() => {
+                      setCompose(f => ({
+                        ...f,
+                        subject: selected.subject ?? "",
+                        type: selected.type ?? "rfi",
+                        priority: selected.priority ?? "medium",
+                        body: selected.body ?? "",
+                        projectId: selected.projectId ? String(selected.projectId) : "",
+                        direction: "outgoing",
+                      }));
+                      setComposeOpen(true);
+                    }}
+                  >
+                    <Send className="h-3 w-3" /> Open in Compose
+                  </Button>
+                </div>
+              </div>
+            ) : (
             <div className="p-4 border-t bg-muted/20">
               {replyingToId && (
                 <div className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
@@ -1071,6 +1103,7 @@ export default function CorrespondencePage() {
                 </div>
               </div>
             </div>
+            )}
           </>
         )}
       </div>
@@ -1099,22 +1132,6 @@ export default function CorrespondencePage() {
                     {["low", "medium", "high", "urgent"].map(p => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}
                   </SelectContent>
                 </Select>
-              </div>
-            </div>
-            {/* Direction */}
-            <div>
-              <Label>Direction</Label>
-              <div className="flex gap-2 mt-1">
-                {(["outgoing", "incoming"] as const).map(d => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setCompose(f => ({ ...f, direction: d }))}
-                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${compose.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
-                  >
-                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
-                  </button>
-                ))}
               </div>
             </div>
             {/* Scope + Project */}
