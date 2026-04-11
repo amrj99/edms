@@ -4,7 +4,7 @@ import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/a
 import {
   FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2,
   Plus, Download, Upload, Eye, Sparkles, Send, Package, AlertCircle,
-  Clock, RefreshCw, Check, X, Square,
+  Clock, RefreshCw, Check, X, Square, Archive,
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
@@ -2056,8 +2056,10 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 function CorrespondenceTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const { data: project } = useGetProject(projectId);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [savedDraft, setSavedDraft] = useState<{ id: number; referenceNumber?: string } | null>(null);
   const [typeFilter, setTypeFilter] = useState("all");
   const [directionFilter, setDirectionFilter] = useState("all");
   const [searchQ, setSearchQ] = useState("");
@@ -2068,6 +2070,13 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     toUserIds: [] as number[], ccUserIds: [] as number[],
     direction: "outgoing",
   });
+
+  type CorrUploadAtt = { kind: "upload"; url: string; name: string; size: number };
+  type CorrRefAtt    = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
+  type CorrAttachment = CorrUploadAtt | CorrRefAtt;
+  const [composeAttachments, setComposeAttachments] = useState<CorrAttachment[]>([]);
+  const [docPickerOpen, setDocPickerOpen] = useState(false);
+  const [docSearch, setDocSearch] = useState("");
 
   const { data: corrData, isLoading } = useQuery({
     queryKey: ["correspondence", projectId],
@@ -2086,6 +2095,23 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     id: u.id, name: u.name ?? u.email, email: u.email,
   }));
 
+  const { data: projDocsData } = useQuery({
+    queryKey: ["project-docs-picker", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/documents`);
+      return r.json();
+    },
+    enabled: docPickerOpen,
+  });
+  const pickerDocs: any[] = (projDocsData?.documents ?? projDocsData ?? []).filter((d: any) =>
+    !docSearch || d.title?.toLowerCase().includes(docSearch.toLowerCase()) || d.documentNumber?.toLowerCase().includes(docSearch.toLowerCase())
+  );
+
+  const resetCreateForm = () => {
+    setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "", toUserIds: [], ccUserIds: [], direction: "outgoing" });
+    setComposeAttachments([]);
+  };
+
   const create = useMutation({
     mutationFn: async (data: any) => {
       const r = await fetch(`/api/projects/${projectId}/correspondence`, {
@@ -2101,6 +2127,11 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
           toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
           ccUserIds: data.ccUserIds.length > 0 ? data.ccUserIds : undefined,
           direction: data.direction || undefined,
+          attachments: composeAttachments.length > 0 ? composeAttachments.map(a =>
+            a.kind === "ref"
+              ? { fileName: a.name, fileUrl: a.fileUrl, documentNumber: a.documentNumber }
+              : { fileName: a.name, fileUrl: a.url, fileSize: a.size }
+          ) : undefined,
           folder: "draft",
           sendNow: false,
         }),
@@ -2108,13 +2139,12 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["correspondence", projectId] });
-      setIsCreateOpen(false);
-      setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "", toUserIds: [], ccUserIds: [], direction: "outgoing" });
-      toast({ title: "Correspondence created as draft" });
+      resetCreateForm();
+      setSavedDraft({ id: data.id, referenceNumber: data.referenceNumber });
     },
-    onError: () => toast({ title: "Failed to create", variant: "destructive" }),
+    onError: () => toast({ title: "Failed to create correspondence", variant: "destructive" }),
   });
 
   const filtered = correspondence.filter((c: any) => {
@@ -2226,8 +2256,99 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+      {/* Document picker for attachments */}
+      <Dialog open={docPickerOpen} onOpenChange={setDocPickerOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Link2 className="h-4 w-4" /> Attach Project Document
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <Input
+              placeholder="Search by title or document number…"
+              value={docSearch}
+              onChange={e => setDocSearch(e.target.value)}
+              className="h-9"
+              autoFocus
+            />
+            <div className="h-60 overflow-y-auto border rounded-lg">
+              {pickerDocs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full py-8 text-muted-foreground">
+                  <FileText className="h-8 w-8 mb-2 opacity-30" />
+                  <p className="text-sm">{docSearch ? "No matching documents" : "No documents in this project"}</p>
+                </div>
+              ) : (
+                <div className="p-1">
+                  {pickerDocs.map((doc: any) => {
+                    const already = composeAttachments.some(a => a.kind === "ref" && a.documentId === doc.id);
+                    return (
+                      <button
+                        key={doc.id}
+                        type="button"
+                        disabled={already}
+                        onClick={() => {
+                          if (already) return;
+                          setComposeAttachments(prev => [...prev, { kind: "ref", documentId: doc.id, name: doc.title, documentNumber: doc.documentNumber, fileUrl: doc.fileUrl ?? "" }]);
+                          setDocPickerOpen(false);
+                          setDocSearch("");
+                        }}
+                        className="w-full flex items-start gap-3 px-3 py-2 rounded-md hover:bg-accent text-left disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{doc.title}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{doc.documentNumber}</p>
+                        </div>
+                        {already && <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDocPickerOpen(false); setDocSearch(""); }}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCreateOpen || !!savedDraft} onOpenChange={v => { if (!v) { setIsCreateOpen(false); setSavedDraft(null); } }}>
         <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+          {savedDraft ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                  <Check className="h-5 w-5" /> Draft Saved
+                </DialogTitle>
+              </DialogHeader>
+              <div className="py-4 space-y-4">
+                <div className="rounded-lg border bg-muted/40 p-4 text-sm space-y-1">
+                  <p className="font-medium">Correspondence saved as draft</p>
+                  {savedDraft.referenceNumber && (
+                    <p className="text-muted-foreground font-mono text-xs">{savedDraft.referenceNumber}</p>
+                  )}
+                  <p className="text-muted-foreground text-xs mt-2">
+                    To send this correspondence, open it in the Correspondence View where you can review, edit, and send.
+                  </p>
+                </div>
+              </div>
+              <DialogFooter className="gap-2 sm:justify-between">
+                <Button variant="outline" onClick={() => setSavedDraft(null)}>Close</Button>
+                <Button
+                  className="gap-2"
+                  onClick={() => {
+                    setSavedDraft(null);
+                    navigate(`/correspondence?openCorr=${savedDraft.id}`);
+                  }}
+                >
+                  <ExternalLink className="h-4 w-4" /> Open in Correspondence View
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+          <>
           <DialogHeader><DialogTitle>New Correspondence</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             {/* Project auto-fill indicator */}
@@ -2312,13 +2433,70 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               <Label>Body</Label>
               <Textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))} placeholder="Write message here..." className="mt-1" rows={4} />
             </div>
+            {/* Attachments */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label>Attachments</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button" variant="outline" size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={() => { setDocSearch(""); setDocPickerOpen(true); }}
+                  >
+                    <Link2 className="h-3 w-3" /> Attach Document
+                  </Button>
+                </div>
+              </div>
+              <FileDropZone
+                onUpload={file => setComposeAttachments(prev => [...prev, { kind: "upload", ...file }])}
+                onMultiUpload={files => setComposeAttachments(prev => [...prev, ...files.map(f => ({ kind: "upload" as const, ...f }))])}
+                label="Upload File — drop or click to attach external files"
+                multiple
+              />
+              {composeAttachments.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {composeAttachments.map((att, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1.5">
+                      {att.kind === "ref"
+                        ? <Link2 className="h-3 w-3 text-primary shrink-0" />
+                        : <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                      }
+                      <div className="flex-1 min-w-0">
+                        <span className="truncate block font-medium">{att.name}</span>
+                        {att.kind === "ref" && <span className="text-muted-foreground font-mono text-[10px]">{att.documentNumber}</span>}
+                        {att.kind === "upload" && <span className="text-muted-foreground">{(att.size / 1024).toFixed(0)} KB</span>}
+                      </div>
+                      {att.kind === "ref" && att.fileUrl && (
+                        <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0">
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setComposeAttachments(prev => prev.filter((_, j) => j !== i))}
+                        className="text-destructive hover:bg-destructive/10 rounded p-0.5 shrink-0"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-            <Button onClick={() => create.mutate(form)} disabled={create.isPending || !form.subject}>
-              {create.isPending ? "Creating..." : "Create as Draft"}
+            <Button variant="outline" onClick={() => { setIsCreateOpen(false); resetCreateForm(); }}>Cancel</Button>
+            <Button
+              onClick={() => create.mutate(form)}
+              disabled={create.isPending || !form.subject}
+              className="gap-1.5"
+            >
+              {create.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+              {create.isPending ? "Saving…" : "Save Draft"}
             </Button>
           </DialogFooter>
+          </>
+          )}
         </DialogContent>
       </Dialog>
 
