@@ -18,6 +18,8 @@ import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { sendCorrespondenceDeliveryEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
+import { scheduleNotification } from "../lib/notifications/scheduler.js";
+import { organizationsTable } from "@workspace/db";
 
 const router = Router({ mergeParams: true });
 
@@ -210,7 +212,10 @@ async function createCorrespondence(
     scope: rawScope,
     projectId: bodyProjectId,
     direction,
+    requiresResponse: rawRequiresResponse,
   } = req.body;
+
+  const requiresResponse = rawRequiresResponse === true || rawRequiresResponse === "true";
 
   const orgId = req.user!.organizationId;
   if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
@@ -254,6 +259,7 @@ async function createCorrespondence(
     dueDate: dueDate ? new Date(dueDate) : undefined,
     assignedToId: taskToId ? parseInt(taskToId) : undefined,
     direction: direction === "incoming" || direction === "outgoing" ? direction : null,
+    requiresResponse,
   }).returning();
 
   if (toUserIds?.length > 0) {
@@ -385,6 +391,91 @@ async function createCorrespondence(
           organizationId: orgId,
         });
       } catch (_) {}
+    }
+  }
+
+  // ─── SLA / reminder scheduling (only when requiresResponse=true and sent now) ──
+  if (sendNow && requiresResponse && toUserIds?.length > 0) {
+    try {
+      const [org] = await db
+        .select({
+          corrUnreadReminderHours: organizationsTable.corrUnreadReminderHours,
+          corrNoResponseHours:     organizationsTable.corrNoResponseHours,
+          corrSlaDueSoonHours:     organizationsTable.corrSlaDueSoonHours,
+        })
+        .from(organizationsTable)
+        .where(eq(organizationsTable.id, orgId))
+        .limit(1);
+
+      const unreadHours  = org?.corrUnreadReminderHours ?? 48;
+      const noRespHours  = org?.corrNoResponseHours     ?? 72;
+      const dueSoonHours = org?.corrSlaDueSoonHours     ?? 24;
+      const sentAt       = corr.sentAt ?? new Date();
+      const dueDateObj   = dueDate ? new Date(dueDate) : null;
+      const now          = new Date();
+
+      const meta = {
+        subject:          corr.subject,
+        referenceNumber:  corr.referenceNumber ?? undefined,
+        correspondenceId: corr.id,
+        link:             `/correspondence?openCorr=${corr.id}`,
+      };
+
+      for (const uid of (toUserIds as number[])) {
+        // 1. Unread reminder — fires after X hours regardless of due date
+        await scheduleNotification({
+          eventKey:       "correspondence.unread_reminder",
+          fireAt:         new Date(sentAt.getTime() + unreadHours * 60 * 60 * 1000),
+          targetUserId:   uid,
+          entityType:     "correspondence",
+          entityId:       corr.id,
+          organizationId: orgId,
+          projectId:      effectiveProjectId ?? undefined,
+          metadata:       meta,
+        });
+
+        // 2. No-response — fires at due date, or after noRespHours if no due date
+        const noRespAt = dueDateObj ?? new Date(sentAt.getTime() + noRespHours * 60 * 60 * 1000);
+        await scheduleNotification({
+          eventKey:       "correspondence.no_response",
+          fireAt:         noRespAt,
+          targetUserId:   uid,
+          entityType:     "correspondence",
+          entityId:       corr.id,
+          organizationId: orgId,
+          projectId:      effectiveProjectId ?? undefined,
+          metadata:       meta,
+        });
+
+        // 3 + 4. Due-soon and SLA-breached — only if a due date is set and still in the future
+        if (dueDateObj && dueDateObj > now) {
+          const dueSoonAt = new Date(dueDateObj.getTime() - dueSoonHours * 60 * 60 * 1000);
+          if (dueSoonAt > now) {
+            await scheduleNotification({
+              eventKey:       "sla.due_soon",
+              fireAt:         dueSoonAt,
+              targetUserId:   uid,
+              entityType:     "correspondence",
+              entityId:       corr.id,
+              organizationId: orgId,
+              projectId:      effectiveProjectId ?? undefined,
+              metadata:       { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
+            });
+          }
+          await scheduleNotification({
+            eventKey:       "sla.breached",
+            fireAt:         dueDateObj,
+            targetUserId:   uid,
+            entityType:     "correspondence",
+            entityId:       corr.id,
+            organizationId: orgId,
+            projectId:      effectiveProjectId ?? undefined,
+            metadata:       { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
+          });
+        }
+      }
+    } catch (schedErr: any) {
+      console.warn("[correspondence] Failed to schedule reminders:", schedErr?.message);
     }
   }
 

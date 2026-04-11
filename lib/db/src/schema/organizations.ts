@@ -18,6 +18,9 @@ export const organizationsTable = pgTable("organizations", {
   address: text("address"),
   subscriptionTier: text("subscription_tier").default("free"),
   storageUsedMb: integer("storage_used_mb").notNull().default(0),
+  corrUnreadReminderHours: integer("corr_unread_reminder_hours").notNull().default(48),
+  corrNoResponseHours:     integer("corr_no_response_hours").notNull().default(72),
+  corrSlaDueSoonHours:     integer("corr_sla_due_soon_hours").notNull().default(24),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -62,6 +62,7 @@ export const correspondenceTable = pgTable("correspondence", {
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
   direction: text("direction", { enum: ["incoming", "outgoing"] }),
+  requiresResponse: boolean("requires_response").notNull().default(false),
   isRead: boolean("is_read").notNull().default(false),
   firstReadAt: timestamp("first_read_at"),
   shareToken: text("share_token"),

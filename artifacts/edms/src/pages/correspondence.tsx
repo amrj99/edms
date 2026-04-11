@@ -72,8 +72,8 @@ export default function CorrespondencePage() {
   const [compose, setCompose] = useState<{
     subject: string; type: string; body: string; priority: string; dueDate: string;
     projectId: string; toUserIds: number[]; ccUserIds: number[]; taskToId: string;
-    scope: string; referenceNumber: string; direction: string;
-  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing" });
+    scope: string; referenceNumber: string; direction: string; requiresResponse: boolean;
+  }>({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing", requiresResponse: false });
   const [toPickUser, setToPickUser] = useState("");
   type UploadAttachment = { kind: "upload"; url: string; name: string; size: number };
   type RefAttachment = { kind: "ref"; documentId: number; name: string; documentNumber: string; fileUrl: string };
@@ -248,6 +248,7 @@ export default function CorrespondencePage() {
         projectId: effectiveScope === "internal" && projectId ? projectId : undefined,
         referenceNumber: data.referenceNumber?.trim() || undefined,
         direction: data.direction || undefined,
+        requiresResponse: data.requiresResponse,
         sendNow,
         folder: "inbox",
       };
@@ -261,7 +262,7 @@ export default function CorrespondencePage() {
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ["correspondence"] });
       setComposeOpen(false);
-      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing" });
+      setCompose({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", projectId: "", toUserIds: [], ccUserIds: [], taskToId: "", scope: "project", referenceNumber: "", direction: "outgoing", requiresResponse: false });
       setToPickUser("");
       setComposeAttachments([]);
       toast({ title: vars.sendNow ? "Correspondence sent" : "Draft saved" });
@@ -716,6 +717,7 @@ export default function CorrespondencePage() {
                         </div>
                         <div className="flex items-center gap-2 mt-1 flex-wrap">
                           {isOverdue && <span className="text-[10px] text-red-500 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />Overdue</span>}
+                          {!isOverdue && item.requiresResponse && <span className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-0.5 font-medium"><Clock className="h-2.5 w-2.5" />Needs reply</span>}
                           {isFlagged && <Flag className="h-3 w-3 text-orange-500" />}
                           {isStarred && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />}
                           {item._source === "general" && <Globe className="h-3 w-3 text-muted-foreground" />}
@@ -775,6 +777,11 @@ export default function CorrespondencePage() {
                       selected.priority === "medium" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"
                     }`}>{selected.priority || "medium"}</span>
                     {selected.status && <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">{selected.status.replace(/_/g, " ")}</span>}
+                    {selected.requiresResponse && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 font-medium flex items-center gap-1">
+                        <Clock className="h-3 w-3" /> Response required
+                      </span>
+                    )}
                   </div>
                   <h2 className="text-lg font-semibold mt-2 leading-snug">{selected.subject}</h2>
                   <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
@@ -1230,6 +1237,23 @@ export default function CorrespondencePage() {
                   single
                   className="mt-1"
                 />
+              </div>
+            </div>
+            {/* Requires Response toggle */}
+            <div
+              onClick={() => setCompose(f => ({ ...f, requiresResponse: !f.requiresResponse }))}
+              className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-3 cursor-pointer transition-colors select-none ${compose.requiresResponse ? "border-primary/40 bg-primary/5" : "border-border hover:bg-muted/40"}`}
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium leading-none">Requires a response</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {compose.requiresResponse
+                    ? `SLA reminders will be scheduled for recipients${compose.dueDate ? " based on the due date" : " (48h unread · 72h no-response)"}`
+                    : "No reminders or SLA tracking — suitable for informational messages"}
+                </p>
+              </div>
+              <div className={`shrink-0 w-9 h-5 rounded-full relative transition-colors ${compose.requiresResponse ? "bg-primary" : "bg-muted-foreground/30"}`}>
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${compose.requiresResponse ? "translate-x-4" : "translate-x-0.5"}`} />
               </div>
             </div>
             {/* Attachments */}
