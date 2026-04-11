@@ -714,7 +714,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 <Select value={bulkTrsForm.purpose} onValueChange={v => setBulkTrsForm(f => ({ ...f, purpose: v }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {[["for_information","For Information"],["for_review","For Review"],["for_approval","For Approval"],["for_construction","For Construction"],["as_built","As Built"]].map(([v,l]) => (
+                    {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
                       <SelectItem key={v} value={v}>{l}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1212,7 +1212,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 <Select value={wfForm.purpose} onValueChange={v => setWfForm(f => ({ ...f, purpose: v }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {[["for_review","For Review"],["for_approval","For Approval"],["for_information","For Information"],["for_construction","For Construction"],["as_built","As Built"]].map(([v,l]) => (
+                    {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
                       <SelectItem key={v} value={v}>{l}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1550,6 +1550,40 @@ function CompareRevisionsDialog({ doc, projectId, open, onClose }: { doc: any; p
 }
 
 // ─── Transmittals Tab ─────────────────────────────────────────────────────────
+const TRS_PURPOSE_LABELS: Record<string, string> = {
+  for_information: "For Information",
+  for_review:      "For Review",
+  for_approval:    "For Approval",
+  for_action:      "For Action",
+  for_construction:"For Construction",
+  for_record:      "For Record / Filing",
+  as_built:        "As Built",
+};
+
+const TRS_REVIEW_CODES: { value: string; label: string; cls: string }[] = [
+  { value: "A", label: "A — Approved",              cls: "bg-emerald-100 text-emerald-800" },
+  { value: "B", label: "B — Approved as Noted",     cls: "bg-teal-100 text-teal-800" },
+  { value: "C", label: "C — Revise & Resubmit",     cls: "bg-amber-100 text-amber-800" },
+  { value: "D", label: "D — Rejected",              cls: "bg-red-100 text-red-800" },
+];
+
+function TrsReviewPill({ code }: { code?: string | null }) {
+  if (!code) return <span className="text-muted-foreground text-xs">—</span>;
+  const entry = TRS_REVIEW_CODES.find(r => r.value === code);
+  if (!entry) return <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">{code}</span>;
+  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${entry.cls}`}>{entry.label}</span>;
+}
+
+function TrsDirectionBadge({ direction }: { direction?: string | null }) {
+  if (!direction) return <span className="text-muted-foreground text-xs">—</span>;
+  const isIn = direction === "incoming";
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[11px] px-2 py-0.5 rounded-full font-semibold ${isIn ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400"}`}>
+      {isIn ? "↓ Incoming" : "↑ Outgoing"}
+    </span>
+  );
+}
+
 function TransmittalsTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -1559,9 +1593,10 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareForm, setShareForm] = useState({ expiresInDays: "30", password: "" });
   const [shareResult, setShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
+  const [directionFilter, setDirectionFilter] = useState("all");
   const [form, setForm] = useState({
     subject: "", description: "", purpose: "for_information",
-    toExternal: "", externalEmails: "", dueDate: "",
+    toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing",
   });
   const [createDocIds, setCreateDocIds] = useState<number[]>([]);
   const [addItemDocId, setAddItemDocId] = useState("_none");
@@ -1573,7 +1608,10 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
       return r.json();
     },
   });
-  const transmittals = Array.isArray(transmittalsData) ? transmittalsData : (transmittalsData?.transmittals ?? transmittalsData ?? []);
+  const allTransmittals = Array.isArray(transmittalsData) ? transmittalsData : (transmittalsData?.transmittals ?? transmittalsData ?? []);
+  const transmittals = allTransmittals.filter((t: any) =>
+    directionFilter === "all" || (t.direction ?? "") === directionFilter
+  );
 
   // Full detail query (with items) when detail sheet is open
   const { data: detailData, refetch: refetchDetail } = useQuery({
@@ -1624,7 +1662,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       setIsCreateOpen(false);
-      setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "" });
+      setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" });
       setCreateDocIds([]);
       toast({ title: "Transmittal created" });
     },
@@ -1684,18 +1722,39 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
     },
   });
 
-  const purposes = ["for_information", "for_review", "for_approval", "for_construction", "as_built"];
+  const setItemReviewCode = async (itemId: number, reviewCode: string | null) => {
+    await fetch(`/api/projects/${projectId}/transmittals/${selected!.id}/items/${itemId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewCode }),
+    });
+    refetchDetail();
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div>
           <h3 className="font-semibold text-lg">Transmittals</h3>
-          <p className="text-sm text-muted-foreground">{transmittals.length} transmittal(s) in this project</p>
+          <p className="text-sm text-muted-foreground">{allTransmittals.length} transmittal(s) in this project</p>
         </div>
         <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
           <Plus className="h-4 w-4" /> New Transmittal
         </Button>
+      </div>
+
+      {/* Direction filter chips */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-xs text-muted-foreground font-medium">Direction:</span>
+        {[["all","All"], ["outgoing","↑ Outgoing"], ["incoming","↓ Incoming"]].map(([val, label]) => (
+          <button
+            key={val}
+            onClick={() => setDirectionFilter(val)}
+            className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${directionFilter === val ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground border-border hover:bg-muted"}`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
@@ -1706,13 +1765,31 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
             </div>
+            {/* Direction */}
+            <div>
+              <Label>Direction</Label>
+              <div className="flex gap-2 mt-1">
+                {(["outgoing", "incoming"] as const).map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, direction: d }))}
+                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${form.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
+                  >
+                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Purpose</Label>
                 <Select value={form.purpose} onValueChange={v => setForm(f => ({ ...f, purpose: v }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {purposes.map(p => <SelectItem key={p} value={p}>{p.replace(/_/g, " ")}</SelectItem>)}
+                    {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
+                      <SelectItem key={v} value={v}>{l}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1783,27 +1860,31 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
-              <TableHead>TRS No.</TableHead>
+              <TableHead className="w-[120px]">TRS No.</TableHead>
               <TableHead>Subject</TableHead>
-              <TableHead>Purpose</TableHead>
-              <TableHead>To</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Due</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="w-[90px]">Direction</TableHead>
+              <TableHead className="w-[140px]">Purpose</TableHead>
+              <TableHead className="w-[140px]">To</TableHead>
+              <TableHead className="w-[90px]">Status</TableHead>
+              <TableHead className="w-[90px]">Due</TableHead>
+              <TableHead className="w-[110px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !transmittals.length ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">No transmittals yet. Create the first one.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                {directionFilter !== "all" ? "No transmittals matching this direction filter." : "No transmittals yet. Create the first one."}
+              </TableCell></TableRow>
             ) : transmittals.map((t: any) => {
               const isOverdue = t.dueDate && new Date(t.dueDate) < new Date() && t.status !== "acknowledged";
               return (
                 <TableRow key={t.id} className={`hover:bg-muted/30 ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
                   <TableCell className="font-mono text-xs font-medium">{t.transmittalNumber}</TableCell>
                   <TableCell className="max-w-xs"><span className="line-clamp-1">{t.subject}</span></TableCell>
-                  <TableCell className="text-xs capitalize">{(t.purpose || "").replace(/_/g, " ")}</TableCell>
+                  <TableCell><TrsDirectionBadge direction={t.direction} /></TableCell>
+                  <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>
                   <TableCell><StatusBadge status={t.status} /></TableCell>
                   <TableCell>
@@ -1852,7 +1933,8 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                 <h3 className="font-semibold">{selected.subject}</h3>
                 <div className="flex items-center gap-2 flex-wrap">
                   <StatusBadge status={selected.status} />
-                  <span className="text-xs text-muted-foreground capitalize">{(selected.purpose || "").replace(/_/g, " ")}</span>
+                  <TrsDirectionBadge direction={selected.direction} />
+                  <span className="text-xs text-muted-foreground">{TRS_PURPOSE_LABELS[selected.purpose] ?? (selected.purpose || "").replace(/_/g, " ")}</span>
                   {selected.dueDate && (
                     <span className="text-xs text-muted-foreground">Due: {format(new Date(selected.dueDate), "dd MMM yyyy")}</span>
                   )}
@@ -1887,10 +1969,39 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                     {detailItems.map((item: any) => (
                       <div key={item.id} className="flex items-center gap-2 p-2 group">
                         <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="font-mono text-xs text-muted-foreground shrink-0">{item.document?.documentNumber ?? "—"}</span>
-                        <span className="text-xs truncate flex-1">{item.document?.title ?? item.fileName ?? "Attachment"}</span>
-                        {item.document?.fileUrl && (
-                          <a href={item.document.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></a>
+                        <span className="font-mono text-xs text-muted-foreground shrink-0">{item.documentNumber ?? "—"}</span>
+                        <span className="text-xs truncate flex-1">{item.documentTitle ?? item.fileName ?? "Attachment"}</span>
+                        {/* Review Code */}
+                        <div className="shrink-0">
+                          {item.reviewCode ? (
+                            <TrsReviewPill code={item.reviewCode} />
+                          ) : (
+                            selected.status !== "draft" && (
+                              <Select
+                                value=""
+                                onValueChange={v => setItemReviewCode(item.id, v || null)}
+                              >
+                                <SelectTrigger className="h-6 text-[10px] w-28 border-dashed text-muted-foreground">
+                                  <SelectValue placeholder="Set code…" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {TRS_REVIEW_CODES.map(rc => (
+                                    <SelectItem key={rc.value} value={rc.value} className="text-xs">{rc.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )
+                          )}
+                          {item.reviewCode && (
+                            <button
+                              className="ml-1 text-muted-foreground hover:text-destructive text-[10px]"
+                              onClick={() => setItemReviewCode(item.id, null)}
+                              title="Clear review code"
+                            >✕</button>
+                          )}
+                        </div>
+                        {(item.fileUrl || item.documentTitle) && (
+                          <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></a>
                         )}
                         <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => removeItemMutation.mutate({ transmittalId: selected.id, itemId: item.id })}>
                           <X className="h-3 w-3" />

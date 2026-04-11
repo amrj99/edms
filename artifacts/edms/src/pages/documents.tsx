@@ -876,8 +876,10 @@ export default function DocumentsPage() {
                 <SelectContent>
                   <SelectItem value="for_review">For Review</SelectItem>
                   <SelectItem value="for_approval">For Approval</SelectItem>
+                  <SelectItem value="for_action">For Action</SelectItem>
                   <SelectItem value="for_information">For Information</SelectItem>
                   <SelectItem value="for_construction">For Construction</SelectItem>
+                  <SelectItem value="for_record">For Record / Filing</SelectItem>
                 </SelectContent>
               </Select>
             </div>
