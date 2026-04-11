@@ -21,3 +21,4 @@ export * from "./chat";
 export * from "./rules";
 export * from "./skills";
 export * from "./migrations";
+export * from "./governance";

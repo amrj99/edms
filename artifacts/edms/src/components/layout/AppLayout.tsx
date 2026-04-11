@@ -11,7 +11,7 @@ import { useOrgContext } from "@/lib/org-context";
 
 import {
   Brain, Building2, CheckSquare, FolderKanban, Home, Inbox, LogOut, Moon,
-  Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send,
+  Search, Settings, Sun, Users, Bell, BarChart3, SlidersHorizontal, Send, UserCheck,
   X, Check, CheckCheck, Mail, Clock, ChevronDown, ChevronRight, ShieldCheck,
   History, Star, FileText, ClipboardList, AlertCircle, ClipboardCheck, User,
   CalendarDays, FileSearch, Hash, Loader2, ListTodo, TrendingUp, MessageSquare,
@@ -380,6 +380,7 @@ export function AppSidebar() {
     ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: t("navSearch"), url: "/search", icon: Search },
+    { title: "Delegations", url: "/delegations", icon: UserCheck },
   ];
 
   const adminNav = [

@@ -15,6 +15,8 @@ export const documentStatusEnum = pgEnum("document_status", [
   "issued",
   "superseded",
   "void",
+  "archived",
+  "obsolete",
 ]);
 
 export const foldersTable = pgTable("folders", {

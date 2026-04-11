@@ -454,22 +454,51 @@ router.put("/:id", requireAuth, async (req, res) => {
   res.json({ ...doc });
 });
 
+// Statuses that are protected from deletion (lifecycle governance).
+// Only sysAdmin can hard-delete these, and must provide a mandatory reason.
+const LIFECYCLE_LOCKED_STATUSES = new Set(["approved", "approved_with_comments", "issued", "archived", "obsolete", "superseded"]);
+
 router.delete("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
   const caller = req.user!;
+  const { reason } = req.body ?? {};
 
-  // Only project managers, admins, or the document creator can delete a document
-  const [existing] = await db.select({ createdById: documentsTable.createdById, title: documentsTable.title, documentNumber: documentsTable.documentNumber }).from(documentsTable)
+  const [existing] = await db.select({ createdById: documentsTable.createdById, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status }).from(documentsTable)
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
-  const canDelete = isSysAdmin(caller) || caller.role === "project_manager" || existing.createdById === caller.id;
-  if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only project managers, admins, or the document creator can delete documents" }); return; }
+  const isLocked = LIFECYCLE_LOCKED_STATUSES.has(existing.status);
+
+  if (isLocked) {
+    // Lifecycle-locked documents can only be hard-deleted by sysAdmin with a mandatory reason
+    if (!isSysAdmin(caller)) {
+      res.status(403).json({
+        error: "Forbidden",
+        message: `Documents with status '${existing.status}' cannot be deleted. Use Archive or Mark Obsolete instead.`,
+        suggestion: "archive_or_obsolete",
+      }); return;
+    }
+    if (!reason?.trim()) {
+      res.status(400).json({ error: "A reason is required to hard-delete a lifecycle-locked document" }); return;
+    }
+  } else {
+    // Unlocked documents: PM, admin, or creator can delete
+    const canDelete = isSysAdmin(caller) || caller.role === "project_manager" || existing.createdById === caller.id;
+    if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only project managers, admins, or the document creator can delete documents" }); return; }
+  }
 
   await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
   await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
-  await createAuditLog({ userId: caller.id, action: "delete", entityType: "document", entityId: id, entityTitle: `${existing.documentNumber} — ${existing.title}`, projectId });
+  await createAuditLog({
+    userId: caller.id,
+    action: isLocked ? "hard_delete" : "delete",
+    entityType: "document",
+    entityId: id,
+    entityTitle: `${existing.documentNumber} — ${existing.title}`,
+    projectId,
+    details: isLocked ? { reason: reason?.trim(), priorStatus: existing.status } : undefined,
+  });
   res.status(204).send();
 });
 
@@ -961,6 +990,92 @@ router.delete("/:id/files/:fileId", requireAuth, async (req, res) => {
   }
 
   res.status(204).end();
+});
+
+// ─── Lifecycle transitions: archive and obsolete ──────────────────────────────
+
+router.patch("/:id/archive", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const caller = req.user!;
+  const { reason } = req.body ?? {};
+
+  if (!reason?.trim()) {
+    res.status(400).json({ error: "A reason is required to archive a document" }); return;
+  }
+  if (!isSysAdmin(caller) && !["admin", "project_manager"].includes(caller.role)) {
+    res.status(403).json({ error: "Only project managers and admins can archive documents" }); return;
+  }
+
+  const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
+    .from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .limit(1);
+  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+
+  if (doc.status === "archived") {
+    res.status(400).json({ error: "Document is already archived" }); return;
+  }
+
+  const [updated] = await db.update(documentsTable)
+    .set({ status: "archived", updatedAt: new Date() })
+    .where(eq(documentsTable.id, id))
+    .returning();
+
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId,
+    action: "archive",
+    entityType: "document",
+    entityId: id,
+    entityTitle: `${doc.documentNumber} — ${doc.title}`,
+    projectId,
+    details: { reason: reason.trim(), previousStatus: doc.status },
+  });
+
+  res.json(updated);
+});
+
+router.patch("/:id/obsolete", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const caller = req.user!;
+  const { reason, supersededByDocumentId } = req.body ?? {};
+
+  if (!reason?.trim()) {
+    res.status(400).json({ error: "A reason is required to mark a document obsolete" }); return;
+  }
+  if (!isSysAdmin(caller) && !["admin", "project_manager"].includes(caller.role)) {
+    res.status(403).json({ error: "Only project managers and admins can mark documents obsolete" }); return;
+  }
+
+  const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
+    .from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .limit(1);
+  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+
+  if (doc.status === "obsolete") {
+    res.status(400).json({ error: "Document is already marked obsolete" }); return;
+  }
+
+  const [updated] = await db.update(documentsTable)
+    .set({ status: "obsolete", updatedAt: new Date() })
+    .where(eq(documentsTable.id, id))
+    .returning();
+
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId,
+    action: "mark_obsolete",
+    entityType: "document",
+    entityId: id,
+    entityTitle: `${doc.documentNumber} — ${doc.title}`,
+    projectId,
+    details: { reason: reason.trim(), previousStatus: doc.status, supersededByDocumentId: supersededByDocumentId ?? null },
+  });
+
+  res.json(updated);
 });
 
 export default router;

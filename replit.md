@@ -23,7 +23,10 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 **Core Architectural Decisions:**
 
 - **Monorepo Structure:** Facilitates code sharing and consistent tooling.
-- **Role-Based Access Control (RBAC):** Granular permissions for users across organizations and projects.
+- **Role-Based Access Control (RBAC):** Granular permissions for users across organizations and projects. Fixed core roles (system_owner, admin, project_manager, document_controller, reviewer, viewer). System-level permissions are enforced in code.
+- **Governance — Delegation:** Time-bound authority delegation. PM/admin can delegate their role to another user for a defined period (org-wide or project-scoped). Full audit trail. Routes: GET/POST/DELETE /api/delegations.
+- **Governance — Project Role Overrides:** Temporary project-level role elevation without changing org role. PM/admin can elevate a member's role within a project until a set expiry. Routes: GET/POST/DELETE /api/projects/:projectId/role-overrides.
+- **Document Lifecycle Governance:** Approved, issued, archived, and obsolete documents are protected from deletion. Non-admin users see Archive and Mark Obsolete actions instead of delete. SysAdmin hard-delete requires mandatory reason and is logged as `hard_delete`. Status enum includes `archived` and `obsolete`.
 - **Dynamic Metadata System:** Allows administrators to define custom fields for documents and correspondence.
 - **AI Integration:** Utilizes Replit AI Integrations (OpenAI proxy) for document analysis, task prioritization, and natural language search.
 - **OpenAPI Specification:** Used for API definition and client code generation via Orval.

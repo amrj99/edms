@@ -8,7 +8,7 @@ import {
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
-  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus,
+  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -32,6 +32,7 @@ import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
+import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -144,6 +145,7 @@ export default function ProjectDetail() {
     { value: "tasks", icon: CheckSquare, label: "Tasks" },
     { value: "workflows", icon: GitBranch, label: "Workflows" },
     { value: "members", icon: Users, label: "Members" },
+    { value: "role-overrides", icon: ShieldCheck, label: "Role Overrides" },
   ];
 
   return (
@@ -203,6 +205,9 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="members">
             <MembersTab projectId={projectId} />
+          </TabsContent>
+          <TabsContent value="role-overrides">
+            <ProjectRoleOverridesTab projectId={projectId} />
           </TabsContent>
         </div>
       </Tabs>

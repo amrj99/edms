@@ -39,6 +39,8 @@ import skillsRouter from "./skills.js";
 import migrationsRouter from "./migrations.js";
 import billingRouter from "./billing.js";
 import workflowEngineRouter from "./workflow-engine.js";
+import delegationsRouter from "./delegations.js";
+import projectRoleOverridesRouter from "./project-role-overrides.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 const router: IRouter = Router();
@@ -100,5 +102,7 @@ router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
 router.use("/billing", billingRouter);
 router.use("/workflow-engine", workflowEngineRouter);
+router.use("/delegations", delegationsRouter);
+router.use("/projects/:projectId", projectRoleOverridesRouter);
 
 export default router;
