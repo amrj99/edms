@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, workflowsTable, tasksTable, correspondenceTable, correspondenceRecipientsTable, usersTable, foldersTable, projectsTable, meetingsTable, meetingActionItemsTable, ncrRecordsTable, deliverablesTable } from "@workspace/db";
+import {
+  documentsTable, wfInstancesTable, wfTemplateStagesTable, tasksTable,
+  correspondenceTable, correspondenceRecipientsTable, usersTable,
+  foldersTable, projectsTable, meetingsTable, meetingActionItemsTable,
+  ncrRecordsTable, deliverablesTable,
+} from "@workspace/db";
 import { eq, and, count, desc, gte, lt, lte, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 
@@ -9,10 +14,8 @@ const router = Router();
 router.get("/", requireAuth, async (req, res) => {
   const userId = req.user!.id;
   const orgId = req.user!.organizationId;
-  const isSystemOwner = req.user!.role === "system_owner";
   const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
 
-  // Resolve org-scoped project IDs when org context is active
   let orgProjectIds: number[] | undefined;
   if (!projectId && orgId) {
     const orgProjects = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
@@ -22,14 +25,14 @@ router.get("/", requireAuth, async (req, res) => {
   const buildDocFilter = () => {
     if (projectId) return and(eq(documentsTable.projectId, projectId));
     if (orgProjectIds && orgProjectIds.length > 0) return inArray(documentsTable.projectId, orgProjectIds);
-    if (orgProjectIds && orgProjectIds.length === 0) return eq(documentsTable.projectId, -1); // no projects => no docs
+    if (orgProjectIds && orgProjectIds.length === 0) return eq(documentsTable.projectId, -1);
     return undefined;
   };
 
   const buildWfFilter = (extra?: ReturnType<typeof eq>) => {
-    if (projectId) return and(eq(workflowsTable.projectId, projectId), extra);
-    if (orgProjectIds && orgProjectIds.length > 0) return and(inArray(workflowsTable.projectId, orgProjectIds), extra);
-    if (orgProjectIds && orgProjectIds.length === 0) return and(eq(workflowsTable.projectId, -1), extra);
+    if (projectId) return and(eq(wfInstancesTable.projectId, projectId), extra);
+    if (orgProjectIds && orgProjectIds.length > 0) return and(inArray(wfInstancesTable.projectId, orgProjectIds), extra);
+    if (orgProjectIds && orgProjectIds.length === 0) return and(eq(wfInstancesTable.projectId, -1), extra);
     return extra;
   };
 
@@ -39,16 +42,14 @@ router.get("/", requireAuth, async (req, res) => {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  // Stats
   const [totalDocsResult] = await db.select({ cnt: count() }).from(documentsTable).where(docFilter);
 
-  const [pendingApprovalsResult] = await db.select({ cnt: count() }).from(workflowsTable)
-    .where(buildWfFilter(eq(workflowsTable.status, "active")));
+  const [pendingApprovalsResult] = await db.select({ cnt: count() }).from(wfInstancesTable)
+    .where(buildWfFilter(eq(wfInstancesTable.status, "active") as any));
 
   const [openTasksResult] = await db.select({ cnt: count() }).from(tasksTable)
     .where(and(eq(tasksTable.assignedToId, userId), eq(tasksTable.status, "pending")));
 
-  // Unread correspondence
   const receivedRels = await db.select({ corrId: correspondenceRecipientsTable.correspondenceId })
     .from(correspondenceRecipientsTable)
     .where(eq(correspondenceRecipientsTable.userId, userId));
@@ -66,10 +67,9 @@ router.get("/", requireAuth, async (req, res) => {
       ? and(docFilter, gte(documentsTable.createdAt, startOfMonth))
       : gte(documentsTable.createdAt, startOfMonth));
 
-  const [activeWorkflowsResult] = await db.select({ cnt: count() }).from(workflowsTable)
-    .where(buildWfFilter(eq(workflowsTable.status, "active")));
+  const [activeWorkflowsResult] = await db.select({ cnt: count() }).from(wfInstancesTable)
+    .where(buildWfFilter(eq(wfInstancesTable.status, "active") as any));
 
-  // Recent documents
   let recentDocs = await db.select({
     doc: documentsTable,
     createdBy: usersTable,
@@ -81,26 +81,34 @@ router.get("/", requireAuth, async (req, res) => {
     .orderBy(desc(documentsTable.updatedAt))
     .limit(5);
 
-  // Pending approvals workflows
-  let pendingWorkflows = await db.select().from(workflowsTable)
-    .where(buildWfFilter(eq(workflowsTable.status, "active")))
-    .orderBy(desc(workflowsTable.updatedAt))
+  // Pending approvals from new workflow engine
+  let pendingWorkflows = await db.select({
+    wf: wfInstancesTable,
+    stage: wfTemplateStagesTable,
+  }).from(wfInstancesTable)
+    .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
+    .where(buildWfFilter(eq(wfInstancesTable.status, "active") as any))
+    .orderBy(desc(wfInstancesTable.updatedAt))
     .limit(5);
 
-  // Enrich workflows with doc info
-  const docIds = pendingWorkflows.map(w => w.documentId);
-  const workflowDocs = docIds.length > 0 ? await db.select().from(documentsTable) : [];
+  const docIds = pendingWorkflows.map(w => w.wf.documentId);
+  const workflowDocs = docIds.length > 0 ? await db.select().from(documentsTable).where(inArray(documentsTable.id, docIds)) : [];
   const workflowUsers = await db.select().from(usersTable);
   const docMap = new Map(workflowDocs.map(d => [d.id, d]));
   const userMap = new Map(workflowUsers.map(u => [u.id, u]));
 
-  const enrichedWorkflows = pendingWorkflows.map(w => {
-    const doc = docMap.get(w.documentId);
-    const initiatedBy = userMap.get(w.initiatedById);
-    return { ...w, documentTitle: doc?.title, documentNumber: doc?.documentNumber, initiatedByName: initiatedBy ? `${initiatedBy.firstName} ${initiatedBy.lastName}` : undefined, steps: [] };
+  const enrichedWorkflows = pendingWorkflows.map(({ wf, stage }) => {
+    const doc = docMap.get(wf.documentId);
+    const initiatedBy = userMap.get(wf.initiatedById);
+    return {
+      ...wf,
+      currentStageName: stage?.name,
+      documentTitle: doc?.title,
+      documentNumber: doc?.documentNumber,
+      initiatedByName: initiatedBy ? `${initiatedBy.firstName} ${initiatedBy.lastName}` : undefined,
+    };
   });
 
-  // My tasks
   const myTasks = await db.select({
     task: tasksTable,
     project: projectsTable,
@@ -110,7 +118,6 @@ router.get("/", requireAuth, async (req, res) => {
     .orderBy(desc(tasksTable.updatedAt))
     .limit(5);
 
-  // Unread correspondence items
   let unreadCorrItems: any[] = [];
   if (receivedIds.length > 0) {
     const items = await db.select().from(correspondenceTable)
@@ -173,19 +180,16 @@ router.get("/reports", requireAuth, async (req, res) => {
     return undefined;
   };
 
-  // Documents by status
   const docsByStatus = await db
     .select({ status: documentsTable.status, cnt: count() })
     .from(documentsTable)
     .where(buildFilter(documentsTable.projectId))
     .groupBy(documentsTable.status);
 
-  // Open NCRs (status = open or in_progress)
   const openNcrs = await db.select().from(ncrRecordsTable)
     .where(and(buildFilter(ncrRecordsTable.projectId), sql`${ncrRecordsTable.status} IN ('open','in_progress')`))
     .orderBy(desc(ncrRecordsTable.createdAt)).limit(20);
 
-  // Meeting action items — overdue
   const allActionItems = await db.select({
     item: meetingActionItemsTable,
     meeting: { projectId: meetingsTable.projectId, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber },
@@ -210,7 +214,6 @@ router.get("/reports", requireAuth, async (req, res) => {
     assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
   }));
 
-  // Meetings this week
   const meetingsThisWeek = await db.select({
     meeting: meetingsTable,
     project: { name: projectsTable.name, code: projectsTable.code },
@@ -224,7 +227,6 @@ router.get("/reports", requireAuth, async (req, res) => {
     ))
     .orderBy(meetingsTable.meetingDate);
 
-  // Correspondence volume last 7 days (by day) — scoped to org
   const recentCorr = await db.select({
     id: correspondenceTable.id,
     createdAt: correspondenceTable.createdAt,
@@ -237,7 +239,6 @@ router.get("/reports", requireAuth, async (req, res) => {
     ))
     .orderBy(correspondenceTable.createdAt);
 
-  // Group by date
   const corrByDay: Record<string, number> = {};
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now); d.setDate(now.getDate() - i); d.setHours(0, 0, 0, 0);
@@ -248,7 +249,6 @@ router.get("/reports", requireAuth, async (req, res) => {
     if (corrByDay[day] !== undefined) corrByDay[day]++;
   });
 
-  // Deliverables progress
   const deliverables = await db.select()
     .from(deliverablesTable)
     .where(buildFilter(deliverablesTable.projectId));

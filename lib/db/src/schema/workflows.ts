@@ -1,69 +1,10 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { pgTable, serial, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
 import { documentsTable } from "./documents";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { organizationsTable } from "./organizations";
 
-// ─── Legacy Workflow System (unchanged — DO NOT MODIFY) ────────────────────────
-
-export const workflowStepEnum = pgEnum("workflow_step", [
-  "uploaded",
-  "under_review",
-  "approved",
-  "issued",
-  "rejected",
-]);
-
-export const workflowStatusEnum = pgEnum("workflow_status", [
-  "active",
-  "completed",
-  "rejected",
-  "cancelled",
-]);
-
-export const workflowActionEnum = pgEnum("workflow_action", [
-  "approved",
-  "approved_with_comments",
-  "for_revision",
-  "rejected",
-  "commented",
-  "submitted",
-]);
-
-export const workflowsTable = pgTable("workflows", {
-  id: serial("id").primaryKey(),
-  documentId: integer("document_id").references(() => documentsTable.id).notNull(),
-  projectId: integer("project_id").references(() => projectsTable.id).notNull(),
-  currentStep: workflowStepEnum("current_step").notNull().default("uploaded"),
-  status: workflowStatusEnum("status").notNull().default("active"),
-  initiatedById: integer("initiated_by_id").references(() => usersTable.id).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
-
-export const workflowStepsTable = pgTable("workflow_steps", {
-  id: serial("id").primaryKey(),
-  workflowId: integer("workflow_id").references(() => workflowsTable.id).notNull(),
-  step: text("step").notNull(),
-  action: workflowActionEnum("action").notNull(),
-  comment: text("comment"),
-  userId: integer("user_id").references(() => usersTable.id).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-export const insertWorkflowSchema = createInsertSchema(workflowsTable).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-
-export type InsertWorkflow = z.infer<typeof insertWorkflowSchema>;
-export type Workflow = typeof workflowsTable.$inferSelect;
-export type WorkflowStep = typeof workflowStepsTable.$inferSelect;
-
-// ─── Configurable Workflow Engine (additive — legacy tables untouched) ─────────
+// ─── Configurable Workflow Engine ─────────────────────────────────────────────
 
 /**
  * wf_templates — a named workflow definition scoped to one org.
@@ -98,9 +39,8 @@ export const wfTemplateStagesTable = pgTable("wf_template_stages", {
   responsibleRole: text("responsible_role"),
   responsibleUserId: integer("responsible_user_id").references(() => usersTable.id),
   isTerminal: boolean("is_terminal").notNull().default(false),
-  // SLA: null means no SLA for this stage (no due date, no reminder, no overdue flag)
-  slaDays: integer("sla_days"),          // calendar days allowed for this stage
-  reminderDays: integer("reminder_days"), // days before due to send first reminder
+  slaDays: integer("sla_days"),
+  reminderDays: integer("reminder_days"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -119,7 +59,6 @@ export const wfInstancesTable = pgTable("wf_instances", {
   currentStageId: integer("current_stage_id").references(() => wfTemplateStagesTable.id),
   status: text("status").notNull().default("active"),
   initiatedById: integer("initiated_by_id").references(() => usersTable.id).notNull(),
-  // SLA tracking: set when a stage with slaDays is entered; null = no SLA on current stage
   stageDueAt: timestamp("stage_due_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

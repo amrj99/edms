@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, type DragEvent, type ChangeEvent } from "react";
+import { useRef, useState, useCallback, useEffect, type DragEvent, type ChangeEvent } from "react";
 import {
   FileText, Upload, X, Check, AlertCircle, Copy, Loader2,
   ChevronDown, ChevronUp, ClipboardCopy,
@@ -102,14 +102,67 @@ function uploadWithProgress(file: File, uploadUrl: string, onProgress: (pct: num
   });
 }
 
+interface DocNumberCheck {
+  checking: boolean;
+  available: boolean | null;
+  existingDocumentId?: number;
+  existingTitle?: string;
+}
+
 export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess }: UploadDocumentsDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [docNumberChecks, setDocNumberChecks] = useState<Record<string, DocNumberCheck>>({});
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const anyUploading = isUploading || files.some(f => f.uploadStatus === "uploading");
+
+  const checkDocNumber = useCallback((fileId: string, docNumber: string) => {
+    if (!docNumber.trim()) {
+      setDocNumberChecks(prev => ({ ...prev, [fileId]: { checking: false, available: null } }));
+      return;
+    }
+    // Show spinner immediately
+    setDocNumberChecks(prev => ({ ...prev, [fileId]: { checking: true, available: null } }));
+    // Clear any existing timer for this file
+    if (debounceTimers.current[fileId]) clearTimeout(debounceTimers.current[fileId]);
+    debounceTimers.current[fileId] = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/projects/${projectId}/documents/check-number?number=${encodeURIComponent(docNumber.trim())}`,
+          { credentials: "include" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setDocNumberChecks(prev => ({
+            ...prev,
+            [fileId]: {
+              checking: false,
+              available: data.available,
+              existingDocumentId: data.existingDocumentId,
+              existingTitle: data.existingTitle,
+            },
+          }));
+        } else {
+          setDocNumberChecks(prev => ({ ...prev, [fileId]: { checking: false, available: null } }));
+        }
+      } catch {
+        setDocNumberChecks(prev => ({ ...prev, [fileId]: { checking: false, available: null } }));
+      }
+    }, 400);
+  }, [projectId]);
+
+  // Clear checks when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setDocNumberChecks({});
+      Object.values(debounceTimers.current).forEach(clearTimeout);
+      debounceTimers.current = {};
+    }
+  }, [open]);
 
   const addFiles = useCallback((incoming: File[]) => {
     const valid = incoming.filter(f => f.size <= MAX_MB * 1024 * 1024);
@@ -149,8 +202,12 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
 
   const removeFile = (id: string) => setFiles(prev => prev.filter(f => f.id !== id));
 
-  const updateMeta = (id: string, patch: Partial<DocMeta>) =>
+  const updateMeta = (id: string, patch: Partial<DocMeta>) => {
     setFiles(prev => prev.map(f => f.id === id ? { ...f, meta: { ...f.meta, ...patch } } : f));
+    if ("docNumber" in patch) {
+      checkDocNumber(id, patch.docNumber ?? "");
+    }
+  };
 
   const toggleExpand = (id: string) =>
     setFiles(prev => prev.map(f => f.id === id ? { ...f, expanded: !f.expanded } : f));
@@ -388,13 +445,39 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                       </div>
                       <div>
                         <Label className="text-xs font-medium">Document Number</Label>
-                        <Input
-                          value={entry.meta.docNumber}
-                          onChange={e => updateMeta(entry.id, { docNumber: e.target.value })}
-                          placeholder="Auto-generated if blank"
-                          className="mt-1 h-8 text-sm font-mono"
-                          disabled={entry.uploadStatus === "uploading"}
-                        />
+                        <div className="relative mt-1">
+                          <Input
+                            value={entry.meta.docNumber}
+                            onChange={e => updateMeta(entry.id, { docNumber: e.target.value })}
+                            placeholder="Auto-generated if blank"
+                            className={cn(
+                              "h-8 text-sm font-mono pr-7",
+                              docNumberChecks[entry.id]?.available === false && "border-amber-400 focus-visible:ring-amber-400/30"
+                            )}
+                            disabled={entry.uploadStatus === "uploading"}
+                          />
+                          {entry.meta.docNumber && docNumberChecks[entry.id]?.checking && (
+                            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground animate-spin" />
+                          )}
+                          {entry.meta.docNumber && docNumberChecks[entry.id]?.available === true && (
+                            <Check className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-emerald-500" />
+                          )}
+                          {entry.meta.docNumber && docNumberChecks[entry.id]?.available === false && (
+                            <AlertCircle className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-amber-500" />
+                          )}
+                        </div>
+                        {docNumberChecks[entry.id]?.available === false && (
+                          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-start gap-1">
+                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                            <span>
+                              Number already exists
+                              {docNumberChecks[entry.id]?.existingTitle && (
+                                <> — &ldquo;{docNumberChecks[entry.id]!.existingTitle}&rdquo;</>
+                              )}
+                              . Upload will be blocked. Change the number or leave blank for auto-generation.
+                            </span>
+                          </p>
+                        )}
                       </div>
                       <div>
                         <Label className="text-xs font-medium">Revision</Label>

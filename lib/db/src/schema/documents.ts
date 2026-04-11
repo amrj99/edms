@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, boolean, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean, jsonb, pgEnum, index, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -58,6 +58,7 @@ export const documentsTable = pgTable("documents", {
   index("idx_documents_organization_id").on(t.organizationId),
   index("idx_documents_project_id").on(t.projectId),
   index("idx_documents_status").on(t.status),
+  unique("documents_project_number_unique").on(t.projectId, t.documentNumber),
 ]);
 
 export const documentRevisionsTable = pgTable("document_revisions", {
@@ -65,45 +66,25 @@ export const documentRevisionsTable = pgTable("document_revisions", {
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   documentId: integer("document_id").references(() => documentsTable.id).notNull(),
   revision: text("revision").notNull(),
-  status: text("status").notNull(),
+  status: documentStatusEnum("status").notNull().default("draft"),
   fileUrl: text("file_url"),
   fileName: text("file_name"),
   comment: text("comment"),
-  createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
-  reviewDecision: text("review_decision"),
-  reviewerName: text("reviewer_name"),
+  createdById: integer("created_by_id").references(() => usersTable.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_doc_revisions_organization_id").on(t.organizationId),
-  index("idx_doc_revisions_document_id").on(t.documentId),
-]);
-
-// ─── Document Files (one-to-many file attachments per document) ───────────────
+});
 
 export const documentFilesTable = pgTable("document_files", {
   id: serial("id").primaryKey(),
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   documentId: integer("document_id").references(() => documentsTable.id).notNull(),
-  fileUrl: text("file_url").notNull(),
   fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
-  fileType: text("file_type"), // MIME type
-  uploadedById: integer("uploaded_by_id").references(() => usersTable.id).notNull(),
+  fileType: text("file_type"),
+  uploadedById: integer("uploaded_by_id").references(() => usersTable.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_doc_files_organization_id").on(t.organizationId),
-  index("idx_doc_files_document_id").on(t.documentId),
-]);
-
-export const insertDocumentFileSchema = createInsertSchema(documentFilesTable).omit({
-  id: true,
-  createdAt: true,
 });
-
-export type DocumentFile = typeof documentFilesTable.$inferSelect;
-export type InsertDocumentFile = z.infer<typeof insertDocumentFileSchema>;
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const insertDocumentSchema = createInsertSchema(documentsTable).omit({
   id: true,
@@ -111,17 +92,8 @@ export const insertDocumentSchema = createInsertSchema(documentsTable).omit({
   updatedAt: true,
 });
 
-export const insertFolderSchema = createInsertSchema(foldersTable).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertDocumentRevisionSchema = createInsertSchema(documentRevisionsTable).omit({
-  id: true,
-  createdAt: true,
-});
-
 export type InsertDocument = z.infer<typeof insertDocumentSchema>;
 export type Document = typeof documentsTable.$inferSelect;
-export type Folder = typeof foldersTable.$inferSelect;
 export type DocumentRevision = typeof documentRevisionsTable.$inferSelect;
+export type DocumentFile = typeof documentFilesTable.$inferSelect;
+export type Folder = typeof foldersTable.$inferSelect;

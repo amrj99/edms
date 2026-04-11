@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
-  documentsTable, correspondenceTable, tasksTable, aiLogsTable,
+  documentsTable, correspondenceTable, tasksTable, aiLogsTable, aiAnalysisTable,
 } from "@workspace/db";
-import { eq, and, inArray, gt } from "drizzle-orm";
+import { eq, and, inArray, gt, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import {
   analyzeDocument,
@@ -358,6 +358,37 @@ router.put("/provider", async (req, res) => {
   await updateAIProviderConfig({ provider, fastModel, smartModel });
   const config = await getAIProviderConfig();
   res.json({ ...config, providerStatus: getProviderStatus() });
+});
+
+// ─── AI Analysis History ──────────────────────────────────────────────────────
+
+/**
+ * GET /api/ai/analysis/:entityType/:entityId
+ * Returns the full history of AI analyses for a given entity.
+ * Query params:
+ *   analysisType — filter to a specific analysis type (e.g. "analyze")
+ *   latestOnly   — if "true", return only the most recent isLatest=true row per type
+ */
+router.get("/analysis/:entityType/:entityId", async (req, res) => {
+  const { entityType, entityId: entityIdStr } = req.params;
+  const entityId = parseInt(entityIdStr);
+  const { analysisType, latestOnly } = req.query;
+  const orgId = req.user!.organizationId;
+
+  const conditions: any[] = [
+    eq(aiAnalysisTable.entityType, entityType),
+    eq(aiAnalysisTable.entityId, entityId),
+  ];
+  if (analysisType) conditions.push(eq(aiAnalysisTable.analysisType, analysisType as string));
+  if (latestOnly === "true") conditions.push(eq(aiAnalysisTable.isLatest, true));
+  if (orgId) conditions.push(eq(aiAnalysisTable.organizationId, orgId));
+
+  const rows = await db.select().from(aiAnalysisTable)
+    .where(and(...conditions))
+    .orderBy(desc(aiAnalysisTable.createdAt))
+    .limit(50);
+
+  res.json({ analyses: rows, total: rows.length });
 });
 
 // ─── AI Activity Logs ─────────────────────────────────────────────────────────

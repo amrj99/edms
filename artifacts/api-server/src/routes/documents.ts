@@ -1,9 +1,9 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, workflowsTable, workflowStepsTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
-import { eq, and, count, desc, sql } from "drizzle-orm";
+import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
@@ -185,6 +185,23 @@ router.post("/", requireAuth, async (req, res) => {
   }
   const resolvedDocNumber = documentNumber || `DOC-${projectId}-${Date.now().toString().slice(-6)}`;
 
+  // Pre-check for document number uniqueness before insert (cleaner UX than catching DB error)
+  if (resolvedDocNumber) {
+    const dup = await db.select({ id: documentsTable.id, title: documentsTable.title })
+      .from(documentsTable)
+      .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, resolvedDocNumber)))
+      .limit(1);
+    if (dup.length > 0) {
+      return res.status(409).json({
+        error: "Document number already exists in this project",
+        code: "DUPLICATE_DOCUMENT_NUMBER",
+        existingDocumentId: dup[0].id,
+        existingTitle: dup[0].title,
+        documentNumber: resolvedDocNumber,
+      });
+    }
+  }
+
   const [doc] = await db.insert(documentsTable).values({
     documentNumber: resolvedDocNumber, title: title.trim(), documentType, discipline,
     revision: revision || "A",
@@ -311,6 +328,23 @@ router.post("/", requireAuth, async (req, res) => {
   res.status(201).json({ ...doc, aiClassification, createdByName: undefined, folderName: undefined });
 });
 
+// GET /check-number?number=X — check if a document number already exists in this project
+router.get("/check-number", requireAuth, async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const number = (req.query.number as string)?.trim();
+  if (!number) return res.status(400).json({ error: "number query param required" });
+
+  const existing = await db.select({ id: documentsTable.id, title: documentsTable.title })
+    .from(documentsTable)
+    .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, number)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return res.json({ available: false, existingDocumentId: existing[0].id, existingTitle: existing[0].title });
+  }
+  return res.json({ available: true });
+});
+
 router.get("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
@@ -327,8 +361,13 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   if (!docs[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
-  const workflows = await db.select().from(workflowsTable)
-    .where(and(eq(workflowsTable.documentId, id), eq(workflowsTable.status, "active")))
+  // Fetch active workflow engine instance (if any) for this document
+  const wfInstances = await db.select({
+    wf: wfInstancesTable,
+    stage: wfTemplateStagesTable,
+  }).from(wfInstancesTable)
+    .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
+    .where(and(eq(wfInstancesTable.documentId, id), eq(wfInstancesTable.status, "active")))
     .limit(1);
 
   const { doc, createdBy, folder } = docs[0];
@@ -336,7 +375,8 @@ router.get("/:id", requireAuth, async (req, res) => {
     ...doc,
     createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
     folderName: folder?.name,
-    workflowStatus: workflows[0]?.currentStep,
+    workflowStatus: wfInstances[0]?.stage?.name ?? null,
+    workflowInstanceId: wfInstances[0]?.wf?.id ?? null,
   });
 });
 
@@ -413,24 +453,36 @@ router.get("/:id/revisions", requireAuth, async (req, res) => {
 
 router.get("/:id/reviews", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
-  const steps = await db.select({
-    step: workflowStepsTable,
-    user: usersTable,
-    wf: workflowsTable,
-  }).from(workflowStepsTable)
-    .leftJoin(workflowsTable, eq(workflowStepsTable.workflowId, workflowsTable.id))
-    .leftJoin(usersTable, eq(workflowStepsTable.userId, usersTable.id))
-    .where(eq(workflowsTable.documentId, id))
-    .orderBy(desc(workflowStepsTable.createdAt));
+
+  // Look up workflow instances for this document, then their transitions
+  const instances = await db.select({ id: wfInstancesTable.id })
+    .from(wfInstancesTable)
+    .where(eq(wfInstancesTable.documentId, id));
+
+  if (instances.length === 0) {
+    return res.json({ history: [] });
+  }
+
+  const instanceIds = instances.map(i => i.id);
+
+  const transitions = await db.select({
+    transition: wfInstanceTransitionsTable,
+    actor: usersTable,
+    toStage: wfTemplateStagesTable,
+  }).from(wfInstanceTransitionsTable)
+    .leftJoin(usersTable, eq(wfInstanceTransitionsTable.actorId, usersTable.id))
+    .leftJoin(wfTemplateStagesTable, eq(wfInstanceTransitionsTable.toStageId, wfTemplateStagesTable.id))
+    .where(inArray(wfInstanceTransitionsTable.instanceId, instanceIds))
+    .orderBy(desc(wfInstanceTransitionsTable.createdAt));
 
   res.json({
-    history: steps.map(({ step, user }) => ({
-      id: step.id,
-      step: step.step,
-      action: step.action,
-      comment: step.comment,
-      createdAt: step.createdAt,
-      userName: user ? `${user.firstName} ${user.lastName}` : "System",
+    history: transitions.map(({ transition, actor, toStage }) => ({
+      id: transition.id,
+      step: toStage?.name ?? transition.action,
+      action: transition.action,
+      comment: transition.comment,
+      createdAt: transition.createdAt,
+      userName: actor ? `${actor.firstName} ${actor.lastName}` : "System",
     })),
   });
 });
@@ -448,28 +500,6 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
     documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment,
   });
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
-
-  const workflows = await db.select().from(workflowsTable)
-    .where(and(eq(workflowsTable.documentId, id), eq(workflowsTable.status, "active")))
-    .limit(1);
-
-  if (workflows[0]) {
-    const isFinalApproval = decision === "approved";
-    await db.update(workflowsTable)
-      .set({
-        status: isFinalApproval ? "completed" : "active",
-        currentStep: isFinalApproval ? "approved" : "under_review",
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowsTable.id, workflows[0].id));
-    await db.insert(workflowStepsTable).values({
-      workflowId: workflows[0].id,
-      step: isFinalApproval ? "approved" : "under_review",
-      action: decision as any,
-      comment: comment || `Document ${decision.replace(/_/g, " ")}`,
-      userId: req.user!.id,
-    });
-  }
 
   await createAuditLog({
     userId: req.user!.id, action: "approve", entityType: "document",
@@ -532,20 +562,6 @@ router.post("/:id/reject", requireAuth, async (req, res) => {
   });
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
-  const workflows = await db.select().from(workflowsTable)
-    .where(and(eq(workflowsTable.documentId, id), eq(workflowsTable.status, "active")))
-    .limit(1);
-
-  if (workflows[0]) {
-    await db.update(workflowsTable)
-      .set({ status: "rejected", currentStep: "rejected", updatedAt: new Date() })
-      .where(eq(workflowsTable.id, workflows[0].id));
-    await db.insert(workflowStepsTable).values({
-      workflowId: workflows[0].id, step: "rejected", action: decision as any,
-      comment: comment || `Document ${decision.replace(/_/g, " ")}`, userId: req.user!.id,
-    });
-  }
-
   await createAuditLog({
     userId: req.user!.id, action: "reject", entityType: "document",
     entityId: id, entityTitle: doc.title, projectId, details: { decision },
@@ -602,25 +618,7 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
     .where(eq(documentsTable.id, id))
     .returning();
 
-  // Create workflow
-  const [workflow] = await db.insert(workflowsTable).values({
-    documentId: id,
-    projectId,
-    currentStep: "under_review",
-    status: "active",
-    initiatedById: req.user!.id,
-  }).returning();
-
-  // Log submission
-  await db.insert(workflowStepsTable).values({
-    workflowId: workflow.id,
-    step: "under_review",
-    action: "submitted",
-    comment: comment || "Submitted for review",
-    userId: req.user!.id,
-  });
-
-  // Create tasks for reviewers
+  // Create review tasks for each assigned reviewer
   if (reviewerIds?.length > 0) {
     const taskValues = reviewerIds.map((uid: number) => ({
       title: `Review document: ${doc.title}`,
@@ -630,8 +628,8 @@ router.post("/:id/submit-review", requireAuth, async (req, res) => {
       assignedToId: uid,
       createdById: req.user!.id,
       projectId,
-      sourceType: "workflow" as const,
-      sourceId: workflow.id,
+      sourceType: "document" as const,
+      sourceId: id,
     }));
     await db.insert(tasksTable).values(taskValues);
   }
