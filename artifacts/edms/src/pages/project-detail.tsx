@@ -2059,11 +2059,14 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
   const { data: project } = useGetProject(projectId);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState("all");
+  const [directionFilter, setDirectionFilter] = useState("all");
   const [searchQ, setSearchQ] = useState("");
   const [corrDetail, setCorrDetail] = useState<any>(null);
   const [form, setForm] = useState({
     subject: "", type: "rfi", body: "", priority: "medium",
-    dueDate: "", referenceNumber: "", to: "", cc: "", bcc: "",
+    dueDate: "", referenceNumber: "",
+    toUserIds: [] as number[], ccUserIds: [] as number[],
+    direction: "outgoing",
   });
 
   const { data: corrData, isLoading } = useQuery({
@@ -2094,11 +2097,12 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
           priority: data.priority,
           dueDate: data.dueDate || undefined,
           referenceNumber: data.referenceNumber || undefined,
-          body: [data.to ? `To: ${data.to}` : "", data.body].filter(Boolean).join("\n\n"),
-          cc: data.cc || undefined,
-          bcc: data.bcc || undefined,
-          folder: "inbox",
-          status: "draft",
+          body: data.body || undefined,
+          toUserIds: data.toUserIds.length > 0 ? data.toUserIds : undefined,
+          ccUserIds: data.ccUserIds.length > 0 ? data.ccUserIds : undefined,
+          direction: data.direction || undefined,
+          folder: "draft",
+          sendNow: false,
         }),
       });
       if (!r.ok) throw new Error("Failed");
@@ -2107,14 +2111,15 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["correspondence", projectId] });
       setIsCreateOpen(false);
-      setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "", to: "", cc: "", bcc: "" });
-      toast({ title: "Correspondence created" });
+      setForm({ subject: "", type: "rfi", body: "", priority: "medium", dueDate: "", referenceNumber: "", toUserIds: [], ccUserIds: [], direction: "outgoing" });
+      toast({ title: "Correspondence created as draft" });
     },
     onError: () => toast({ title: "Failed to create", variant: "destructive" }),
   });
 
   const filtered = correspondence.filter((c: any) => {
     if (typeFilter !== "all" && c.type !== typeFilter) return false;
+    if (directionFilter !== "all" && (c.direction ?? "") !== directionFilter) return false;
     if (searchQ && !c.subject?.toLowerCase().includes(searchQ.toLowerCase())) return false;
     return true;
   });
@@ -2129,7 +2134,7 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap justify-between items-center gap-2">
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
           <Input placeholder="Search..." className="w-48 h-9" value={searchQ} onChange={e => setSearchQ(e.target.value)} />
           <Select value={typeFilter} onValueChange={setTypeFilter}>
             <SelectTrigger className="w-36 h-9"><SelectValue placeholder="All types" /></SelectTrigger>
@@ -2138,6 +2143,18 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               {CORR_TYPES.map(t => <SelectItem key={t} value={t}>{CORR_TYPE_LABELS[t] || t}</SelectItem>)}
             </SelectContent>
           </Select>
+          {/* Direction filter */}
+          <div className="flex items-center rounded-md border overflow-hidden h-9">
+            {([["all", "All"], ["incoming", "↓ In"], ["outgoing", "↑ Out"]] as [string, string][]).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setDirectionFilter(val)}
+                className={`px-2.5 h-full text-xs font-medium transition-colors border-r last:border-r-0 ${directionFilter === val ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <Button onClick={() => setIsCreateOpen(true)} className="gap-2 h-9">
           <Plus className="h-4 w-4" /> New Correspondence
@@ -2171,11 +2188,19 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
             <div className="space-y-3 py-1 text-sm">
               <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                 <div><span className="text-muted-foreground">Reference:</span> <span className="font-mono font-medium">{corrDetail.referenceNumber || `#${corrDetail.id}`}</span></div>
-                <div><span className="text-muted-foreground">Priority:</span> <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${priorityColor[corrDetail.priority] ?? "bg-muted"}`}>{corrDetail.priority}</span></div>
+                <div><span className="text-muted-foreground">Priority:</span> <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColor[corrDetail.priority] ?? "bg-muted"}`}>{corrDetail.priority}</span></div>
                 <div><span className="text-muted-foreground">Status:</span> <StatusBadge status={corrDetail.status} /></div>
+                {corrDetail.direction && (
+                  <div>
+                    <span className="text-muted-foreground">Direction:</span>{" "}
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${corrDetail.direction === "incoming" ? "bg-blue-50 text-blue-700" : "bg-orange-50 text-orange-700"}`}>
+                      {corrDetail.direction === "incoming" ? "↓ Incoming" : "↑ Outgoing"}
+                    </span>
+                  </div>
+                )}
                 {corrDetail.dueDate && <div><span className="text-muted-foreground">Due:</span> {format(new Date(corrDetail.dueDate), "dd MMM yyyy")}</div>}
-                {corrDetail.cc && <div className="col-span-2"><span className="text-muted-foreground">CC:</span> {corrDetail.cc}</div>}
-                {corrDetail.bcc && <div className="col-span-2"><span className="text-muted-foreground">BCC:</span> {corrDetail.bcc}</div>}
+                {corrDetail.toUserNames?.length > 0 && <div className="col-span-2"><span className="text-muted-foreground">To:</span> {corrDetail.toUserNames.join(", ")}</div>}
+                {corrDetail.ccUserNames?.length > 0 && <div className="col-span-2"><span className="text-muted-foreground">CC:</span> {corrDetail.ccUserNames.join(", ")}</div>}
                 <div><span className="text-muted-foreground">Created:</span> {format(new Date(corrDetail.createdAt), "dd MMM yyyy")}</div>
               </div>
               {corrDetail.body && (
@@ -2237,37 +2262,41 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Enter subject..." className="mt-1" />
             </div>
+            {/* Direction */}
             <div>
-              <Label>To</Label>
-              <EmailChipInput
+              <Label>Direction</Label>
+              <div className="flex gap-2 mt-1">
+                {(["outgoing", "incoming"] as const).map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, direction: d }))}
+                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${form.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
+                  >
+                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label>To (Recipients)</Label>
+              <RecipientAutocomplete
                 users={corrUsers}
-                value={form.to}
-                onChange={v => setForm(f => ({ ...f, to: v }))}
-                placeholder="Add recipient email…"
+                selectedIds={form.toUserIds}
+                onChange={ids => setForm(f => ({ ...f, toUserIds: ids }))}
+                placeholder="Search by name or email…"
                 className="mt-1"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>CC</Label>
-                <EmailChipInput
-                  users={corrUsers}
-                  value={form.cc}
-                  onChange={v => setForm(f => ({ ...f, cc: v }))}
-                  placeholder="Add CC…"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>BCC</Label>
-                <EmailChipInput
-                  users={corrUsers}
-                  value={form.bcc}
-                  onChange={v => setForm(f => ({ ...f, bcc: v }))}
-                  placeholder="Add BCC…"
-                  className="mt-1"
-                />
-              </div>
+            <div>
+              <Label>CC</Label>
+              <RecipientAutocomplete
+                users={corrUsers}
+                selectedIds={form.ccUserIds}
+                onChange={ids => setForm(f => ({ ...f, ccUserIds: ids }))}
+                placeholder="Search by name or email…"
+                className="mt-1"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -2297,20 +2326,21 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
-              <TableHead>Ref.</TableHead>
-              <TableHead>Type</TableHead>
+              <TableHead className="w-[110px]">Ref.</TableHead>
+              <TableHead className="w-[120px]">Type</TableHead>
               <TableHead>Subject</TableHead>
-              <TableHead>Priority</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Due</TableHead>
-              <TableHead>Created</TableHead>
+              <TableHead className="w-[90px]">Direction</TableHead>
+              <TableHead className="w-[80px]">Priority</TableHead>
+              <TableHead className="w-[100px]">Status</TableHead>
+              <TableHead className="w-[90px]">Due</TableHead>
+              <TableHead className="w-[100px]">Created</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !filtered.length ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">No correspondence found.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">No correspondence found.</TableCell></TableRow>
             ) : filtered.map((c: any) => {
               const isOverdue = c.dueDate && new Date(c.dueDate) < new Date() && c.status !== "closed";
               return (
@@ -2327,7 +2357,14 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
                   </TableCell>
                   <TableCell className="max-w-xs"><span className="line-clamp-1">{c.subject}</span></TableCell>
                   <TableCell>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${priorityColor[c.priority] ?? "bg-muted"}`}>{c.priority}</span>
+                    {c.direction ? (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${c.direction === "incoming" ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400"}`}>
+                        {c.direction === "incoming" ? "↓ In" : "↑ Out"}
+                      </span>
+                    ) : <span className="text-muted-foreground text-xs">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColor[c.priority] ?? "bg-muted"}`}>{c.priority}</span>
                   </TableCell>
                   <TableCell><StatusBadge status={c.status} /></TableCell>
                   <TableCell>
