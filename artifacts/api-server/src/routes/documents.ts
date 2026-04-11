@@ -241,7 +241,7 @@ router.post("/", requireAuth, async (req, res) => {
     } catch (_) {}
   }
 
-  // AI classification (non-blocking — enhances metadata for rules engine)
+  // AI classification (non-blocking — enhances metadata and is persisted to document record)
   let aiClassification: { category?: string; tags?: string[]; priority?: string } = {};
   try {
     aiClassification = await classifyItem({
@@ -251,6 +251,12 @@ router.post("/", requireAuth, async (req, res) => {
       documentType: doc.documentType,
       discipline: doc.discipline,
     }) ?? {};
+    if (aiClassification.tags?.length || aiClassification.priority) {
+      await db.update(documentsTable).set({
+        aiTags: aiClassification.tags ?? [],
+        aiPriority: aiClassification.priority ?? null,
+      }).where(eq(documentsTable.id, doc.id));
+    }
   } catch (_) {}
 
   // Rules engine — evaluate and execute matching automation rules

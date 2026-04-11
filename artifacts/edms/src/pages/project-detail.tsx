@@ -644,6 +644,8 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             open={isUploadOpen}
             onOpenChange={setIsUploadOpen}
             projectId={projectId}
+            projectCode={projectCode}
+            projectName={projectName}
             onSuccess={handleMultiUploadSuccess}
           />
           <UploadWithAIDialog

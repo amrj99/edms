@@ -52,6 +52,8 @@ export const documentsTable = pgTable("documents", {
   isConfidential: boolean("is_confidential").default(false),
   downloadRestricted: boolean("download_restricted").default(false),
   watermarkText: text("watermark_text"),
+  aiTags: jsonb("ai_tags").$type<string[]>().default([]),
+  aiPriority: text("ai_priority"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [

@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type DragEvent, type ChangeEvent } from "react";
 import {
   FileText, Upload, X, Check, AlertCircle, Copy, Loader2,
-  ChevronDown, ChevronUp, ClipboardCopy,
+  ChevronDown, ChevronUp, ClipboardCopy, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
 
 const DOC_TYPES = ["general","drawing","specification","report","certificate","calculation","procedure","manual","datasheet","schedule","correspondence","other"];
 const SOURCES = ["internal","external","client","contractor","consultant","supplier"];
@@ -42,6 +43,8 @@ interface UploadDocumentsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: number;
+  projectCode?: string;
+  projectName?: string;
   onSuccess: (docs: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }[]) => void;
 }
 
@@ -109,13 +112,14 @@ interface DocNumberCheck {
   existingTitle?: string;
 }
 
-export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess }: UploadDocumentsDialogProps) {
+export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCode, projectName, onSuccess }: UploadDocumentsDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [docNumberChecks, setDocNumberChecks] = useState<Record<string, DocNumberCheck>>({});
+  const [aiPanelOpen, setAiPanelOpen] = useState<Record<string, boolean>>({});
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const anyUploading = isUploading || files.some(f => f.uploadStatus === "uploading");
@@ -384,6 +388,24 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {entry.uploadStatus === "pending" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "h-7 px-2.5 text-xs gap-1.5 font-medium",
+                          aiPanelOpen[entry.id]
+                            ? "border-primary/60 text-primary bg-primary/5"
+                            : "border-primary/30 text-primary hover:bg-primary/5 hover:border-primary/60"
+                        )}
+                        onClick={() => setAiPanelOpen(prev => ({ ...prev, [entry.id]: !prev[entry.id] }))}
+                        title="Get AI suggestions for document number, discipline and revision"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        {aiPanelOpen[entry.id] ? "Hide AI" : "AI Suggest"}
+                      </Button>
+                    )}
                     {files.length > 1 && entry.uploadStatus === "pending" && (
                       <Button
                         type="button"
@@ -556,6 +578,24 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, onSuccess
                         />
                       </div>
                     </div>
+                    {aiPanelOpen[entry.id] && (
+                      <AIProcedurePanel
+                        projectCode={projectCode}
+                        projectName={projectName}
+                        discipline={entry.meta.discipline}
+                        documentType={entry.meta.docType}
+                        partialTitle={entry.meta.title}
+                        onApply={(suggestion) => {
+                          updateMeta(entry.id, {
+                            ...(suggestion.documentNumber ? { docNumber: suggestion.documentNumber } : {}),
+                            ...(suggestion.discipline ? { discipline: suggestion.discipline } : {}),
+                            ...(suggestion.documentType ? { docType: suggestion.documentType } : {}),
+                            ...(suggestion.revision ? { revision: suggestion.revision } : {}),
+                            ...(suggestion.title ? { title: suggestion.title } : {}),
+                          });
+                        }}
+                      />
+                    )}
                     {!entry.meta.title.trim() && (
                       <p className="text-xs text-destructive">Title is required.</p>
                     )}

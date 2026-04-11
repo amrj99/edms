@@ -26,6 +26,7 @@ interface SearchParams {
   projectId?: string;
   dateFrom?: string;
   dateTo?: string;
+  projectName?: string;
   aiInterpretation?: string;
 }
 
@@ -71,14 +72,19 @@ export default function Search() {
 
   const clearFilters = () => setFilters({ type: "all", status: "", discipline: "", projectId: "", dateFrom: "", dateTo: "" });
 
+  const effectiveDateFrom = filters.dateFrom || searchParams.dateFrom || "";
+  const effectiveDateTo = filters.dateTo || searchParams.dateTo || "";
+  const effectiveProjectName = searchParams.projectName || "";
+
   const filterDoc = (doc: any) => {
-    if (filters.dateFrom && new Date(doc.updatedAt) < new Date(filters.dateFrom)) return false;
-    if (filters.dateTo && new Date(doc.updatedAt) > new Date(filters.dateTo)) return false;
+    if (effectiveDateFrom && new Date(doc.updatedAt) < new Date(effectiveDateFrom)) return false;
+    if (effectiveDateTo && new Date(doc.updatedAt) > new Date(effectiveDateTo)) return false;
+    if (effectiveProjectName && !doc.projectName?.toLowerCase().includes(effectiveProjectName.toLowerCase())) return false;
     return true;
   };
   const filterCorr = (c: any) => {
-    if (filters.dateFrom && new Date(c.createdAt) < new Date(filters.dateFrom)) return false;
-    if (filters.dateTo && new Date(c.createdAt) > new Date(filters.dateTo)) return false;
+    if (effectiveDateFrom && new Date(c.createdAt) < new Date(effectiveDateFrom)) return false;
+    if (effectiveDateTo && new Date(c.createdAt) > new Date(effectiveDateTo)) return false;
     return true;
   };
 
@@ -208,9 +214,30 @@ export default function Search() {
       )}
 
       {searchParams.aiInterpretation && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-primary/5 border border-primary/20 rounded-lg px-4 py-2">
-          <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
-          <span>AI interpreted: <span className="font-medium text-foreground">{searchParams.aiInterpretation}</span></span>
+        <div className="flex items-start gap-2 text-sm text-muted-foreground bg-primary/5 border border-primary/20 rounded-lg px-4 py-2.5">
+          <Sparkles className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <span>AI interpreted: <span className="font-medium text-foreground">{searchParams.aiInterpretation}</span></span>
+            {(searchParams.dateFrom || searchParams.dateTo || searchParams.projectName) && (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {searchParams.projectName && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <FolderOpen className="h-3 w-3" /> {searchParams.projectName}
+                  </Badge>
+                )}
+                {(searchParams.dateFrom || searchParams.dateTo) && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <CalendarDays className="h-3 w-3" />
+                    {searchParams.dateFrom && searchParams.dateTo
+                      ? `${searchParams.dateFrom} – ${searchParams.dateTo}`
+                      : searchParams.dateFrom
+                        ? `From ${searchParams.dateFrom}`
+                        : `Until ${searchParams.dateTo}`}
+                  </Badge>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

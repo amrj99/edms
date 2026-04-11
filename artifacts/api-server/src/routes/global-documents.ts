@@ -42,7 +42,7 @@ async function getAllowedProjectIds(userId: number, organizationId: number, sysA
 // GET /api/documents — documents visible to the authenticated user
 // Scoped to: user's org AND projects the user is a member of (sys_owner bypasses)
 router.get("/", requireAuth, async (req, res) => {
-  const { projectId, discipline, documentType, status, source, issuedBy, search, page, limit } = req.query;
+  const { projectId, discipline, documentType, status, source, issuedBy, search, page, limit, dateFrom, dateTo, projectName } = req.query;
   const lim = Math.min(parseInt(limit as string || "100"), 500);
   const pg = Math.max(1, parseInt(page as string || "1"));
 
@@ -97,6 +97,26 @@ router.get("/", requireAuth, async (req, res) => {
       d.doc.documentType?.toLowerCase().includes(q) ||
       d.doc.source?.toLowerCase().includes(q) ||
       d.doc.issuedBy?.toLowerCase().includes(q)
+    );
+  }
+  if (dateFrom) {
+    const from = new Date(dateFrom as string);
+    if (!isNaN(from.getTime())) {
+      filtered = filtered.filter(d => new Date(d.doc.updatedAt) >= from);
+    }
+  }
+  if (dateTo) {
+    const to = new Date(dateTo as string);
+    if (!isNaN(to.getTime())) {
+      to.setHours(23, 59, 59, 999);
+      filtered = filtered.filter(d => new Date(d.doc.updatedAt) <= to);
+    }
+  }
+  if (projectName) {
+    const pn = (projectName as string).toLowerCase();
+    filtered = filtered.filter(d =>
+      d.project?.name?.toLowerCase().includes(pn) ||
+      d.project?.code?.toLowerCase().includes(pn)
     );
   }
 

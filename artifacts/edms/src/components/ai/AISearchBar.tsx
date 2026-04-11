@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Sparkles, Loader2, Search, ArrowRight, Lightbulb, X } from "lucide-react";
+import { Sparkles, Loader2, Search, ArrowRight, Lightbulb, X, Calendar, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,9 @@ interface NLSearchResult {
   documentType?: string;
   keywords: string[];
   suggestions: string[];
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  projectName?: string | null;
 }
 
 interface AISearchBarProps {
@@ -25,6 +28,9 @@ interface AISearchBarProps {
     status?: string;
     documentType?: string;
     aiInterpretation?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    projectName?: string;
   }) => void;
   className?: string;
 }
@@ -33,7 +39,7 @@ const EXAMPLE_QUERIES = [
   "Show me all approved electrical drawings",
   "Find overdue RFIs from last month",
   "High priority structural reports under review",
-  "All transmittals related to piping",
+  "All transmittals from the Riyadh project this week",
 ];
 
 export function AISearchBar({ onSearch, className }: AISearchBarProps) {
@@ -57,7 +63,6 @@ export function AISearchBar({ onSearch, className }: AISearchBarProps) {
       });
 
       if (!res.ok) {
-        // Fall back to keyword search
         onSearch({ q: query, aiInterpretation: undefined });
         return;
       }
@@ -73,6 +78,9 @@ export function AISearchBar({ onSearch, className }: AISearchBarProps) {
         status: data.status ?? undefined,
         documentType: data.documentType ?? undefined,
         aiInterpretation: data.interpretation,
+        dateFrom: data.dateFrom ?? undefined,
+        dateTo: data.dateTo ?? undefined,
+        projectName: data.projectName ?? undefined,
       });
     } catch {
       onSearch({ q: query });
@@ -97,6 +105,14 @@ export function AISearchBar({ onSearch, className }: AISearchBarProps) {
     onSearch({ q: "" });
   };
 
+  const formatDate = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return iso;
+    }
+  };
+
   return (
     <div className={cn("space-y-3", className)}>
       {/* Search bar */}
@@ -110,7 +126,7 @@ export function AISearchBar({ onSearch, className }: AISearchBarProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask in plain English — e.g., 'Find all approved electrical drawings'"
+            placeholder="Ask in plain English — e.g., 'Find approved electrical drawings from last month'"
             className="pl-9 pr-9 h-11 bg-primary/5 border-primary/20 focus:border-primary placeholder:text-muted-foreground/60"
           />
           {query && (
@@ -149,7 +165,23 @@ export function AISearchBar({ onSearch, className }: AISearchBarProps) {
                   <Badge variant="outline" className="text-xs">{result.discipline}</Badge>
                 )}
                 {result.status && (
-                  <Badge variant="outline" className="text-xs capitalize">{result.status}</Badge>
+                  <Badge variant="outline" className="text-xs capitalize">{result.status.replace(/_/g, " ")}</Badge>
+                )}
+                {result.projectName && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <FolderOpen className="h-3 w-3" />
+                    {result.projectName}
+                  </Badge>
+                )}
+                {(result.dateFrom || result.dateTo) && (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <Calendar className="h-3 w-3" />
+                    {result.dateFrom && result.dateTo
+                      ? `${formatDate(result.dateFrom)} – ${formatDate(result.dateTo)}`
+                      : result.dateFrom
+                        ? `From ${formatDate(result.dateFrom)}`
+                        : `Until ${formatDate(result.dateTo!)}`}
+                  </Badge>
                 )}
                 {result.keywords?.map((kw) => (
                   <Badge key={kw} variant="ghost" className="text-xs text-muted-foreground">{kw}</Badge>
