@@ -504,8 +504,9 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
   const generateAISummary = async () => {
     setAiSummaryLoading(true);
     try {
-      const docList = selectedDocs.map((d: any) => `${d.documentNumber} - ${d.title} (Rev ${d.revision ?? "01"})`).join("; ");
-      setBulkTrsForm(f => ({ ...f, description: `Transmittal covering ${selectedDocs.length} document(s): ${docList}. Please review and acknowledge receipt.` }));
+      const formDocs = allDocs.filter((d: any) => selectedIds.has(d.id));
+      const docList = formDocs.map((d: any) => `${d.documentNumber} - ${d.title} (Rev ${d.revision ?? "01"})`).join("; ");
+      setBulkTrsForm(f => ({ ...f, description: `Transmittal covering ${formDocs.length} document(s): ${docList}. Please review and acknowledge receipt.` }));
     } finally {
       setAiSummaryLoading(false);
     }
@@ -513,7 +514,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
 
   const createBulkTransmittal = useMutation({
     mutationFn: async () => {
-      const docIds = selectedDocs.map((d: any) => d.id);
+      const docIds = Array.from(selectedIds);
       const r = await fetch(`/api/projects/${projectId}/transmittals`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -523,11 +524,12 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
       return r.json();
     },
     onSuccess: () => {
+      const count = selectedIds.size;
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       setIsBulkTransOpen(false);
       clearSelection();
       setBulkTrsForm({ subject: "", purpose: "for_review", toExternal: "", description: "" });
-      toast({ title: `Transmittal created with ${selectedDocs.length} document(s)` });
+      toast({ title: `Transmittal created with ${count} document(s)` });
     },
     onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
   });
@@ -671,22 +673,22 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Send className="h-5 w-5" />
-              Create Transmittal — {selectedDocs.length} Document(s)
+              Create Transmittal — {selectedIds.size} Document(s)
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             {/* Selected doc list — with remove buttons */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <Label className="text-xs text-muted-foreground">Attached Documents ({selectedDocs.length})</Label>
-                {selectedDocs.length === 0 && (
+                <Label className="text-xs text-muted-foreground">Attached Documents ({selectedIds.size})</Label>
+                {selectedIds.size === 0 && (
                   <span className="text-xs text-destructive">At least one document required</span>
                 )}
               </div>
               <div className="border rounded-lg divide-y max-h-36 overflow-y-auto">
-                {selectedDocs.length === 0 ? (
+                {selectedIds.size === 0 ? (
                   <div className="p-3 text-xs text-muted-foreground text-center">No documents selected</div>
-                ) : selectedDocs.map((d: any) => (
+                ) : allDocs.filter((d: any) => selectedIds.has(d.id)).map((d: any) => (
                   <div key={d.id} className="flex items-center gap-2 px-3 py-1.5 text-xs">
                     <FileText className="h-3.5 w-3.5 text-primary shrink-0" />
                     <span className="font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
@@ -703,6 +705,30 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                   </div>
                 ))}
               </div>
+              {/* Add more documents */}
+              {allDocs.filter((d: any) => !selectedIds.has(d.id)).length > 0 && (
+                <div className="mt-2">
+                  <Select
+                    value="_none"
+                    onValueChange={(v) => {
+                      if (v !== "_none") setSelectedIds(prev => new Set([...prev, parseInt(v)]));
+                    }}
+                  >
+                    <SelectTrigger className="h-8 text-xs border-dashed text-muted-foreground">
+                      <SelectValue placeholder="+ Add another document…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none" className="text-xs text-muted-foreground">+ Add another document…</SelectItem>
+                      {allDocs.filter((d: any) => !selectedIds.has(d.id)).map((d: any) => (
+                        <SelectItem key={d.id} value={String(d.id)} className="text-xs">
+                          <span className="font-mono text-muted-foreground mr-2">{d.documentNumber}</span>
+                          <span className="truncate">{d.title}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <div>
               <Label>Subject *</Label>
@@ -738,7 +764,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsBulkTransOpen(false)}>Cancel</Button>
-            <Button onClick={() => createBulkTransmittal.mutate()} disabled={createBulkTransmittal.isPending || !bulkTrsForm.subject || selectedDocs.length === 0}>
+            <Button onClick={() => createBulkTransmittal.mutate()} disabled={createBulkTransmittal.isPending || !bulkTrsForm.subject || selectedIds.size === 0}>
               {createBulkTransmittal.isPending ? "Creating..." : "Create Transmittal"}
             </Button>
           </DialogFooter>
@@ -1557,7 +1583,6 @@ const TRS_PURPOSE_LABELS: Record<string, string> = {
   for_action:      "For Action",
   for_construction:"For Construction",
   for_record:      "For Record / Filing",
-  as_built:        "As Built",
 };
 
 const TRS_REVIEW_CODES: { value: string; label: string; cls: string }[] = [
@@ -1765,22 +1790,6 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
             </div>
-            {/* Direction */}
-            <div>
-              <Label>Direction</Label>
-              <div className="flex gap-2 mt-1">
-                {(["outgoing", "incoming"] as const).map(d => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setForm(f => ({ ...f, direction: d }))}
-                    className={`flex-1 h-8 rounded-md border text-xs font-medium transition-colors ${form.direction === d ? "bg-primary text-primary-foreground border-primary" : "bg-card text-muted-foreground hover:bg-muted border-border"}`}
-                  >
-                    {d === "outgoing" ? "↑ Outgoing" : "↓ Incoming"}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Purpose</Label>
@@ -1862,7 +1871,6 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
             <TableRow>
               <TableHead className="w-[120px]">TRS No.</TableHead>
               <TableHead>Subject</TableHead>
-              <TableHead className="w-[90px]">Direction</TableHead>
               <TableHead className="w-[140px]">Purpose</TableHead>
               <TableHead className="w-[140px]">To</TableHead>
               <TableHead className="w-[90px]">Status</TableHead>
@@ -1872,9 +1880,9 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={7} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !transmittals.length ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+              <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                 {directionFilter !== "all" ? "No transmittals matching this direction filter." : "No transmittals yet. Create the first one."}
               </TableCell></TableRow>
             ) : transmittals.map((t: any) => {
@@ -1883,7 +1891,6 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                 <TableRow key={t.id} className={`hover:bg-muted/30 ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
                   <TableCell className="font-mono text-xs font-medium">{t.transmittalNumber}</TableCell>
                   <TableCell className="max-w-xs"><span className="line-clamp-1">{t.subject}</span></TableCell>
-                  <TableCell><TrsDirectionBadge direction={t.direction} /></TableCell>
                   <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>
                   <TableCell><StatusBadge status={t.status} /></TableCell>
