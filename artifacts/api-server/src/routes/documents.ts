@@ -435,7 +435,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
   const caller = req.user!;
 
   // Only project managers, admins, or the document creator can delete a document
-  const [existing] = await db.select({ createdById: documentsTable.createdById }).from(documentsTable)
+  const [existing] = await db.select({ createdById: documentsTable.createdById, title: documentsTable.title, documentNumber: documentsTable.documentNumber }).from(documentsTable)
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -444,6 +444,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
 
   await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
   await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
+  await createAuditLog({ userId: caller.id, action: "delete", entityType: "document", entityId: id, entityTitle: `${existing.documentNumber} — ${existing.title}`, projectId });
   res.status(204).send();
 });
 
