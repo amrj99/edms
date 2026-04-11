@@ -58,7 +58,6 @@ export default function CorrespondencePage() {
   const [selectedFolder, setSelectedFolder] = useState<string>("inbox");
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>("all");
-  const [filterDirection, setFilterDirection] = useState<string>("all");
   const [searchQ, setSearchQ] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -165,7 +164,6 @@ export default function CorrespondencePage() {
 
     if (selectedProjectId && selectedFolder !== "general") items = items.filter((i: any) => i.projectId === selectedProjectId);
     if (selectedTypeFilter !== "all") items = items.filter((i: any) => i.type === selectedTypeFilter);
-    if (filterDirection !== "all") items = items.filter((i: any) => (i.direction ?? "") === filterDirection);
     if (searchQ) items = items.filter((i: any) =>
       i.subject?.toLowerCase().includes(searchQ.toLowerCase()) ||
       i.referenceNumber?.toLowerCase().includes(searchQ.toLowerCase()) ||
@@ -651,18 +649,6 @@ export default function CorrespondencePage() {
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
-          {/* Direction quick filter */}
-          <div className="flex items-center rounded-md border overflow-hidden h-6">
-            {([["all", "All"], ["incoming", "↓ In"], ["outgoing", "↑ Out"]] as [string, string][]).map(([val, label]) => (
-              <button
-                key={val}
-                onClick={() => setFilterDirection(val)}
-                className={`px-2 h-full text-[10px] font-medium transition-colors border-r last:border-r-0 ${filterDirection === val ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
         </div>
 
         <ScrollArea className="flex-1">
@@ -714,7 +700,10 @@ export default function CorrespondencePage() {
                             <span className="text-[10px] text-muted-foreground truncate max-w-[120px]" title={`From: ${item.fromName}`}>↩ {item.fromName}</span>
                           )}
                           {item.projectName && (
-                            <span className="text-[10px] text-muted-foreground truncate max-w-[100px]" title={`Project: ${item.projectName}`}>📁 {item.projectName}</span>
+                            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-400 border border-violet-200 dark:border-violet-800 font-medium shrink-0 max-w-[140px] truncate" title={`Project: ${item.projectName}`}>
+                              <FolderKanban className="h-2.5 w-2.5 shrink-0" />
+                              <span className="truncate">{item.projectName}</span>
+                            </span>
                           )}
                           {item.scope === "internal" && item.projectId && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 font-medium shrink-0">
@@ -730,11 +719,6 @@ export default function CorrespondencePage() {
                           {isFlagged && <Flag className="h-3 w-3 text-orange-500" />}
                           {isStarred && <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />}
                           {item._source === "general" && <Globe className="h-3 w-3 text-muted-foreground" />}
-                          {item.direction && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${item.direction === "incoming" ? "bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400"}`}>
-                              {item.direction === "incoming" ? "↓ In" : "↑ Out"}
-                            </span>
-                          )}
                         </div>
                       </div>
                       <div className="flex flex-col gap-1 shrink-0">
