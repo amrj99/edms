@@ -39,6 +39,8 @@ export const transmittalsTable = pgTable("transmittals", {
   direction: text("direction"),
   partyType: text("party_type"),
   reviewCode: text("review_code"),
+  responseToTransmittalId: integer("response_to_transmittal_id"),
+  reviewOutcome: text("review_outcome"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -41,6 +41,18 @@ router.get("/", async (req, res) => {
       approvedById: transmittalsTable.approvedById,
       approvalComment: transmittalsTable.approvalComment,
       approvedAt: transmittalsTable.approvedAt,
+      reviewOutcome: transmittalsTable.reviewOutcome,
+      responseToTransmittalId: transmittalsTable.responseToTransmittalId,
+      responseTransmittalNumber: sql<string | null>`(
+        SELECT t2.transmittal_number FROM transmittals t2
+        WHERE t2.response_to_transmittal_id = ${transmittalsTable.id}
+        LIMIT 1
+      )`,
+      sourceTransmittalNumber: sql<string | null>`(
+        SELECT t2.transmittal_number FROM transmittals t2
+        WHERE t2.id = ${transmittalsTable.responseToTransmittalId}
+        LIMIT 1
+      )`,
       itemCount: sql<number>`(
         SELECT COUNT(*) FROM transmittal_items
         WHERE transmittal_id = ${transmittalsTable.id}
@@ -81,7 +93,29 @@ router.get("/:id", async (req, res) => {
     .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
     .where(eq(transmittalItemsTable.transmittalId, id));
 
-  res.json({ ...transmittal, items });
+  // Linked transmittal numbers
+  let sourceTransmittalNumber: string | null = null;
+  let responseTransmittalNumber: string | null = null;
+  let responseTransmittalId: number | null = null;
+
+  if (transmittal.responseToTransmittalId) {
+    const [src] = await db
+      .select({ transmittalNumber: transmittalsTable.transmittalNumber })
+      .from(transmittalsTable)
+      .where(eq(transmittalsTable.id, transmittal.responseToTransmittalId));
+    sourceTransmittalNumber = src?.transmittalNumber ?? null;
+  }
+
+  const [resp] = await db
+    .select({ transmittalNumber: transmittalsTable.transmittalNumber, id: transmittalsTable.id })
+    .from(transmittalsTable)
+    .where(eq(transmittalsTable.responseToTransmittalId, id));
+  if (resp) {
+    responseTransmittalNumber = resp.transmittalNumber;
+    responseTransmittalId = resp.id;
+  }
+
+  res.json({ ...transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId });
 });
 
 // Create transmittal
@@ -265,6 +299,111 @@ router.post("/:id/acknowledge", async (req, res) => {
     performedByName: actorName,
   });
   res.json(transmittal);
+});
+
+// Complete review — compute rolled-up outcome and auto-create response draft
+router.post("/:id/complete-review", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
+  const actor = req.user as any;
+  const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
+
+  const [transmittal] = await db.select().from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Check no response already exists
+  const [existingResponse] = await db.select({ id: transmittalsTable.id })
+    .from(transmittalsTable).where(eq(transmittalsTable.responseToTransmittalId, id));
+  if (existingResponse) {
+    res.status(409).json({ error: "A response transmittal already exists for this transmittal" });
+    return;
+  }
+
+  // Fetch items
+  const items = await db.select({
+    id: transmittalItemsTable.id,
+    documentId: transmittalItemsTable.documentId,
+    reviewCode: transmittalItemsTable.reviewCode,
+  }).from(transmittalItemsTable).where(eq(transmittalItemsTable.transmittalId, id));
+
+  if (items.length === 0) { res.status(400).json({ error: "No items on this transmittal" }); return; }
+
+  const unreviewed = items.filter(i => !i.reviewCode);
+  if (unreviewed.length > 0) {
+    res.status(400).json({ error: `${unreviewed.length} item(s) still need a review code` });
+    return;
+  }
+
+  // Compute rolled-up outcome: D > C > B > A
+  const codePriority: Record<string, number> = { A: 1, B: 2, C: 3, D: 4 };
+  const worstCode = items.reduce((worst: string, item) => {
+    const code = item.reviewCode ?? "A";
+    return (codePriority[code] ?? 0) > (codePriority[worst] ?? 0) ? code : worst;
+  }, "A");
+
+  // Update the transmittal with the review outcome
+  await db.update(transmittalsTable)
+    .set({ reviewOutcome: worstCode, updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id));
+
+  const outcomeLabels: Record<string, string> = {
+    A: "Approved",
+    B: "Approved with Comments",
+    C: "Revise and Resubmit",
+    D: "Rejected",
+  };
+
+  await db.insert(transmittalHistoryTable).values({
+    transmittalId: id,
+    eventType: "review_completed",
+    description: `Review completed — overall outcome: ${worstCode} (${outcomeLabels[worstCode] ?? worstCode})`,
+    performedByName: actorName,
+  });
+
+  // Generate response transmittal number
+  const existing = await db
+    .select({ count: transmittalsTable.id })
+    .from(transmittalsTable)
+    .where(eq(transmittalsTable.projectId, projectId));
+  const seq = String(existing.length + 1).padStart(4, "0");
+  const [project] = await db.select({ code: projectsTable.code })
+    .from(projectsTable).where(eq(projectsTable.id, projectId));
+  const responseNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
+
+  const [response] = await db.insert(transmittalsTable).values({
+    transmittalNumber: responseNumber,
+    subject: `Re: ${transmittal.subject}`,
+    description: `Response to ${transmittal.transmittalNumber}. Overall review outcome: ${worstCode} — ${outcomeLabels[worstCode] ?? worstCode}.`,
+    purpose: transmittal.purpose,
+    organizationId: transmittal.organizationId,
+    projectId,
+    createdById: actor.id,
+    toExternal: transmittal.toExternal ?? undefined,
+    direction: "outgoing",
+    status: "draft",
+    responseToTransmittalId: id,
+  }).returning();
+
+  // Copy item document IDs to the response transmittal
+  if (items.length > 0) {
+    await db.insert(transmittalItemsTable).values(
+      items.map(i => ({
+        transmittalId: response.id,
+        documentId: i.documentId,
+        reviewCode: i.reviewCode ?? undefined,
+      }))
+    );
+  }
+
+  await db.insert(transmittalHistoryTable).values({
+    transmittalId: response.id,
+    eventType: "created",
+    description: `Response transmittal created automatically from review of ${transmittal.transmittalNumber}`,
+    performedByName: actorName,
+  });
+
+  res.json({ reviewOutcome: worstCode, responseTrs: response });
 });
 
 // Get transmittal history

@@ -1609,6 +1609,24 @@ function TrsDirectionBadge({ direction }: { direction?: string | null }) {
   );
 }
 
+const TRS_OUTCOME_CONFIG: Record<string, { label: string; cls: string }> = {
+  A: { label: "Approved",               cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  B: { label: "Approved with Comments", cls: "bg-teal-100 text-teal-800 border-teal-200" },
+  C: { label: "Revise & Resubmit",      cls: "bg-amber-100 text-amber-800 border-amber-200" },
+  D: { label: "Rejected",               cls: "bg-red-100 text-red-800 border-red-200" },
+};
+
+function TrsReviewOutcomeBadge({ outcome }: { outcome?: string | null }) {
+  if (!outcome) return null;
+  const cfg = TRS_OUTCOME_CONFIG[outcome] ?? { label: outcome, cls: "bg-muted text-muted-foreground border-border" };
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold ${cfg.cls}`}>
+      <ClipboardCheck className="h-3.5 w-3.5" />
+      Review Outcome: {outcome} — {cfg.label}
+    </span>
+  );
+}
+
 function TransmittalsTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -1714,6 +1732,20 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       toast({ title: "Transmittal acknowledged" });
     },
+  });
+
+  const completeReview = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${id}/complete-review`, { method: "POST" });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error ?? "Failed"); }
+      return r.json();
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
+      qc.invalidateQueries({ queryKey: ["transmittal-detail", selected?.id] });
+      toast({ title: `Review completed — Outcome: ${data.reviewOutcome}`, description: `Response draft ${data.responseTrs?.transmittalNumber} created` });
+    },
+    onError: (e: any) => toast({ title: "Could not complete review", description: e.message, variant: "destructive" }),
   });
 
   const createShareLink = useMutation({
@@ -1890,7 +1922,19 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               return (
                 <TableRow key={t.id} className={`hover:bg-muted/30 ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
                   <TableCell className="font-mono text-xs font-medium">{t.transmittalNumber}</TableCell>
-                  <TableCell className="max-w-xs"><span className="line-clamp-1">{t.subject}</span></TableCell>
+                  <TableCell className="max-w-xs">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="line-clamp-1 min-w-0">{t.subject}</span>
+                      {t.reviewOutcome && (() => {
+                        const cfg = TRS_OUTCOME_CONFIG[t.reviewOutcome];
+                        return cfg ? (
+                          <span className={`shrink-0 inline-block text-[10px] px-1.5 py-0.5 rounded-full border font-semibold ${cfg.cls}`}>
+                            {t.reviewOutcome}
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>
                   <TableCell><StatusBadge status={t.status} /></TableCell>
@@ -1947,6 +1991,29 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                   )}
                 </div>
                 {selected.description && <p className="text-sm text-muted-foreground mt-2">{selected.description}</p>}
+
+                {/* Traceability links */}
+                {(detailData?.sourceTransmittalNumber || detailData?.responseTransmittalNumber) && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {detailData?.sourceTransmittalNumber && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs bg-muted/50 text-muted-foreground">
+                        <Link2 className="h-3 w-3" /> Response to: <span className="font-mono font-medium">{detailData.sourceTransmittalNumber}</span>
+                      </span>
+                    )}
+                    {detailData?.responseTransmittalNumber && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs bg-blue-50 text-blue-700 border-blue-200">
+                        <Link2 className="h-3 w-3" /> Has response: <span className="font-mono font-medium">{detailData.responseTransmittalNumber}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Review outcome badge */}
+                {detailData?.reviewOutcome && (
+                  <div className="mt-2">
+                    <TrsReviewOutcomeBadge outcome={detailData.reviewOutcome} />
+                  </div>
+                )}
               </div>
 
               {/* External Recipients */}
@@ -2035,6 +2102,41 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                     </Button>
                   </div>
                 )}
+
+                {/* Complete Review — only when all items have codes, no outcome set, no response yet */}
+                {(() => {
+                  if (detailItems.length === 0) return null;
+                  if (detailData?.reviewOutcome) return null;
+                  if (detailData?.responseTransmittalNumber) return null;
+                  const coded = detailItems.filter((i: any) => !!i.reviewCode).length;
+                  const total = detailItems.length;
+                  const allCoded = coded === total;
+                  return (
+                    <div className={`mt-3 rounded-lg border p-3 space-y-2 ${allCoded ? "border-primary/30 bg-primary/5" : "border-border bg-muted/30"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs font-semibold">
+                            {allCoded
+                              ? "All items reviewed — ready to complete"
+                              : `Review in progress — ${coded} of ${total} items coded`}
+                          </p>
+                          {!allCoded && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">Set review codes on all items to enable completion</p>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          className="gap-1.5 shrink-0"
+                          disabled={!allCoded || completeReview.isPending}
+                          onClick={() => completeReview.mutate(selected.id)}
+                        >
+                          <ClipboardCheck className="h-3.5 w-3.5" />
+                          {completeReview.isPending ? "Processing…" : "Complete Review"}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Secure Share Link */}
