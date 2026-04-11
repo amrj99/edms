@@ -1,27 +1,38 @@
+import { useState } from "react";
 import { useParams, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   ArrowLeft, FileText, Building2, FolderOpen, User, Calendar,
   Download, ExternalLink, Loader2, Paperclip, Tag, Hash, Globe,
+  Brain, History, Info,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { DocumentWorkflowPanel } from "@/components/workflow/DocumentWorkflowPanel";
-import { useAuth } from "@/lib/auth";
+import { DocumentAiTab } from "@/components/documents/DocumentAiTab";
+import { DocumentRevisionsTab } from "@/components/documents/DocumentRevisionsTab";
+import { cn } from "@/lib/utils";
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-700",
+  draft:        "bg-gray-100 text-gray-700",
   under_review: "bg-yellow-100 text-yellow-800",
-  approved: "bg-green-100 text-green-700",
-  issued: "bg-blue-100 text-blue-700",
-  superseded: "bg-purple-100 text-purple-700",
-  void: "bg-red-100 text-red-700",
+  approved:     "bg-green-100 text-green-700",
+  issued:       "bg-blue-100 text-blue-700",
+  superseded:   "bg-purple-100 text-purple-700",
+  void:         "bg-red-100 text-red-700",
 };
+
+type TabId = "overview" | "revisions" | "ai";
+
+const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
+  { id: "overview",  label: "Overview",   icon: Info },
+  { id: "revisions", label: "Revisions",  icon: History },
+  { id: "ai",        label: "AI Analysis", icon: Brain },
+];
 
 function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   if (!value) return null;
@@ -38,12 +49,12 @@ function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 
 export default function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
 
   const { data: doc, isLoading, isError } = useQuery({
     queryKey: ["document-detail", id],
     queryFn: async () => {
-      const r = await fetch(`/api/documents/${id}`);
+      const r = await fetch(`/api/documents/${id}`, { credentials: "include" });
       if (!r.ok) throw new Error("Failed to load document");
       return r.json();
     },
@@ -70,6 +81,8 @@ export default function DocumentDetailPage() {
       </div>
     );
   }
+
+  const docId = parseInt(id!);
 
   return (
     <div className="space-y-6 animate-in fade-in max-w-5xl">
@@ -105,7 +118,10 @@ export default function DocumentDetailPage() {
                   Rev {doc.revision}
                 </span>
               )}
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${STATUS_COLORS[doc.status] || "bg-muted text-muted-foreground"}`}>
+              <span className={cn(
+                "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize",
+                STATUS_COLORS[doc.status] ?? "bg-muted text-muted-foreground",
+              )}>
                 {doc.status?.replace(/_/g, " ")}
               </span>
             </div>
@@ -124,99 +140,142 @@ export default function DocumentDetailPage() {
             )}
           </div>
         </div>
+      </div>
 
-        <Separator className="my-5" />
+      {/* Tabs */}
+      <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex border-b">
+          {TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors",
+                activeTab === tab.id
+                  ? "border-primary text-primary bg-primary/5"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/40",
+              )}
+            >
+              <tab.icon className="h-3.5 w-3.5" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-        {/* Metadata grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 divide-y sm:divide-y-0">
-          <MetaRow
-            icon={<Building2 className="h-4 w-4" />}
-            label="Project"
-            value={
-              doc.projectId
-                ? <Link href={`/projects/${doc.projectId}`} className="hover:text-primary hover:underline">
-                    {doc.projectName || `Project #${doc.projectId}`}
-                  </Link>
-                : null
-            }
-          />
-          <MetaRow
-            icon={<Tag className="h-4 w-4" />}
-            label="Discipline"
-            value={doc.discipline}
-          />
-          <MetaRow
-            icon={<Hash className="h-4 w-4" />}
-            label="Document Type"
-            value={doc.documentType}
-          />
-          <MetaRow
-            icon={<Globe className="h-4 w-4" />}
-            label="Source"
-            value={doc.source ? <span className="capitalize">{doc.source}</span> : null}
-          />
-          <MetaRow
-            icon={<User className="h-4 w-4" />}
-            label="Issued By"
-            value={doc.issuedBy}
-          />
-          <MetaRow
-            icon={<User className="h-4 w-4" />}
-            label="Uploaded By"
-            value={doc.createdByName}
-          />
-          {doc.folderName && (
-            <MetaRow
-              icon={<FolderOpen className="h-4 w-4" />}
-              label="Folder"
-              value={doc.folderName}
+        <div className="p-6">
+          {/* Overview tab */}
+          {activeTab === "overview" && (
+            <div className="space-y-6">
+              {/* Metadata grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 divide-y sm:divide-y-0">
+                <MetaRow
+                  icon={<Building2 className="h-4 w-4" />}
+                  label="Project"
+                  value={
+                    doc.projectId
+                      ? <Link href={`/projects/${doc.projectId}`} className="hover:text-primary hover:underline">
+                          {doc.projectName || `Project #${doc.projectId}`}
+                        </Link>
+                      : null
+                  }
+                />
+                <MetaRow
+                  icon={<Tag className="h-4 w-4" />}
+                  label="Discipline"
+                  value={doc.discipline}
+                />
+                <MetaRow
+                  icon={<Hash className="h-4 w-4" />}
+                  label="Document Type"
+                  value={doc.documentType}
+                />
+                <MetaRow
+                  icon={<Globe className="h-4 w-4" />}
+                  label="Source"
+                  value={doc.source ? <span className="capitalize">{doc.source}</span> : null}
+                />
+                <MetaRow
+                  icon={<User className="h-4 w-4" />}
+                  label="Issued By"
+                  value={doc.issuedBy}
+                />
+                <MetaRow
+                  icon={<User className="h-4 w-4" />}
+                  label="Uploaded By"
+                  value={doc.createdByName}
+                />
+                {doc.folderName && (
+                  <MetaRow
+                    icon={<FolderOpen className="h-4 w-4" />}
+                    label="Folder"
+                    value={doc.folderName}
+                  />
+                )}
+                <MetaRow
+                  icon={<Calendar className="h-4 w-4" />}
+                  label="Created"
+                  value={doc.createdAt ? format(new Date(doc.createdAt), "dd MMM yyyy, HH:mm") : null}
+                />
+                <MetaRow
+                  icon={<Calendar className="h-4 w-4" />}
+                  label="Last Updated"
+                  value={doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yyyy, HH:mm") : null}
+                />
+              </div>
+
+              {/* Tags */}
+              {doc.tags && doc.tags.length > 0 && (
+                <>
+                  <Separator />
+                  <div className="flex flex-wrap gap-1.5">
+                    {doc.tags.map((tag: string) => (
+                      <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <Separator />
+
+              {/* Approval Workflow Panel */}
+              <DocumentWorkflowPanel
+                documentId={docId}
+                documentType={doc.documentType}
+              />
+
+              <Separator />
+
+              {/* Files Panel */}
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <Paperclip className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="font-semibold text-sm">Attached Files</h2>
+                </div>
+                <DocumentFilesPanel
+                  documentId={docId}
+                  projectId={doc.projectId}
+                  canEdit={true}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Revisions tab */}
+          {activeTab === "revisions" && (
+            <DocumentRevisionsTab
+              documentId={docId}
+              documentTitle={doc.title}
             />
           )}
-          <MetaRow
-            icon={<Calendar className="h-4 w-4" />}
-            label="Created"
-            value={doc.createdAt ? format(new Date(doc.createdAt), "dd MMM yyyy, HH:mm") : null}
-          />
-          <MetaRow
-            icon={<Calendar className="h-4 w-4" />}
-            label="Last Updated"
-            value={doc.updatedAt ? format(new Date(doc.updatedAt), "dd MMM yyyy, HH:mm") : null}
-          />
-        </div>
 
-        {/* Tags */}
-        {doc.tags && doc.tags.length > 0 && (
-          <>
-            <Separator className="my-4" />
-            <div className="flex flex-wrap gap-1.5">
-              {doc.tags.map((tag: string) => (
-                <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Approval Workflow Panel */}
-      <div className="bg-card border rounded-xl shadow-sm">
-        <DocumentWorkflowPanel
-          documentId={parseInt(id!)}
-          documentType={doc.documentType}
-        />
-      </div>
-
-      {/* Files Panel */}
-      <div className="bg-card border rounded-xl shadow-sm">
-        <div className="flex items-center gap-2 px-6 py-4 border-b">
-          <Paperclip className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-semibold">Attached Files</h2>
-        </div>
-        <div className="p-6">
-          <DocumentFilesPanel
-            documentId={parseInt(id!)}
-            projectId={doc.projectId}
-            canEdit={true}
-          />
+          {/* AI Analysis tab */}
+          {activeTab === "ai" && (
+            <DocumentAiTab
+              documentId={docId}
+              documentTitle={doc.title}
+            />
+          )}
         </div>
       </div>
     </div>

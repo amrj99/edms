@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, usersTable, projectsTable, projectMembersTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
@@ -186,6 +186,30 @@ router.get("/:id", requireAuth, async (req, res) => {
       ...file,
       uploaderName: uploader ? `${uploader.firstName} ${uploader.lastName}` : undefined,
     })),
+  });
+});
+
+// ─── Revisions ────────────────────────────────────────────────────────────────
+
+router.get("/:id/revisions", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid document id" }); return; }
+
+  const revisions = await db.select({
+    rev:  documentRevisionsTable,
+    user: usersTable,
+  })
+    .from(documentRevisionsTable)
+    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+    .where(eq(documentRevisionsTable.documentId, id))
+    .orderBy(desc(documentRevisionsTable.createdAt));
+
+  res.json({
+    revisions: revisions.map(({ rev, user }) => ({
+      ...rev,
+      createdByName: user ? `${user.firstName} ${user.lastName}` : undefined,
+    })),
+    total: revisions.length,
   });
 });
 

@@ -376,6 +376,7 @@ export function AppSidebar() {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
     },
+    { title: t("aiInsights"), url: "/ai-insights", icon: Brain },
     ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: t("navSearch"), url: "/search", icon: Search },

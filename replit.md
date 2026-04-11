@@ -57,6 +57,11 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **Deliverables Module:** Manages project deliverables with status tracking.
 - **Link Relationships:** Supports linking between various records (documents, correspondence, NCRs, etc.).
 - **AI-Assisted Transmittal Linking:** Suggests links between transmittals based on similarity scoring.
+- **AI Service Modularisation (Phase 3):** `ai-service.ts` is a re-export barrel for six domain modules (`ai-core`, `ai-settings`, `ai-documents`, `ai-correspondence`, `ai-tasks`, `ai-search`). The `ai_analysis` table stores permanent, append-only AI analysis results with `isLatest` flagging.
+- **Document AI Analysis Tab (Phase 4):** Each document detail page has a tabbed layout (Overview / Revisions / AI Analysis). The AI tab loads on demand, shows latest analysis with urgency badge and recommendations, supports manual re-run, and keeps full analysis history.
+- **Version Comparison (Phase 4):** The Revisions tab on each document shows the full revision history with A/B selector. A metadata diff is always available; an optional "Summarise with AI" button calls the AI only on demand.
+- **AI Insights Dashboard (Phase 4):** A dedicated `/ai-insights` page shows organisation-wide risk distribution, documents needing attention (high/critical urgency), duplicate detection signals (discipline+type density per project), and a future-ready workflow bottleneck placeholder. All data is loaded lazily — no AI calls on render.
+- **Document Number Uniqueness (Phase 3):** Unique constraint on `(project_id, document_number)`. Upload dialog has a debounced check (400 ms) with inline amber warning when a number is taken.
 
 ## External Dependencies
 

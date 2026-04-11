@@ -44,6 +44,7 @@ import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
 import BillingPage from "@/pages/billing";
 import WorkflowEnginePage from "@/pages/workflow-engine";
+import AIInsightsPage from "@/pages/ai-insights";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -196,6 +197,9 @@ function Router() {
       </Route>
       <Route path="/migration-wizard">
         <ProtectedRoute component={MigrationWizard} />
+      </Route>
+      <Route path="/ai-insights">
+        <ProtectedRoute component={AIInsightsPage} />
       </Route>
 
       <Route component={NotFound} />

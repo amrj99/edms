@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import {
   documentsTable, correspondenceTable, tasksTable, aiLogsTable, aiAnalysisTable,
 } from "@workspace/db";
-import { eq, and, inArray, gt, desc } from "drizzle-orm";
+import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import {
   analyzeDocument,
@@ -18,6 +18,7 @@ import {
   updateAIProviderConfig,
   getProviderStatus,
   getAIClient,
+  callAI,
 } from "../lib/ai-service.js";
 
 const router = Router();
@@ -218,28 +219,175 @@ router.post("/validate-documents", async (req, res) => {
   res.json({ issues, summary, total: documents.length });
 });
 
-// ─── Compare Revisions (AI Summary) ──────────────────────────────────────────
+// ─── Compare Revisions (metadata diff + optional AI narrative) ───────────────
 
 router.post("/compare-revisions", async (req, res) => {
-  const { document: docTitle, revisionA, revisionB } = req.body ?? {};
+  const { document: docTitle, revisionA, revisionB, withAI } = req.body ?? {};
   if (!revisionA || !revisionB) {
     res.status(400).json({ error: "revisionA and revisionB are required" });
     return;
   }
 
-  const changes: string[] = [];
-  const fields = ["revision", "status", "fileName", "comment"];
-  fields.forEach(f => {
-    if (revisionA[f] !== revisionB[f]) {
-      changes.push(`${f} changed from "${revisionA[f] || "none"}" to "${revisionB[f] || "none"}"`);
-    }
+  const TRACKED_FIELDS = [
+    { key: "revision",  label: "Revision" },
+    { key: "status",    label: "Status" },
+    { key: "fileName",  label: "File" },
+    { key: "comment",   label: "Comment" },
+    { key: "fileSize",  label: "File Size" },
+  ];
+
+  const diff: { field: string; label: string; from: string; to: string }[] = [];
+  for (const { key, label } of TRACKED_FIELDS) {
+    const from = String(revisionA[key] ?? "—");
+    const to   = String(revisionB[key]   ?? "—");
+    if (from !== to) diff.push({ field: key, label, from, to });
+  }
+
+  const plainSummary = diff.length === 0
+    ? `No tracked metadata differences between the two revisions of "${docTitle}".`
+    : `${diff.length} metadata field(s) changed between revisions of "${docTitle}": ${diff.map(d => `${d.label} (${d.from} → ${d.to})`).join("; ")}.`;
+
+  if (!withAI) {
+    res.json({ diff, summary: plainSummary, aiSummary: null });
+    return;
+  }
+
+  // Optional AI narrative — only called when withAI=true
+  try {
+    const changesText = diff.length === 0
+      ? "No metadata changes detected."
+      : diff.map(d => `- ${d.label}: "${d.from}" → "${d.to}"`).join("\n");
+
+    const { data, provider, model } = await callAI(
+      `You are an engineering document management AI.
+Two revisions of the document "${docTitle}" were compared.
+
+Metadata changes:
+${changesText}
+
+Write a concise 2-3 sentence professional summary of what changed between these two revisions and any implications for document control. Be specific about the changes.`,
+      "Respond in plain professional English. Do not use markdown or bullet points.",
+      "fast",
+    );
+
+    res.json({ diff, summary: plainSummary, aiSummary: String(data), provider, model });
+  } catch (err: any) {
+    // If AI fails, still return the metadata diff
+    res.json({ diff, summary: plainSummary, aiSummary: null, aiError: err?.message ?? "AI unavailable" });
+  }
+});
+
+// ─── AI Insights Dashboard ────────────────────────────────────────────────────
+
+/**
+ * GET /api/ai/insights
+ * Aggregated AI insights for the organisation's documents.
+ * All heavy computation is done in SQL; no AI calls are made here.
+ */
+router.get("/insights", async (req, res) => {
+  const orgId = req.user!.organizationId;
+
+  // 1. Total documents in the org
+  const [{ totalDocs }] = await db
+    .select({ totalDocs: count() })
+    .from(documentsTable)
+    .where(orgId ? eq(documentsTable.organizationId, orgId) : sql`true`);
+
+  // 2. Latest analyses for this org (entityType='document', analysisType='analyze', isLatest=true)
+  const latestAnalyses = await db
+    .select({
+      entityId:      aiAnalysisTable.entityId,
+      result:        aiAnalysisTable.result,
+      model:         aiAnalysisTable.model,
+      provider:      aiAnalysisTable.provider,
+      createdAt:     aiAnalysisTable.createdAt,
+    })
+    .from(aiAnalysisTable)
+    .where(
+      and(
+        eq(aiAnalysisTable.entityType, "document"),
+        eq(aiAnalysisTable.analysisType, "analyze"),
+        eq(aiAnalysisTable.isLatest, true),
+        ...(orgId ? [eq(aiAnalysisTable.organizationId, orgId)] : []),
+      ),
+    )
+    .orderBy(desc(aiAnalysisTable.createdAt))
+    .limit(500);
+
+  const analyzedCount = latestAnalyses.length;
+  const coveragePct = totalDocs > 0 ? Math.round((analyzedCount / Number(totalDocs)) * 100) : 0;
+
+  // 3. Urgency distribution
+  const urgencyDist: Record<string, number> = { low: 0, medium: 0, high: 0, critical: 0 };
+  for (const row of latestAnalyses) {
+    const r = row.result as any;
+    const lvl = r?.urgencyLevel as string;
+    if (lvl && lvl in urgencyDist) urgencyDist[lvl]++;
+  }
+
+  // 4. Documents needing attention (high / critical urgency) — fetch their metadata
+  const needsAttentionIds = latestAnalyses
+    .filter(r => {
+      const lvl = (r.result as any)?.urgencyLevel;
+      return lvl === "high" || lvl === "critical";
+    })
+    .slice(0, 20)
+    .map(r => r.entityId);
+
+  let needsAttention: any[] = [];
+  if (needsAttentionIds.length > 0) {
+    const docs = await db
+      .select({
+        id:             documentsTable.id,
+        title:          documentsTable.title,
+        documentNumber: documentsTable.documentNumber,
+        documentType:   documentsTable.documentType,
+        discipline:     documentsTable.discipline,
+        status:         documentsTable.status,
+        projectId:      documentsTable.projectId,
+      })
+      .from(documentsTable)
+      .where(inArray(documentsTable.id, needsAttentionIds));
+
+    const analysisMap = new Map(latestAnalyses.map(a => [a.entityId, a]));
+    needsAttention = docs.map(d => ({
+      ...d,
+      urgencyLevel:  (analysisMap.get(d.id)?.result as any)?.urgencyLevel,
+      urgencyReason: (analysisMap.get(d.id)?.result as any)?.urgencyReason,
+      analyzedAt:    analysisMap.get(d.id)?.createdAt,
+    }));
+  }
+
+  // 5. Duplicate detection signals — documents sharing discipline+documentType within same project (count > 1)
+  const duplicateSignals = await db
+    .select({
+      projectId:    documentsTable.projectId,
+      documentType: documentsTable.documentType,
+      discipline:   documentsTable.discipline,
+      cnt:          count(),
+    })
+    .from(documentsTable)
+    .where(
+      and(
+        orgId ? eq(documentsTable.organizationId, orgId) : sql`true`,
+        sql`${documentsTable.discipline} IS NOT NULL`,
+        sql`${documentsTable.documentType} IS NOT NULL`,
+      ),
+    )
+    .groupBy(documentsTable.projectId, documentsTable.documentType, documentsTable.discipline)
+    .having(sql`count(*) > 5`)
+    .orderBy(desc(sql`count(*)`))
+    .limit(10);
+
+  res.json({
+    totalDocs: Number(totalDocs),
+    analyzedCount,
+    coveragePct,
+    urgencyDistribution: urgencyDist,
+    needsAttention,
+    duplicateSignals: duplicateSignals.map(s => ({ ...s, cnt: Number(s.cnt) })),
+    generatedAt: new Date().toISOString(),
   });
-
-  const summary = changes.length === 0
-    ? `No tracked metadata differences detected between the two revisions of "${docTitle}".`
-    : `Between the two revisions of "${docTitle}": ${changes.join("; ")}.`;
-
-  res.json({ summary });
 });
 
 // ─── AI Settings ─────────────────────────────────────────────────────────────
