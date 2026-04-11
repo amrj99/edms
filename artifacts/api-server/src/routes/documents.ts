@@ -20,6 +20,23 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100
 
 const router = Router({ mergeParams: true });
 
+// ─── Project access helper ─────────────────────────────────────────────────
+// Returns true if the user may access documents in the given project.
+// SysAdmins bypass all checks. Otherwise: org-owner match OR explicit project membership.
+async function canAccessProject(userId: number, userOrgId: number | undefined, projectId: number, sysAdmin: boolean): Promise<boolean> {
+  if (sysAdmin) return true;
+  const [project] = await db.select({ organizationId: projectsTable.organizationId })
+    .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+  if (!project) return false;
+  if (project.organizationId === userOrgId) return true;
+  // Cross-org: check explicit project membership
+  const [member] = await db.select({ userId: projectMembersTable.userId })
+    .from(projectMembersTable)
+    .where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)))
+    .limit(1);
+  return !!member;
+}
+
 // Folders
 router.get("/folders", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
@@ -116,6 +133,10 @@ router.post("/folders/copy-from", requireAuth, async (req, res) => {
 // Documents
 router.get("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  const caller = req.user!;
+  if (!await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller))) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
   const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy } = req.query;
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
@@ -354,6 +375,10 @@ router.get("/check-number", requireAuth, async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
+  const caller = req.user!;
+  if (!await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller))) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
 
   const docs = await db.select({
     doc: documentsTable,
@@ -518,13 +543,17 @@ router.get("/:id/reviews", requireAuth, async (req, res) => {
 
 router.post("/:id/approve", requireAuth, async (req, res) => {
   const caller = req.user!;
-  if (!isSysAdmin(caller) && caller.role !== "project_manager") {
-    res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can approve documents" }); return;
+  // Direct approve is an admin override only — normal approvals go through the Workflow Engine
+  if (!isSysAdmin(caller)) {
+    res.status(403).json({ error: "Forbidden", message: "Direct document approval is an admin override. Use the Workflow Engine for standard approvals." }); return;
+  }
+  const { comment, decision: rawDecision } = req.body;
+  if (!comment?.trim()) {
+    res.status(400).json({ error: "A comment is required for admin override approvals" }); return;
   }
 
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
-  const { comment, decision: rawDecision } = req.body;
   const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
   const reviewer = req.user as any;
@@ -581,13 +610,17 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
 
 router.post("/:id/reject", requireAuth, async (req, res) => {
   const caller = req.user!;
-  if (!isSysAdmin(caller) && caller.role !== "project_manager") {
-    res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can reject documents" }); return;
+  // Direct reject is an admin override only — normal rejections go through the Workflow Engine
+  if (!isSysAdmin(caller)) {
+    res.status(403).json({ error: "Forbidden", message: "Direct document rejection is an admin override. Use the Workflow Engine for standard review actions." }); return;
+  }
+  const { comment, decision: rawDecision } = req.body;
+  if (!comment?.trim()) {
+    res.status(400).json({ error: "A comment is required for admin override actions" }); return;
   }
 
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
-  const { comment, decision: rawDecision } = req.body;
   const decision: ReviewDecision =
     (rawDecision === "rejected" || rawDecision === "for_revision")
       ? rawDecision

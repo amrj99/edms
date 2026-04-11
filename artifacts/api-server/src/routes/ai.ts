@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   documentsTable, correspondenceTable, tasksTable, aiLogsTable, aiAnalysisTable,
+  projectsTable, projectMembersTable,
 } from "@workspace/db";
 import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
@@ -31,6 +32,7 @@ router.use(requireAuth);
 router.post("/documents/:id/analyze", async (req, res) => {
   const docId = parseInt(req.params.id);
   const force = req.query.force === "true";
+  const caller = req.user!;
 
   const docs = await db.select().from(documentsTable)
     .where(eq(documentsTable.id, docId)).limit(1);
@@ -42,12 +44,26 @@ router.post("/documents/:id/analyze", async (req, res) => {
 
   const doc = docs[0];
 
-  if (!await isModuleEnabled("documents", req.user!.organizationId)) {
+  // Verify the caller has access to the document's project
+  if (!isSysAdmin(caller)) {
+    const [project] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, doc.projectId)).limit(1);
+    const isSameOrg = project?.organizationId === caller.organizationId;
+    if (!isSameOrg) {
+      const [member] = await db.select({ userId: projectMembersTable.userId })
+        .from(projectMembersTable)
+        .where(and(eq(projectMembersTable.projectId, doc.projectId), eq(projectMembersTable.userId, caller.id)))
+        .limit(1);
+      if (!member) { res.status(403).json({ error: "Access denied" }); return; }
+    }
+  }
+
+  if (!await isModuleEnabled("documents", caller.organizationId)) {
     res.status(403).json({ error: "AI is disabled for the Documents module" });
     return;
   }
 
-  const analysis = await analyzeDocument(doc, req.user!.id, force);
+  const analysis = await analyzeDocument(doc, caller.id, force);
   res.json(analysis);
 });
 
@@ -56,6 +72,7 @@ router.post("/documents/:id/analyze", async (req, res) => {
 router.post("/correspondence/:id/analyze", async (req, res) => {
   const corrId = parseInt(req.params.id);
   const force = req.query.force === "true";
+  const caller = req.user!;
 
   const items = await db.select().from(correspondenceTable)
     .where(eq(correspondenceTable.id, corrId)).limit(1);
@@ -67,12 +84,17 @@ router.post("/correspondence/:id/analyze", async (req, res) => {
 
   const corr = items[0];
 
-  if (!await isModuleEnabled("correspondence", req.user!.organizationId)) {
+  // Org isolation: correspondence is org-scoped
+  if (!isSysAdmin(caller) && corr.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Access denied" }); return;
+  }
+
+  if (!await isModuleEnabled("correspondence", caller.organizationId)) {
     res.status(403).json({ error: "AI is disabled for the Correspondence module" });
     return;
   }
 
-  const analysis = await analyzeCorrespondence(corr, req.user!.id, force);
+  const analysis = await analyzeCorrespondence(corr, caller.id, force);
   res.json(analysis);
 });
 
@@ -80,14 +102,19 @@ router.post("/correspondence/:id/analyze", async (req, res) => {
 
 router.post("/tasks/prioritize", async (req, res) => {
   const { taskIds, projectId } = req.body ?? {};
+  const caller = req.user!;
 
-  if (!await isModuleEnabled("tasks", req.user!.organizationId)) {
+  if (!await isModuleEnabled("tasks", caller.organizationId)) {
     res.status(403).json({ error: "AI is disabled for the Tasks module" });
     return;
   }
 
-  let query = db.select().from(tasksTable);
-  const conditions = [];
+  const conditions: any[] = [];
+
+  // Always scope to the caller's org to prevent cross-org task access
+  if (!isSysAdmin(caller) && caller.organizationId) {
+    conditions.push(eq(tasksTable.organizationId, caller.organizationId));
+  }
 
   if (taskIds?.length > 0) {
     conditions.push(inArray(tasksTable.id, taskIds));
@@ -97,10 +124,10 @@ router.post("/tasks/prioritize", async (req, res) => {
   }
 
   const tasks = conditions.length > 0
-    ? await query.where(and(...conditions))
-    : await query.limit(50);
+    ? await db.select().from(tasksTable).where(and(...conditions)).limit(50)
+    : await db.select().from(tasksTable).limit(50);
 
-  const insights = await prioritizeTasks(tasks, req.user!.id);
+  const insights = await prioritizeTasks(tasks, caller.id);
   res.json(insights);
 });
 

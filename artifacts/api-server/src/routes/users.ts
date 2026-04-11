@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, organizationsTable } from "@workspace/db";
-import { eq, count, and } from "drizzle-orm";
+import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
+import { eq, count, and, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
@@ -9,11 +9,52 @@ import { PLANS } from "../lib/plans.js";
 const router = Router();
 
 router.get("/", requireAuth, async (req, res) => {
-  // sysAdmin may pass an explicit orgId filter; all other roles are locked to their own org
+  const caller = req.user!;
   const requestedOrgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
-  const orgId = isSysAdmin(req.user!)
+  const requestedProjectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+
+  // ── Project-scoped query: all members of a project (cross-org collaboration) ──
+  if (requestedProjectId) {
+    // Caller must be a member of the requested project (or sysAdmin)
+    if (!isSysAdmin(caller)) {
+      const [selfMembership] = await db.select({ userId: projectMembersTable.userId })
+        .from(projectMembersTable)
+        .where(and(eq(projectMembersTable.projectId, requestedProjectId), eq(projectMembersTable.userId, caller.id)))
+        .limit(1);
+      if (!selfMembership) { res.status(403).json({ error: "Forbidden" }); return; }
+    }
+
+    const members = await db.select({ userId: projectMembersTable.userId })
+      .from(projectMembersTable)
+      .where(eq(projectMembersTable.projectId, requestedProjectId));
+    const memberIds = members.map(m => m.userId);
+    if (memberIds.length === 0) { res.json({ users: [], total: 0 }); return; }
+
+    const results = await db.select({ user: usersTable, orgName: organizationsTable.name })
+      .from(usersTable)
+      .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
+      .where(inArray(usersTable.id, memberIds));
+
+    res.json({
+      users: results.map(r => ({
+        id: r.user.id,
+        firstName: r.user.firstName,
+        lastName: r.user.lastName,
+        email: r.user.email,
+        role: r.user.role,
+        organizationId: r.user.organizationId,
+        organizationName: r.orgName,
+        isActive: r.user.isActive,
+      })),
+      total: results.length,
+    });
+    return;
+  }
+
+  // ── Standard org-scoped query ────────────────────────────────────────────────
+  const orgId = isSysAdmin(caller)
     ? requestedOrgId
-    : req.user!.organizationId ?? undefined;
+    : caller.organizationId ?? undefined;
 
   const results = await db.select({
     user: usersTable,
@@ -94,9 +135,23 @@ router.get("/:id", requireAuth, async (req, res) => {
   const user = users[0];
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
 
-  // sysAdmins can fetch any user; others can only fetch users within their own org
+  let limitedProfile = false;
+
   if (!isSysAdmin(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
+    // Cross-org: only allowed if they share at least one project membership
+    const callerProjectIds = (await db.select({ projectId: projectMembersTable.projectId })
+      .from(projectMembersTable)
+      .where(eq(projectMembersTable.userId, caller.id))
+    ).map(r => r.projectId);
+
+    const hasSharedProject = callerProjectIds.length > 0
+      && (await db.select({ userId: projectMembersTable.userId })
+        .from(projectMembersTable)
+        .where(and(eq(projectMembersTable.userId, id), inArray(projectMembersTable.projectId, callerProjectIds)))
+        .limit(1)).length > 0;
+
+    if (!hasSharedProject) { res.status(403).json({ error: "Forbidden" }); return; }
+    limitedProfile = true; // Only expose collaboration-level fields
   }
 
   let orgName: string | undefined;
@@ -104,6 +159,13 @@ router.get("/:id", requireAuth, async (req, res) => {
     const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
     orgName = orgs[0]?.name;
   }
+
+  if (limitedProfile) {
+    // Limited cross-org profile: name, email, organisation, role — no internal/admin fields
+    res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, organizationId: user.organizationId, organizationName: orgName });
+    return;
+  }
+
   res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, organizationName: orgName, isActive: user.isActive, createdAt: user.createdAt });
 });
 
