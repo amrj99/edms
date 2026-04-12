@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "FnRco_SQRmn5AXtogAzmj"
+uri = "file://ArcScale_EDMS_System_Guide.md"
+type = "text"
+title = "ArcScale EDMS — System Guide Outline v0.1"
