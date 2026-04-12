@@ -60,6 +60,11 @@ function uploadWithProgress(
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", uploadUrl);
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    // Attach Bearer token for on-premise uploads to our own API
+    if (uploadUrl.startsWith("/") || uploadUrl.includes(window.location.host)) {
+      const token = localStorage.getItem("edms_token");
+      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
     };

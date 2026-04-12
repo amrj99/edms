@@ -43,15 +43,15 @@ else
   echo "  ⚠ migrate_production.sql not found — skipping SQL migration."
 fi
 
-# ── Step 3: Rebuild API image ─────────────────────────────────────────────────
-echo "► [3/5] Rebuilding API image with latest schema..."
-docker compose -f "$COMPOSE_FILE" build --no-cache api
-echo "  ✓ Image rebuilt."
+# ── Step 3: Rebuild ALL images (API + Frontend) ───────────────────────────────
+echo "► [3/5] Rebuilding API and frontend images with latest code..."
+docker compose -f "$COMPOSE_FILE" build --no-cache api frontend
+echo "  ✓ Images rebuilt."
 
-# ── Step 4: Restart API container ─────────────────────────────────────────────
-echo "► [4/5] Restarting API container..."
-docker compose -f "$COMPOSE_FILE" up -d api
-echo "  ✓ Container started."
+# ── Step 4: Restart containers ────────────────────────────────────────────────
+echo "► [4/5] Restarting API and frontend containers..."
+docker compose -f "$COMPOSE_FILE" up -d api frontend
+echo "  ✓ Containers started."
 
 # ── Step 5: Health check ──────────────────────────────────────────────────────
 echo "► [5/5] Waiting for API to become healthy..."
