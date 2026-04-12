@@ -180,6 +180,15 @@ ALTER TABLE rules ADD COLUMN IF NOT EXISTS applies_to           rule_applies_to 
 
 -- ─── SECTION 3: NEW TABLES ────────────────────────────────────────────────────
 
+-- correspondence_cc  (was missing from original migration)
+CREATE TABLE IF NOT EXISTS correspondence_cc (
+  id                  serial   PRIMARY KEY,
+  correspondence_id   integer  NOT NULL REFERENCES correspondence(id),
+  user_id             integer  NOT NULL REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_correspondence_cc_corr_id ON correspondence_cc (correspondence_id);
+CREATE INDEX IF NOT EXISTS idx_correspondence_cc_user_id ON correspondence_cc (user_id);
+
 -- transmittal_history
 CREATE TABLE IF NOT EXISTS transmittal_history (
   id               serial      PRIMARY KEY,
