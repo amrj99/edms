@@ -110,8 +110,11 @@ export async function requestUpload(params: {
         safeFile,
       );
       fs.mkdirSync(path.dirname(absPath), { recursive: true });
+      // The client cannot PUT directly to a filesystem path.
+      // We expose an API endpoint that receives the binary body and writes it to disk.
       return {
         mode: "onpremise",
+        uploadURL: `/api/storage/uploads/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
         filePath: absPath,
         objectPath: absPath,
         serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
