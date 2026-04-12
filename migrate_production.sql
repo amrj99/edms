@@ -43,6 +43,13 @@ EXCEPTION WHEN others THEN NULL; END $$;
 
 -- ─── 2. NEW COLUMNS ON EXISTING TABLES ────────────────────────────────────────
 
+-- refresh_tokens  (organization_id added during development)
+ALTER TABLE refresh_tokens       ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);
+ALTER TABLE refresh_tokens       ADD COLUMN IF NOT EXISTS revoked_at       timestamp;
+
+-- password_reset_tokens (organization_id added during development)
+ALTER TABLE password_reset_tokens ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);
+
 -- users
 ALTER TABLE users ADD COLUMN IF NOT EXISTS department            text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms_at     timestamp;
