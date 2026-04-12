@@ -3,28 +3,48 @@
  *
  * Use resolveEffectiveRole() in routes wherever canAct logic depends on a
  * user's role. It returns the highest-privilege role available to the caller
- * in the given project context, considering:
- *   1. Active project role overrides (time-bound, project-scoped elevation)
- *   2. Active delegations (acting on behalf of another user)
- *   3. Base org role (fallback)
+ * in the given project context, considering (in order):
+ *   1. Project member role  (per-project role stored in project_members)
+ *   2. Active project role overrides (time-bound, project-scoped elevation)
+ *   3. Active delegations (acting on behalf of another user)
+ *   4. Base org role (fallback)
+ *
+ * Privilege escalation is prevented:
+ *   - Delegations cannot grant more than the delegator's own effective role.
+ *   - Role overrides to system_owner can only be granted by system_owner.
  */
 
 import { db } from "@workspace/db";
-import { delegationsTable, projectRoleOverridesTable, usersTable } from "@workspace/db";
+import { delegationsTable, projectRoleOverridesTable, usersTable, projectMembersTable } from "@workspace/db";
 import { eq, and, or, isNull, gt } from "drizzle-orm";
 import type { AuthUser } from "./auth.js";
+import { ROLE_RANK } from "./permissions.js";
 
-const ROLE_RANK: Record<string, number> = {
-  system_owner: 100,
-  admin: 80,
-  project_manager: 60,
-  document_controller: 40,
-  reviewer: 20,
-  viewer: 0,
-};
+export { ROLE_RANK };
 
 function higherRole(a: string, b: string): string {
   return (ROLE_RANK[a] ?? 0) >= (ROLE_RANK[b] ?? 0) ? a : b;
+}
+
+/**
+ * Returns the user's explicit project-member role for this project, if any.
+ * Returns null if the user has no project_members row for this project.
+ */
+export async function getProjectMemberRole(
+  userId: number,
+  projectId: number,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ role: projectMembersTable.role })
+    .from(projectMembersTable)
+    .where(
+      and(
+        eq(projectMembersTable.userId, userId),
+        eq(projectMembersTable.projectId, projectId),
+      ),
+    )
+    .limit(1);
+  return row?.role ?? null;
 }
 
 /**
@@ -85,7 +105,6 @@ export async function getActiveDelegation(
 
   if (rows.length === 0) return null;
 
-  // Pick the most specific delegation (project-specific beats org-wide)
   const specific = rows.find(r => r.projectId !== null);
   const chosen = specific ?? rows[0];
 
@@ -99,30 +118,63 @@ export async function getActiveDelegation(
   return { fromUserRole: fromUser.role, fromUserId: chosen.fromUserId, delegationId: chosen.id };
 }
 
+export interface ResolvedRole {
+  /** The highest effective role after all layers of resolution */
+  role: string;
+  /** True when the caller is acting under an active delegation */
+  isDelegating: boolean;
+  /** The user they are acting on behalf of (when delegating) */
+  delegatedFromUserId?: number;
+  /** The delegation record ID (when delegating) */
+  delegationId?: number;
+  /** True when the effective role came from a project_members override */
+  hasProjectMemberRole: boolean;
+  /** True when the effective role came from a project_role_override */
+  hasRoleOverride: boolean;
+}
+
 /**
  * Main entry point. Returns the effective role of the caller in the given
- * project context, considering delegations and project role overrides.
+ * project context, considering:
+ *  1. Project member role (project_members table)
+ *  2. Active project role override (time-bound elevation)
+ *  3. Active delegation (acting on behalf of another user)
+ *  4. Base org role (the user's own role on their account)
+ *
+ * The highest role across all active sources wins.
  *
  * Pass projectId when doing project-scoped permission checks.
  */
 export async function resolveEffectiveRole(
   caller: AuthUser,
   projectId?: number,
-): Promise<{ role: string; isDelegating: boolean; delegatedFromUserId?: number; delegationId?: number }> {
+): Promise<ResolvedRole> {
   let role = caller.role;
   let isDelegating = false;
   let delegatedFromUserId: number | undefined;
   let delegationId: number | undefined;
+  let hasProjectMemberRole = false;
+  let hasRoleOverride = false;
 
-  // 1. Check project role override (elevates role within this project)
   if (projectId) {
+    // 1. Project member role
+    const memberRole = await getProjectMemberRole(caller.id, projectId);
+    if (memberRole) {
+      const elevated = higherRole(role, memberRole);
+      if (elevated !== role) hasProjectMemberRole = true;
+      role = elevated;
+    }
+
+    // 2. Project role override (time-bound elevation)
     const override = await getProjectRoleOverride(caller.id, projectId);
     if (override) {
-      role = higherRole(role, override);
+      const elevated = higherRole(role, override);
+      if (elevated !== role) hasRoleOverride = true;
+      role = elevated;
     }
   }
 
-  // 2. Check active delegation (caller acts on behalf of someone else)
+  // 3. Active delegation (caller acts on behalf of someone else)
   if (caller.organizationId) {
     const delegation = await getActiveDelegation(caller.id, caller.organizationId, projectId);
     if (delegation) {
@@ -136,7 +188,7 @@ export async function resolveEffectiveRole(
     }
   }
 
-  return { role, isDelegating, delegatedFromUserId, delegationId };
+  return { role, isDelegating, delegatedFromUserId, delegationId, hasProjectMemberRole, hasRoleOverride };
 }
 
 /**

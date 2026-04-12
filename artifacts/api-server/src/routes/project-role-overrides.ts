@@ -69,7 +69,7 @@ router.post("/role-overrides", requireAuth, async (req, res) => {
     res.status(403).json({ error: "Only project managers and admins can create role overrides" }); return;
   }
 
-  const VALID_ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
+  const VALID_ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
   if (!VALID_ROLES.includes(roleOverride)) {
     res.status(400).json({ error: "Invalid roleOverride value" }); return;
   }

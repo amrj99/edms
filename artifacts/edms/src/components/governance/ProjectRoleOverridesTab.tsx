@@ -35,6 +35,7 @@ const ROLE_LABELS: Record<string, string> = {
   project_manager: "Project Manager",
   document_controller: "Document Controller",
   reviewer: "Reviewer",
+  member: "Member",
   viewer: "Viewer",
 };
 
@@ -43,6 +44,7 @@ const ROLE_COLORS: Record<string, string> = {
   admin: "bg-purple-100 text-purple-700",
   document_controller: "bg-cyan-100 text-cyan-700",
   reviewer: "bg-green-100 text-green-700",
+  member: "bg-teal-100 text-teal-700",
   viewer: "bg-gray-100 text-gray-600",
   system_owner: "bg-amber-100 text-amber-700",
 };

@@ -3145,10 +3145,10 @@ function MembersTab({ projectId }: { projectId: number }) {
               <Select value={addRole} onValueChange={setAddRole}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="project_admin">Project Admin</SelectItem>
                   <SelectItem value="project_manager">Project Manager</SelectItem>
                   <SelectItem value="document_controller">Document Controller</SelectItem>
                   <SelectItem value="reviewer">Reviewer</SelectItem>
+                  <SelectItem value="member">Member</SelectItem>
                   <SelectItem value="viewer">Viewer</SelectItem>
                 </SelectContent>
               </Select>
@@ -3217,10 +3217,10 @@ function MembersTab({ projectId }: { projectId: number }) {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="project_admin" className="text-xs">Project Admin</SelectItem>
                           <SelectItem value="project_manager" className="text-xs">Project Manager</SelectItem>
                           <SelectItem value="document_controller" className="text-xs">Document Controller</SelectItem>
                           <SelectItem value="reviewer" className="text-xs">Reviewer</SelectItem>
+                          <SelectItem value="member" className="text-xs">Member</SelectItem>
                           <SelectItem value="viewer" className="text-xs">Viewer</SelectItem>
                         </SelectContent>
                       </Select>

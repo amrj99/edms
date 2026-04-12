@@ -1280,7 +1280,7 @@ components:
           type: string
         role:
           type: string
-          enum: [admin, project_manager, document_controller, reviewer, viewer]
+          enum: [admin, project_manager, document_controller, reviewer, member, viewer]
         organizationId:
           type: integer
         organizationName:
@@ -1326,7 +1326,7 @@ components:
           type: string
         role:
           type: string
-          enum: [admin, project_manager, document_controller, reviewer, viewer]
+          enum: [admin, project_manager, document_controller, reviewer, member, viewer]
         organizationId:
           type: integer
       required:
@@ -1345,7 +1345,7 @@ components:
           type: string
         role:
           type: string
-          enum: [admin, project_manager, document_controller, reviewer, viewer]
+          enum: [admin, project_manager, document_controller, reviewer, member, viewer]
         isActive:
           type: boolean
 
@@ -1497,7 +1497,7 @@ components:
           type: integer
         role:
           type: string
-          enum: [admin, project_manager, document_controller, reviewer, viewer]
+          enum: [admin, project_manager, document_controller, reviewer, member, viewer]
         user:
           $ref: "#/components/schemas/User"
         joinedAt:
@@ -1530,7 +1530,7 @@ components:
           type: integer
         role:
           type: string
-          enum: [admin, project_manager, document_controller, reviewer, viewer]
+          enum: [admin, project_manager, document_controller, reviewer, member, viewer]
       required:
         - userId
         - role

@@ -33,14 +33,15 @@ import {
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
 
-const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "viewer"];
+const ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
 const ROLE_DESCRIPTIONS: Record<string, string> = {
   system_owner: "Full system access including global settings and configuration",
   admin: "Manage organization data, users, and most settings",
-  project_manager: "Manage projects, documents, and team members",
-  document_controller: "Upload, revise, and control document workflow",
-  reviewer: "Review and comment on documents",
-  viewer: "Read-only access to assigned documents",
+  project_manager: "Oversight of projects, documents, and team members",
+  document_controller: "Upload, revise, and control the document lifecycle",
+  reviewer: "Review and comment on documents and transmittals",
+  member: "Participate in tasks and correspondence; read project documents",
+  viewer: "Read-only access to assigned documents and project content",
 };
 const ROLE_BADGE: Record<string, string> = {
   system_owner: "bg-red-100 text-red-700",
@@ -48,10 +49,11 @@ const ROLE_BADGE: Record<string, string> = {
   project_manager: "bg-blue-100 text-blue-700",
   document_controller: "bg-purple-100 text-purple-700",
   reviewer: "bg-cyan-100 text-cyan-700",
+  member: "bg-green-100 text-green-700",
   viewer: "bg-gray-100 text-gray-700",
 };
 
-const PROJECT_ROLES = ["project_manager", "document_controller", "reviewer", "viewer", "project_admin"];
+const PROJECT_ROLES = ["project_manager", "document_controller", "reviewer", "member", "viewer"];
 
 export default function Admin() {
   const { user } = useAuth();

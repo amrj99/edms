@@ -34,6 +34,7 @@ export const UserRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
 
@@ -67,6 +68,7 @@ export const CreateUserRequestRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
 
@@ -87,6 +89,7 @@ export const UpdateUserRequestRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
 
@@ -198,6 +201,7 @@ export const ProjectMemberRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
 
@@ -223,6 +227,7 @@ export const AddProjectMemberRequestRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
 

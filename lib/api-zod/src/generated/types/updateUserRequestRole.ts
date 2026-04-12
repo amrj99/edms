@@ -14,5 +14,6 @@ export const UpdateUserRequestRole = {
   project_manager: "project_manager",
   document_controller: "document_controller",
   reviewer: "reviewer",
+  member: "member",
   viewer: "viewer",
 } as const;
