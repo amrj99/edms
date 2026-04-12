@@ -7,7 +7,9 @@ import {
   correspondenceTable,
 } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { requireAuth, requireRole, hashPassword } from "../lib/auth.js";
+import { requireAuth, requireRole, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { resolveEffectiveRole } from "../lib/governance.js";
+import { TransmittalPermissions, checkAssignmentBasedPermission } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
@@ -513,10 +515,40 @@ router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "doc
   res.json({ success: true });
 });
 
-// Set per-item review code
-router.patch("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller", "reviewer"), async (req, res) => {
+// Set per-item review code — assignment-based: must be the designated recipient or admin+
+router.patch("/:id/items/:itemId", requireAuth, async (req, res) => {
+  const transmittalId = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
   const itemId = parseInt(req.params.itemId);
+  const caller = req.user!;
   const { reviewCode } = req.body;
+
+  // Fetch transmittal to check assignment
+  const [transmittal] = await db.select({
+    toUserId: transmittalsTable.toUserId,
+    createdById: transmittalsTable.createdById,
+  }).from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)))
+    .limit(1);
+  if (!transmittal) { res.status(404).json({ error: "Transmittal not found" }); return; }
+
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+
+  // Assignment check: caller is the designated recipient, or admin+ override
+  const isAssigned = transmittal.toUserId === caller.id || transmittal.createdById === caller.id;
+  const basis = checkAssignmentBasedPermission(effectiveRole, isAssigned, "reviewer");
+  if (!basis) {
+    res.status(403).json({ error: "Forbidden", message: "You must be the designated recipient to set review codes, or an admin to override" }); return;
+  }
+
+  if (basis === "admin_override") {
+    await createAuditLog({
+      userId: caller.id, organizationId: caller.organizationId,
+      action: "admin_override_review_code", entityType: "transmittal_item",
+      entityId: itemId, projectId, details: { reviewCode, transmittalId },
+    });
+  }
+
   const [updated] = await db.update(transmittalItemsTable)
     .set({ reviewCode: reviewCode ?? null })
     .where(eq(transmittalItemsTable.id, itemId))
@@ -625,11 +657,22 @@ router.post(
 
 router.post(
   "/:id/approve",
-  requireRole("admin", "project_manager"),
+  requireAuth,
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
+
+    // Direct transmittal approval is an admin-override action only
+    const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+    if (!isSysAdmin(caller) && effectiveRole !== "admin") {
+      res.status(403).json({ error: "Forbidden", message: "Direct transmittal approval is an admin override. Normal approvals go through the workflow engine." }); return;
+    }
+    if (!comment?.trim()) {
+      res.status(400).json({ error: "A comment is required for admin override approvals" }); return;
+    }
+
     const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
     const [existing] = await db.select().from(transmittalsTable)
@@ -722,11 +765,22 @@ router.post(
 
 router.post(
   "/:id/reject",
-  requireRole("admin", "project_manager"),
+  requireAuth,
   async (req, res) => {
     const id = parseInt(req.params.id);
     const projectId = parseInt(req.params.projectId);
+    const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
+
+    // Direct transmittal rejection is an admin-override action only; comment is mandatory
+    const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+    if (!isSysAdmin(caller) && effectiveRole !== "admin") {
+      res.status(403).json({ error: "Forbidden", message: "Direct transmittal rejection is an admin override. Normal rejections go through the workflow engine." }); return;
+    }
+    if (!comment?.trim()) {
+      res.status(400).json({ error: "A comment is required for admin override rejections" }); return;
+    }
+
     const decision: ReviewDecision =
       (rawDecision === "rejected" || rawDecision === "for_revision") ? rawDecision : "for_revision";
 

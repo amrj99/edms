@@ -11,8 +11,10 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
-import { requireAuth, hashPassword } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { resolveEffectiveRole } from "../lib/governance.js";
+import { CorrespondencePermissions } from "../lib/permissions.js";
 import crypto from "crypto";
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
@@ -197,6 +199,15 @@ async function createCorrespondence(
   res: any,
   contextProjectId: number | null
 ) {
+  const caller = req.user!;
+
+  // Resolve effective role (respects project member roles, overrides, delegations)
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
+  if (!CorrespondencePermissions.canCreate(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "You do not have permission to create correspondence" });
+    return;
+  }
+
   const {
     subject,
     type,
@@ -217,7 +228,7 @@ async function createCorrespondence(
 
   const requiresResponse = rawRequiresResponse === true || rawRequiresResponse === "true";
 
-  const orgId = req.user!.organizationId;
+  const orgId = caller.organizationId;
   if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
   if (!subject?.trim()) { res.status(400).json({ error: "subject is required" }); return; }
   if (!type) { res.status(400).json({ error: "type is required" }); return; }
@@ -504,9 +515,17 @@ router.get("/assigned-to-me", requireAuth, async (req, res) => {
 
 router.get("/", requireAuth, async (req, res) => {
   const projectId = req.params.projectId ? parseInt(req.params.projectId) : null;
-  const { folder, type, scope } = req.query;
-  const userId = req.user!.id;
-  const orgId = req.user!.organizationId;
+  const { folder, type, scope, viewAll } = req.query;
+  const caller = req.user!;
+  const userId = caller.id;
+  const orgId = caller.organizationId;
+
+  // Resolve effective role (respects overrides, delegations, project member roles)
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
+
+  // viewAll=true: PM/DC opt-in to see all project correspondence (not just own To/CC)
+  // Only honoured in project context and only for eligible roles
+  const wantsViewAll = viewAll === "true" && projectId !== null && CorrespondencePermissions.hasViewAllCapability(effectiveRole);
 
   const baseFilter = projectId !== null
     ? and(
@@ -521,6 +540,20 @@ router.get("/", requireAuth, async (req, res) => {
         )
       );
 
+  if (wantsViewAll) {
+    // Return all correspondence in the project (PM/DC opt-in view)
+    let allItems = await db.select().from(correspondenceTable)
+      .where(baseFilter)
+      .orderBy(desc(correspondenceTable.updatedAt));
+    if (folder) allItems = allItems.filter(i => i.folder === folder);
+    if (type) allItems = allItems.filter(i => i.type === type as string);
+    if (scope) allItems = allItems.filter(i => i.scope === scope as string);
+    const enriched = await enrichCorrespondence(allItems);
+    res.json({ items: enriched, total: enriched.length, viewAll: true });
+    return;
+  }
+
+  // Default mail-model: only show correspondence where caller is sender, To, or CC
   const sent = await db.select().from(correspondenceTable)
     .where(and(baseFilter, eq(correspondenceTable.fromUserId, userId)))
     .orderBy(desc(correspondenceTable.updatedAt));
@@ -529,13 +562,21 @@ router.get("/", requireAuth, async (req, res) => {
     .from(correspondenceRecipientsTable)
     .where(eq(correspondenceRecipientsTable.userId, userId));
 
-  const receivedIds = receivedRels.map(r => r.corrId);
+  const ccRels = await db.select({ corrId: correspondenceCcTable.correspondenceId })
+    .from(correspondenceCcTable)
+    .where(eq(correspondenceCcTable.userId, userId));
+
+  const involvedIds = new Set([
+    ...receivedRels.map(r => r.corrId),
+    ...ccRels.map(r => r.corrId),
+  ]);
+
   let received: (typeof correspondenceTable.$inferSelect)[] = [];
-  if (receivedIds.length > 0) {
-    received = await db.select().from(correspondenceTable)
+  if (involvedIds.size > 0) {
+    const all = await db.select().from(correspondenceTable)
       .where(baseFilter)
       .orderBy(desc(correspondenceTable.updatedAt));
-    received = received.filter(c => receivedIds.includes(c.id) && c.fromUserId !== userId);
+    received = all.filter(c => involvedIds.has(c.id) && c.fromUserId !== userId);
   }
 
   let allItems = [...sent, ...received];
@@ -547,7 +588,7 @@ router.get("/", requireAuth, async (req, res) => {
   if (scope) allItems = allItems.filter(i => i.scope === scope);
 
   const enriched = await enrichCorrespondence(allItems);
-  res.json({ items: enriched, total: enriched.length });
+  res.json({ items: enriched, total: enriched.length, viewAll: false });
 });
 
 router.post("/", requireAuth, async (req, res) => {
@@ -558,7 +599,8 @@ router.post("/", requireAuth, async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const projectId = req.params.projectId ? parseInt(req.params.projectId) : null;
   const id = parseInt(req.params.id);
-  const userId = req.user!.id;
+  const caller = req.user!;
+  const userId = caller.id;
 
   const filter = projectId !== null
     ? and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId))
@@ -566,6 +608,21 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   const items = await db.select().from(correspondenceTable).where(filter).limit(1);
   if (!items[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Access check: caller must be sender, To, CC, or PM/DC with view-all capability
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
+  const isSender = items[0].fromUserId === userId;
+  if (!isSender && !CorrespondencePermissions.hasViewAllCapability(effectiveRole)) {
+    const [toRow] = await db.select({ corrId: correspondenceRecipientsTable.correspondenceId })
+      .from(correspondenceRecipientsTable)
+      .where(and(eq(correspondenceRecipientsTable.correspondenceId, id), eq(correspondenceRecipientsTable.userId, userId)))
+      .limit(1);
+    const [ccRow] = await db.select({ corrId: correspondenceCcTable.correspondenceId })
+      .from(correspondenceCcTable)
+      .where(and(eq(correspondenceCcTable.correspondenceId, id), eq(correspondenceCcTable.userId, userId)))
+      .limit(1);
+    if (!toRow && !ccRow) { res.status(403).json({ error: "Forbidden", message: "You do not have access to this correspondence" }); return; }
+  }
 
   if (!items[0].isRead && items[0].fromUserId !== userId) {
     const now = new Date();
@@ -597,8 +654,32 @@ router.put("/:id/read", requireAuth, async (req, res) => {
 
 router.put("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const caller = req.user!;
   const { subject, body, folder, status, referenceNumber } = req.body;
-  const orgId = req.user!.organizationId;
+  const orgId = caller.organizationId;
+
+  // Fetch the existing record to check ownership and project context
+  const [existing] = await db.select({
+    fromUserId: correspondenceTable.fromUserId,
+    projectId: correspondenceTable.projectId,
+    status: correspondenceTable.status,
+  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+  const isCreator = existing.fromUserId === caller.id;
+
+  // Status or folder changes (close/archive) require DC+ permission
+  const isStatusOrFolderChange = (status !== undefined && status !== existing.status) || folder !== undefined;
+  if (isStatusOrFolderChange && !CorrespondencePermissions.canClose(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "Only document controllers and above can close or archive correspondence" }); return;
+  }
+
+  // Content changes (subject, body) require being the creator or DC+
+  const isContentChange = subject !== undefined || body !== undefined;
+  if (isContentChange && !isCreator && !CorrespondencePermissions.canClose(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "Only the sender or a document controller can edit correspondence content" }); return;
+  }
 
   if (referenceNumber?.trim()) {
     const trimmed = referenceNumber.trim();
@@ -635,8 +716,15 @@ router.put("/:id", requireAuth, async (req, res) => {
 router.post("/:id/reply", requireAuth, async (req, res) => {
   const contextProjectId = req.params.projectId ? parseInt(req.params.projectId) : null;
   const parentId = parseInt(req.params.id);
-  const orgId = req.user!.organizationId;
+  const caller = req.user!;
+  const orgId = caller.organizationId;
   if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
+
+  // Only member+ can reply to correspondence
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
+  if (!CorrespondencePermissions.canReply(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "You do not have permission to reply to correspondence" }); return;
+  }
 
   const { subject, type, body, toUserIds, ccUserIds } = req.body;
 
@@ -712,6 +800,22 @@ router.delete("/:id/attachments/:attId", requireAuth, async (req, res) => {
 
 router.delete("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const caller = req.user!;
+
+  // Fetch to get project context for role resolution
+  const [existing] = await db.select({
+    projectId: correspondenceTable.projectId,
+    subject: correspondenceTable.subject,
+    referenceNumber: correspondenceTable.referenceNumber,
+  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Admin+ only can delete correspondence (hard delete, no recovery)
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+  if (!CorrespondencePermissions.canDelete(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "Only administrators can delete correspondence threads" }); return;
+  }
+
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
   await db.delete(correspondenceCcTable).where(eq(correspondenceCcTable.correspondenceId, id));
@@ -719,6 +823,18 @@ router.delete("/:id", requireAuth, async (req, res) => {
     .where(eq(correspondenceTable.id, id))
     .returning();
   if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
+
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId,
+    action: "delete",
+    entityType: "correspondence",
+    entityId: id,
+    entityTitle: existing.referenceNumber ?? existing.subject,
+    projectId: existing.projectId ?? undefined,
+    details: { deletedBy: caller.id },
+  });
+
   res.json({ success: true });
 });
 

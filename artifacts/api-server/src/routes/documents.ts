@@ -5,6 +5,8 @@ import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTabl
 import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { resolveEffectiveRole } from "../lib/governance.js";
+import { DocumentPermissions } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail, sendDocumentUploadedEmail } from "../lib/email.js";
@@ -423,14 +425,17 @@ router.put("/:id", requireAuth, async (req, res) => {
   const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
-  // Only admins or the document creator may edit a document; status changes require project_manager+
-  const canEdit = isSysAdmin(caller) || caller.role === "project_manager" || existing[0].createdById === caller.id;
+  // Resolve effective role (respects project-level overrides, delegations, project member roles)
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+
+  // DC+ or the document creator may edit
+  const canEdit = DocumentPermissions.canEdit(effectiveRole) || existing[0].createdById === caller.id;
   if (!canEdit) { res.status(403).json({ error: "Forbidden", message: "You do not have permission to edit this document" }); return; }
 
-  // Only project managers or admins may change document status
+  // Status changes require DC+ (document_controller, project_manager, admin, system_owner)
   if (status !== undefined && status !== existing[0].status) {
-    if (!isSysAdmin(caller) && caller.role !== "project_manager") {
-      res.status(403).json({ error: "Forbidden", message: "Only project managers and admins can change document status" }); return;
+    if (!DocumentPermissions.canEdit(effectiveRole)) {
+      res.status(403).json({ error: "Forbidden", message: "Only document controllers and above can change document status" }); return;
     }
   }
 
@@ -472,9 +477,12 @@ router.delete("/:id", requireAuth, async (req, res) => {
 
   const isLocked = LIFECYCLE_LOCKED_STATUSES.has(existing.status);
 
+  // Resolve effective role for this project context
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+
   if (isLocked) {
-    // Lifecycle-locked documents can only be hard-deleted by sysAdmin with a mandatory reason
-    if (!isSysAdmin(caller)) {
+    // Lifecycle-locked documents can only be hard-deleted by admin+ with a mandatory reason
+    if (!DocumentPermissions.canAdminOverrideApproval(effectiveRole)) {
       res.status(403).json({
         error: "Forbidden",
         message: `Documents with status '${existing.status}' cannot be deleted. Use Archive or Mark Obsolete instead.`,
@@ -485,9 +493,9 @@ router.delete("/:id", requireAuth, async (req, res) => {
       res.status(400).json({ error: "A reason is required to hard-delete a lifecycle-locked document" }); return;
     }
   } else {
-    // Unlocked documents: PM, admin, or creator can delete
-    const canDelete = isSysAdmin(caller) || caller.role === "project_manager" || existing.createdById === caller.id;
-    if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only project managers, admins, or the document creator can delete documents" }); return; }
+    // Unlocked documents (draft, under_review): DC+ or creator can delete
+    const canDelete = DocumentPermissions.canDelete(effectiveRole, existing.status) || existing.createdById === caller.id;
+    if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only document controllers, project managers, admins, or the document creator can delete documents in early stages" }); return; }
   }
 
   await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
