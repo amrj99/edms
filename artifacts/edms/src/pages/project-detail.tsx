@@ -8,7 +8,7 @@ import {
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
-  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck,
+  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1688,6 +1688,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
     toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing",
   });
   const [createDocIds, setCreateDocIds] = useState<number[]>([]);
+  const [createDocSearch, setCreateDocSearch] = useState("");
   const [addItemDocId, setAddItemDocId] = useState("_none");
 
   const { data: transmittalsData, isLoading } = useQuery({
@@ -1862,10 +1863,22 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
         ))}
       </div>
 
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader><DialogTitle>Create Transmittal</DialogTitle></DialogHeader>
-          <div className="space-y-4 py-2">
+      <Dialog
+        open={isCreateOpen}
+        onOpenChange={v => {
+          setIsCreateOpen(v);
+          if (!v) {
+            setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" });
+            setCreateDocIds([]);
+            setCreateDocSearch("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[580px] flex flex-col max-h-[90vh] p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
+            <DialogTitle>Create Transmittal</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             <div>
               <Label>Subject *</Label>
               <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
@@ -1894,41 +1907,102 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
             <div>
               <Label>External Recipients (emails)</Label>
               <Input value={form.externalEmails} onChange={e => setForm(f => ({ ...f, externalEmails: e.target.value }))} placeholder="alice@firm.com, bob@client.com (comma separated)" className="mt-1" />
-              <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas. Recipients will receive an external access link.</p>
+              <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas.</p>
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center justify-between mb-2">
                 <Label>Attach Documents from Project</Label>
-                {documents.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (createDocIds.length === documents.length) setCreateDocIds([]);
-                      else setCreateDocIds(documents.map((d: any) => d.id));
-                    }}
-                    className="text-xs text-primary hover:underline"
-                  >
-                    {createDocIds.length === documents.length ? "Deselect All" : "Select All"}
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {createDocIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCreateDocIds([])}
+                      className="text-xs text-destructive hover:underline"
+                    >
+                      Clear all ({createDocIds.length})
+                    </button>
+                  )}
+                  {documents.length > 0 && createDocIds.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCreateDocIds(documents.map((d: any) => d.id))}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Select all
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="border rounded-lg p-2 max-h-40 overflow-y-auto space-y-1 bg-muted/20">
-                {documents.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-2">No documents in this project yet</p>
-                ) : documents.map((d: any) => {
-                  const checked = createDocIds.includes(d.id);
-                  return (
-                    <label key={d.id} className="flex items-center gap-2 cursor-pointer px-1 py-0.5 rounded hover:bg-muted/50">
-                      <input type="checkbox" checked={checked} onChange={() => setCreateDocIds(prev => checked ? prev.filter(id => id !== d.id) : [...prev, d.id])} className="rounded" />
-                      <span className="text-xs font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
-                      <span className="text-xs truncate">{d.title}</span>
-                      <span className="text-xs text-muted-foreground ml-auto shrink-0">Rev {d.revision ?? "01"}</span>
-                    </label>
-                  );
-                })}
+              {/* Search */}
+              <div className="relative mb-2">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={createDocSearch}
+                  onChange={e => setCreateDocSearch(e.target.value)}
+                  placeholder="Search by number or title…"
+                  className="h-8 pl-8 text-xs"
+                />
               </div>
+              {/* Selected chips */}
               {createDocIds.length > 0 && (
-                <p className="text-xs text-primary mt-1">{createDocIds.length} of {documents.length} document(s) selected</p>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {createDocIds.map(id => {
+                    const d = documents.find((doc: any) => doc.id === id);
+                    if (!d) return null;
+                    return (
+                      <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium max-w-[180px]">
+                        <span className="font-mono text-[10px] shrink-0">{d.documentNumber}</span>
+                        <span className="truncate">{d.title}</span>
+                        <button
+                          type="button"
+                          onClick={() => setCreateDocIds(prev => prev.filter(x => x !== id))}
+                          className="shrink-0 hover:text-destructive ml-0.5"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Document list */}
+              <div className="border rounded-lg overflow-hidden">
+                <div className="max-h-44 overflow-y-auto">
+                  {documents.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
+                  ) : (() => {
+                    const q = createDocSearch.toLowerCase();
+                    const filtered = documents.filter((d: any) =>
+                      !createDocIds.includes(d.id) && (
+                        !q || d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q)
+                      )
+                    );
+                    if (filtered.length === 0 && createDocSearch) {
+                      return <p className="text-xs text-muted-foreground text-center py-4">No documents match "{createDocSearch}"</p>;
+                    }
+                    if (filtered.length === 0) {
+                      return <p className="text-xs text-muted-foreground text-center py-4">All documents selected.</p>;
+                    }
+                    return filtered.map((d: any) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setCreateDocIds(prev => [...prev, d.id])}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left border-b last:border-b-0 transition-colors"
+                      >
+                        <span className="font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
+                        <span className="flex-1 truncate">{d.title}</span>
+                        <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                        <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
+                      </button>
+                    ));
+                  })()}
+                </div>
+              </div>
+              {documents.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {createDocIds.length} of {documents.length} document{documents.length !== 1 ? "s" : ""} selected
+                </p>
               )}
             </div>
             <div>
@@ -1936,7 +2010,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional notes for recipients..." className="mt-1" rows={3} />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
             <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
             <Button onClick={() => create.mutate(form)} disabled={create.isPending || !form.subject}>
               {create.isPending ? "Creating..." : "Create Transmittal"}
@@ -1953,6 +2027,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <TableHead>Subject</TableHead>
               <TableHead className="w-[140px]">Purpose</TableHead>
               <TableHead className="w-[140px]">To</TableHead>
+              <TableHead className="w-[100px]">Direction</TableHead>
               <TableHead className="w-[90px]">Status</TableHead>
               <TableHead className="w-[90px]">Due</TableHead>
               <TableHead className="w-[110px] text-right">Actions</TableHead>
@@ -1960,9 +2035,9 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !transmittals.length ? (
-              <TableRow><TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
                 {directionFilter !== "all" ? "No transmittals matching this direction filter." : "No transmittals yet. Create the first one."}
               </TableCell></TableRow>
             ) : transmittals.map((t: any) => {
@@ -1985,6 +2060,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                   </TableCell>
                   <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>
+                  <TableCell><TrsDirectionBadge direction={t.direction} /></TableCell>
                   <TableCell><StatusBadge status={t.status} /></TableCell>
                   <TableCell>
                     {t.dueDate ? (

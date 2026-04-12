@@ -1280,17 +1280,17 @@ export default function CorrespondencePage() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <Label className="flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Attachments</Label>
-                {composeProjectId && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs gap-1.5"
-                    onClick={() => { setProjectPickerSearch(""); setProjectPickerOpen(true); }}
-                  >
-                    <LinkIcon className="h-3 w-3" /> Attach from Project
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5"
+                  disabled={!composeProjectId}
+                  title={!composeProjectId ? "Select a project above to attach project documents" : "Attach an existing project document"}
+                  onClick={() => { setProjectPickerSearch(""); setProjectPickerOpen(true); }}
+                >
+                  <LinkIcon className="h-3 w-3" /> Attach from Project
+                </Button>
               </div>
               <FileDropZone
                 onUpload={file => setComposeAttachments(prev => [...prev, { kind: "upload", ...file }])}
