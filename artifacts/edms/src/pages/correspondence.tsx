@@ -22,6 +22,8 @@ import { useToast } from "@/hooks/use-toast";
 import { FileDropZone } from "@/components/file-drop-zone";
 import { RecipientAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { useAuth } from "@/lib/auth";
+import { usePermissions } from "@/hooks/usePermissions";
 
 const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
@@ -54,6 +56,8 @@ function PriorityIcon({ priority }: { priority: string }) {
 export default function CorrespondencePage() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const perms = usePermissions();
 
   const [selectedFolder, setSelectedFolder] = useState<string>("inbox");
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
@@ -501,7 +505,7 @@ export default function CorrespondencePage() {
       {/* LEFT: Folder Panel — hidden on mobile */}
       <div className="hidden md:flex w-52 shrink-0 border-r bg-muted/30 flex-col">
         <div className="p-3 border-b">
-          <Button size="sm" className="w-full gap-2" onClick={() => setComposeOpen(true)}>
+          <Button size="sm" className="w-full gap-2" onClick={() => setComposeOpen(true)} disabled={!perms.canCreateCorrespondence} title={!perms.canCreateCorrespondence ? "Member role or above required to compose" : undefined}>
             <Plus className="h-4 w-4" /> Compose
           </Button>
         </div>
@@ -591,12 +595,16 @@ export default function CorrespondencePage() {
               <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkMarkRead.mutate({ isRead: false })} disabled={bulkMarkRead.isPending}>
                 <Square className="h-3 w-3" /> Unread
               </Button>
-              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkArchive.mutate()} disabled={bulkArchive.isPending}>
-                <Archive className="h-3 w-3" /> Archive
-              </Button>
-              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2 text-destructive hover:text-destructive" onClick={() => bulkDelete.mutate()} disabled={bulkDelete.isPending}>
-                <Trash2 className="h-3 w-3" /> Delete
-              </Button>
+              {perms.canCloseCorrespondence && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" onClick={() => bulkArchive.mutate()} disabled={bulkArchive.isPending}>
+                  <Archive className="h-3 w-3" /> Archive
+                </Button>
+              )}
+              {perms.canDeleteCorrespondence && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2 text-destructive hover:text-destructive" onClick={() => bulkDelete.mutate()} disabled={bulkDelete.isPending}>
+                  <Trash2 className="h-3 w-3" /> Delete
+                </Button>
+              )}
             </div>
           </div>
         )}
@@ -796,15 +804,21 @@ export default function CorrespondencePage() {
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => { setReplyingToId(selected.id); setTimeout(() => document.getElementById("quick-reply-ta")?.focus(), 50); }}>
-                    <Reply className="h-3.5 w-3.5" /> Reply
-                  </Button>
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleReplyAll}>
-                    <ReplyAll className="h-3.5 w-3.5" /> Reply All
-                  </Button>
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
-                    <Send className="h-3.5 w-3.5" /> Forward
-                  </Button>
+                  {perms.canReply && (
+                    <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => { setReplyingToId(selected.id); setTimeout(() => document.getElementById("quick-reply-ta")?.focus(), 50); }}>
+                      <Reply className="h-3.5 w-3.5" /> Reply
+                    </Button>
+                  )}
+                  {perms.canReply && (
+                    <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleReplyAll}>
+                      <ReplyAll className="h-3.5 w-3.5" /> Reply All
+                    </Button>
+                  )}
+                  {perms.canReply && (
+                    <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
+                      <Send className="h-3.5 w-3.5" /> Forward
+                    </Button>
+                  )}
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setSelected(null); setMobilePanel("list"); }}>
                     <X className="h-4 w-4" />
                   </Button>
@@ -1054,7 +1068,7 @@ export default function CorrespondencePage() {
                   </Button>
                 </div>
               </div>
-            ) : (
+            ) : perms.canReply ? (
             <div className="p-4 border-t bg-muted/20">
               {replyingToId && (
                 <div className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
@@ -1088,11 +1102,17 @@ export default function CorrespondencePage() {
                   >
                     {sendReply.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-8 text-xs gap-1">
-                    <Archive className="h-3.5 w-3.5" /> Archive
-                  </Button>
+                  {perms.canCloseCorrespondence && (
+                    <Button variant="ghost" size="sm" className="h-8 text-xs gap-1">
+                      <Archive className="h-3.5 w-3.5" /> Archive
+                    </Button>
+                  )}
                 </div>
               </div>
+            </div>
+            ) : (
+            <div className="p-3 border-t bg-muted/20">
+              <p className="text-xs text-muted-foreground text-center">You have read-only access to this correspondence</p>
             </div>
             )}
           </>

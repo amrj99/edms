@@ -33,6 +33,8 @@ import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
 import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
+import { useAuth } from "@/lib/auth";
+import { usePermissions } from "@/hooks/usePermissions";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -230,6 +232,8 @@ const PROJECT_DOC_COLS = [
 function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const perms = usePermissions();
   const [, navigate] = useLocation();
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading } = useListDocuments(projectId);
@@ -637,17 +641,21 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           >
             <FolderMinus className="h-3.5 w-3.5" /> Import Existing
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 gap-1.5 border-primary/40 text-primary hover:bg-primary/5"
-            onClick={() => setIsAIUploadOpen(true)}
-          >
-            <Sparkles className="h-3.5 w-3.5" /> Upload with AI
-          </Button>
-          <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
-            <Upload className="h-3.5 w-3.5" /> Bulk Upload
-          </Button>
+          {perms.canCreateDocument && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 gap-1.5 border-primary/40 text-primary hover:bg-primary/5"
+              onClick={() => setIsAIUploadOpen(true)}
+            >
+              <Sparkles className="h-3.5 w-3.5" /> Upload with AI
+            </Button>
+          )}
+          {perms.canCreateDocument && (
+            <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
+              <Upload className="h-3.5 w-3.5" /> Bulk Upload
+            </Button>
+          )}
           <UploadDocumentsDialog
             open={isUploadOpen}
             onOpenChange={setIsUploadOpen}
@@ -803,7 +811,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
               projectId={projectId}
               selectedFolderId={folderViewFolderId}
               onSelectFolder={setFolderViewFolderId}
-              canEdit={true}
+              canEdit={perms.canEditDocument}
             />
           </div>
         )}
@@ -931,22 +939,28 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Compare revisions" onClick={() => setCompareDoc(doc)}>
                         <GitCompare className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document" onClick={() => {
-                        setEditDoc(doc);
-                        setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
-                        setEditFile(null);
-                      }}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Create Transmittal" onClick={() => {
-                        setWfDoc(doc);
-                        setWfForm({ subject: `For Review: ${doc.documentNumber} — ${doc.title}`, purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
-                      }}>
-                        <Send className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Start Workflow" onClick={() => openStartWorkflow(doc)}>
-                        <Layers className="h-4 w-4" />
-                      </Button>
+                      {(perms.canEditDocument || doc.createdById === user?.id) && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document" onClick={() => {
+                          setEditDoc(doc);
+                          setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
+                          setEditFile(null);
+                        }}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {perms.canSubmitForWorkflow && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Create Transmittal" onClick={() => {
+                          setWfDoc(doc);
+                          setWfForm({ subject: `For Review: ${doc.documentNumber} — ${doc.title}`, purpose: "for_review", toUserIds: [], externalEmails: "", description: "" });
+                        }}>
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {perms.canSubmitForWorkflow && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Start Workflow" onClick={() => openStartWorkflow(doc)}>
+                          <Layers className="h-4 w-4" />
+                        </Button>
+                      )}
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Generate share link" onClick={() => {
                         setShareDoc(doc);
                         setDocShareResult(null);
@@ -1160,7 +1174,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 <DocumentFilesPanel
                   documentId={docPreview.id}
                   projectId={projectId}
-                  canEdit={true}
+                  canEdit={perms.canEditDocument || docPreview?.createdById === user?.id}
                 />
               </div>
             )}
@@ -1630,6 +1644,8 @@ function TrsReviewOutcomeBadge({ outcome }: { outcome?: string | null }) {
 function TransmittalsTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const perms = usePermissions();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selected, setSelected] = useState<any>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -1795,9 +1811,11 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
           <h3 className="font-semibold text-lg">Transmittals</h3>
           <p className="text-sm text-muted-foreground">{allTransmittals.length} transmittal(s) in this project</p>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> New Transmittal
-        </Button>
+        {perms.canCreateTransmittal && (
+          <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
+            <Plus className="h-4 w-4" /> New Transmittal
+          </Button>
+        )}
       </div>
 
       {/* Direction filter chips */}
@@ -1950,7 +1968,7 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                       <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => { setSelected(t); setDetailOpen(true); }}>
                         <Eye className="h-3 w-3" /> Detail
                       </Button>
-                      {t.status === "draft" && (
+                      {t.status === "draft" && perms.canSendTransmittal && (
                         <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => sendTransmittal.mutate(t.id)}>
                           <Send className="h-3 w-3" /> Send
                         </Button>
@@ -2046,33 +2064,40 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                         <span className="font-mono text-xs text-muted-foreground shrink-0">{item.documentNumber ?? "—"}</span>
                         <span className="text-xs truncate flex-1">{item.documentTitle ?? item.fileName ?? "Attachment"}</span>
                         {/* Review Code */}
-                        <div className="shrink-0">
-                          {item.reviewCode ? (
-                            <TrsReviewPill code={item.reviewCode} />
-                          ) : (
-                            selected.status !== "draft" && (
-                              <Select
-                                value=""
-                                onValueChange={v => setItemReviewCode(item.id, v || null)}
-                              >
-                                <SelectTrigger className="h-6 text-[10px] w-28 border-dashed text-muted-foreground">
-                                  <SelectValue placeholder="Set code…" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {TRS_REVIEW_CODES.map(rc => (
-                                    <SelectItem key={rc.value} value={rc.value} className="text-xs">{rc.label}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            )
-                          )}
-                          {item.reviewCode && (
-                            <button
-                              className="ml-1 text-muted-foreground hover:text-destructive text-[10px]"
-                              onClick={() => setItemReviewCode(item.id, null)}
-                              title="Clear review code"
-                            >✕</button>
-                          )}
+                        <div className="shrink-0 flex items-center gap-0.5">
+                          {(() => {
+                            const isAssigned = selected.toUserId === user?.id || selected.createdById === user?.id;
+                            const canCode = perms.canSetReviewCode(isAssigned);
+                            if (item.reviewCode) {
+                              return (
+                                <>
+                                  <TrsReviewPill code={item.reviewCode} />
+                                  {canCode && (
+                                    <button
+                                      className="ml-1 text-muted-foreground hover:text-destructive text-[10px]"
+                                      onClick={() => setItemReviewCode(item.id, null)}
+                                      title="Clear review code"
+                                    >✕</button>
+                                  )}
+                                </>
+                              );
+                            }
+                            if (selected.status !== "draft" && canCode) {
+                              return (
+                                <Select value="" onValueChange={v => setItemReviewCode(item.id, v || null)}>
+                                  <SelectTrigger className="h-6 text-[10px] w-28 border-dashed text-muted-foreground">
+                                    <SelectValue placeholder="Set code…" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {TRS_REVIEW_CODES.map(rc => (
+                                      <SelectItem key={rc.value} value={rc.value} className="text-xs">{rc.label}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                         {(item.fileUrl || item.documentTitle) && (
                           <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></a>
@@ -2108,6 +2133,9 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
                   if (detailItems.length === 0) return null;
                   if (detailData?.reviewOutcome) return null;
                   if (detailData?.responseTransmittalNumber) return null;
+                  const isAssigned = selected.toUserId === user?.id || selected.createdById === user?.id;
+                  const canComplete = perms.canCompleteReview(isAssigned);
+                  if (!canComplete) return null;
                   const coded = detailItems.filter((i: any) => !!i.reviewCode).length;
                   const total = detailItems.length;
                   const allCoded = coded === total;
@@ -2276,6 +2304,7 @@ const PRIORITIES = ["low", "medium", "high", "urgent"];
 function CorrespondenceTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const perms = usePermissions();
   const [, navigate] = useLocation();
   const { data: project } = useGetProject(projectId);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -2406,9 +2435,11 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
             ))}
           </div>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)} className="gap-2 h-9">
-          <Plus className="h-4 w-4" /> New Correspondence
-        </Button>
+        {perms.canCreateCorrespondence && (
+          <Button onClick={() => setIsCreateOpen(true)} className="gap-2 h-9">
+            <Plus className="h-4 w-4" /> New Correspondence
+          </Button>
+        )}
       </div>
 
       {/* Type summary pills */}
@@ -3270,6 +3301,7 @@ function MembersTab({ projectId }: { projectId: number }) {
 function ReviewTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const perms = usePermissions();
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
@@ -3432,7 +3464,7 @@ function ReviewTab({ projectId }: { projectId: number }) {
 
             {/* Actions */}
             <div className="p-4 border-b flex flex-wrap gap-2 items-end">
-              {selectedDoc.status === "draft" && (
+              {selectedDoc.status === "draft" && perms.canSubmitForWorkflow && (
                 <Button className="gap-2" onClick={() => setSubmitOpen(true)}>
                   <Send className="h-4 w-4" /> Submit for Review
                 </Button>
