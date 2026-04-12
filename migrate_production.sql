@@ -43,6 +43,17 @@ EXCEPTION WHEN others THEN NULL; END $$;
 
 -- ─── 2. NEW COLUMNS ON EXISTING TABLES ────────────────────────────────────────
 
+-- organizations  (columns added during development)
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_email              text;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_phone              text;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS address                    text;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS subscription_tier          text DEFAULT 'free';
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS storage_used_mb            integer NOT NULL DEFAULT 0;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS corr_unread_reminder_hours integer NOT NULL DEFAULT 48;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS corr_no_response_hours     integer NOT NULL DEFAULT 72;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS corr_sla_due_soon_hours    integer NOT NULL DEFAULT 24;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS updated_at                 timestamp NOT NULL DEFAULT now();
+
 -- refresh_tokens  (organization_id added during development)
 ALTER TABLE refresh_tokens       ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);
 ALTER TABLE refresh_tokens       ADD COLUMN IF NOT EXISTS revoked_at       timestamp;
