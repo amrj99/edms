@@ -288,7 +288,11 @@ router.get(
       .from(orgConfigTable)
       .where(eq(orgConfigTable.organizationId, targetOrgId));
 
-    if (!cfg?.storagePath) {
+    // Mirror the upload endpoint: fall back to DEFAULT_STORAGE_PATH env var
+    const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
+    const basePath = cfg?.storagePath || envStoragePath;
+
+    if (!basePath) {
       res.status(404).json({ error: "On-premise storage not configured" });
       return;
     }
@@ -300,9 +304,9 @@ router.get(
       return;
     }
 
-    const absPath = path.join(cfg.storagePath, orgId, projectId, fileType, safeFilename);
+    const absPath = path.join(basePath, orgId, projectId, fileType, safeFilename);
     // Ensure final path stays within configured base directory
-    if (!absPath.startsWith(path.resolve(cfg.storagePath))) {
+    if (!absPath.startsWith(path.resolve(basePath))) {
       await createAuditLog({
         userId: req.user?.id,
         organizationId: req.user?.organizationId ?? undefined,
@@ -310,7 +314,7 @@ router.get(
         entityType: "file",
         entityId: 0,
         entityTitle: filename,
-        details: { attemptedPath: absPath, basePath: cfg.storagePath },
+        details: { attemptedPath: absPath, basePath },
         ipAddress: req.ip,
       });
       res.status(400).json({ error: "Invalid file path" });

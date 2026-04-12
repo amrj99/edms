@@ -141,6 +141,12 @@ export default function ProjectDetail() {
   const [activeTab, setActiveTab] = useState("documents");
   const [govSubTab, setGovSubTab] = useState<"dashboard" | "audit" | "matrix">("dashboard");
   const perms = usePermissions();
+  // Bridge: Documents tab → Transmittals tab pre-populated create dialog
+  const [pendingTransDocIds, setPendingTransDocIds] = useState<number[] | null>(null);
+  function openTransmittalCreate(docIds: number[]) {
+    setPendingTransDocIds(docIds);
+    setActiveTab("transmittals");
+  }
 
   if (projLoading) return <div className="p-12 flex justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   if (!project) return <div>Project not found</div>;
@@ -189,13 +195,13 @@ export default function ProjectDetail() {
 
         <div className="mt-6">
           <TabsContent value="documents">
-            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} />
+            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} />
           </TabsContent>
           <TabsContent value="review">
             <ReviewTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="transmittals">
-            <TransmittalsTab projectId={projectId} />
+            <TransmittalsTab projectId={projectId} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
           </TabsContent>
           <TabsContent value="correspondence">
             <CorrespondenceTab projectId={projectId} />
@@ -273,7 +279,7 @@ const DOC_COLUMNS: ColumnDef[] = [
 ];
 const DOC_PINNED = ["docNum", "title"];
 
-function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
+function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -660,7 +666,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
           </div>
           {selectedIds.size > 0 && (
             <>
-              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsBulkTransOpen(true)}>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => onCreateTransmittal?.(Array.from(selectedIds))}>
                 <Send className="h-3.5 w-3.5" /> Create Transmittal
               </Button>
               <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsBulkAssignOpen(true)}>
@@ -1440,7 +1446,7 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-primary text-white rounded-full shadow-lg px-5 py-2.5 flex items-center gap-4 text-sm font-medium">
           <CheckSquare className="h-4 w-4" />
           {selectedIds.size} document{selectedIds.size !== 1 ? "s" : ""} selected
-          <button onClick={() => setIsBulkTransOpen(true)} className="px-3 py-1 rounded-full bg-white/20 hover:bg-white/30 transition-colors text-xs gap-1 flex items-center">
+          <button onClick={() => onCreateTransmittal?.(Array.from(selectedIds))} className="px-3 py-1 rounded-full bg-white/20 hover:bg-white/30 transition-colors text-xs gap-1 flex items-center">
             <Send className="h-3.5 w-3.5" /> Transmit
           </button>
           <button onClick={clearSelection} className="text-white/70 hover:text-white">
@@ -1722,7 +1728,11 @@ const TRS_COLUMNS: ColumnDef[] = [
 ];
 const TRS_PINNED = ["trsNo", "actions"];
 
-function TransmittalsTab({ projectId }: { projectId: number }) {
+function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
+  projectId: number;
+  prefillDocIds?: number[] | null;
+  onPrefillConsumed?: () => void;
+}) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -1742,6 +1752,15 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
   });
   const [createDocIds, setCreateDocIds] = useState<number[]>([]);
   const [createDocSearch, setCreateDocSearch] = useState("");
+
+  // Auto-open create dialog when Documents tab hands off pre-selected docs
+  useEffect(() => {
+    if (prefillDocIds && prefillDocIds.length > 0) {
+      setCreateDocIds(prefillDocIds);
+      setIsCreateOpen(true);
+      onPrefillConsumed?.();
+    }
+  }, [prefillDocIds]);
   const [addItemDocId, setAddItemDocId] = useState("_none");
 
   const { data: transmittalsData, isLoading } = useQuery({
