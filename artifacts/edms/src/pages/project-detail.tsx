@@ -29,6 +29,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
+import { useColumnVisibility, type ColumnDef } from "@/hooks/useColumnVisibility";
+import { ColumnVisibilityMenu } from "@/components/ui/column-visibility-menu";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
@@ -1671,11 +1673,25 @@ function TrsReviewOutcomeBadge({ outcome }: { outcome?: string | null }) {
   );
 }
 
+const TRS_COLUMNS: ColumnDef[] = [
+  { key: "trsNo",     label: "TRS No." },
+  { key: "subject",   label: "Subject" },
+  { key: "purpose",   label: "Purpose" },
+  { key: "to",        label: "To" },
+  { key: "direction", label: "Direction" },
+  { key: "status",    label: "Status" },
+  { key: "due",       label: "Due" },
+  { key: "actions",   label: "Actions" },
+];
+const TRS_PINNED = ["trsNo", "actions"];
+
 function TransmittalsTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const perms = usePermissions();
+  const { isVisible: isColVis, toggle: toggleCol, reset: resetCols, visibleCount: trsColCount } =
+    useColumnVisibility(`trs-${projectId}`, TRS_COLUMNS);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selected, setSelected] = useState<any>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -1849,8 +1865,8 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
         )}
       </div>
 
-      {/* Direction filter chips */}
-      <div className="flex items-center gap-1.5 flex-wrap">
+      {/* Direction filter chips + column visibility */}
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground font-medium">Direction:</span>
         {[["all","All"], ["outgoing","↑ Outgoing"], ["incoming","↓ Incoming"]].map(([val, label]) => (
           <button
@@ -1861,6 +1877,15 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
             {label}
           </button>
         ))}
+        <div className="ml-auto">
+          <ColumnVisibilityMenu
+            columns={TRS_COLUMNS}
+            isVisible={isColVis}
+            toggle={toggleCol}
+            reset={resetCols}
+            pinnedKeys={TRS_PINNED}
+          />
+        </div>
       </div>
 
       <Dialog
@@ -2024,20 +2049,20 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="w-[120px]">TRS No.</TableHead>
-              <TableHead>Subject</TableHead>
-              <TableHead className="w-[140px]">Purpose</TableHead>
-              <TableHead className="w-[140px]">To</TableHead>
-              <TableHead className="w-[100px]">Direction</TableHead>
-              <TableHead className="w-[90px]">Status</TableHead>
-              <TableHead className="w-[90px]">Due</TableHead>
+              {isColVis("subject")   && <TableHead>Subject</TableHead>}
+              {isColVis("purpose")   && <TableHead className="w-[140px]">Purpose</TableHead>}
+              {isColVis("to")        && <TableHead className="w-[140px]">To</TableHead>}
+              {isColVis("direction") && <TableHead className="w-[100px]">Direction</TableHead>}
+              {isColVis("status")    && <TableHead className="w-[90px]">Status</TableHead>}
+              {isColVis("due")       && <TableHead className="w-[90px]">Due</TableHead>}
               <TableHead className="w-[110px] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={trsColCount} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !transmittals.length ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+              <TableRow><TableCell colSpan={trsColCount} className="text-center py-12 text-muted-foreground">
                 {directionFilter !== "all" ? "No transmittals matching this direction filter." : "No transmittals yet. Create the first one."}
               </TableCell></TableRow>
             ) : transmittals.map((t: any) => {
@@ -2045,30 +2070,34 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               return (
                 <TableRow key={t.id} className={`hover:bg-muted/30 ${isOverdue ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
                   <TableCell className="font-mono text-xs font-medium">{t.transmittalNumber}</TableCell>
-                  <TableCell className="max-w-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="line-clamp-1 min-w-0">{t.subject}</span>
-                      {t.reviewOutcome && (() => {
-                        const cfg = TRS_OUTCOME_CONFIG[t.reviewOutcome];
-                        return cfg ? (
-                          <span className={`shrink-0 inline-block text-[10px] px-1.5 py-0.5 rounded-full border font-semibold ${cfg.cls}`}>
-                            {t.reviewOutcome}
-                          </span>
-                        ) : null;
-                      })()}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>
-                  <TableCell><TrsDirectionBadge direction={t.direction} /></TableCell>
-                  <TableCell><StatusBadge status={t.status} /></TableCell>
-                  <TableCell>
-                    {t.dueDate ? (
-                      <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
-                        {format(new Date(t.dueDate), "dd MMM yy")}
-                      </span>
-                    ) : "—"}
-                  </TableCell>
+                  {isColVis("subject") && (
+                    <TableCell className="max-w-xs">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="line-clamp-1 min-w-0">{t.subject}</span>
+                        {t.reviewOutcome && (() => {
+                          const cfg = TRS_OUTCOME_CONFIG[t.reviewOutcome];
+                          return cfg ? (
+                            <span className={`shrink-0 inline-block text-[10px] px-1.5 py-0.5 rounded-full border font-semibold ${cfg.cls}`}>
+                              {t.reviewOutcome}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
+                    </TableCell>
+                  )}
+                  {isColVis("purpose")   && <TableCell className="text-xs">{TRS_PURPOSE_LABELS[t.purpose] ?? (t.purpose || "").replace(/_/g, " ")}</TableCell>}
+                  {isColVis("to")        && <TableCell className="text-xs text-muted-foreground">{t.toExternal || "—"}</TableCell>}
+                  {isColVis("direction") && <TableCell><TrsDirectionBadge direction={t.direction} /></TableCell>}
+                  {isColVis("status")    && <TableCell><StatusBadge status={t.status} /></TableCell>}
+                  {isColVis("due") && (
+                    <TableCell>
+                      {t.dueDate ? (
+                        <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                          {format(new Date(t.dueDate), "dd MMM yy")}
+                        </span>
+                      ) : "—"}
+                    </TableCell>
+                  )}
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => { setSelected(t); setDetailOpen(true); }}>
@@ -2407,10 +2436,24 @@ const CORR_TYPE_LABELS: Record<string, string> = {
 };
 const PRIORITIES = ["low", "medium", "high", "urgent"];
 
+const CORR_COLUMNS: ColumnDef[] = [
+  { key: "ref",       label: "Ref." },
+  { key: "type",      label: "Type" },
+  { key: "subject",   label: "Subject" },
+  { key: "direction", label: "Direction" },
+  { key: "priority",  label: "Priority" },
+  { key: "status",    label: "Status" },
+  { key: "due",       label: "Due" },
+  { key: "created",   label: "Created" },
+];
+const CORR_PINNED = ["subject"];
+
 function CorrespondenceTab({ projectId }: { projectId: number }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const perms = usePermissions();
+  const { isVisible: isCorrColVis, toggle: toggleCorrCol, reset: resetCorrCols, visibleCount: corrColCount } =
+    useColumnVisibility(`corr-${projectId}`, CORR_COLUMNS);
   const [, navigate] = useLocation();
   const { data: project } = useGetProject(projectId);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -2541,11 +2584,20 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
             ))}
           </div>
         </div>
-        {perms.canCreateCorrespondence && (
-          <Button onClick={() => setIsCreateOpen(true)} className="gap-2 h-9">
-            <Plus className="h-4 w-4" /> New Correspondence
-          </Button>
-        )}
+        <div className="flex items-center gap-2 ml-auto">
+          <ColumnVisibilityMenu
+            columns={CORR_COLUMNS}
+            isVisible={isCorrColVis}
+            toggle={toggleCorrCol}
+            reset={resetCorrCols}
+            pinnedKeys={CORR_PINNED}
+          />
+          {perms.canCreateCorrespondence && (
+            <Button onClick={() => setIsCreateOpen(true)} className="gap-2 h-9">
+              <Plus className="h-4 w-4" /> New Correspondence
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Type summary pills */}
@@ -2845,21 +2897,21 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
         <Table>
           <TableHeader className="bg-muted/50">
             <TableRow>
-              <TableHead className="w-[110px]">Ref.</TableHead>
-              <TableHead className="w-[120px]">Type</TableHead>
+              {isCorrColVis("ref")       && <TableHead className="w-[110px]">Ref.</TableHead>}
+              {isCorrColVis("type")      && <TableHead className="w-[120px]">Type</TableHead>}
               <TableHead>Subject</TableHead>
-              <TableHead className="w-[90px]">Direction</TableHead>
-              <TableHead className="w-[80px]">Priority</TableHead>
-              <TableHead className="w-[100px]">Status</TableHead>
-              <TableHead className="w-[90px]">Due</TableHead>
-              <TableHead className="w-[100px]">Created</TableHead>
+              {isCorrColVis("direction") && <TableHead className="w-[90px]">Direction</TableHead>}
+              {isCorrColVis("priority")  && <TableHead className="w-[80px]">Priority</TableHead>}
+              {isCorrColVis("status")    && <TableHead className="w-[100px]">Status</TableHead>}
+              {isCorrColVis("due")       && <TableHead className="w-[90px]">Due</TableHead>}
+              {isCorrColVis("created")   && <TableHead className="w-[100px]">Created</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={corrColCount} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !filtered.length ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">No correspondence found.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={corrColCount} className="text-center py-12 text-muted-foreground">No correspondence found.</TableCell></TableRow>
             ) : filtered.map((c: any) => {
               const isOverdue = c.dueDate && new Date(c.dueDate) < new Date() && c.status !== "closed";
               return (
@@ -2870,31 +2922,39 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
                   onDoubleClick={() => window.open(`/correspondence?openCorr=${c.id}`, "_blank", "width=1200,height=800,menubar=no,toolbar=no")}
                   title="Click to view — double-click to open in new window"
                 >
-                  <TableCell className="font-mono text-xs">{c.referenceNumber || `#${c.id}`}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-xs">{CORR_TYPE_LABELS[c.type] || c.type}</Badge>
-                  </TableCell>
+                  {isCorrColVis("ref") && <TableCell className="font-mono text-xs">{c.referenceNumber || `#${c.id}`}</TableCell>}
+                  {isCorrColVis("type") && (
+                    <TableCell>
+                      <Badge variant="outline" className="text-xs">{CORR_TYPE_LABELS[c.type] || c.type}</Badge>
+                    </TableCell>
+                  )}
                   <TableCell className="max-w-xs"><span className="line-clamp-1">{c.subject}</span></TableCell>
-                  <TableCell>
-                    {c.direction ? (
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${c.direction === "incoming" ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400"}`}>
-                        {c.direction === "incoming" ? "↓ In" : "↑ Out"}
-                      </span>
-                    ) : <span className="text-muted-foreground text-xs">—</span>}
-                  </TableCell>
-                  <TableCell>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColor[c.priority] ?? "bg-muted"}`}>{c.priority}</span>
-                  </TableCell>
-                  <TableCell><StatusBadge status={c.status} /></TableCell>
-                  <TableCell>
-                    {c.dueDate ? (
-                      <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
-                        {format(new Date(c.dueDate), "dd MMM yy")}
-                        {isOverdue && <span className="ml-1 text-red-500">!</span>}
-                      </span>
-                    ) : "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{format(new Date(c.createdAt), "dd MMM yyyy")}</TableCell>
+                  {isCorrColVis("direction") && (
+                    <TableCell>
+                      {c.direction ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${c.direction === "incoming" ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400" : "bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400"}`}>
+                          {c.direction === "incoming" ? "↓ In" : "↑ Out"}
+                        </span>
+                      ) : <span className="text-muted-foreground text-xs">—</span>}
+                    </TableCell>
+                  )}
+                  {isCorrColVis("priority") && (
+                    <TableCell>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColor[c.priority] ?? "bg-muted"}`}>{c.priority}</span>
+                    </TableCell>
+                  )}
+                  {isCorrColVis("status") && <TableCell><StatusBadge status={c.status} /></TableCell>}
+                  {isCorrColVis("due") && (
+                    <TableCell>
+                      {c.dueDate ? (
+                        <span className={`text-xs ${isOverdue ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                          {format(new Date(c.dueDate), "dd MMM yy")}
+                          {isOverdue && <span className="ml-1 text-red-500">!</span>}
+                        </span>
+                      ) : "—"}
+                    </TableCell>
+                  )}
+                  {isCorrColVis("created") && <TableCell className="text-xs text-muted-foreground">{format(new Date(c.createdAt), "dd MMM yyyy")}</TableCell>}
                 </TableRow>
               );
             })}
