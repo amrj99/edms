@@ -261,11 +261,25 @@ const PROJECT_DOC_COLS = [
   { key: "updatedAt",    defaultWidth: 110, minWidth: 90 },
 ];
 
+const DOC_COLUMNS: ColumnDef[] = [
+  { key: "docNum",     label: "Document No." },
+  { key: "title",      label: "Title" },
+  { key: "discipline", label: "Discipline" },
+  { key: "source",     label: "Source" },
+  { key: "issuedBy",   label: "Issued By" },
+  { key: "revision",   label: "Rev" },
+  { key: "status",     label: "Status" },
+  { key: "updatedAt",  label: "Updated" },
+];
+const DOC_PINNED = ["docNum", "title"];
+
 function DocumentTab({ projectId, projectCode, projectName }: { projectId: number; projectCode?: string; projectName?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const perms = usePermissions();
+  const { isVisible: isDocColVis, toggle: toggleDocCol, reset: resetDocCols, visibleCount: docColVisCount } =
+    useColumnVisibility(`docs-${projectId}`, DOC_COLUMNS);
   const [, navigate] = useLocation();
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading } = useListDocuments(projectId);
@@ -864,11 +878,20 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
             </div>
           )}
           {viewMode !== "folder" && <span />}
-          <button
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted ml-auto"
-            onClick={resetDocWidths}
-            title="Reset column widths"
-          >Reset columns</button>
+          <div className="flex items-center gap-2 ml-auto">
+            <ColumnVisibilityMenu
+              columns={DOC_COLUMNS}
+              isVisible={isDocColVis}
+              toggle={toggleDocCol}
+              reset={resetDocCols}
+              pinnedKeys={DOC_PINNED}
+            />
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded hover:bg-muted"
+              onClick={resetDocWidths}
+              title="Reset column widths"
+            >Reset widths</button>
+          </div>
         </div>
         <div className="overflow-x-auto">
         <Table style={{ tableLayout: "fixed", minWidth: 850 }}>
@@ -892,38 +915,50 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                 <span className="truncate">Title</span>
                 <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("title", e)} onClick={e => e.stopPropagation()} />
               </TableHead>
-              <TableHead style={getDocThStyle("discipline")} className="overflow-hidden">
-                <span className="truncate">Discipline</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("discipline", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
-              <TableHead style={getDocThStyle("source")} className="overflow-hidden">
-                <span className="truncate">Source</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("source", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
-              <TableHead style={getDocThStyle("issuedBy")} className="overflow-hidden">
-                <span className="truncate">Issued By</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("issuedBy", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
-              <TableHead style={getDocThStyle("revision")} className="overflow-hidden">
-                <span className="truncate">Rev</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("revision", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
-              <TableHead style={getDocThStyle("status")} className="overflow-hidden">
-                <span className="truncate">Status</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("status", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
-              <TableHead style={getDocThStyle("updatedAt")} className="overflow-hidden">
-                <span className="truncate">Updated</span>
-                <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("updatedAt", e)} onClick={e => e.stopPropagation()} />
-              </TableHead>
+              {isDocColVis("discipline") && (
+                <TableHead style={getDocThStyle("discipline")} className="overflow-hidden">
+                  <span className="truncate">Discipline</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("discipline", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
+              {isDocColVis("source") && (
+                <TableHead style={getDocThStyle("source")} className="overflow-hidden">
+                  <span className="truncate">Source</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("source", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
+              {isDocColVis("issuedBy") && (
+                <TableHead style={getDocThStyle("issuedBy")} className="overflow-hidden">
+                  <span className="truncate">Issued By</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("issuedBy", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
+              {isDocColVis("revision") && (
+                <TableHead style={getDocThStyle("revision")} className="overflow-hidden">
+                  <span className="truncate">Rev</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("revision", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
+              {isDocColVis("status") && (
+                <TableHead style={getDocThStyle("status")} className="overflow-hidden">
+                  <span className="truncate">Status</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("status", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
+              {isDocColVis("updatedAt") && (
+                <TableHead style={getDocThStyle("updatedAt")} className="overflow-hidden">
+                  <span className="truncate">Updated</span>
+                  <div className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50" onMouseDown={e => startDocResize("updatedAt", e)} onClick={e => e.stopPropagation()} />
+                </TableHead>
+              )}
               <TableHead className="text-right w-[150px]">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={docColVisCount + 2} className="text-center py-12"><Loader2 className="h-6 w-6 animate-spin mx-auto" /></TableCell></TableRow>
             ) : !filtered.length ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={docColVisCount + 2} className="text-center py-12 text-muted-foreground">No documents found.</TableCell></TableRow>
             ) : filtered.map((doc: any) => {
               const isSelected = selectedIds.has(doc.id);
               return (
@@ -951,18 +986,20 @@ function DocumentTab({ projectId, projectCode, projectName }: { projectId: numbe
                       <span className="line-clamp-1 hover:underline underline-offset-2">{doc.title}</span>
                     </div>
                   </TableCell>
-                  <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>
-                  <TableCell>
-                    {doc.source ? (
-                      <span className="inline-flex items-center text-xs bg-muted/60 px-2 py-0.5 rounded-full capitalize">
-                        {doc.source}
-                      </span>
-                    ) : <span className="text-muted-foreground text-xs">—</span>}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground max-w-[90px] truncate">{doc.issuedBy || "—"}</TableCell>
-                  <TableCell><span className="bg-muted px-2 py-0.5 rounded text-xs font-mono">{doc.revision ?? "01"}</span></TableCell>
-                  <TableCell><StatusBadge status={doc.status} /></TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), "MMM d, yyyy")}</TableCell>
+                  {isDocColVis("discipline") && <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>}
+                  {isDocColVis("source") && (
+                    <TableCell>
+                      {doc.source ? (
+                        <span className="inline-flex items-center text-xs bg-muted/60 px-2 py-0.5 rounded-full capitalize">
+                          {doc.source}
+                        </span>
+                      ) : <span className="text-muted-foreground text-xs">—</span>}
+                    </TableCell>
+                  )}
+                  {isDocColVis("issuedBy") && <TableCell className="text-xs text-muted-foreground max-w-[90px] truncate">{doc.issuedBy || "—"}</TableCell>}
+                  {isDocColVis("revision") && <TableCell><span className="bg-muted px-2 py-0.5 rounded text-xs font-mono">{doc.revision ?? "01"}</span></TableCell>}
+                  {isDocColVis("status") && <TableCell><StatusBadge status={doc.status} /></TableCell>}
+                  {isDocColVis("updatedAt") && <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), "MMM d, yyyy")}</TableCell>}
                   <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" title="AI Analyze" onClick={() => setAiDoc(doc)}>
@@ -1934,101 +1971,123 @@ function TransmittalsTab({ projectId }: { projectId: number }) {
               <Input value={form.externalEmails} onChange={e => setForm(f => ({ ...f, externalEmails: e.target.value }))} placeholder="alice@firm.com, bob@client.com (comma separated)" className="mt-1" />
               <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas.</p>
             </div>
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label>Attach Documents from Project</Label>
-                <div className="flex items-center gap-2">
+            <div className="space-y-2">
+              <Label>Attach Documents from Project</Label>
+
+              {/* ── Selected ───────────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    Selected
+                    {createDocIds.length > 0 && (
+                      <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] font-bold leading-4">
+                        {createDocIds.length}
+                      </span>
+                    )}
+                  </span>
                   {createDocIds.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setCreateDocIds([])}
                       className="text-xs text-destructive hover:underline"
                     >
-                      Clear all ({createDocIds.length})
+                      Clear all
                     </button>
                   )}
-                  {documents.length > 0 && createDocIds.length === 0 && (
+                </div>
+                <div className="border rounded-lg overflow-hidden bg-background">
+                  {createDocIds.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-3 italic">
+                      No documents selected — add from the list below
+                    </p>
+                  ) : (
+                    <div className="max-h-32 overflow-y-auto divide-y">
+                      {createDocIds.map(id => {
+                        const d = documents.find((doc: any) => doc.id === id);
+                        if (!d) return null;
+                        return (
+                          <div key={id} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-primary/5 hover:bg-primary/10 transition-colors">
+                            <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
+                            <span className="flex-1 truncate font-medium">{d.title}</span>
+                            <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                            <button
+                              type="button"
+                              title="Remove"
+                              onClick={() => setCreateDocIds(prev => prev.filter(x => x !== id))}
+                              className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Available ──────────────────────────────────────── */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold text-foreground">Available</span>
+                  {documents.length > 0 && createDocIds.length < documents.length && (
                     <button
                       type="button"
                       onClick={() => setCreateDocIds(documents.map((d: any) => d.id))}
                       className="text-xs text-primary hover:underline"
                     >
-                      Select all
+                      Add all
                     </button>
                   )}
                 </div>
-              </div>
-              {/* Search */}
-              <div className="relative mb-2">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                <Input
-                  value={createDocSearch}
-                  onChange={e => setCreateDocSearch(e.target.value)}
-                  placeholder="Search by number or title…"
-                  className="h-8 pl-8 text-xs"
-                />
-              </div>
-              {/* Selected chips */}
-              {createDocIds.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {createDocIds.map(id => {
-                    const d = documents.find((doc: any) => doc.id === id);
-                    if (!d) return null;
-                    return (
-                      <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium max-w-[180px]">
-                        <span className="font-mono text-[10px] shrink-0">{d.documentNumber}</span>
-                        <span className="truncate">{d.title}</span>
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="px-2.5 py-1.5 border-b bg-muted/30">
+                    <div className="relative">
+                      <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+                      <Input
+                        value={createDocSearch}
+                        onChange={e => setCreateDocSearch(e.target.value)}
+                        placeholder="Search by number or title…"
+                        className="h-7 pl-6 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto divide-y">
+                    {documents.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
+                    ) : (() => {
+                      const q = createDocSearch.toLowerCase();
+                      const available = documents.filter((d: any) =>
+                        !createDocIds.includes(d.id) && (
+                          !q || d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q)
+                        )
+                      );
+                      if (available.length === 0 && createDocSearch) {
+                        return <p className="text-xs text-muted-foreground text-center py-4">No documents match this search</p>;
+                      }
+                      if (available.length === 0) {
+                        return <p className="text-xs text-muted-foreground text-center py-4 italic">All project documents already added</p>;
+                      }
+                      return available.map((d: any) => (
                         <button
+                          key={d.id}
                           type="button"
-                          onClick={() => setCreateDocIds(prev => prev.filter(x => x !== id))}
-                          className="shrink-0 hover:text-destructive ml-0.5"
+                          onClick={() => setCreateDocIds(prev => [...prev, d.id])}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left transition-colors"
                         >
-                          <X className="h-3 w-3" />
+                          <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
+                          <span className="flex-1 truncate">{d.title}</span>
+                          <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                          <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
                         </button>
-                      </span>
-                    );
-                  })}
+                      ));
+                    })()}
+                  </div>
                 </div>
-              )}
-              {/* Document list */}
-              <div className="border rounded-lg overflow-hidden">
-                <div className="max-h-44 overflow-y-auto">
-                  {documents.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
-                  ) : (() => {
-                    const q = createDocSearch.toLowerCase();
-                    const filtered = documents.filter((d: any) =>
-                      !createDocIds.includes(d.id) && (
-                        !q || d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q)
-                      )
-                    );
-                    if (filtered.length === 0 && createDocSearch) {
-                      return <p className="text-xs text-muted-foreground text-center py-4">No documents match "{createDocSearch}"</p>;
-                    }
-                    if (filtered.length === 0) {
-                      return <p className="text-xs text-muted-foreground text-center py-4">All documents selected.</p>;
-                    }
-                    return filtered.map((d: any) => (
-                      <button
-                        key={d.id}
-                        type="button"
-                        onClick={() => setCreateDocIds(prev => [...prev, d.id])}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left border-b last:border-b-0 transition-colors"
-                      >
-                        <span className="font-mono text-muted-foreground shrink-0">{d.documentNumber}</span>
-                        <span className="flex-1 truncate">{d.title}</span>
-                        <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                        <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
-                      </button>
-                    ));
-                  })()}
-                </div>
-              </div>
-              {documents.length > 0 && (
-                <p className="text-xs text-muted-foreground mt-1">
+                <p className="text-[11px] text-muted-foreground mt-1">
                   {createDocIds.length} of {documents.length} document{documents.length !== 1 ? "s" : ""} selected
                 </p>
-              )}
+              </div>
             </div>
             <div>
               <Label>Description</Label>
