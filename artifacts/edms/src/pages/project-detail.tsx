@@ -33,6 +33,9 @@ import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
 import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
+import { GovernanceDashboardTab } from "@/components/governance/GovernanceDashboardTab";
+import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
+import { RoleMatrix } from "@/components/governance/RoleMatrix";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -134,6 +137,8 @@ export default function ProjectDetail() {
   const projectId = parseInt(params.id || "0");
   const { data: project, isLoading: projLoading } = useGetProject(projectId);
   const [activeTab, setActiveTab] = useState("documents");
+  const [govSubTab, setGovSubTab] = useState<"dashboard" | "audit" | "matrix">("dashboard");
+  const perms = usePermissions();
 
   if (projLoading) return <div className="p-12 flex justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   if (!project) return <div>Project not found</div>;
@@ -148,6 +153,7 @@ export default function ProjectDetail() {
     { value: "workflows", icon: GitBranch, label: "Workflows" },
     { value: "members", icon: Users, label: "Members" },
     { value: "role-overrides", icon: ShieldCheck, label: "Role Overrides" },
+    ...(perms.canEditDocument ? [{ value: "governance", icon: LayoutList, label: "Governance" }] : []),
   ];
 
   return (
@@ -210,6 +216,30 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="role-overrides">
             <ProjectRoleOverridesTab projectId={projectId} />
+          </TabsContent>
+          <TabsContent value="governance">
+            {/* Governance sub-nav */}
+            <div className="flex gap-1 mb-6 bg-muted/40 rounded-lg p-1 w-fit">
+              {(["dashboard", "audit", "matrix"] as const).map(sub => {
+                const labels: Record<string, string> = { dashboard: "Dashboard", audit: "Audit Log", matrix: "Role Matrix" };
+                return (
+                  <button
+                    key={sub}
+                    onClick={() => setGovSubTab(sub)}
+                    className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      govSubTab === sub
+                        ? "bg-background shadow-sm text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {labels[sub]}
+                  </button>
+                );
+              })}
+            </div>
+            {govSubTab === "dashboard" && <GovernanceDashboardTab projectId={projectId} />}
+            {govSubTab === "audit" && <AuditLogPanel projectId={projectId} />}
+            {govSubTab === "matrix" && <RoleMatrix />}
           </TabsContent>
         </div>
       </Tabs>

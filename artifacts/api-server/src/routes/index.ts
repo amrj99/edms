@@ -41,6 +41,7 @@ import billingRouter from "./billing.js";
 import workflowEngineRouter from "./workflow-engine.js";
 import delegationsRouter from "./delegations.js";
 import projectRoleOverridesRouter from "./project-role-overrides.js";
+import projectGovernanceRouter from "./project-governance.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 const router: IRouter = Router();
@@ -104,5 +105,6 @@ router.use("/billing", billingRouter);
 router.use("/workflow-engine", workflowEngineRouter);
 router.use("/delegations", delegationsRouter);
 router.use("/projects/:projectId", projectRoleOverridesRouter);
+router.use("/projects/:projectId", projectGovernanceRouter);
 
 export default router;

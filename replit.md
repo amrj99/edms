@@ -36,6 +36,11 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **Multi-Organization Isolation:** Ensures data separation between different organizations, with a focus on project and user data isolation.
 - **Module Licensing:** Per-organization feature flags control module access (e.g., dashboard, deliverables, registers, notifications), enforced via API middleware and UI components.
 - **Workflow Approvals:** Implements submit/approve/reject workflows for various records (e.g., NCR, ITR, Transmittal) with associated UI components and audit logging.
+- **Frontend Permission Hook:** `artifacts/edms/src/hooks/usePermissions.ts` — mirrors the backend rank model. Used in all UI surfaces to gate actions. Use `perms.canXxx` flags; for assignment-based actions, use `canSetReviewCode(isAssigned)` / `canCompleteReview(isAssigned)`.
+- **Governance Layer (Phase 6):** Three surfaces accessible via a "Governance" tab (DC+ roles) in project-detail:
+  1. **Governance Dashboard** — live KPIs (overdue correspondence, awaiting response, SLA %, active workflows + bottleneck stage), transmittal review-code distribution, document status breakdown. Backend: `GET /api/projects/:id/governance/stats` in `project-governance.ts`.
+  2. **Audit Log UI** — searchable, filterable (entity type, action, date range, free text), paginated (25/page), exportable (XLSX). Uses the existing `GET /api/audit-logs` route with full user+project joins.
+  3. **Role Matrix** — read-only visual table mapping role tiers × permission capabilities. Rows grouped by category (Correspondence, Documents, Transmittals, Workflows, Audit, Member Management). Assignment-based actions shown with "A" badge.
 - **Pluggable File Storage:** Default is `s3` (S3-compatible — AWS, Cloudflare R2, MinIO, DigitalOcean Spaces). Also supports `onpremise` (NAS/NFS mounted path). Replit cloud storage hidden in production unless `ENABLE_REPLIT_STORAGE=true`. Strict tenant isolation: S3 object keys are prefixed with orgId, on-premise paths include path traversal guards. Unauthorized access attempts logged via audit log.
 - **Real-Time WebSockets (Socket.io):** Enables real-time updates for notifications, chat, document, and task events.
 - **Circuit Breaker for Rules:** Implements a circuit breaker pattern for automation rules to prevent continuous execution of failing rules.
