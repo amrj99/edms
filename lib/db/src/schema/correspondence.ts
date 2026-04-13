@@ -16,6 +16,7 @@ export const correspondenceTypeEnum = pgEnum("correspondence_type", [
   "submittal",
   "ncr",
   "technical_query",
+  "inspection",
 ]);
 
 export const correspondenceFolderEnum = pgEnum("correspondence_folder", [
@@ -30,8 +31,10 @@ export const correspondenceStatusEnum = pgEnum("correspondence_status", [
   "sent",
   "read",
   "responded",
+  "under_review",
   "closed",
   "overdue",
+  "recalled",
 ]);
 
 export const correspondencePriorityEnum = pgEnum("correspondence_priority", [
@@ -61,6 +64,8 @@ export const correspondenceTable = pgTable("correspondence", {
   dueDate: timestamp("due_date"),
   sentAt: timestamp("sent_at"),
   closedAt: timestamp("closed_at"),
+  recalledAt: timestamp("recalled_at"),
+  recalledById: integer("recalled_by_id").references(() => usersTable.id),
   direction: text("direction", { enum: ["incoming", "outgoing"] }),
   requiresResponse: boolean("requires_response").notNull().default(false),
   isRead: boolean("is_read").notNull().default(false),

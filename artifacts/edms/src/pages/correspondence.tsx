@@ -7,7 +7,7 @@ import {
   MessageSquare, Reply, ReplyAll, MoreHorizontal, X, Tag, Archive, Loader2,
   FolderKanban, Globe, CheckSquare, TriangleAlert, Paperclip, Link2, FileDown,
   Trash2, Square, CheckCheck, ChevronLeft, PanelLeftOpen, ExternalLink,
-  Download, FileText, LinkIcon, Info,
+  Download, FileText, LinkIcon, Info, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,11 +25,11 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 
-const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "letter", "memo", "email", "internal", "notice"];
+const CORR_TYPES = ["rfi", "ncr", "inspection", "technical_query", "submittal", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
   rfi: "RFI", submittal: "Submittal", ncr: "NCR", technical_query: "TQ",
   transmittal: "Transmittal", letter: "Letter", memo: "Memo",
-  email: "Email", internal: "Internal", notice: "Notice",
+  email: "Email", internal: "Internal", notice: "Notice", inspection: "Inspection",
 };
 const TYPE_COLORS: Record<string, string> = {
   rfi: "bg-blue-100 text-blue-700", submittal: "bg-purple-100 text-purple-700",
@@ -37,6 +37,21 @@ const TYPE_COLORS: Record<string, string> = {
   transmittal: "bg-green-100 text-green-700", letter: "bg-amber-100 text-amber-700",
   memo: "bg-orange-100 text-orange-700", email: "bg-gray-100 text-gray-700",
   internal: "bg-indigo-100 text-indigo-700", notice: "bg-pink-100 text-pink-700",
+  inspection: "bg-teal-100 text-teal-700",
+};
+const STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-600",
+  sent: "bg-blue-100 text-blue-700",
+  read: "bg-sky-100 text-sky-700",
+  responded: "bg-green-100 text-green-700",
+  under_review: "bg-amber-100 text-amber-700",
+  closed: "bg-gray-200 text-gray-500",
+  overdue: "bg-red-100 text-red-700",
+  recalled: "bg-rose-100 text-rose-700",
+};
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Draft", sent: "Sent", read: "Read", responded: "Responded",
+  under_review: "Under Review", closed: "Closed", overdue: "Overdue", recalled: "Recalled",
 };
 const PRIORITY_COLORS: Record<string, string> = {
   low: "text-gray-400", medium: "text-blue-500", high: "text-orange-500", urgent: "text-red-500",
@@ -442,6 +457,40 @@ export default function CorrespondencePage() {
       if (selected && bulkSelected.has(bulkKey(selected))) setSelected(null);
       toast({ title: "Deleted" });
     },
+  });
+
+  const updateCorrStatus = useMutation({
+    mutationFn: async ({ item, status }: { item: any; status: string }) => {
+      const url = item._source === "general"
+        ? `/api/correspondence/${item.id}`
+        : `/api/projects/${item.projectId}/correspondence/${item.id}`;
+      const r = await fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message || e.error || "Status update failed"); }
+      return r.json();
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      setSelected((s: any) => s?.id === data.id ? data : s);
+      toast({ title: "Status updated", description: `Marked as ${STATUS_LABELS[data.status] ?? data.status}` });
+    },
+    onError: (e: any) => toast({ title: "Status update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const recallCorr = useMutation({
+    mutationFn: async (item: any) => {
+      const url = item._source === "general"
+        ? `/api/correspondence/${item.id}/recall`
+        : `/api/projects/${item.projectId}/correspondence/${item.id}/recall`;
+      const r = await fetch(url, { method: "POST" });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Recall failed"); }
+      return r.json();
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["correspondence"] });
+      setSelected((s: any) => s?.id === data.id ? data : s);
+      toast({ title: "Correspondence recalled", description: "Recipients have been notified." });
+    },
+    onError: (e: any) => toast({ title: "Cannot recall", description: e.message, variant: "destructive" }),
   });
 
   const { data: threadData } = useQuery({
@@ -870,7 +919,11 @@ export default function CorrespondencePage() {
                       selected.priority === "high" ? "bg-orange-100 text-orange-700" :
                       selected.priority === "medium" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-600"
                     }`}>{selected.priority || "medium"}</span>
-                    {selected.status && <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">{selected.status.replace(/_/g, " ")}</span>}
+                    {selected.status && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selected.status] ?? "bg-muted text-muted-foreground"}`}>
+                        {STATUS_LABELS[selected.status] ?? selected.status.replace(/_/g, " ")}
+                      </span>
+                    )}
                     {selected.requiresResponse && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 font-medium flex items-center gap-1">
                         <Clock className="h-3 w-3" /> Response required
@@ -903,6 +956,36 @@ export default function CorrespondencePage() {
                   {perms.canReply && (
                     <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={handleForward}>
                       <Send className="h-3.5 w-3.5" /> Forward
+                    </Button>
+                  )}
+                  {/* Under Review status transition — DC+ only, for active non-closed items */}
+                  {perms.canCloseCorrespondence &&
+                    !["draft", "under_review", "closed", "recalled"].includes(selected.status) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 h-8 text-amber-600 border-amber-200 hover:bg-amber-50"
+                      disabled={updateCorrStatus.isPending}
+                      title="Mark this correspondence as under review"
+                      onClick={() => updateCorrStatus.mutate({ item: selected, status: "under_review" })}
+                    >
+                      {updateCorrStatus.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock className="h-3.5 w-3.5" />}
+                      Under Review
+                    </Button>
+                  )}
+                  {/* Recall button — sender or DC+, only when status is sent/read and not yet opened */}
+                  {(selected.fromUserId === user?.id || perms.canCloseCorrespondence) &&
+                    !["draft", "recalled"].includes(selected.status) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={`gap-1.5 h-8 ${selected.isRead ? "text-muted-foreground" : "text-rose-600 border-rose-200 hover:bg-rose-50"}`}
+                      disabled={recallCorr.isPending || selected.isRead}
+                      title={selected.isRead ? "Recall unavailable — at least one recipient has already opened this item" : "Recall this correspondence before anyone opens it"}
+                      onClick={() => recallCorr.mutate(selected)}
+                    >
+                      {recallCorr.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                      {selected.isRead ? "Can't Recall" : "Recall"}
                     </Button>
                   )}
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setSelected(null); setMobilePanel("list"); }}>

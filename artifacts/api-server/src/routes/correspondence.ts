@@ -641,6 +641,97 @@ router.get("/:id", requireAuth, async (req, res) => {
   res.json(enriched[0]);
 });
 
+// ─── Recall ───────────────────────────────────────────────────────────────────
+
+router.post("/:id/recall", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const caller = req.user!;
+
+  // Fetch the correspondence to check ownership, state, and read receipt
+  const [existing] = await db.select({
+    id: correspondenceTable.id,
+    fromUserId: correspondenceTable.fromUserId,
+    status: correspondenceTable.status,
+    isRead: correspondenceTable.isRead,
+    subject: correspondenceTable.subject,
+    referenceNumber: correspondenceTable.referenceNumber,
+    projectId: correspondenceTable.projectId,
+    organizationId: correspondenceTable.organizationId,
+  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Only the original sender or DC+ may recall
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+  const isSender = existing.fromUserId === caller.id;
+  if (!isSender && !CorrespondencePermissions.canClose(effectiveRole)) {
+    res.status(403).json({ error: "Forbidden", message: "Only the sender or a document controller can recall correspondence" });
+    return;
+  }
+
+  // Cannot recall a draft that was never sent
+  if (existing.status === "draft") {
+    res.status(400).json({ error: "Bad Request", message: "Draft correspondence has not been sent and cannot be recalled" });
+    return;
+  }
+
+  // Cannot recall an already-recalled item
+  if (existing.status === "recalled") {
+    res.status(409).json({ error: "Conflict", message: "This correspondence has already been recalled" });
+    return;
+  }
+
+  // Recall is only permitted if no recipient has opened the item yet
+  if (existing.isRead) {
+    res.status(409).json({
+      error: "Conflict",
+      code: "ALREADY_OPENED",
+      message: "Recall is not possible — at least one recipient has already opened this correspondence. The item remains on record for audit purposes.",
+    });
+    return;
+  }
+
+  const now = new Date();
+  const [recalled] = await db.update(correspondenceTable)
+    .set({ status: "recalled", recalledAt: now, recalledById: caller.id, updatedAt: now })
+    .where(eq(correspondenceTable.id, id))
+    .returning();
+
+  // Audit trail
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: existing.organizationId ?? undefined,
+    action: "recall",
+    entityType: "correspondence",
+    entityId: id,
+    entityTitle: existing.referenceNumber ?? existing.subject,
+    projectId: existing.projectId ?? undefined,
+    details: { recalledBy: caller.id, recalledAt: now.toISOString() },
+  });
+
+  // Notify all To recipients that the item was recalled
+  const recipients = await db.select({ userId: correspondenceRecipientsTable.userId })
+    .from(correspondenceRecipientsTable)
+    .where(eq(correspondenceRecipientsTable.correspondenceId, id));
+
+  for (const r of recipients) {
+    if (r.userId === caller.id) continue;
+    await dispatchNotification({
+      userId: r.userId,
+      type: "correspondence_recalled",
+      title: "Correspondence Recalled",
+      message: `"${existing.referenceNumber ?? existing.subject}" has been recalled by the sender.`,
+      entityType: "correspondence",
+      entityId: id,
+      organizationId: existing.organizationId ?? undefined,
+      projectId: existing.projectId ?? undefined,
+    }).catch(() => {});
+  }
+
+  const enriched = await enrichCorrespondence([recalled]);
+  res.json(enriched[0]);
+});
+
 router.put("/:id/read", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const { isRead } = req.body;
