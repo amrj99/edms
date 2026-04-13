@@ -65,6 +65,8 @@ export default function UsersPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [orgSearchQ, setOrgSearchQ] = useState("");
+  const [orgSort, setOrgSort] = useState<"alpha" | "count">("alpha");
   const [addOpen, setAddOpen] = useState(false);
   const [editRoleOpen, setEditRoleOpen] = useState(false);
   const [resetPwOpen, setResetPwOpen] = useState(false);
@@ -212,32 +214,106 @@ export default function UsersPage() {
 
       {/* LEFT: Org filter sidebar */}
       {isSysAdmin && (
-        <div className="hidden md:flex w-56 shrink-0 border-r bg-muted/30 flex-col">
-          <div className="p-3 border-b">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Organizations</p>
+        <div className="hidden md:flex w-60 shrink-0 border-r bg-muted/30 flex-col">
+
+          {/* Sticky header + search */}
+          <div className="shrink-0 border-b bg-muted/30">
+            <div className="flex items-center justify-between px-3 pt-3 pb-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Organizations</p>
+              {/* Sort toggle */}
+              <button
+                onClick={() => setOrgSort(s => s === "alpha" ? "count" : "alpha")}
+                title={orgSort === "alpha" ? "Sorted A–Z, click to sort by user count" : "Sorted by user count, click to sort A–Z"}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {orgSort === "alpha" ? (
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M2 4h8M2 8h6M2 12h4" strokeLinecap="round"/>
+                    <path d="M12 3v10M12 13l2-2M12 13l-2-2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M2 4h8M2 8h5M2 12h3" strokeLinecap="round"/>
+                    <path d="M12 3v10M12 3l-2 2M12 3l2 2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </button>
+            </div>
+            {/* Search input */}
+            <div className="relative px-2 pb-2">
+              <Search className="absolute left-4 top-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                value={orgSearchQ}
+                onChange={e => setOrgSearchQ(e.target.value)}
+                placeholder="Search…"
+                className="h-7 pl-7 pr-6 text-xs bg-background"
+              />
+              {orgSearchQ && (
+                <button
+                  onClick={() => setOrgSearchQ("")}
+                  className="absolute right-4 top-2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
           </div>
+
           <ScrollArea className="flex-1">
             <div className="p-2 space-y-0.5">
-              <button
-                onClick={() => setSelectedOrgId("all")}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${selectedOrgId === "all" ? "bg-primary text-white" : "hover:bg-accent"}`}
-              >
-                <span className="flex items-center gap-2"><UsersIcon className="h-3.5 w-3.5 shrink-0" /> All Organizations</span>
-                <span className="text-xs opacity-70">{orgUserCounts.all ?? 0}</span>
-              </button>
-              {organizations.map((org: any) => (
+              {/* "All" entry — always shown, hidden only when a search query filters it out */}
+              {!orgSearchQ && (
                 <button
-                  key={org.id}
-                  onClick={() => setSelectedOrgId(org.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${selectedOrgId === org.id ? "bg-primary text-white" : "hover:bg-accent"}`}
+                  onClick={() => setSelectedOrgId("all")}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
+                    selectedOrgId === "all"
+                      ? "bg-primary text-primary-foreground font-medium shadow-sm"
+                      : "hover:bg-accent"
+                  }`}
                 >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <Building2 className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{org.name}</span>
+                  <span className="flex items-center gap-2">
+                    <UsersIcon className="h-3.5 w-3.5 shrink-0" />
+                    All Organizations
                   </span>
-                  <span className="text-xs opacity-70 shrink-0">{orgUserCounts[org.id] ?? 0}</span>
+                  <span className={`text-xs shrink-0 ${selectedOrgId === "all" ? "opacity-80" : "text-muted-foreground"}`}>
+                    {orgUserCounts.all ?? 0}
+                  </span>
                 </button>
-              ))}
+              )}
+              {[...organizations]
+                .filter((org: any) =>
+                  !orgSearchQ || org.name.toLowerCase().includes(orgSearchQ.toLowerCase())
+                )
+                .sort((a: any, b: any) =>
+                  orgSort === "alpha"
+                    ? a.name.localeCompare(b.name)
+                    : (orgUserCounts[b.id] ?? 0) - (orgUserCounts[a.id] ?? 0)
+                )
+                .map((org: any) => (
+                  <button
+                    key={org.id}
+                    onClick={() => setSelectedOrgId(org.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
+                      selectedOrgId === org.id
+                        ? "bg-primary text-primary-foreground font-medium shadow-sm"
+                        : "hover:bg-accent"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Building2 className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{org.name}</span>
+                    </span>
+                    <span className={`text-xs shrink-0 ${selectedOrgId === org.id ? "opacity-80" : "text-muted-foreground"}`}>
+                      {orgUserCounts[org.id] ?? 0}
+                    </span>
+                  </button>
+                ))
+              }
+              {orgSearchQ && organizations.filter((o: any) =>
+                o.name.toLowerCase().includes(orgSearchQ.toLowerCase())
+              ).length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-4">No organizations match</p>
+              )}
             </div>
           </ScrollArea>
         </div>
