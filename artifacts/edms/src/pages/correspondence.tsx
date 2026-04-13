@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, isPast, parseISO } from "date-fns";
 import {
@@ -90,6 +90,67 @@ export default function CorrespondencePage() {
   const [corrShareForm, setCorrShareForm] = useState({ expiresInDays: "30", password: "" });
   const [corrShareResult, setCorrShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+
+  // ── Resizable pane widths (persisted to localStorage) ──────────────────────
+  const STORAGE_KEY = "corr-pane-widths";
+  const DEFAULT_LIST_WIDTH = 320;
+  const DEFAULT_FOLDER_WIDTH = 208;
+  const [listWidth, setListWidth] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").listWidth ?? DEFAULT_LIST_WIDTH; }
+    catch { return DEFAULT_LIST_WIDTH; }
+  });
+  const [folderWidth, setFolderWidth] = useState<number>(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}").folderWidth ?? DEFAULT_FOLDER_WIDTH; }
+    catch { return DEFAULT_FOLDER_WIDTH; }
+  });
+  const listDrag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const folderDrag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const persistWidths = useCallback((lw: number, fw: number) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ listWidth: lw, folderWidth: fw }));
+  }, []);
+
+  const startListResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    listDrag.current = { startX: e.clientX, startWidth: listWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!listDrag.current) return;
+      const next = Math.max(220, Math.min(600, listDrag.current.startWidth + ev.clientX - listDrag.current.startX));
+      setListWidth(next);
+    };
+    const onUp = () => {
+      setListWidth(w => { persistWidths(w, folderWidth); return w; });
+      listDrag.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [listWidth, folderWidth, persistWidths]);
+
+  const startFolderResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    folderDrag.current = { startX: e.clientX, startWidth: folderWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!folderDrag.current) return;
+      const next = Math.max(150, Math.min(320, folderDrag.current.startWidth + ev.clientX - folderDrag.current.startX));
+      setFolderWidth(next);
+    };
+    const onUp = () => {
+      setFolderWidth(w => { persistWidths(listWidth, w); return w; });
+      folderDrag.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [folderWidth, listWidth, persistWidths]);
+
+  const resetPaneWidths = useCallback(() => {
+    setListWidth(DEFAULT_LIST_WIDTH);
+    setFolderWidth(DEFAULT_FOLDER_WIDTH);
+    localStorage.removeItem(STORAGE_KEY);
+  }, []);
 
   // Fetch projects
   const { data: projectsData } = useQuery({
@@ -502,8 +563,14 @@ export default function CorrespondencePage() {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] -m-4 md:-m-6 lg:-m-8 rounded-xl overflow-hidden border bg-card shadow-sm">
-      {/* LEFT: Folder Panel — hidden on mobile */}
-      <div className="hidden md:flex w-52 shrink-0 border-r bg-muted/30 flex-col">
+      {/* LEFT: Folder Panel — hidden on mobile, resizable */}
+      <div className="hidden md:flex shrink-0 bg-muted/30 flex-col relative border-r" style={{ width: folderWidth }}>
+        {/* Folder–List drag divider */}
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize group z-10 hover:bg-primary/30 active:bg-primary/50 transition-colors"
+          onMouseDown={startFolderResize}
+          title="Drag to resize"
+        />
         <div className="p-3 border-b">
           <Button size="sm" className="w-full gap-2" onClick={() => setComposeOpen(true)} disabled={!perms.canCreateCorrespondence} title={!perms.canCreateCorrespondence ? "Member role or above required to compose" : undefined}>
             <Plus className="h-4 w-4" /> Compose
@@ -574,10 +641,29 @@ export default function CorrespondencePage() {
             })}
           </div>
         </ScrollArea>
+        {/* Reset layout button */}
+        <div className="p-2 border-t">
+          <button
+            onClick={resetPaneWidths}
+            className="w-full text-[10px] text-muted-foreground hover:text-foreground py-1 rounded transition-colors text-center"
+            title="Reset pane widths to default"
+          >
+            ↺ Reset layout
+          </button>
+        </div>
       </div>
 
-      {/* MIDDLE: List Panel — full width on mobile, fixed on desktop; hidden on mobile when detail open */}
-      <div className={`${mobilePanel === "detail" ? "hidden" : "flex"} md:flex w-full md:w-80 md:shrink-0 border-r flex-col`}>
+      {/* MIDDLE: List Panel — resizable on desktop, full width on mobile */}
+      <div
+        className={`${mobilePanel === "detail" ? "hidden" : "flex"} md:flex w-full flex-col relative border-r`}
+        style={{ width: listWidth, flexShrink: 0 }}
+      >
+        {/* List–Preview drag divider */}
+        <div
+          className="hidden md:block absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-primary/30 active:bg-primary/50 transition-colors"
+          onMouseDown={startListResize}
+          title="Drag to resize"
+        />
         {/* Bulk action toolbar */}
         {bulkSelected.size > 0 && (
           <div className="px-3 py-2 border-b bg-primary/5 flex items-center gap-2 flex-wrap">
