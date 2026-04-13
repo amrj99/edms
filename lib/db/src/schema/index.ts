@@ -22,3 +22,4 @@ export * from "./rules";
 export * from "./skills";
 export * from "./migrations";
 export * from "./governance";
+export * from "./submission-chains";
