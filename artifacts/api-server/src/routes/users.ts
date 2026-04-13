@@ -166,7 +166,36 @@ router.get("/:id", requireAuth, async (req, res) => {
     return;
   }
 
-  res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, organizationName: orgName, isActive: user.isActive, createdAt: user.createdAt });
+  // Full profile: include project memberships
+  const projectMemberships = await db
+    .select({
+      projectId: projectMembersTable.projectId,
+      projectName: projectsTable.name,
+      projectCode: projectsTable.code,
+      memberRole: projectMembersTable.role,
+    })
+    .from(projectMembersTable)
+    .leftJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
+    .where(eq(projectMembersTable.userId, id));
+
+  res.json({
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    role: user.role,
+    organizationId: user.organizationId,
+    organizationName: orgName,
+    isActive: user.isActive,
+    createdAt: user.createdAt,
+    department: user.department,
+    projectMemberships: projectMemberships.map(m => ({
+      projectId: m.projectId,
+      projectName: m.projectName,
+      projectCode: m.projectCode,
+      role: m.memberRole,
+    })),
+  });
 });
 
 router.put("/:id", requireAuth, async (req, res) => {
