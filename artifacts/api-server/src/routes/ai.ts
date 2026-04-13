@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   documentsTable, correspondenceTable, tasksTable, aiLogsTable, aiAnalysisTable,
-  projectsTable, projectMembersTable, organizationsTable, orgConfigTable,
+  projectsTable, projectMembersTable, organizationsTable, orgConfigTable, documentSequencesTable,
 } from "@workspace/db";
 import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
@@ -135,7 +135,7 @@ router.post("/tasks/prioritize", async (req, res) => {
 
 router.post("/documents/suggest-procedure", async (req, res) => {
   const {
-    projectCode, projectName, discipline, documentType, partialTitle,
+    projectId, projectCode, projectName, discipline, documentType, partialTitle,
     existingNumbers, organizationName,
   } = req.body ?? {};
 
@@ -145,21 +145,51 @@ router.post("/documents/suggest-procedure", async (req, res) => {
       return;
     }
 
-    // Look up the caller's org code and numbering format from the DB
-    const callerOrgId = req.user!.organizationId;
+    // Resolve owning org: prefer the project's org, fall back to caller's org.
+    // This ensures {ORG} is always derived from the document's owning organization.
+    let ownerOrgId: number | undefined = req.user!.organizationId ?? undefined;
+    if (projectId) {
+      const pid = parseInt(String(projectId));
+      if (!isNaN(pid)) {
+        const [proj] = await db.select({ organizationId: projectsTable.organizationId })
+          .from(projectsTable).where(eq(projectsTable.id, pid)).limit(1);
+        if (proj?.organizationId) ownerOrgId = proj.organizationId;
+      }
+    }
+
     let orgCode: string | undefined;
     let numberingFormat: string | undefined;
-    if (callerOrgId) {
-      const [org] = await db.select({ code: organizationsTable.code, name: organizationsTable.name })
-        .from(organizationsTable).where(eq(organizationsTable.id, callerOrgId)).limit(1);
+    let nextSeq: number | undefined;
+    if (ownerOrgId) {
+      const [org] = await db.select({ code: organizationsTable.code })
+        .from(organizationsTable).where(eq(organizationsTable.id, ownerOrgId)).limit(1);
       orgCode = org?.code ?? undefined;
       const [cfg] = await db.select({ fmt: orgConfigTable.documentNumberingFormat })
-        .from(orgConfigTable).where(eq(orgConfigTable.organizationId, callerOrgId)).limit(1);
+        .from(orgConfigTable).where(eq(orgConfigTable.organizationId, ownerOrgId)).limit(1);
       numberingFormat = cfg?.fmt ?? undefined;
     }
 
+    // Look up the next seq for this (project × org × discipline × docType) scope.
+    // We read `lastSeq + 1` without incrementing — the counter only moves on actual document creation.
+    if (projectId && ownerOrgId) {
+      const pid = parseInt(String(projectId));
+      if (!isNaN(pid)) {
+        const disc = (discipline ?? "").toLowerCase();
+        const dtype = (documentType ?? "").toLowerCase();
+        const [seqRow] = await db.select({ lastSeq: documentSequencesTable.lastSeq })
+          .from(documentSequencesTable)
+          .where(and(
+            eq(documentSequencesTable.projectId, pid),
+            eq(documentSequencesTable.organizationId, ownerOrgId),
+            eq(documentSequencesTable.discipline, disc),
+            eq(documentSequencesTable.docType, dtype),
+          )).limit(1);
+        nextSeq = (seqRow?.lastSeq ?? 0) + 1;
+      }
+    }
+
     const suggestion = await suggestDocumentProcedure(
-      { projectCode, projectName, discipline, documentType, partialTitle, existingNumbers, organizationName, orgCode, numberingFormat },
+      { projectCode, projectName, discipline, documentType, partialTitle, existingNumbers, organizationName, orgCode, numberingFormat, nextSeq },
       req.user!.id,
     );
     res.json(suggestion);

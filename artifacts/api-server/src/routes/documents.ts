@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
@@ -207,7 +207,51 @@ router.post("/", requireAuth, async (req, res) => {
     res.status(400).json({ error: "title is required" });
     return;
   }
-  const resolvedDocNumber = documentNumber || `DOC-${projectId}-${Date.now().toString().slice(-6)}`;
+  // Document numbers are immutable once assigned — never update documentNumber after creation.
+  // If not supplied, generate one using the project's owning org's numbering template + scoped SEQ counter.
+  let resolvedDocNumber: string;
+  if (documentNumber) {
+    resolvedDocNumber = documentNumber;
+  } else {
+    // Resolve the project's owning organization (not the current user's org)
+    const [proj] = await db.select({ code: projectsTable.code, organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    const ownerOrgId = proj?.organizationId;
+
+    if (!ownerOrgId) {
+      resolvedDocNumber = `DOC-${projectId}-${Date.now().toString().slice(-6)}`;
+    } else {
+      const [org] = await db.select({ code: organizationsTable.code })
+        .from(organizationsTable).where(eq(organizationsTable.id, ownerOrgId)).limit(1);
+      const [cfg] = await db.select({ fmt: orgConfigTable.documentNumberingFormat })
+        .from(orgConfigTable).where(eq(orgConfigTable.organizationId, ownerOrgId)).limit(1);
+      const fmt = cfg?.fmt;
+
+      if (!fmt || !fmt.includes("{SEQ}")) {
+        // No sequence-based template — use simple fallback
+        resolvedDocNumber = `DOC-${projectId}-${Date.now().toString().slice(-6)}`;
+      } else {
+        // Atomically upsert the sequence counter for this scope and get the new value
+        const disc = (discipline ?? "").toLowerCase();
+        const dtype = (documentType ?? "").toLowerCase();
+        const [seqRow] = await db.insert(documentSequencesTable)
+          .values({ projectId, organizationId: ownerOrgId, discipline: disc, docType: dtype, lastSeq: 1 })
+          .onConflictDoUpdate({
+            target: [documentSequencesTable.projectId, documentSequencesTable.organizationId, documentSequencesTable.discipline, documentSequencesTable.docType],
+            set: { lastSeq: sql`document_sequences.last_seq + 1` },
+          })
+          .returning({ lastSeq: documentSequencesTable.lastSeq });
+        const seq = seqRow?.lastSeq ?? 1;
+        const seqStr = String(seq).padStart(3, "0");
+        resolvedDocNumber = fmt
+          .replace("{PROJECT}", proj?.code ?? `P${projectId}`)
+          .replace("{ORG}", org?.code ?? "ORG")
+          .replace("{DISCIPLINE}", (discipline ?? "GEN").substring(0, 3).toUpperCase())
+          .replace("{TYPE}", (documentType ?? "DWG").substring(0, 3).toUpperCase())
+          .replace("{SEQ}", seqStr);
+      }
+    }
+  }
 
   // Pre-check for document number uniqueness before insert (cleaner UX than catching DB error)
   if (resolvedDocNumber) {

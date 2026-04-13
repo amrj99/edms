@@ -164,18 +164,21 @@ export async function suggestDocumentProcedure(input: {
   organizationName?: string;
   orgCode?: string;
   numberingFormat?: string;
+  /** Next sequence number for this (project × org × discipline × type) scope */
+  nextSeq?: number;
 }, userId?: number): Promise<DocumentProcedureSuggestion> {
   const start = Date.now();
 
   // Resolve the numbering format and substitute known tokens with concrete values
   // so the AI knows exactly what pattern to follow.
   const fmt = input.numberingFormat ?? "{PROJECT}-{DISCIPLINE}-{TYPE}-{SEQ}";
+  const seqStr = String(input.nextSeq ?? 1).padStart(3, "0");
   const resolvedExample = fmt
     .replace("{PROJECT}", input.projectCode ?? "PRJ")
     .replace("{ORG}", input.orgCode ?? "ORG")
     .replace("{DISCIPLINE}", (input.discipline ?? "ELE").substring(0, 3).toUpperCase())
     .replace("{TYPE}", "DWG")
-    .replace("{SEQ}", "001");
+    .replace("{SEQ}", seqStr);
 
   try {
     const { data: rawData, provider, model, tokensUsed } = await callAI(
@@ -212,8 +215,8 @@ Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}
 
 Important: 
 - The suggestedDocumentNumber MUST follow the format template exactly.
-- Derive the next {SEQ} by inspecting the existing numbers and incrementing.
-- If no existing numbers, start {SEQ} at 001.`,
+- Use ${seqStr} as the {SEQ} value — this is the pre-computed next sequence number scoped to this project + org + discipline + type combination.
+- Do NOT increment or re-derive {SEQ} from existing numbers; use ${seqStr} exactly (zero-padded to the same width).`,
       `You are an engineering document management expert. Respond with valid JSON only.`,
       "fast",
       false,
@@ -235,7 +238,7 @@ Important:
         .replace("{ORG}", input.orgCode ?? "ORG")
         .replace("{DISCIPLINE}", (input.discipline ?? "GEN").substring(0, 3).toUpperCase())
         .replace("{TYPE}", (input.documentType ?? "DWG").substring(0, 3).toUpperCase())
-        .replace("{SEQ}", "001");
+        .replace("{SEQ}", seqStr);
       parsed = {
         suggestedDocumentNumber: fallbackNum,
         numberingReason: "Standard engineering document numbering",

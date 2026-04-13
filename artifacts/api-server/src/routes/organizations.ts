@@ -94,7 +94,16 @@ router.post("/", requireAuth, async (req, res) => {
   }
   // Auto-derive a short code from the name if not provided
   const resolvedCode = (code?.trim() || name.replace(/[^A-Za-z0-9]/g, "").substring(0, 6).toUpperCase()) || undefined;
-  const [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address, code: resolvedCode }).returning();
+  let org: typeof organizationsTable.$inferSelect;
+  try {
+    [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address, code: resolvedCode }).returning();
+  } catch (err: any) {
+    if (err?.code === "23505" && err?.constraint?.includes("code")) {
+      res.status(409).json({ error: "Conflict", message: `Organization short code "${resolvedCode}" is already in use. Choose a different code.` });
+      return;
+    }
+    throw err;
+  }
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "organization", entityId: org.id, entityTitle: org.name });
   res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
 });
@@ -117,10 +126,19 @@ router.put("/:id", requireAuth, async (req, res) => {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;
-  const [org] = await db.update(organizationsTable)
-    .set({ name, type, contactEmail, contactPhone, address, ...(code !== undefined && { code: code?.trim() || null }), updatedAt: new Date() })
-    .where(eq(organizationsTable.id, id))
-    .returning();
+  let org: typeof organizationsTable.$inferSelect | undefined;
+  try {
+    [org] = await db.update(organizationsTable)
+      .set({ name, type, contactEmail, contactPhone, address, ...(code !== undefined && { code: code?.trim() || null }), updatedAt: new Date() })
+      .where(eq(organizationsTable.id, id))
+      .returning();
+  } catch (err: any) {
+    if (err?.code === "23505" && err?.constraint?.includes("code")) {
+      res.status(409).json({ error: "Conflict", message: `Organization short code "${code?.trim()}" is already in use by another organization.` });
+      return;
+    }
+    throw err;
+  }
   if (!org) { res.status(404).json({ error: "Not Found" }); return; }
   await createAuditLog({ userId: req.user!.id, action: "update", entityType: "organization", entityId: org.id, entityTitle: org.name });
   const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));

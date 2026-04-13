@@ -601,6 +601,7 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                     </div>
                     {aiPanelOpen[entry.id] && (
                       <AIProcedurePanel
+                        projectId={projectId}
                         projectCode={projectCode}
                         projectName={projectName}
                         discipline={entry.meta.discipline}

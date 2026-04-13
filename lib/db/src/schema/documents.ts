@@ -91,6 +91,19 @@ export const documentFilesTable = pgTable("document_files", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Tracks the next available SEQ per (project × org × discipline × docType).
+// Used by both the auto-numbering fallback and the AI suggestion route.
+export const documentSequencesTable = pgTable("document_sequences", {
+  id: serial("id").primaryKey(),
+  projectId: integer("project_id").references(() => projectsTable.id).notNull(),
+  organizationId: integer("organization_id").references(() => organizationsTable.id).notNull(),
+  discipline: text("discipline").notNull().default(""),
+  docType: text("doc_type").notNull().default(""),
+  lastSeq: integer("last_seq").notNull().default(0),
+}, (t) => [
+  unique("doc_seq_scope_unique").on(t.projectId, t.organizationId, t.discipline, t.docType),
+]);
+
 export const insertDocumentSchema = createInsertSchema(documentsTable).omit({
   id: true,
   createdAt: true,

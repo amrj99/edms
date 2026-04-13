@@ -21,6 +21,7 @@ interface DocumentProcedureSuggestion {
 }
 
 interface AIProcedurePanelProps {
+  projectId?: number;
   projectCode?: string;
   projectName?: string;
   discipline?: string;
@@ -37,6 +38,7 @@ interface AIProcedurePanelProps {
 }
 
 export function AIProcedurePanel({
+  projectId,
   projectCode,
   projectName,
   discipline,
@@ -57,7 +59,7 @@ export function AIProcedurePanel({
       const res = await fetch("/api/ai/documents/suggest-procedure", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectCode, projectName, discipline, documentType, partialTitle }),
+        body: JSON.stringify({ projectId, projectCode, projectName, discipline, documentType, partialTitle }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

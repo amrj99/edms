@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -12,7 +12,7 @@ export const organizationTypeEnum = pgEnum("organization_type", [
 export const organizationsTable = pgTable("organizations", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  code: text("code"),
+  code: text("code").unique("organizations_code_unique"),
   type: organizationTypeEnum("type").notNull(),
   contactEmail: text("contact_email"),
   contactPhone: text("contact_phone"),

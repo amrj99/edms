@@ -130,6 +130,7 @@ export function UploadWithAIDialog({
           <div className="px-6 py-4 space-y-5">
             {/* AI Procedure Panel */}
             <AIProcedurePanel
+              projectId={projectId}
               projectCode={projectCode}
               projectName={projectName}
               discipline={discipline}
