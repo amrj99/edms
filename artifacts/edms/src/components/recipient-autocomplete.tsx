@@ -50,7 +50,7 @@ function UserDropdown({ filtered, selectedIds, onToggle }: {
             )}>
               {isSelected
                 ? <Check className="h-3.5 w-3.5" />
-                : `${u.firstName[0]}${u.lastName[0]}`
+                : `${u.firstName?.[0] ?? ""}${u.lastName?.[0] ?? u.email?.[0] ?? "?"}`
               }
             </div>
             <div className="flex-1 min-w-0">
@@ -345,7 +345,7 @@ export function EmailChipInput({
                 className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-muted/70 transition-colors"
               >
                 <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center text-xs font-semibold shrink-0">
-                  {u.firstName[0]}{u.lastName[0]}
+                  {u.firstName?.[0] ?? ""}{u.lastName?.[0] ?? u.email?.[0] ?? "?"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate leading-none">{u.firstName} {u.lastName}</p>
