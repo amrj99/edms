@@ -9,7 +9,7 @@ import {
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
   LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
-  AlertTriangle,
+  AlertTriangle, FilePlus2,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -318,6 +318,10 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
   const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
   const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
+  // New Revision dialog state
+  const [newRevDoc, setNewRevDoc] = useState<any>(null);
+  const [newRevForm, setNewRevForm] = useState({ revision: "", notes: "" });
+  const [newRevFile, setNewRevFile] = useState<UploadedFile | null>(null);
   // Send for Workflow (Transmittal) state
   const [wfDoc, setWfDoc] = useState<any>(null);
   const [wfForm, setWfForm] = useState({ subject: "", purpose: "for_review", toUserIds: [] as number[], externalEmails: "", description: "" });
@@ -399,6 +403,50 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
       toast({ title: "Document updated" });
     },
     onError: () => toast({ title: "Failed to update document", variant: "destructive" }),
+  });
+
+  // ─── New Revision helpers ─────────────────────────────────────────────────
+  function suggestNextRevision(current: string): string {
+    if (!current) return "";
+    // Trailing numeric: "01" → "02", "P01" → "P02", "A1" → "A2"
+    const numericMatch = current.match(/^(\D*)(\d+)$/);
+    if (numericMatch) {
+      const prefix = numericMatch[1];
+      const digits = numericMatch[2];
+      const next = String(parseInt(digits, 10) + 1).padStart(digits.length, "0");
+      return prefix + next;
+    }
+    // Single uppercase letter: A → B, Z → AA
+    if (/^[A-Z]$/.test(current)) {
+      const code = current.charCodeAt(0);
+      return code < 90 ? String.fromCharCode(code + 1) : "AA";
+    }
+    // Single lowercase letter
+    if (/^[a-z]$/.test(current)) {
+      const code = current.charCodeAt(0);
+      return code < 122 ? String.fromCharCode(code + 1) : "aa";
+    }
+    return current;
+  }
+
+  const createRevision = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${newRevDoc!.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Failed to create revision"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["documents", projectId] });
+      setNewRevDoc(null);
+      setNewRevFile(null);
+      setNewRevForm({ revision: "", notes: "" });
+      toast({ title: "New revision created", description: `Revision ${newRevForm.revision} saved and recorded in history.` });
+    },
+    onError: (e: any) => toast({ title: "Failed to create revision", description: e.message, variant: "destructive" }),
   });
 
   const createDocShare = useMutation({
@@ -1016,12 +1064,28 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                         <GitCompare className="h-4 w-4" />
                       </Button>
                       {(perms.canEditDocument || doc.createdById === user?.id) && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document" onClick={() => {
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document metadata" onClick={() => {
                           setEditDoc(doc);
                           setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
                           setEditFile(null);
                         }}>
                           <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {(perms.canEditDocument || doc.createdById === user?.id) && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                          title="Upload new revision"
+                          onClick={() => {
+                            const suggested = suggestNextRevision(doc.revision ?? "01");
+                            setNewRevDoc(doc);
+                            setNewRevForm({ revision: suggested, notes: "" });
+                            setNewRevFile(null);
+                          }}
+                        >
+                          <FilePlus2 className="h-4 w-4" />
                         </Button>
                       )}
                       {perms.canSubmitForWorkflow && (
@@ -1104,10 +1168,20 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
               <Textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} className="mt-1" rows={3} />
             </div>
             <div>
-              <Label className="mb-2 block">Replace Primary File (optional)</Label>
-              <FileDropZone onUpload={setEditFile} label="Drop new file version here" />
-              {editFile && <p className="text-xs text-muted-foreground mt-1">New file: {editFile.name}</p>}
-              {!editFile && editDoc?.fileName && <p className="text-xs text-muted-foreground mt-1">Current: {editDoc.fileName}</p>}
+              <Label className="mb-2 block">Replace Primary File <span className="text-muted-foreground font-normal">(optional — for metadata-only edits leave blank)</span></Label>
+              <FileDropZone onUpload={setEditFile} label="Drop replacement file here" />
+              {editFile && <p className="text-xs text-muted-foreground mt-1">Staged: {editFile.name}</p>}
+              {!editFile && editDoc?.fileName && <p className="text-xs text-muted-foreground mt-1">Current file: {editDoc.fileName}</p>}
+              {/* Warning: file staged but revision unchanged — would silently overwrite */}
+              {editFile && editForm.revision === (editDoc?.revision ?? "") && (
+                <div className="mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-800 dark:text-amber-300">
+                    <p className="font-semibold">Revision identifier unchanged</p>
+                    <p className="mt-0.5">The new file will replace the current one without creating a revision history record. To preserve history, update the <strong>Revision</strong> field above before saving — or use the <strong>Upload New Revision</strong> action instead.</p>
+                  </div>
+                </div>
+              )}
             </div>
             <div>
               <Label className="mb-2 block flex items-center gap-1.5"><Paperclip className="h-3.5 w-3.5" /> Additional Files</Label>
@@ -1158,6 +1232,124 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
               disabled={updateDoc.isPending || !editForm.title}
             >
               {updateDoc.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── New Revision Dialog ──────────────────────────────────────────── */}
+      <Dialog
+        open={!!newRevDoc}
+        onOpenChange={v => { if (!v) { setNewRevDoc(null); setNewRevFile(null); setNewRevForm({ revision: "", notes: "" }); } }}
+      >
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FilePlus2 className="h-4 w-4 text-blue-600" /> Upload New Revision
+            </DialogTitle>
+          </DialogHeader>
+
+          {newRevDoc && (
+            <div className="space-y-4 py-1">
+              {/* Document context */}
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                <p className="font-medium truncate">{newRevDoc.title}</p>
+                <p className="text-xs text-muted-foreground font-mono mt-0.5">
+                  {newRevDoc.documentNumber} · Current rev: <strong>{newRevDoc.revision ?? "01"}</strong>
+                </p>
+              </div>
+
+              {/* Revision identifier — pre-filled with suggestion, blocked if unchanged */}
+              <div>
+                <Label>
+                  New Revision Identifier <span className="text-destructive">*</span>
+                </Label>
+                <div className="flex gap-2 mt-1">
+                  <Input
+                    value={newRevForm.revision}
+                    onChange={e => setNewRevForm(f => ({ ...f, revision: e.target.value.trim() }))}
+                    className="font-mono"
+                    placeholder="e.g. 02, B, P02"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 text-xs"
+                    onClick={() => setNewRevForm(f => ({ ...f, revision: suggestNextRevision(newRevDoc.revision ?? "01") }))}
+                  >
+                    Auto-suggest
+                  </Button>
+                </div>
+                {newRevForm.revision && newRevForm.revision === (newRevDoc.revision ?? "") && (
+                  <p className="mt-1.5 text-xs text-destructive flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    Must differ from the current revision ({newRevDoc.revision}). Change it before saving.
+                  </p>
+                )}
+                {newRevForm.revision && newRevForm.revision !== (newRevDoc.revision ?? "") && (
+                  <p className="mt-1.5 text-xs text-green-700 dark:text-green-400">
+                    A new revision history record will be created for revision <strong>{newRevForm.revision}</strong>.
+                  </p>
+                )}
+              </div>
+
+              {/* File upload — not required (allows revision-only metadata bump) */}
+              <div>
+                <Label className="mb-1.5 block">
+                  Revised File <span className="text-muted-foreground font-normal text-xs">(recommended — attach the corrected document)</span>
+                </Label>
+                <FileDropZone onUpload={setNewRevFile} label="Drop corrected file here, or click to browse" />
+                {newRevFile && (
+                  <p className="mt-1.5 text-xs text-green-700 dark:text-green-400 flex items-center gap-1">
+                    <Check className="h-3 w-3 shrink-0" /> {newRevFile.name}
+                  </p>
+                )}
+                {!newRevFile && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">No file attached — the existing file will be carried forward under the new revision identifier.</p>
+                )}
+              </div>
+
+              {/* Revision notes */}
+              <div>
+                <Label>Revision Notes <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+                <Textarea
+                  value={newRevForm.notes}
+                  onChange={e => setNewRevForm(f => ({ ...f, notes: e.target.value }))}
+                  className="mt-1"
+                  rows={2}
+                  placeholder="Describe what changed in this revision…"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setNewRevDoc(null); setNewRevFile(null); setNewRevForm({ revision: "", notes: "" }); }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                createRevision.isPending ||
+                !newRevForm.revision ||
+                newRevForm.revision === (newRevDoc?.revision ?? "")
+              }
+              onClick={() => {
+                createRevision.mutate({
+                  revision: newRevForm.revision,
+                  description: newRevForm.notes || newRevDoc?.description,
+                  ...(newRevFile ? { fileUrl: newRevFile.url, fileName: newRevFile.name, fileSize: newRevFile.size } : {}),
+                });
+              }}
+            >
+              {createRevision.isPending ? (
+                <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Creating…</>
+              ) : (
+                <><FilePlus2 className="h-3.5 w-3.5 mr-1.5" /> Create Revision {newRevForm.revision || "—"}</>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
