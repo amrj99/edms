@@ -1753,9 +1753,23 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
   const [createDocIds, setCreateDocIds] = useState<number[]>([]);
   const [createDocSearch, setCreateDocSearch] = useState("");
 
+  const FORM_DEFAULT = { subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" };
+
+  function resetCreate() {
+    setForm(FORM_DEFAULT);
+    setCreateDocIds([]);
+    setCreateDocSearch("");
+  }
+
+  function closeCreate() {
+    resetCreate();
+    setIsCreateOpen(false);
+  }
+
   // Auto-open create dialog when Documents tab hands off pre-selected docs
   useEffect(() => {
     if (prefillDocIds && prefillDocIds.length > 0) {
+      resetCreate();
       setCreateDocIds(prefillDocIds);
       setIsCreateOpen(true);
       onPrefillConsumed?.();
@@ -1823,9 +1837,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
-      setIsCreateOpen(false);
-      setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" });
-      setCreateDocIds([]);
+      closeCreate();
       toast({ title: "Transmittal created" });
     },
     onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
@@ -1915,7 +1927,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
           <p className="text-sm text-muted-foreground">{allTransmittals.length} transmittal(s) in this project</p>
         </div>
         {perms.canCreateTransmittal && (
-          <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
+          <Button onClick={() => { resetCreate(); setIsCreateOpen(true); }} className="gap-2">
             <Plus className="h-4 w-4" /> New Transmittal
           </Button>
         )}
@@ -1947,12 +1959,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
       <Dialog
         open={isCreateOpen}
         onOpenChange={v => {
-          setIsCreateOpen(v);
-          if (!v) {
-            setForm({ subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" });
-            setCreateDocIds([]);
-            setCreateDocSearch("");
-          }
+          if (!v) { closeCreate(); } else { setIsCreateOpen(true); }
         }}
       >
         <DialogContent className="sm:max-w-[580px] flex flex-col max-h-[90vh] p-0 gap-0">
@@ -2114,7 +2121,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
             </div>
           </div>
           <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
-            <Button variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={closeCreate}>Cancel</Button>
             <Button onClick={() => create.mutate(form)} disabled={create.isPending || !form.subject}>
               {create.isPending ? "Creating..." : "Create Transmittal"}
             </Button>
