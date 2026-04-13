@@ -12,6 +12,7 @@ export const organizationTypeEnum = pgEnum("organization_type", [
 export const organizationsTable = pgTable("organizations", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
+  code: text("code"),
   type: organizationTypeEnum("type").notNull(),
   contactEmail: text("contact_email"),
   contactPhone: text("contact_phone"),

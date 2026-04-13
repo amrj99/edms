@@ -162,12 +162,25 @@ export async function suggestDocumentProcedure(input: {
   partialTitle?: string;
   existingNumbers?: string[];
   organizationName?: string;
+  orgCode?: string;
+  numberingFormat?: string;
 }, userId?: number): Promise<DocumentProcedureSuggestion> {
   const start = Date.now();
+
+  // Resolve the numbering format and substitute known tokens with concrete values
+  // so the AI knows exactly what pattern to follow.
+  const fmt = input.numberingFormat ?? "{PROJECT}-{DISCIPLINE}-{TYPE}-{SEQ}";
+  const resolvedExample = fmt
+    .replace("{PROJECT}", input.projectCode ?? "PRJ")
+    .replace("{ORG}", input.orgCode ?? "ORG")
+    .replace("{DISCIPLINE}", (input.discipline ?? "ELE").substring(0, 3).toUpperCase())
+    .replace("{TYPE}", "DWG")
+    .replace("{SEQ}", "001");
+
   try {
     const { data: rawData, provider, model, tokensUsed } = await callAI(
       `Generate a document numbering suggestion. Return JSON with these fields:
-- suggestedDocumentNumber: the document number (e.g. "${input.projectCode ?? "PRJ"}-ELE-DWG-001")
+- suggestedDocumentNumber: the document number following the exact format template below
 - numberingReason: brief explanation
 - suggestedClassification: document classification
 - suggestedDiscipline: engineering discipline  
@@ -177,13 +190,30 @@ export async function suggestDocumentProcedure(input: {
 - procedureNotes: key procedure notes
 - confidence: number between 0 and 1
 
+Numbering Format Template: ${fmt}
+Token meanings:
+  {PROJECT}    = project code
+  {ORG}        = organization short code (e.g. "ARC", "MCO")
+  {DISCIPLINE} = discipline abbreviation (e.g. "STR", "ELE", "MEC")
+  {TYPE}       = document type abbreviation (e.g. "DWG", "RPT", "SPC")
+  {SEQ}        = zero-padded sequence number (e.g. "001", "0042")
+
+Example for this context: ${resolvedExample}
+
 Context:
 Project Code: ${input.projectCode ?? "PRJ"}
 Project Name: ${input.projectName ?? "Unknown Project"}
+Organization Code: ${input.orgCode ?? "ORG"}
+Organization Name: ${input.organizationName ?? ""}
 Discipline: ${input.discipline ?? "General"}
 Document Type: ${input.documentType ?? "Drawing"}
 Partial Title: ${input.partialTitle ?? ""}
-Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
+Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}
+
+Important: 
+- The suggestedDocumentNumber MUST follow the format template exactly.
+- Derive the next {SEQ} by inspecting the existing numbers and incrementing.
+- If no existing numbers, start {SEQ} at 001.`,
       `You are an engineering document management expert. Respond with valid JSON only.`,
       "fast",
       false,
@@ -199,14 +229,21 @@ Existing Numbers: ${input.existingNumbers?.join(", ") || "None"}`,
       parsed = JSON.parse(jsonStr);
     } catch {
       logger.warn({ result: String(result).substring(0, 200) }, "Failed to parse procedure suggestion");
+      // Deterministic fallback: resolve the format template directly
+      const fallbackNum = fmt
+        .replace("{PROJECT}", input.projectCode ?? "PRJ")
+        .replace("{ORG}", input.orgCode ?? "ORG")
+        .replace("{DISCIPLINE}", (input.discipline ?? "GEN").substring(0, 3).toUpperCase())
+        .replace("{TYPE}", (input.documentType ?? "DWG").substring(0, 3).toUpperCase())
+        .replace("{SEQ}", "001");
       parsed = {
-        suggestedDocumentNumber: `${input.projectCode ?? "PRJ"}-${(input.discipline ?? "GEN").substring(0, 3).toUpperCase()}-001`,
+        suggestedDocumentNumber: fallbackNum,
         numberingReason: "Standard engineering document numbering",
         suggestedClassification: input.documentType ?? "Drawing",
         suggestedDiscipline: input.discipline ?? "General",
         suggestedTitle: input.partialTitle ?? "Engineering Document",
         suggestedRevision: "00",
-        namingConvention: "[ProjectCode]-[Discipline]-[Sequence]",
+        namingConvention: fmt,
         procedureNotes: "Follow project document control procedures",
         confidence: 0.5,
       };

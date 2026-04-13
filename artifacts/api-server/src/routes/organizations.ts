@@ -87,12 +87,14 @@ router.get("/cross-org-stats", requireAuth, async (req, res) => {
 
 router.post("/", requireAuth, async (req, res) => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
-  const { name, type, contactEmail, contactPhone, address } = req.body;
+  const { name, type, contactEmail, contactPhone, address, code } = req.body;
   if (!name || !type) {
     res.status(400).json({ error: "Bad Request", message: "name and type are required" });
     return;
   }
-  const [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address }).returning();
+  // Auto-derive a short code from the name if not provided
+  const resolvedCode = (code?.trim() || name.replace(/[^A-Za-z0-9]/g, "").substring(0, 6).toUpperCase()) || undefined;
+  const [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address, code: resolvedCode }).returning();
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "organization", entityId: org.id, entityTitle: org.name });
   res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
 });
@@ -114,9 +116,9 @@ router.put("/:id", requireAuth, async (req, res) => {
   if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
-  const { name, type, contactEmail, contactPhone, address } = req.body;
+  const { name, type, contactEmail, contactPhone, address, code } = req.body;
   const [org] = await db.update(organizationsTable)
-    .set({ name, type, contactEmail, contactPhone, address, updatedAt: new Date() })
+    .set({ name, type, contactEmail, contactPhone, address, ...(code !== undefined && { code: code?.trim() || null }), updatedAt: new Date() })
     .where(eq(organizationsTable.id, id))
     .returning();
   if (!org) { res.status(404).json({ error: "Not Found" }); return; }

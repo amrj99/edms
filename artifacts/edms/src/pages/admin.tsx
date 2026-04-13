@@ -215,7 +215,7 @@ export default function Admin() {
   const [createOrgOpen, setCreateOrgOpen] = useState(false);
   const [editOrg, setEditOrg] = useState<any>(null);
   const [deleteOrg, setDeleteOrg] = useState<any>(null);
-  const [orgForm, setOrgForm] = useState({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" });
+  const [orgForm, setOrgForm] = useState({ name: "", code: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" });
 
   const createOrg = useMutation({
     mutationFn: async (data: any) => {
@@ -223,7 +223,7 @@ export default function Admin() {
       if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Failed"); }
       return r.json();
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setCreateOrgOpen(false); setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: t("orgCreated") }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setCreateOrgOpen(false); setOrgForm({ name: "", code: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); toast({ title: t("orgCreated") }); },
     onError: (e: any) => toast({ title: e.message || "Failed to create organization", variant: "destructive" }),
   });
 
@@ -339,7 +339,11 @@ export default function Admin() {
             <DialogContent className="sm:max-w-[480px]">
               <DialogHeader><DialogTitle className="flex items-center gap-2"><Building2 className="h-5 w-5" />{t("addOrganization")}</DialogTitle></DialogHeader>
               <div className="space-y-3 py-2">
-                <div><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder={t("orgName")} /></div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2"><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder={t("orgName")} /></div>
+                  <div><Label>Short Code</Label><Input value={orgForm.code} onChange={e => setOrgForm(f => ({ ...f, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) }))} className="mt-1 font-mono uppercase" placeholder="ARC" maxLength={8} /></div>
+                </div>
+                <p className="text-xs text-muted-foreground -mt-1">Short code is used in document numbers as the <code className="bg-muted px-1 rounded">{"{ORG}"}</code> token. Auto-generated from name if left blank.</p>
                 <div><Label>{t("orgType")} *</Label>
                   <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
@@ -369,7 +373,11 @@ export default function Admin() {
             <DialogContent className="sm:max-w-[480px]">
               <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-5 w-5" />{t("editOrganization")}</DialogTitle></DialogHeader>
               <div className="space-y-3 py-2">
-                <div><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" /></div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2"><Label>{t("orgName")} *</Label><Input value={orgForm.name} onChange={e => setOrgForm(f => ({ ...f, name: e.target.value }))} className="mt-1" /></div>
+                  <div><Label>Short Code</Label><Input value={orgForm.code} onChange={e => setOrgForm(f => ({ ...f, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) }))} className="mt-1 font-mono uppercase" placeholder="ARC" maxLength={8} /></div>
+                </div>
+                <p className="text-xs text-muted-foreground -mt-1">Short code used as the <code className="bg-muted px-1 rounded">{"{ORG}"}</code> token in document numbers.</p>
                 <div><Label>{t("orgType")} *</Label>
                   <Select value={orgForm.type} onValueChange={v => setOrgForm(f => ({ ...f, type: v }))}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
@@ -440,7 +448,7 @@ export default function Admin() {
                       <TableCell className="text-xs text-muted-foreground">{org.contactEmail || "—"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", code: org.code ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                           <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDeleteOrg(org)}>
@@ -944,7 +952,7 @@ export default function Admin() {
                 <div>
                   <Label>Format Template</Label>
                   <Input value={form.documentNumberingFormat || ""} onChange={e => setForm((f: any) => ({ ...f, documentNumberingFormat: e.target.value }))} className="mt-1 font-mono" />
-                  <p className="text-xs text-muted-foreground mt-1">Tokens: {"{PROJECT}"} {"{DISCIPLINE}"} {"{TYPE}"} {"{SEQ}"}</p>
+                  <p className="text-xs text-muted-foreground mt-1">Tokens: {"{PROJECT}"} {"{ORG}"} {"{DISCIPLINE}"} {"{TYPE}"} {"{SEQ}"}</p>
                 </div>
                 <div>
                   <Label>Revision Format</Label>

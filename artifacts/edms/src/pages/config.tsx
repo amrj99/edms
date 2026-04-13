@@ -136,7 +136,7 @@ export default function Config() {
                   Document Numbering Format
                 </CardTitle>
                 <CardDescription>
-                  Use tokens: {"{PROJECT}"}, {"{DISCIPLINE}"}, {"{TYPE}"}, {"{SEQ}"}
+                  Use tokens: {"{PROJECT}"}, {"{ORG}"}, {"{DISCIPLINE}"}, {"{TYPE}"}, {"{SEQ}"}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
