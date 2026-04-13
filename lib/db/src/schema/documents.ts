@@ -77,6 +77,9 @@ export const documentRevisionsTable = pgTable("document_revisions", {
   comment: text("comment"),
   createdById: integer("created_by_id").references(() => usersTable.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // true when no new file was uploaded — the previous file was carried forward.
+  // Used by the UI to show a "no new file" visual indicator on this revision row.
+  fileCarriedForward: boolean("file_carried_forward").notNull().default(false),
 });
 
 export const documentFilesTable = pgTable("document_files", {

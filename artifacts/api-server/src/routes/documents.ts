@@ -490,14 +490,17 @@ router.put("/:id", requireAuth, async (req, res) => {
 
   // Save revision record if revision changed
   if (revision && revision !== existing[0].revision) {
+    const isNewFile = !!fileUrl;
     await db.insert(documentRevisionsTable).values({
       documentId: id,
       revision: revision,
       status: status || existing[0].status,
       fileUrl: fileUrl || existing[0].fileUrl,
       fileName: fileName || existing[0].fileName,
-      comment: `Updated to revision ${revision}`,
+      // comment: use caller-supplied notes if present, otherwise generate a default
+      comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
       createdById: req.user!.id,
+      fileCarriedForward: !isNewFile,
     });
   }
 

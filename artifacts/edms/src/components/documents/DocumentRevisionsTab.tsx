@@ -8,7 +8,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   History, Loader2, Brain, ArrowRight, CheckCircle2,
-  AlertCircle, ChevronDown, ChevronUp, GitCompare,
+  AlertCircle, ChevronDown, ChevronUp, GitCompare, FileX2, Paperclip,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,15 +26,16 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 interface Revision {
-  id:              number;
-  documentId:      number;
-  revision:        string;
-  status:          string;
-  fileName?:       string;
-  fileSize?:       number;
-  comment?:        string;
-  createdAt:       string;
-  createdByName?:  string;
+  id:                  number;
+  documentId:          number;
+  revision:            string;
+  status:              string;
+  fileName?:           string;
+  fileSize?:           number;
+  comment?:            string;
+  createdAt:           string;
+  createdByName?:      string;
+  fileCarriedForward?: boolean;
 }
 
 interface DiffField {
@@ -168,9 +169,22 @@ export function DocumentRevisionsTab({ documentId, documentTitle }: DocumentRevi
                       {rev.status.replace(/_/g, " ")}
                     </span>
                   )}
-                  {rev.fileName && (
-                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">{rev.fileName}</span>
-                  )}
+                  {/* File indicator — visually distinct for carried-forward vs. newly uploaded */}
+                  {rev.fileCarriedForward ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground/50 italic"
+                      title="No new file uploaded — previous file carried forward"
+                    >
+                      <FileX2 className="h-3.5 w-3.5 text-amber-400/70 shrink-0" />
+                      <span className="line-through decoration-amber-400/50">{rev.fileName}</span>
+                      <span className="not-italic no-underline text-amber-600/80 dark:text-amber-400/70">(no new file)</span>
+                    </span>
+                  ) : rev.fileName ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground truncate max-w-[220px]" title={rev.fileName}>
+                      <Paperclip className="h-3 w-3 shrink-0" />
+                      {rev.fileName}
+                    </span>
+                  ) : null}
                 </div>
                 {rev.comment && <p className="text-xs text-muted-foreground mt-1">{rev.comment}</p>}
                 <p className="text-[11px] text-muted-foreground mt-1">

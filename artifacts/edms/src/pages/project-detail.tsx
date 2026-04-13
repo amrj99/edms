@@ -1294,10 +1294,14 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                 )}
               </div>
 
-              {/* File upload — not required (allows revision-only metadata bump) */}
+              {/* File upload */}
               <div>
                 <Label className="mb-1.5 block">
-                  Revised File <span className="text-muted-foreground font-normal text-xs">(recommended — attach the corrected document)</span>
+                  Revised File
+                  {newRevFile
+                    ? <span className="ml-1.5 text-green-700 dark:text-green-400 font-normal text-xs">✓ attached</span>
+                    : <span className="ml-1.5 text-amber-600 font-normal text-xs">not attached</span>
+                  }
                 </Label>
                 <FileDropZone onUpload={setNewRevFile} label="Drop corrected file here, or click to browse" />
                 {newRevFile && (
@@ -1305,21 +1309,38 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                     <Check className="h-3 w-3 shrink-0" /> {newRevFile.name}
                   </p>
                 )}
+                {/* Strong warning when no file is staged */}
                 {!newRevFile && (
-                  <p className="mt-1.5 text-xs text-muted-foreground">No file attached — the existing file will be carried forward under the new revision identifier.</p>
+                  <div className="mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-3 py-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-800 dark:text-amber-300 space-y-0.5">
+                      <p className="font-semibold">No file attached</p>
+                      <p>The existing file will be carried forward and marked as such in the revision history. This revision will be visually flagged as "no new file uploaded" wherever it appears.</p>
+                      <p className="font-medium">Revision notes are required when no file is attached.</p>
+                    </div>
+                  </div>
                 )}
               </div>
 
-              {/* Revision notes */}
+              {/* Revision notes — optional with file, required without */}
               <div>
-                <Label>Revision Notes <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
+                <Label>
+                  Revision Notes
+                  {!newRevFile
+                    ? <span className="text-destructive ml-1">*</span>
+                    : <span className="text-muted-foreground font-normal text-xs ml-1">(optional)</span>
+                  }
+                </Label>
                 <Textarea
                   value={newRevForm.notes}
                   onChange={e => setNewRevForm(f => ({ ...f, notes: e.target.value }))}
-                  className="mt-1"
+                  className={`mt-1 ${!newRevFile && !newRevForm.notes.trim() ? "border-amber-300 focus-visible:ring-amber-400" : ""}`}
                   rows={2}
-                  placeholder="Describe what changed in this revision…"
+                  placeholder={newRevFile ? "Describe what changed in this revision…" : "Required: explain why no new file is being uploaded…"}
                 />
+                {!newRevFile && !newRevForm.notes.trim() && (
+                  <p className="mt-1 text-xs text-destructive">Notes are required when no file is attached.</p>
+                )}
               </div>
             </div>
           )}
@@ -1335,12 +1356,14 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
               disabled={
                 createRevision.isPending ||
                 !newRevForm.revision ||
-                newRevForm.revision === (newRevDoc?.revision ?? "")
+                newRevForm.revision === (newRevDoc?.revision ?? "") ||
+                (!newRevFile && !newRevForm.notes.trim())
               }
               onClick={() => {
                 createRevision.mutate({
                   revision: newRevForm.revision,
-                  description: newRevForm.notes || newRevDoc?.description,
+                  revisionNotes: newRevForm.notes.trim() || undefined,
+                  description: newRevDoc?.description,
                   ...(newRevFile ? { fileUrl: newRevFile.url, fileName: newRevFile.name, fileSize: newRevFile.size } : {}),
                 });
               }}
