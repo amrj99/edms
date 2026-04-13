@@ -10,7 +10,7 @@ import {
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
   LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
@@ -1728,6 +1728,306 @@ const TRS_COLUMNS: ColumnDef[] = [
 ];
 const TRS_PINNED = ["trsNo", "actions"];
 
+// ─── CreateTransmittalDialog ─────────────────────────────────────────────────
+// Self-contained component. Receives a key= prop from TransmittalsTab so React
+// fully re-mounts (and resets all state) each time the dialog is opened.
+function CreateTransmittalDialog({
+  open, onClose, initialDocIds, projectId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialDocIds: number[];
+  projectId: number;
+}) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [form, setForm] = useState({
+    subject: "", description: "", purpose: "for_information",
+    toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing",
+  });
+  const [docIds, setDocIds] = useState<number[]>(initialDocIds);
+  const [docSearch, setDocSearch] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+
+  const { data: docsData } = useListDocuments(projectId);
+  const documents: any[] = docsData?.documents ?? [];
+
+  const { data: usersRaw } = useQuery({
+    queryKey: ["users"],
+    queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
+  });
+  const userList: RecipientUser[] = (usersRaw?.users ?? []).map((u: any) => ({
+    id: u.id,
+    firstName: u.firstName ?? "",
+    lastName: u.lastName ?? "",
+    email: u.email,
+    organizationName: u.organizationName,
+    role: u.role,
+  }));
+
+  const available = documents.filter((d: any) => {
+    if (docIds.includes(d.id)) return false;
+    if (!docSearch) return true;
+    const q = docSearch.toLowerCase();
+    return d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q);
+  });
+
+  async function uploadAttachments(transmittalId: number) {
+    const orgId = user?.organizationId;
+    for (const file of pendingFiles) {
+      try {
+        const token = localStorage.getItem("edms_token");
+        const urlRes = await fetch("/api/storage/uploads/request-url", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ orgId, projectId, fileType: "attachment", filename: file.name }),
+        });
+        if (!urlRes.ok) continue;
+        const { uploadURL } = await urlRes.json();
+        await new Promise<void>(resolve => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", uploadURL);
+          if (uploadURL.startsWith("/") || uploadURL.includes(window.location.host)) {
+            if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+          }
+          xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+          xhr.onload = () => resolve();
+          xhr.onerror = () => resolve();
+          xhr.send(file);
+        });
+        const fileUrl = uploadURL.split("?")[0];
+        await fetch(`/api/projects/${projectId}/transmittals/${transmittalId}/upload-attachment`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileName: file.name, fileUrl, fileSize: file.size }),
+        });
+      } catch { /* non-fatal — log but continue */ }
+    }
+  }
+
+  const create = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch(`/api/projects/${projectId}/transmittals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...data, documentIds: docIds }),
+      });
+      if (!r.ok) throw new Error("Failed to create transmittal");
+      return r.json();
+    },
+    onSuccess: async (data) => {
+      if (pendingFiles.length > 0) {
+        setUploading(true);
+        try { await uploadAttachments(data.id); } finally { setUploading(false); }
+      }
+      qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
+      onClose();
+      toast({ title: "Transmittal created" });
+    },
+    onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-[600px] flex flex-col max-h-[90vh] p-0 gap-0">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
+          <DialogTitle>Create Transmittal</DialogTitle>
+        </DialogHeader>
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+
+          <div>
+            <Label>Subject *</Label>
+            <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Purpose</Label>
+              <Select value={form.purpose} onValueChange={v => setForm(f => ({ ...f, purpose: v }))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
+                    <SelectItem key={v} value={v}>{l}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Due Date</Label>
+              <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
+            </div>
+          </div>
+
+          <div>
+            <Label>To (Company / Organisation)</Label>
+            <Input value={form.toExternal} onChange={e => setForm(f => ({ ...f, toExternal: e.target.value }))} placeholder="Contractor, consultant, client name..." className="mt-1" />
+          </div>
+
+          <div>
+            <Label>External Recipients (emails)</Label>
+            <div className="mt-1">
+              <EmailChipInput
+                users={userList}
+                value={form.externalEmails}
+                onChange={v => setForm(f => ({ ...f, externalEmails: v }))}
+                placeholder="Type name or email to search…"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Type to search system users, or enter any email address and press comma / Enter.</p>
+          </div>
+
+          {/* ── Transmittal Documents ────────────────────────────────── */}
+          <div className="space-y-2">
+            <div>
+              <Label>Transmittal Documents</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">Official project documents from the register</p>
+            </div>
+
+            {/* Selected */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  Selected
+                  {docIds.length > 0 && (
+                    <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] font-bold leading-4">
+                      {docIds.length}
+                    </span>
+                  )}
+                </span>
+                {docIds.length > 0 && (
+                  <button type="button" onClick={() => setDocIds([])} className="text-xs text-destructive hover:underline">
+                    Clear all
+                  </button>
+                )}
+              </div>
+              <div className="border rounded-lg overflow-hidden bg-background">
+                {docIds.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-3 italic">
+                    No documents selected — add from the list below
+                  </p>
+                ) : (
+                  <div className="max-h-32 overflow-y-auto divide-y">
+                    {docIds.map(id => {
+                      const d = documents.find((doc: any) => doc.id === id);
+                      if (!d) return null;
+                      return (
+                        <div key={id} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-primary/5 hover:bg-primary/10 transition-colors">
+                          <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
+                          <span className="flex-1 truncate font-medium">{d.title}</span>
+                          <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                          <button type="button" title="Remove"
+                            onClick={() => setDocIds(prev => prev.filter(x => x !== id))}
+                            className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Available */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-foreground">Available</span>
+                {documents.length > 0 && docIds.length < documents.length && (
+                  <button type="button" onClick={() => setDocIds(documents.map((d: any) => d.id))}
+                    className="text-xs text-primary hover:underline">Add all</button>
+                )}
+              </div>
+              <div className="border rounded-lg overflow-hidden">
+                <div className="px-2.5 py-1.5 border-b bg-muted/30">
+                  <div className="relative">
+                    <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
+                    <Input value={docSearch} onChange={e => setDocSearch(e.target.value)}
+                      placeholder="Search by number or title…"
+                      className="h-7 pl-6 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:ring-offset-0" />
+                  </div>
+                </div>
+                <div className="max-h-40 overflow-y-auto divide-y">
+                  {documents.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
+                  ) : available.length === 0 ? (
+                    <p className="text-xs text-muted-foreground text-center py-4 italic">
+                      {docSearch ? "No documents match this search" : "All project documents already added"}
+                    </p>
+                  ) : available.map((d: any) => (
+                    <button key={d.id} type="button" onClick={() => setDocIds(prev => [...prev, d.id])}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left transition-colors">
+                      <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
+                      <span className="flex-1 truncate">{d.title}</span>
+                      <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
+                      <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {docIds.length} of {documents.length} document{documents.length !== 1 ? "s" : ""} selected
+              </p>
+            </div>
+          </div>
+
+          {/* ── Additional Attachments ───────────────────────────────── */}
+          <div className="space-y-2">
+            <div>
+              <Label>Additional Attachments</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">External files not in the project register</p>
+            </div>
+            <input ref={fileInputRef} type="file" multiple className="hidden"
+              onChange={e => {
+                const files = Array.from(e.target.files ?? []);
+                setPendingFiles(prev => [...prev, ...files]);
+                e.target.value = "";
+              }} />
+            {pendingFiles.length > 0 && (
+              <div className="border rounded-lg divide-y overflow-hidden bg-background">
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 text-xs">
+                    <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate">{f.name}</span>
+                    <span className="text-muted-foreground shrink-0 text-[10px]">{(f.size / 1024).toFixed(0)} KB</span>
+                    <button type="button" onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                      className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-8"
+              onClick={() => fileInputRef.current?.click()}>
+              <Paperclip className="h-3.5 w-3.5" /> Attach Files
+            </Button>
+          </div>
+
+          <div>
+            <Label>Description</Label>
+            <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="Optional notes for recipients..." className="mt-1" rows={3} />
+          </div>
+        </div>
+
+        <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => create.mutate(form)} disabled={create.isPending || uploading || !form.subject}>
+            {create.isPending || uploading ? "Creating…" : "Create Transmittal"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
   projectId: number;
   prefillDocIds?: number[] | null;
@@ -1739,39 +2039,26 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
   const perms = usePermissions();
   const { isVisible: isColVis, toggle: toggleCol, reset: resetCols, visibleCount: trsColCount } =
     useColumnVisibility(`trs-${projectId}`, TRS_COLUMNS);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createKey, setCreateKey] = useState(0);
+  const [createInitialDocs, setCreateInitialDocs] = useState<number[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareForm, setShareForm] = useState({ expiresInDays: "30", password: "" });
   const [shareResult, setShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
   const [directionFilter, setDirectionFilter] = useState("all");
-  const [form, setForm] = useState({
-    subject: "", description: "", purpose: "for_information",
-    toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing",
-  });
-  const [createDocIds, setCreateDocIds] = useState<number[]>([]);
-  const [createDocSearch, setCreateDocSearch] = useState("");
 
-  const FORM_DEFAULT = { subject: "", description: "", purpose: "for_information", toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing" };
-
-  function resetCreate() {
-    setForm(FORM_DEFAULT);
-    setCreateDocIds([]);
-    setCreateDocSearch("");
-  }
-
-  function closeCreate() {
-    resetCreate();
-    setIsCreateOpen(false);
+  function openCreate(docIds: number[] = []) {
+    setCreateInitialDocs(docIds);
+    setCreateKey(k => k + 1);
+    setCreateOpen(true);
   }
 
   // Auto-open create dialog when Documents tab hands off pre-selected docs
   useEffect(() => {
     if (prefillDocIds && prefillDocIds.length > 0) {
-      resetCreate();
-      setCreateDocIds(prefillDocIds);
-      setIsCreateOpen(true);
+      openCreate(prefillDocIds);
       onPrefillConsumed?.();
     }
   }, [prefillDocIds]);
@@ -1823,24 +2110,6 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
       return r.json();
     },
     onSuccess: () => { refetchDetail(); toast({ title: "Item removed" }); },
-  });
-
-  const create = useMutation({
-    mutationFn: async (data: any) => {
-      const r = await fetch(`/api/projects/${projectId}/transmittals`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, documentIds: createDocIds }),
-      });
-      if (!r.ok) throw new Error("Failed to create transmittal");
-      return r.json();
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
-      closeCreate();
-      toast({ title: "Transmittal created" });
-    },
-    onError: () => toast({ title: "Failed to create transmittal", variant: "destructive" }),
   });
 
   const sendTransmittal = useMutation({
@@ -1927,7 +2196,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
           <p className="text-sm text-muted-foreground">{allTransmittals.length} transmittal(s) in this project</p>
         </div>
         {perms.canCreateTransmittal && (
-          <Button onClick={() => { resetCreate(); setIsCreateOpen(true); }} className="gap-2">
+          <Button onClick={() => openCreate()} className="gap-2">
             <Plus className="h-4 w-4" /> New Transmittal
           </Button>
         )}
@@ -1956,178 +2225,13 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
         </div>
       </div>
 
-      <Dialog
-        open={isCreateOpen}
-        onOpenChange={v => {
-          if (!v) { closeCreate(); } else { setIsCreateOpen(true); }
-        }}
-      >
-        <DialogContent className="sm:max-w-[580px] flex flex-col max-h-[90vh] p-0 gap-0">
-          <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
-            <DialogTitle>Create Transmittal</DialogTitle>
-          </DialogHeader>
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-            <div>
-              <Label>Subject *</Label>
-              <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Purpose</Label>
-                <Select value={form.purpose} onValueChange={v => setForm(f => ({ ...f, purpose: v }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
-                      <SelectItem key={v} value={v}>{l}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Due Date</Label>
-                <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <Label>To (Company / Organisation)</Label>
-              <Input value={form.toExternal} onChange={e => setForm(f => ({ ...f, toExternal: e.target.value }))} placeholder="Contractor, consultant, client name..." className="mt-1" />
-            </div>
-            <div>
-              <Label>External Recipients (emails)</Label>
-              <Input value={form.externalEmails} onChange={e => setForm(f => ({ ...f, externalEmails: e.target.value }))} placeholder="alice@firm.com, bob@client.com (comma separated)" className="mt-1" />
-              <p className="text-xs text-muted-foreground mt-1">Separate multiple email addresses with commas.</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Attach Documents from Project</Label>
-
-              {/* ── Selected ───────────────────────────────────────── */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                    Selected
-                    {createDocIds.length > 0 && (
-                      <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] font-bold leading-4">
-                        {createDocIds.length}
-                      </span>
-                    )}
-                  </span>
-                  {createDocIds.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setCreateDocIds([])}
-                      className="text-xs text-destructive hover:underline"
-                    >
-                      Clear all
-                    </button>
-                  )}
-                </div>
-                <div className="border rounded-lg overflow-hidden bg-background">
-                  {createDocIds.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-3 italic">
-                      No documents selected — add from the list below
-                    </p>
-                  ) : (
-                    <div className="max-h-32 overflow-y-auto divide-y">
-                      {createDocIds.map(id => {
-                        const d = documents.find((doc: any) => doc.id === id);
-                        if (!d) return null;
-                        return (
-                          <div key={id} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-primary/5 hover:bg-primary/10 transition-colors">
-                            <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
-                            <span className="flex-1 truncate font-medium">{d.title}</span>
-                            <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                            <button
-                              type="button"
-                              title="Remove"
-                              onClick={() => setCreateDocIds(prev => prev.filter(x => x !== id))}
-                              className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* ── Available ──────────────────────────────────────── */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-foreground">Available</span>
-                  {documents.length > 0 && createDocIds.length < documents.length && (
-                    <button
-                      type="button"
-                      onClick={() => setCreateDocIds(documents.map((d: any) => d.id))}
-                      className="text-xs text-primary hover:underline"
-                    >
-                      Add all
-                    </button>
-                  )}
-                </div>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="px-2.5 py-1.5 border-b bg-muted/30">
-                    <div className="relative">
-                      <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
-                      <Input
-                        value={createDocSearch}
-                        onChange={e => setCreateDocSearch(e.target.value)}
-                        placeholder="Search by number or title…"
-                        className="h-7 pl-6 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                      />
-                    </div>
-                  </div>
-                  <div className="max-h-40 overflow-y-auto divide-y">
-                    {documents.length === 0 ? (
-                      <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
-                    ) : (() => {
-                      const q = createDocSearch.toLowerCase();
-                      const available = documents.filter((d: any) =>
-                        !createDocIds.includes(d.id) && (
-                          !q || d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q)
-                        )
-                      );
-                      if (available.length === 0 && createDocSearch) {
-                        return <p className="text-xs text-muted-foreground text-center py-4">No documents match this search</p>;
-                      }
-                      if (available.length === 0) {
-                        return <p className="text-xs text-muted-foreground text-center py-4 italic">All project documents already added</p>;
-                      }
-                      return available.map((d: any) => (
-                        <button
-                          key={d.id}
-                          type="button"
-                          onClick={() => setCreateDocIds(prev => [...prev, d.id])}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left transition-colors"
-                        >
-                          <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
-                          <span className="flex-1 truncate">{d.title}</span>
-                          <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                          <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
-                        </button>
-                      ));
-                    })()}
-                  </div>
-                </div>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  {createDocIds.length} of {documents.length} document{documents.length !== 1 ? "s" : ""} selected
-                </p>
-              </div>
-            </div>
-            <div>
-              <Label>Description</Label>
-              <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Optional notes for recipients..." className="mt-1" rows={3} />
-            </div>
-          </div>
-          <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
-            <Button variant="outline" onClick={closeCreate}>Cancel</Button>
-            <Button onClick={() => create.mutate(form)} disabled={create.isPending || !form.subject}>
-              {create.isPending ? "Creating..." : "Create Transmittal"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CreateTransmittalDialog
+        key={createKey}
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        initialDocIds={createInitialDocs}
+        projectId={projectId}
+      />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
         <Table>
