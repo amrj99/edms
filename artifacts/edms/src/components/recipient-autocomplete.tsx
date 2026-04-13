@@ -11,6 +11,12 @@ export interface RecipientUser {
   role?: string;
 }
 
+// ── Helper: build a readable display label for a user ──────────────────────────
+function userLabel(u: RecipientUser): string {
+  const name = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+  return name || u.email;
+}
+
 // ── Shared chip style ──────────────────────────────────────────────────────────
 const chipCls = "inline-flex items-center gap-1 bg-primary/10 text-primary text-xs px-2 py-0.5 rounded-full font-medium shrink-0";
 
@@ -54,7 +60,7 @@ function UserDropdown({ filtered, selectedIds, onToggle }: {
               }
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate leading-none">{u.firstName} {u.lastName}</p>
+              <p className="text-sm font-medium truncate leading-none">{userLabel(u)}</p>
               <p className="text-xs text-muted-foreground truncate mt-0.5">
                 {u.email}
                 {u.organizationName && (
@@ -145,7 +151,7 @@ export function RecipientAutocomplete({
           <div className="flex items-center justify-between bg-muted/50 border rounded-md px-3 py-1.5 text-sm">
             <div className="flex items-center gap-2 min-w-0">
               <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="font-medium truncate">{selectedUser.firstName} {selectedUser.lastName}</span>
+              <span className="font-medium truncate">{userLabel(selectedUser)}</span>
               {selectedUser.organizationName && (
                 <span className="text-xs text-muted-foreground truncate">· {selectedUser.organizationName}</span>
               )}
@@ -195,7 +201,7 @@ export function RecipientAutocomplete({
       >
         {selectedUsers.map(u => (
           <span key={u.id} className={chipCls}>
-            {u.firstName} {u.lastName}
+            {userLabel(u)}
             {u.organizationName && (
               <span className="text-primary/60 text-[10px]">({u.organizationName})</span>
             )}
@@ -348,7 +354,7 @@ export function EmailChipInput({
                   {u.firstName?.[0] ?? ""}{u.lastName?.[0] ?? u.email?.[0] ?? "?"}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate leading-none">{u.firstName} {u.lastName}</p>
+                  <p className="text-sm font-medium truncate leading-none">{userLabel(u)}</p>
                   <p className="text-xs text-muted-foreground truncate mt-0.5">{u.email}</p>
                 </div>
               </button>
