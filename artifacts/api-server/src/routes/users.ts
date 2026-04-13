@@ -155,9 +155,11 @@ router.get("/:id", requireAuth, async (req, res) => {
   }
 
   let orgName: string | undefined;
+  let orgType: string | undefined;
   if (user.organizationId) {
     const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
     orgName = orgs[0]?.name;
+    orgType = orgs[0]?.type;
   }
 
   if (limitedProfile) {
@@ -186,6 +188,7 @@ router.get("/:id", requireAuth, async (req, res) => {
     role: user.role,
     organizationId: user.organizationId,
     organizationName: orgName,
+    organizationType: orgType,
     isActive: user.isActive,
     createdAt: user.createdAt,
     department: user.department,

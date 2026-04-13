@@ -18,6 +18,23 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 
+const ORG_TYPES = ["client", "consultant", "contractor", "subcontractor"] as const;
+type OrgType = typeof ORG_TYPES[number];
+
+const ORG_TYPE_LABELS: Record<OrgType, string> = {
+  client: "Client",
+  consultant: "Consultant",
+  contractor: "Contractor",
+  subcontractor: "Subcontractor",
+};
+
+const ORG_TYPE_COLORS: Record<OrgType, string> = {
+  client:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  consultant:   "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+  contractor:   "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  subcontractor:"bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+};
+
 const ALL_ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -66,6 +83,7 @@ export default function UsersPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [orgSearchQ, setOrgSearchQ] = useState("");
+  const [orgTypeFilter, setOrgTypeFilter] = useState<OrgType | "all">("all");
   const [orgSort, setOrgSort] = useState<"alpha" | "count">("alpha");
   const [addOpen, setAddOpen] = useState(false);
   const [editRoleOpen, setEditRoleOpen] = useState(false);
@@ -214,16 +232,16 @@ export default function UsersPage() {
 
       {/* LEFT: Org filter sidebar */}
       {isSysAdmin && (
-        <div className="hidden md:flex w-60 shrink-0 border-r bg-muted/30 flex-col">
+        <div className="hidden md:flex w-64 shrink-0 border-r bg-muted/30 flex-col">
 
-          {/* Sticky header + search */}
+          {/* Sticky header + controls */}
           <div className="shrink-0 border-b bg-muted/30">
+            {/* Title + sort toggle */}
             <div className="flex items-center justify-between px-3 pt-3 pb-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Organizations</p>
-              {/* Sort toggle */}
               <button
                 onClick={() => setOrgSort(s => s === "alpha" ? "count" : "alpha")}
-                title={orgSort === "alpha" ? "Sorted A–Z, click to sort by user count" : "Sorted by user count, click to sort A–Z"}
+                title={orgSort === "alpha" ? "Sorted A–Z — click for most users first" : "Sorted by user count — click for A–Z"}
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 {orgSort === "alpha" ? (
@@ -239,30 +257,58 @@ export default function UsersPage() {
                 )}
               </button>
             </div>
+
             {/* Search input */}
             <div className="relative px-2 pb-2">
               <Search className="absolute left-4 top-2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <Input
                 value={orgSearchQ}
                 onChange={e => setOrgSearchQ(e.target.value)}
-                placeholder="Search…"
+                placeholder="Search organizations…"
                 className="h-7 pl-7 pr-6 text-xs bg-background"
               />
               {orgSearchQ && (
-                <button
-                  onClick={() => setOrgSearchQ("")}
-                  className="absolute right-4 top-2 text-muted-foreground hover:text-foreground"
-                >
+                <button onClick={() => setOrgSearchQ("")} className="absolute right-4 top-2 text-muted-foreground hover:text-foreground">
                   <X className="h-3 w-3" />
                 </button>
               )}
+            </div>
+
+            {/* Type filter chips */}
+            <div className="px-2 pb-2.5 flex flex-wrap gap-1">
+              <button
+                onClick={() => setOrgTypeFilter("all")}
+                className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors border ${
+                  orgTypeFilter === "all"
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                }`}
+              >
+                All
+              </button>
+              {ORG_TYPES.map(t => {
+                const cnt = organizations.filter((o: any) => o.type === t).length;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setOrgTypeFilter(prev => prev === t ? "all" : t)}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors border ${
+                      orgTypeFilter === t
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
+                    }`}
+                  >
+                    {ORG_TYPE_LABELS[t]} {cnt > 0 ? `·${cnt}` : ""}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           <ScrollArea className="flex-1">
             <div className="p-2 space-y-0.5">
-              {/* "All" entry — always shown, hidden only when a search query filters it out */}
-              {!orgSearchQ && (
+              {/* "All" entry — hidden when any filter is active */}
+              {!orgSearchQ && orgTypeFilter === "all" && (
                 <button
                   onClick={() => setSelectedOrgId("all")}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
@@ -280,40 +326,61 @@ export default function UsersPage() {
                   </span>
                 </button>
               )}
-              {[...organizations]
-                .filter((org: any) =>
-                  !orgSearchQ || org.name.toLowerCase().includes(orgSearchQ.toLowerCase())
-                )
-                .sort((a: any, b: any) =>
-                  orgSort === "alpha"
-                    ? a.name.localeCompare(b.name)
-                    : (orgUserCounts[b.id] ?? 0) - (orgUserCounts[a.id] ?? 0)
-                )
-                .map((org: any) => (
-                  <button
-                    key={org.id}
-                    onClick={() => setSelectedOrgId(org.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
-                      selectedOrgId === org.id
-                        ? "bg-primary text-primary-foreground font-medium shadow-sm"
-                        : "hover:bg-accent"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <Building2 className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{org.name}</span>
-                    </span>
-                    <span className={`text-xs shrink-0 ${selectedOrgId === org.id ? "opacity-80" : "text-muted-foreground"}`}>
-                      {orgUserCounts[org.id] ?? 0}
-                    </span>
-                  </button>
-                ))
-              }
-              {orgSearchQ && organizations.filter((o: any) =>
-                o.name.toLowerCase().includes(orgSearchQ.toLowerCase())
-              ).length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-4">No organizations match</p>
-              )}
+
+              {(() => {
+                const visible = [...organizations]
+                  .filter((org: any) =>
+                    (!orgSearchQ || org.name.toLowerCase().includes(orgSearchQ.toLowerCase())) &&
+                    (orgTypeFilter === "all" || org.type === orgTypeFilter)
+                  )
+                  .sort((a: any, b: any) =>
+                    orgSort === "alpha"
+                      ? a.name.localeCompare(b.name)
+                      : (orgUserCounts[b.id] ?? 0) - (orgUserCounts[a.id] ?? 0)
+                  );
+
+                if (visible.length === 0) {
+                  return (
+                    <p className="text-xs text-muted-foreground text-center py-6">
+                      No organizations match
+                    </p>
+                  );
+                }
+
+                return visible.map((org: any) => {
+                  const isSelected = selectedOrgId === org.id;
+                  const typeLabel = ORG_TYPE_LABELS[org.type as OrgType];
+                  const typeColor = ORG_TYPE_COLORS[org.type as OrgType];
+                  return (
+                    <button
+                      key={org.id}
+                      onClick={() => setSelectedOrgId(org.id)}
+                      className={`w-full flex flex-col px-3 py-2 rounded-md text-sm transition-colors text-left ${
+                        isSelected
+                          ? "bg-primary text-primary-foreground font-medium shadow-sm"
+                          : "hover:bg-accent"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full gap-2">
+                        <span className="flex items-center gap-2 min-w-0">
+                          <Building2 className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate font-medium">{org.name}</span>
+                        </span>
+                        <span className={`text-xs shrink-0 ${isSelected ? "opacity-80" : "text-muted-foreground"}`}>
+                          {orgUserCounts[org.id] ?? 0}
+                        </span>
+                      </div>
+                      {typeLabel && (
+                        <span className={`mt-0.5 ml-5.5 self-start inline-flex items-center px-1.5 py-0 rounded-full text-[10px] font-medium ${
+                          isSelected ? "bg-white/20 text-white" : typeColor
+                        }`}>
+                          {typeLabel}
+                        </span>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
             </div>
           </ScrollArea>
         </div>
@@ -530,11 +597,20 @@ export default function UsersPage() {
                 </div>
 
                 {/* Organization */}
-                <div className="rounded-lg border bg-muted/30 p-3 space-y-1">
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Organization</p>
-                  <div className="flex items-center gap-2 text-sm">
-                    <Building2 className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{detailData.organizationName ?? "—"}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm min-w-0">
+                      <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="font-medium truncate">{detailData.organizationName ?? "—"}</span>
+                    </div>
+                    {detailData.organizationType && ORG_TYPE_LABELS[detailData.organizationType as OrgType] && (
+                      <span className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                        ORG_TYPE_COLORS[detailData.organizationType as OrgType]
+                      }`}>
+                        {ORG_TYPE_LABELS[detailData.organizationType as OrgType]}
+                      </span>
+                    )}
                   </div>
                 </div>
 
