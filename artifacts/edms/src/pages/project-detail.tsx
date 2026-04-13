@@ -1746,9 +1746,12 @@ function CreateTransmittalDialog({
 
   const [form, setForm] = useState({
     subject: "", description: "", purpose: "for_information",
-    toExternal: "", externalEmails: "", dueDate: "", direction: "outgoing",
+    toExternal: "", dueDate: "", direction: "outgoing",
   });
+  const [toEmails, setToEmails] = useState("");
+  const [ccEmails, setCcEmails] = useState("");
   const [docIds, setDocIds] = useState<number[]>(initialDocIds);
+  const [docPickerOpen, setDocPickerOpen] = useState(false);
   const [docSearch, setDocSearch] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -1761,20 +1764,17 @@ function CreateTransmittalDialog({
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
   const userList: RecipientUser[] = (usersRaw?.users ?? []).map((u: any) => ({
-    id: u.id,
-    firstName: u.firstName ?? "",
-    lastName: u.lastName ?? "",
-    email: u.email,
-    organizationName: u.organizationName,
-    role: u.role,
+    id: u.id, firstName: u.firstName ?? "", lastName: u.lastName ?? "",
+    email: u.email, organizationName: u.organizationName, role: u.role,
   }));
 
-  const available = documents.filter((d: any) => {
-    if (docIds.includes(d.id)) return false;
-    if (!docSearch) return true;
-    const q = docSearch.toLowerCase();
-    return d.documentNumber?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q);
-  });
+  const pickerDocs = documents.filter(d =>
+    !docIds.includes(d.id) && (
+      !docSearch ||
+      d.documentNumber?.toLowerCase().includes(docSearch.toLowerCase()) ||
+      d.title?.toLowerCase().includes(docSearch.toLowerCase())
+    )
+  );
 
   async function uploadAttachments(transmittalId: number) {
     const orgId = user?.organizationId;
@@ -1783,10 +1783,7 @@ function CreateTransmittalDialog({
         const token = localStorage.getItem("edms_token");
         const urlRes = await fetch("/api/storage/uploads/request-url", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { "Authorization": `Bearer ${token}` } : {}),
-          },
+          headers: { "Content-Type": "application/json", ...(token ? { "Authorization": `Bearer ${token}` } : {}) },
           body: JSON.stringify({ orgId, projectId, fileType: "attachment", filename: file.name }),
         });
         if (!urlRes.ok) continue;
@@ -1808,16 +1805,21 @@ function CreateTransmittalDialog({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileName: file.name, fileUrl, fileSize: file.size }),
         });
-      } catch { /* non-fatal — log but continue */ }
+      } catch { /* non-fatal */ }
     }
   }
 
   const create = useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async () => {
       const r = await fetch(`/api/projects/${projectId}/transmittals`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, documentIds: docIds }),
+        body: JSON.stringify({
+          ...form,
+          externalEmails: toEmails || undefined,
+          ccEmails: ccEmails || undefined,
+          documentIds: docIds,
+        }),
       });
       if (!r.ok) throw new Error("Failed to create transmittal");
       return r.json();
@@ -1835,196 +1837,220 @@ function CreateTransmittalDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
-      <DialogContent className="sm:max-w-[600px] flex flex-col max-h-[90vh] p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
-          <DialogTitle>Create Transmittal</DialogTitle>
-        </DialogHeader>
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-
-          <div>
-            <Label>Subject *</Label>
-            <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Purpose</Label>
-              <Select value={form.purpose} onValueChange={v => setForm(f => ({ ...f, purpose: v }))}>
-                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
-                    <SelectItem key={v} value={v}>{l}</SelectItem>
+    <>
+      {/* ── Document picker popup ───────────────────────────────────── */}
+      <Dialog open={docPickerOpen} onOpenChange={v => { setDocPickerOpen(v); if (!v) setDocSearch(""); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-4 w-4" /> Attach Project Document
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <Input
+              placeholder="Search by title or document number…"
+              value={docSearch}
+              onChange={e => setDocSearch(e.target.value)}
+              className="h-9"
+              autoFocus
+            />
+            <div className="h-60 overflow-y-auto border rounded-lg">
+              {pickerDocs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full py-8 text-muted-foreground">
+                  <FileText className="h-8 w-8 mb-2 opacity-30" />
+                  <p className="text-sm">{docSearch ? "No matching documents" : (documents.length === 0 ? "No documents in this project" : "All documents already attached")}</p>
+                </div>
+              ) : (
+                <div className="p-1">
+                  {pickerDocs.map((doc: any) => (
+                    <button
+                      key={doc.id}
+                      type="button"
+                      onClick={() => {
+                        setDocIds(prev => [...prev, doc.id]);
+                        setDocPickerOpen(false);
+                        setDocSearch("");
+                      }}
+                      className="w-full flex items-start gap-3 px-3 py-2 rounded-md hover:bg-accent text-left transition-colors"
+                    >
+                      <FileText className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{doc.title}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{doc.documentNumber} · Rev {doc.revision ?? "01"}</p>
+                      </div>
+                      <Plus className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                    </button>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Due Date</Label>
-              <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
+                </div>
+              )}
             </div>
           </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDocPickerOpen(false); setDocSearch(""); }}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          <div>
-            <Label>To (Company / Organisation)</Label>
-            <Input value={form.toExternal} onChange={e => setForm(f => ({ ...f, toExternal: e.target.value }))} placeholder="Contractor, consultant, client name..." className="mt-1" />
-          </div>
+      {/* ── Main transmittal form ───────────────────────────────────── */}
+      <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
+        <DialogContent className="sm:max-w-[620px] flex flex-col max-h-[90vh] p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
+            <DialogTitle>Create Transmittal</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 
-          <div>
-            <Label>External Recipients (emails)</Label>
-            <div className="mt-1">
-              <EmailChipInput
-                users={userList}
-                value={form.externalEmails}
-                onChange={v => setForm(f => ({ ...f, externalEmails: v }))}
-                placeholder="Type name or email to search…"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Type to search system users, or enter any email address and press comma / Enter.</p>
-          </div>
-
-          {/* ── Transmittal Documents ────────────────────────────────── */}
-          <div className="space-y-2">
             <div>
-              <Label>Transmittal Documents</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">Official project documents from the register</p>
+              <Label>Subject *</Label>
+              <Input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="Transmittal subject" className="mt-1" />
             </div>
 
-            {/* Selected */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  Selected
-                  {docIds.length > 0 && (
-                    <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] font-bold leading-4">
-                      {docIds.length}
-                    </span>
-                  )}
-                </span>
-                {docIds.length > 0 && (
-                  <button type="button" onClick={() => setDocIds([])} className="text-xs text-destructive hover:underline">
-                    Clear all
-                  </button>
-                )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Purpose</Label>
+                <Select value={form.purpose} onValueChange={v => setForm(f => ({ ...f, purpose: v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(TRS_PURPOSE_LABELS).map(([v, l]) => (
+                      <SelectItem key={v} value={v}>{l}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="border rounded-lg overflow-hidden bg-background">
-                {docIds.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-3 italic">
-                    No documents selected — add from the list below
-                  </p>
-                ) : (
-                  <div className="max-h-32 overflow-y-auto divide-y">
-                    {docIds.map(id => {
-                      const d = documents.find((doc: any) => doc.id === id);
-                      if (!d) return null;
-                      return (
-                        <div key={id} className="flex items-center gap-2 px-3 py-1.5 text-xs bg-primary/5 hover:bg-primary/10 transition-colors">
-                          <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
-                          <span className="flex-1 truncate font-medium">{d.title}</span>
-                          <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                          <button type="button" title="Remove"
-                            onClick={() => setDocIds(prev => prev.filter(x => x !== id))}
-                            className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
-                            <X className="h-3.5 w-3.5" />
-                          </button>
+              <div>
+                <Label>Due Date</Label>
+                <Input type="date" value={form.dueDate} onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))} className="mt-1" />
+              </div>
+            </div>
+
+            <div>
+              <Label>To (Company / Organisation)</Label>
+              <Input value={form.toExternal} onChange={e => setForm(f => ({ ...f, toExternal: e.target.value }))} placeholder="e.g. ABC Contractors, Client Name…" className="mt-1" />
+            </div>
+
+            <div>
+              <Label>To (Email Recipients)</Label>
+              <div className="mt-1">
+                <EmailChipInput
+                  users={userList}
+                  value={toEmails}
+                  onChange={setToEmails}
+                  placeholder="Type name or email and press Enter…"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label>CC</Label>
+              <div className="mt-1">
+                <EmailChipInput
+                  users={userList}
+                  value={ccEmails}
+                  onChange={setCcEmails}
+                  placeholder="Type name or email and press Enter…"
+                />
+              </div>
+            </div>
+
+            {/* ── Project Documents ───────────────────────────────────── */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <Label>Project Documents</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Official documents from the project register</p>
+                </div>
+                <Button
+                  type="button" variant="outline" size="sm"
+                  className="h-7 text-xs gap-1.5 shrink-0"
+                  onClick={() => { setDocSearch(""); setDocPickerOpen(true); }}
+                >
+                  <Link2 className="h-3 w-3" /> Attach Document
+                </Button>
+              </div>
+              {docIds.length > 0 ? (
+                <div className="border rounded-lg divide-y overflow-hidden bg-background">
+                  {docIds.map(id => {
+                    const d = documents.find((doc: any) => doc.id === id);
+                    if (!d) return null;
+                    return (
+                      <div key={id} className="flex items-center gap-2 px-3 py-2 text-xs">
+                        <FileText className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium block truncate">{d.title}</span>
+                          <span className="text-muted-foreground font-mono text-[10px]">{d.documentNumber} · Rev {d.revision ?? "01"}</span>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                        <button type="button" title="Remove"
+                          onClick={() => setDocIds(prev => prev.filter(x => x !== id))}
+                          className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setDocSearch(""); setDocPickerOpen(true); }}
+                  className="w-full border border-dashed rounded-lg px-4 py-5 flex flex-col items-center gap-1.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+                >
+                  <FileText className="h-6 w-6 opacity-40" />
+                  <span className="text-xs">Click to attach project documents</span>
+                </button>
+              )}
             </div>
 
-            {/* Available */}
+            {/* ── Additional Attachments ──────────────────────────────── */}
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-foreground">Available</span>
-                {documents.length > 0 && docIds.length < documents.length && (
-                  <button type="button" onClick={() => setDocIds(documents.map((d: any) => d.id))}
-                    className="text-xs text-primary hover:underline">Add all</button>
-                )}
-              </div>
-              <div className="border rounded-lg overflow-hidden">
-                <div className="px-2.5 py-1.5 border-b bg-muted/30">
-                  <div className="relative">
-                    <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
-                    <Input value={docSearch} onChange={e => setDocSearch(e.target.value)}
-                      placeholder="Search by number or title…"
-                      className="h-7 pl-6 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:ring-offset-0" />
-                  </div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <Label>Additional Attachments</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">External files not in the project register</p>
                 </div>
-                <div className="max-h-40 overflow-y-auto divide-y">
-                  {documents.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No documents in this project yet</p>
-                  ) : available.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4 italic">
-                      {docSearch ? "No documents match this search" : "All project documents already added"}
-                    </p>
-                  ) : available.map((d: any) => (
-                    <button key={d.id} type="button" onClick={() => setDocIds(prev => [...prev, d.id])}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/60 text-left transition-colors">
-                      <span className="font-mono text-muted-foreground shrink-0 text-[10px]">{d.documentNumber}</span>
-                      <span className="flex-1 truncate">{d.title}</span>
-                      <span className="text-muted-foreground shrink-0">Rev {d.revision ?? "01"}</span>
-                      <Plus className="h-3.5 w-3.5 text-primary shrink-0" />
-                    </button>
+              </div>
+              <input ref={fileInputRef} type="file" multiple className="hidden"
+                onChange={e => {
+                  const files = Array.from(e.target.files ?? []);
+                  setPendingFiles(prev => [...prev, ...files]);
+                  e.target.value = "";
+                }} />
+              {pendingFiles.length > 0 && (
+                <div className="border rounded-lg divide-y overflow-hidden bg-background mb-2">
+                  {pendingFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 px-3 py-2 text-xs">
+                      <Paperclip className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="flex-1 truncate">{f.name}</span>
+                      <span className="text-muted-foreground shrink-0 text-[10px]">{(f.size / 1024).toFixed(0)} KB</span>
+                      <button type="button" onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                        className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ))}
                 </div>
-              </div>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                {docIds.length} of {documents.length} document{documents.length !== 1 ? "s" : ""} selected
-              </p>
+              )}
+              <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-8"
+                onClick={() => fileInputRef.current?.click()}>
+                <Paperclip className="h-3.5 w-3.5" /> Attach Files
+              </Button>
             </div>
-          </div>
 
-          {/* ── Additional Attachments ───────────────────────────────── */}
-          <div className="space-y-2">
             <div>
-              <Label>Additional Attachments</Label>
-              <p className="text-xs text-muted-foreground mt-0.5">External files not in the project register</p>
+              <Label>Description</Label>
+              <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                placeholder="Optional notes for recipients..." className="mt-1" rows={3} />
             </div>
-            <input ref={fileInputRef} type="file" multiple className="hidden"
-              onChange={e => {
-                const files = Array.from(e.target.files ?? []);
-                setPendingFiles(prev => [...prev, ...files]);
-                e.target.value = "";
-              }} />
-            {pendingFiles.length > 0 && (
-              <div className="border rounded-lg divide-y overflow-hidden bg-background">
-                {pendingFiles.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 px-3 py-2 text-xs">
-                    <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span className="flex-1 truncate">{f.name}</span>
-                    <span className="text-muted-foreground shrink-0 text-[10px]">{(f.size / 1024).toFixed(0)} KB</span>
-                    <button type="button" onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
-                      className="shrink-0 text-muted-foreground hover:text-destructive transition-colors ml-1">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-8"
-              onClick={() => fileInputRef.current?.click()}>
-              <Paperclip className="h-3.5 w-3.5" /> Attach Files
+
+          </div>
+
+          <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => create.mutate()} disabled={create.isPending || uploading || !form.subject}>
+              {create.isPending || uploading ? "Creating…" : "Create Transmittal"}
             </Button>
-          </div>
-
-          <div>
-            <Label>Description</Label>
-            <Textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="Optional notes for recipients..." className="mt-1" rows={3} />
-          </div>
-        </div>
-
-        <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => create.mutate(form)} disabled={create.isPending || uploading || !form.subject}>
-            {create.isPending || uploading ? "Creating…" : "Create Transmittal"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -2617,7 +2643,7 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
 }
 
 // ─── Correspondence Tab ───────────────────────────────────────────────────────
-const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
+const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
   rfi: "RFI", submittal: "Submittal", ncr: "NCR", technical_query: "TQ",
   transmittal: "Transmittal", letter: "Letter", memo: "Memo",

@@ -36,6 +36,8 @@ export const transmittalsTable = pgTable("transmittals", {
   approvedById: integer("approved_by_id").references(() => usersTable.id),
   approvalComment: text("approval_comment"),
   approvedAt: timestamp("approved_at"),
+  externalEmails: text("external_emails"),
+  ccEmails: text("cc_emails"),
   direction: text("direction"),
   partyType: text("party_type"),
   reviewCode: text("review_code"),

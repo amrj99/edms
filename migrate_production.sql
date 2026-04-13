@@ -764,5 +764,9 @@ CREATE TABLE IF NOT EXISTS skill_executions (
   created_at    timestamp NOT NULL DEFAULT now()
 );
 
--- ─── SECTION 4: DONE ──────────────────────────────────────────────────────────
+-- ─── SECTION 5: Transmittal email fields ──────────────────────────────────────
+ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS external_emails text;
+ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS cc_emails text;
+
+-- ─── SECTION 5: DONE ──────────────────────────────────────────────────────────
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;

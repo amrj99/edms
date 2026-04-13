@@ -25,7 +25,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 
-const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "transmittal", "letter", "memo", "email", "internal", "notice"];
+const CORR_TYPES = ["rfi", "submittal", "ncr", "technical_query", "letter", "memo", "email", "internal", "notice"];
 const CORR_TYPE_LABELS: Record<string, string> = {
   rfi: "RFI", submittal: "Submittal", ncr: "NCR", technical_query: "TQ",
   transmittal: "Transmittal", letter: "Letter", memo: "Memo",

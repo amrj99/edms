@@ -123,7 +123,7 @@ router.get("/:id", async (req, res) => {
 // Create transmittal
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const projectId = parseInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, documentIds, direction, partyType, reviewCode } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
   // Generate transmittal number
@@ -146,6 +146,8 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     purpose: purpose || "for_information",
     dueDate: dueDate ? new Date(dueDate) : undefined,
     toExternal,
+    externalEmails: externalEmails ?? null,
+    ccEmails: ccEmails ?? null,
     organizationId: req.user!.organizationId ?? null,
     projectId,
     createdById: req.user!.id,
@@ -190,7 +192,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
   const id = parseInt(req.params.id);
   const projectId = parseInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, status, direction, partyType, reviewCode } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode } = req.body;
 
   const [existing] = await db.select().from(transmittalsTable)
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
@@ -204,7 +206,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   }
 
   const [transmittal] = await db.update(transmittalsTable)
-    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, status: resolvedStatus, direction, partyType, reviewCode, updatedAt: new Date() })
+    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, externalEmails: externalEmails ?? undefined, ccEmails: ccEmails ?? undefined, status: resolvedStatus, direction, partyType, reviewCode, updatedAt: new Date() })
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
     .returning();
 
