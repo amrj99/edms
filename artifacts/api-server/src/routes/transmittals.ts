@@ -305,12 +305,13 @@ router.post("/:id/acknowledge", async (req, res) => {
   res.json(transmittal);
 });
 
-// Complete review — compute rolled-up outcome and auto-create response draft
+// Complete review — compute rolled-up outcome, apply document statuses, create response draft
 router.post("/:id/complete-review", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const projectId = parseInt(req.params.projectId);
   const actor = req.user as any;
   const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
+  const { reviewComment } = req.body;
 
   const [transmittal] = await db.select().from(transmittalsTable)
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
@@ -346,11 +347,6 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
     return (codePriority[code] ?? 0) > (codePriority[worst] ?? 0) ? code : worst;
   }, "A");
 
-  // Update the transmittal with the review outcome
-  await db.update(transmittalsTable)
-    .set({ reviewOutcome: worstCode, updatedAt: new Date() })
-    .where(eq(transmittalsTable.id, id));
-
   const outcomeLabels: Record<string, string> = {
     A: "Approved",
     B: "Approved with Comments",
@@ -358,10 +354,43 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
     D: "Rejected",
   };
 
+  const REVIEW_CODE_TO_DECISION: Record<string, ReviewDecision> = {
+    A: "approved",
+    B: "approved_with_comments",
+    C: "for_revision",
+    D: "rejected",
+  };
+
+  // Apply document status decisions for each item
+  await Promise.all(
+    items
+      .filter(i => i.reviewCode && REVIEW_CODE_TO_DECISION[i.reviewCode])
+      .map(i =>
+        applyDocumentReviewDecision({
+          documentId: i.documentId,
+          decision: REVIEW_CODE_TO_DECISION[i.reviewCode!],
+          reviewerId: actor.id,
+          reviewerName: actorName,
+          comment: reviewComment
+            ? `${actorName}: ${reviewComment}`
+            : `Auto-updated from transmittal ${transmittal.transmittalNumber} — review code ${i.reviewCode} (${outcomeLabels[i.reviewCode!] ?? i.reviewCode})`,
+        })
+      )
+  );
+
+  // Update the transmittal with the review outcome
+  await db.update(transmittalsTable)
+    .set({ reviewOutcome: worstCode, status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
+    .where(eq(transmittalsTable.id, id));
+
+  const historyDesc = reviewComment
+    ? `Review completed — overall outcome: ${worstCode} (${outcomeLabels[worstCode] ?? worstCode}). Reviewer notes: ${reviewComment}`
+    : `Review completed — overall outcome: ${worstCode} (${outcomeLabels[worstCode] ?? worstCode})`;
+
   await db.insert(transmittalHistoryTable).values({
     transmittalId: id,
     eventType: "review_completed",
-    description: `Review completed — overall outcome: ${worstCode} (${outcomeLabels[worstCode] ?? worstCode})`,
+    description: historyDesc,
     performedByName: actorName,
   });
 
@@ -375,21 +404,34 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
     .from(projectsTable).where(eq(projectsTable.id, projectId));
   const responseNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
 
+  // Build response description — include resubmission instruction for C/D
+  const needsResubmission = worstCode === "C" || worstCode === "D";
+  const responseDesc = [
+    `Response to ${transmittal.transmittalNumber}.`,
+    `Overall review outcome: ${worstCode} — ${outcomeLabels[worstCode] ?? worstCode}.`,
+    reviewComment ? `Reviewer notes: ${reviewComment}` : null,
+    needsResubmission
+      ? "ACTION REQUIRED: One or more documents require revision and resubmission. Please attach the revised documents and re-send this transmittal."
+      : null,
+  ].filter(Boolean).join(" ");
+
   const [response] = await db.insert(transmittalsTable).values({
     transmittalNumber: responseNumber,
     subject: `Re: ${transmittal.subject}`,
-    description: `Response to ${transmittal.transmittalNumber}. Overall review outcome: ${worstCode} — ${outcomeLabels[worstCode] ?? worstCode}.`,
+    description: responseDesc,
     purpose: transmittal.purpose,
     organizationId: transmittal.organizationId,
     projectId,
     createdById: actor.id,
     toExternal: transmittal.toExternal ?? undefined,
+    externalEmails: transmittal.externalEmails ?? undefined,
+    ccEmails: transmittal.ccEmails ?? undefined,
     direction: "outgoing",
     status: "draft",
     responseToTransmittalId: id,
   }).returning();
 
-  // Copy item document IDs to the response transmittal
+  // Copy item document IDs (with codes) to the response transmittal
   if (items.length > 0) {
     await db.insert(transmittalItemsTable).values(
       items.map(i => ({
@@ -405,6 +447,14 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
     eventType: "created",
     description: `Response transmittal created automatically from review of ${transmittal.transmittalNumber}`,
     performedByName: actorName,
+  });
+
+  await createAuditLog({
+    userId: actor.id,
+    action: "review_completed",
+    entityType: "transmittal",
+    entityId: id,
+    details: { outcome: worstCode, responseTrsNumber: responseNumber, comment: reviewComment ?? null },
   });
 
   res.json({ reviewOutcome: worstCode, responseTrs: response });

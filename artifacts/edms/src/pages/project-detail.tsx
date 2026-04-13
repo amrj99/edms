@@ -9,6 +9,7 @@ import {
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
   LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
+  AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -2160,16 +2161,29 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
     },
   });
 
+  const [reviewComment, setReviewComment] = useState("");
+
   const completeReview = useMutation({
     mutationFn: async (id: number) => {
-      const r = await fetch(`/api/projects/${projectId}/transmittals/${id}/complete-review`, { method: "POST" });
+      const r = await fetch(`/api/projects/${projectId}/transmittals/${id}/complete-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewComment: reviewComment.trim() || undefined }),
+      });
       if (!r.ok) { const e = await r.json(); throw new Error(e.error ?? "Failed"); }
       return r.json();
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["transmittals", projectId] });
       qc.invalidateQueries({ queryKey: ["transmittal-detail", selected?.id] });
-      toast({ title: `Review completed — Outcome: ${data.reviewOutcome}`, description: `Response draft ${data.responseTrs?.transmittalNumber} created` });
+      setReviewComment("");
+      const outcomeLabel: Record<string, string> = {
+        A: "Approved ✓", B: "Approved with Comments", C: "Revise & Resubmit", D: "Rejected",
+      };
+      toast({
+        title: `Review submitted — ${outcomeLabel[data.reviewOutcome] ?? data.reviewOutcome}`,
+        description: `Response draft ${data.responseTrs?.transmittalNumber} created automatically`,
+      });
     },
     onError: (e: any) => toast({ title: "Could not complete review", description: e.message, variant: "destructive" }),
   });
@@ -2384,18 +2398,37 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
                 )}
               </div>
 
-              {/* External Recipients */}
-              <div className="border rounded-lg p-3 bg-muted/30 space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">External Recipients</p>
-                {selected.toExternal ? (
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
-                      <Users className="h-3 w-3 text-primary" />
-                    </div>
+              {/* Recipients */}
+              <div className="border rounded-lg p-3 bg-muted/30 space-y-2.5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recipients</p>
+                {selected.toExternal && (
+                  <div className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-6 shrink-0 mt-0.5">To</span>
                     <span className="font-medium">{selected.toExternal}</span>
                   </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">No external company specified</p>
+                )}
+                {detailData?.externalEmails && (
+                  <div className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-6 shrink-0 mt-0.5">To</span>
+                    <div className="flex flex-wrap gap-1">
+                      {detailData.externalEmails.split(",").map((e: string) => e.trim()).filter(Boolean).map((email: string) => (
+                        <span key={email} className="inline-flex items-center px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-medium">{email}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {detailData?.ccEmails && (
+                  <div className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-6 shrink-0 mt-0.5">CC</span>
+                    <div className="flex flex-wrap gap-1">
+                      {detailData.ccEmails.split(",").map((e: string) => e.trim()).filter(Boolean).map((email: string) => (
+                        <span key={email} className="inline-flex items-center px-1.5 py-0.5 rounded bg-muted text-muted-foreground text-[10px] font-medium">{email}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {!selected.toExternal && !detailData?.externalEmails && !detailData?.ccEmails && (
+                  <p className="text-xs text-muted-foreground">No recipients specified</p>
                 )}
               </div>
 
@@ -2478,6 +2511,20 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
                   </div>
                 )}
 
+                {/* Resubmission banner — shown when outcome is C or D and a response TRS exists */}
+                {(detailData?.reviewOutcome === "C" || detailData?.reviewOutcome === "D") && detailData?.responseTransmittalNumber && (
+                  <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3 space-y-1">
+                    <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      {detailData.reviewOutcome === "D" ? "Documents Rejected — Resubmission Required" : "Revise and Resubmit Required"}
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      Response draft <span className="font-mono font-medium">{detailData.responseTransmittalNumber}</span> has been created automatically.
+                      Attach the revised documents to that transmittal, then send it to the recipient.
+                    </p>
+                  </div>
+                )}
+
                 {/* Complete Review — only when all items have codes, no outcome set, no response yet */}
                 {(() => {
                   if (detailItems.length === 0) return null;
@@ -2490,28 +2537,41 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
                   const total = detailItems.length;
                   const allCoded = coded === total;
                   return (
-                    <div className={`mt-3 rounded-lg border p-3 space-y-2 ${allCoded ? "border-primary/30 bg-primary/5" : "border-border bg-muted/30"}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-semibold">
-                            {allCoded
-                              ? "All items reviewed — ready to complete"
-                              : `Review in progress — ${coded} of ${total} items coded`}
-                          </p>
-                          {!allCoded && (
-                            <p className="text-[11px] text-muted-foreground mt-0.5">Set review codes on all items to enable completion</p>
-                          )}
-                        </div>
-                        <Button
-                          size="sm"
-                          className="gap-1.5 shrink-0"
-                          disabled={!allCoded || completeReview.isPending}
-                          onClick={() => completeReview.mutate(selected.id)}
-                        >
-                          <ClipboardCheck className="h-3.5 w-3.5" />
-                          {completeReview.isPending ? "Processing…" : "Complete Review"}
-                        </Button>
+                    <div className={`mt-3 rounded-lg border p-3 space-y-3 ${allCoded ? "border-primary/30 bg-primary/5" : "border-border bg-muted/30"}`}>
+                      <div>
+                        <p className="text-xs font-semibold">
+                          {allCoded
+                            ? "All items reviewed — ready to submit"
+                            : `Review in progress — ${coded} of ${total} items coded`}
+                        </p>
+                        {!allCoded && (
+                          <p className="text-[11px] text-muted-foreground mt-0.5">Set a review code on every document to enable submission</p>
+                        )}
                       </div>
+                      {allCoded && (
+                        <div>
+                          <Label className="text-xs">Reviewer Notes <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                          <Textarea
+                            value={reviewComment}
+                            onChange={e => setReviewComment(e.target.value)}
+                            placeholder="Add overall review comments, conditions, or instructions for the originator…"
+                            className="mt-1 text-xs resize-none"
+                            rows={3}
+                          />
+                        </div>
+                      )}
+                      <Button
+                        size="sm"
+                        className="gap-1.5 w-full"
+                        disabled={!allCoded || completeReview.isPending}
+                        onClick={() => completeReview.mutate(selected.id)}
+                      >
+                        <ClipboardCheck className="h-3.5 w-3.5" />
+                        {completeReview.isPending ? "Submitting Review…" : "Submit Review"}
+                      </Button>
+                      <p className="text-[10px] text-muted-foreground text-center">
+                        Submitting will update document statuses and create a response transmittal draft automatically.
+                      </p>
                     </div>
                   );
                 })()}
