@@ -1,4 +1,5 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { TermsGate } from "@/components/legal/TermsGate";
 import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -654,17 +655,34 @@ const TYPE_URL: Record<string, (r: any) => string> = {
 function GlobalSearch() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  const [focusIdx, setFocusIdx] = useState(-1);
   const [, navigate] = useLocation();
   const { t, isRtl } = useI18n();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data, isFetching } = useQuery({
-    queryKey: ["global-search", q],
+  // Debounce: fire query 400 ms after the user stops typing
+  const handleQChange = (val: string) => {
+    setQ(val);
+    setFocusIdx(-1);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!val.trim()) { setDebouncedQ(""); return; }
+    debounceRef.current = setTimeout(() => setDebouncedQ(val.trim()), 400);
+  };
+
+  // Clean up timer on unmount
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
+  const { data, isFetching, isError } = useQuery({
+    queryKey: ["global-search", debouncedQ],
     queryFn: async () => {
-      if (!q.trim()) return {};
-      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&type=all`);
+      const r = await fetch(`/api/search?q=${encodeURIComponent(debouncedQ)}&type=all`, { credentials: "include" });
+      if (!r.ok) throw new Error(`Search failed: ${r.status}`);
       return r.json();
     },
-    enabled: q.trim().length >= 2,
+    enabled: debouncedQ.length >= 2,
+    staleTime: 60_000,
+    retry: 0,
   });
 
   const results: any[] = [
@@ -674,7 +692,6 @@ function GlobalSearch() {
     ...(data?.meetings ?? []).map((m: any) => ({ ...m, _type: "meeting", _label: m.title || m.referenceNumber, _sub: m.referenceNumber, _projectName: m.project?.name })),
   ];
 
-  // Group results by type
   const grouped = Object.entries(
     results.reduce((acc: Record<string, any[]>, r) => {
       acc[r._type] = acc[r._type] ?? [];
@@ -684,10 +701,17 @@ function GlobalSearch() {
   );
 
   const handleSelect = (result: any) => {
-    setOpen(false);
-    setQ("");
+    closeSearch();
     const getUrl = TYPE_URL[result._type];
     if (getUrl) navigate(getUrl(result));
+  };
+
+  const closeSearch = () => {
+    setOpen(false);
+    setQ("");
+    setDebouncedQ("");
+    setFocusIdx(-1);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
   };
 
   // Ctrl+K / Cmd+K shortcut
@@ -698,6 +722,18 @@ function GlobalSearch() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Keyboard navigation inside the input
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { closeSearch(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setFocusIdx(i => Math.min(i + 1, results.length - 1)); }
+    if (e.key === "ArrowUp") { e.preventDefault(); setFocusIdx(i => Math.max(i - 1, -1)); }
+    if (e.key === "Enter" && focusIdx >= 0 && results[focusIdx]) { handleSelect(results[focusIdx]); }
+  };
+
+  // True while the user is still typing (debounce pending) or waiting for the response
+  const isSearching = q.trim().length >= 2 && (debouncedQ !== q.trim() || isFetching);
+  const hasQuery = debouncedQ.length >= 2;
 
   return (
     <>
@@ -710,29 +746,58 @@ function GlobalSearch() {
         <span className="hidden sm:block w-32 text-start">{t("globalSearchPlaceholder")}</span>
         <kbd className="hidden sm:block ms-auto font-mono text-xs bg-background/80 border rounded px-1 py-0.5">⌘K</kbd>
       </button>
+
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4" onClick={() => setOpen(false)} dir={isRtl ? "rtl" : "ltr"}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4" onClick={closeSearch} dir={isRtl ? "rtl" : "ltr"}>
           <div className="w-full max-w-xl bg-popover border shadow-xl rounded-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+
+            {/* ── Input bar ─────────────────────────────────────── */}
             <div className="flex items-center border-b px-3 gap-2">
               <Search className="h-4 w-4 text-muted-foreground shrink-0" />
               <input
                 autoFocus
                 className="flex-1 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
-                placeholder={t("globalSearchHint")}
+                placeholder="Search documents, projects, correspondence…"
                 value={q}
-                onChange={e => setQ(e.target.value)}
-                onKeyDown={e => e.key === "Escape" && setOpen(false)}
+                onChange={e => handleQChange(e.target.value)}
+                onKeyDown={handleKeyDown}
               />
-              {isFetching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
-              <button onClick={() => setOpen(false)} className="shrink-0 text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent">
+              {isSearching && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
+              {q && !isSearching && (
+                <button
+                  onClick={() => handleQChange("")}
+                  className="shrink-0 text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent"
+                  title="Clear"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button onClick={closeSearch} className="shrink-0 text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent">
                 <X className="h-4 w-4" />
               </button>
             </div>
+
+            {/* ── Results area ───────────────────────────────────── */}
             <div className="max-h-[28rem] overflow-y-auto">
               {q.trim().length < 2 ? (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("globalSearchMin")}</div>
-              ) : results.length === 0 ? (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{isFetching ? t("globalSearching") : t("globalNoResults")}</div>
+                <div className="px-4 py-8 text-center space-y-1">
+                  <p className="text-sm text-muted-foreground">Type at least 2 characters to search</p>
+                  <p className="text-xs text-muted-foreground/60">Searches documents, projects, correspondence, and meetings</p>
+                </div>
+              ) : isSearching ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">Searching for &ldquo;{q.trim()}&rdquo;…</p>
+                </div>
+              ) : isError ? (
+                <div className="px-4 py-8 text-center space-y-1">
+                  <p className="text-sm text-destructive font-medium">Search unavailable</p>
+                  <p className="text-xs text-muted-foreground">Could not reach the search service. Please try again.</p>
+                </div>
+              ) : !hasQuery ? null : results.length === 0 ? (
+                <div className="px-4 py-8 text-center space-y-1">
+                  <p className="text-sm text-muted-foreground font-medium">No results for &ldquo;{debouncedQ}&rdquo;</p>
+                  <p className="text-xs text-muted-foreground/60">Try different keywords, or check the spelling</p>
+                </div>
               ) : (
                 <div className="py-1">
                   {grouped.map(([type, items]) => {
@@ -747,36 +812,55 @@ function GlobalSearch() {
                           </span>
                           <span className="text-xs text-muted-foreground">{items.length} result{items.length !== 1 ? "s" : ""}</span>
                         </div>
-                        {items.map((r: any, i: number) => (
-                          <button
-                            key={i}
-                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-accent text-start transition-colors group"
-                            onClick={() => handleSelect(r)}
-                          >
-                            <div className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 ${meta.bg}`}>
-                              <Icon className={`h-3.5 w-3.5 ${meta.color}`} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{r._label || r.name || "Untitled"}</p>
-                              <p className="text-xs text-muted-foreground truncate">
-                                {r._sub && <span className="font-mono">{r._sub}</span>}
-                                {r._sub && r._projectName && <span className="mx-1">·</span>}
-                                {r._projectName && <span className="text-muted-foreground">{r._projectName}</span>}
-                              </p>
-                            </div>
-                            <ExternalLink className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                          </button>
-                        ))}
+                        {items.map((r: any, i: number) => {
+                          const globalIdx = results.indexOf(r);
+                          return (
+                            <button
+                              key={i}
+                              className={cn(
+                                "w-full flex items-center gap-3 px-4 py-2 hover:bg-accent text-start transition-colors group",
+                                focusIdx === globalIdx && "bg-accent"
+                              )}
+                              onClick={() => handleSelect(r)}
+                            >
+                              <div className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 ${meta.bg}`}>
+                                <Icon className={`h-3.5 w-3.5 ${meta.color}`} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">{r._label || r.name || "Untitled"}</p>
+                                <p className="text-xs text-muted-foreground truncate">
+                                  {r._sub && <span className="font-mono">{r._sub}</span>}
+                                  {r._sub && r._projectName && <span className="mx-1">·</span>}
+                                  {r._projectName && <span>{r._projectName}</span>}
+                                </p>
+                              </div>
+                              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                            </button>
+                          );
+                        })}
                       </div>
                     );
                   })}
+
+                  {/* ── Link to full search page ──────────────── */}
+                  <div className="px-4 pt-2 pb-2.5 border-t mt-1">
+                    <button
+                      className="text-xs text-primary hover:underline"
+                      onClick={() => { closeSearch(); navigate(`/search?q=${encodeURIComponent(debouncedQ)}`); }}
+                    >
+                      View all results for &ldquo;{debouncedQ}&rdquo; on the Search page →
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
-            <div className="border-t px-4 py-2 flex items-center gap-3 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↵</kbd> {t("globalOpenResult")}</span>
-              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">Esc</kbd> {t("closeMenu")}</span>
-              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">⌘K</kbd> Toggle</span>
+
+            {/* ── Keyboard hint footer ───────────────────────────── */}
+            <div className="border-t px-4 py-2 flex items-center gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↵</kbd> Open</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">↑↓</kbd> Navigate</span>
+              <span className="flex items-center gap-1"><kbd className="font-mono bg-muted border rounded px-1">Esc</kbd> Close</span>
+              <span className="flex items-center gap-1 ms-auto"><kbd className="font-mono bg-muted border rounded px-1">⌘K</kbd> Toggle</span>
             </div>
           </div>
         </div>
