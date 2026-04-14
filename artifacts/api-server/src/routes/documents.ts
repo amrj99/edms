@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
@@ -602,6 +602,107 @@ router.get("/:id/revisions", requireAuth, async (req, res) => {
     })),
     total: revisions.length,
   });
+});
+
+// ─── GET /:id/activity — unified chronological history for a document ────────
+// Returns revisions + transmittals + submission chains merged and sorted by date.
+// Shape is stable and extensible: adding correspondence later requires only
+// appending another typed block to the merge array, with no frontend shape change.
+router.get("/:id/activity", requireAuth, async (req, res) => {
+  const docId   = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId ?? "0");
+
+  // 1 ── Revisions ───────────────────────────────────────────────────────────
+  const revisionRows = await db
+    .select({ rev: documentRevisionsTable, user: usersTable })
+    .from(documentRevisionsTable)
+    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+    .where(eq(documentRevisionsTable.documentId, docId))
+    .orderBy(desc(documentRevisionsTable.createdAt));
+
+  const revisionEvents = revisionRows.map(({ rev, user }) => ({
+    id:     `rev-${rev.id}`,
+    type:   "revision" as const,
+    date:   (rev.createdAt as Date).toISOString(),
+    title:  rev.revision ? `Revision ${rev.revision} uploaded` : "Document uploaded",
+    status: rev.status ?? null,
+    meta: {
+      revision:       rev.revision ?? null,
+      createdByName:  user ? `${user.firstName} ${user.lastName}` : null,
+      notes:          (rev as any).notes ?? null,
+      fileName:       rev.fileName ?? null,
+    },
+    href: `/documents/${docId}?tab=revisions`,
+  }));
+
+  // 2 ── Transmittals (via transmittal_items join) ───────────────────────────
+  const txRows = await db
+    .select({
+      tx:   transmittalsTable,
+      item: transmittalItemsTable,
+    })
+    .from(transmittalItemsTable)
+    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+    .where(eq(transmittalItemsTable.documentId, docId))
+    .orderBy(desc(transmittalsTable.createdAt));
+
+  // Deduplicate by transmittal ID (a document may appear multiple times in one transmittal)
+  const seenTx = new Set<number>();
+  const transmittalEvents = txRows
+    .filter(({ tx }) => { if (seenTx.has(tx.id)) return false; seenTx.add(tx.id); return true; })
+    .map(({ tx }) => ({
+      id:     `tx-${tx.id}`,
+      type:   "transmittal" as const,
+      date:   (tx.sentAt ?? tx.createdAt as Date).toISOString(),
+      title:  `Transmittal ${tx.transmittalNumber}${tx.subject ? `: ${tx.subject}` : ""}`,
+      status: tx.status ?? null,
+      meta: {
+        transmittalNumber: tx.transmittalNumber,
+        subject:           tx.subject ?? null,
+        purpose:           tx.purpose ?? null,
+        direction:         tx.direction ?? null,
+        toExternal:        tx.toExternal ?? null,
+        dueDate:           tx.dueDate ? (tx.dueDate as Date).toISOString() : null,
+        approvalStatus:    tx.approvalStatus ?? null,
+      },
+      href: `/projects/${tx.projectId}/transmittals`,
+    }));
+
+  // 3 ── Submission Chains (via submission_chain_documents join) ─────────────
+  const chainRows = await db
+    .select({
+      chain: submissionChainsTable,
+      doc:   submissionChainDocumentsTable,
+    })
+    .from(submissionChainDocumentsTable)
+    .innerJoin(submissionChainsTable, eq(submissionChainDocumentsTable.chainId, submissionChainsTable.id))
+    .where(eq(submissionChainDocumentsTable.documentId, docId))
+    .orderBy(desc(submissionChainDocumentsTable.addedAt));
+
+  // Deduplicate by chain ID
+  const seenChain = new Set<number>();
+  const chainEvents = chainRows
+    .filter(({ chain }) => { if (seenChain.has(chain.id)) return false; seenChain.add(chain.id); return true; })
+    .map(({ chain, doc }) => ({
+      id:     `sc-${chain.id}`,
+      type:   "chain" as const,
+      date:   (doc.addedAt ?? chain.createdAt as Date).toISOString(),
+      title:  `Added to submission chain: ${chain.title}`,
+      status: chain.status ?? null,
+      meta: {
+        chainTitle:  chain.title,
+        chainStatus: chain.status ?? null,
+        chainRef:    (chain as any).referenceNumber ?? null,
+      },
+      href: `/projects/${chain.projectId}/submission-chains`,
+    }));
+
+  // 4 ── Merge & sort chronologically (newest first) ─────────────────────────
+  // Future: correspondence events appended here without any shape change
+  const events = [...revisionEvents, ...transmittalEvents, ...chainEvents]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  res.json({ events, total: events.length });
 });
 
 router.get("/:id/reviews", requireAuth, async (req, res) => {

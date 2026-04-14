@@ -692,12 +692,12 @@ function GlobalSearch() {
     ...(data?.meetings ?? []).map((m: any) => ({ ...m, _type: "meeting", _label: m.title || m.referenceNumber, _sub: m.referenceNumber, _projectName: m.project?.name })),
   ];
 
-  const grouped = Object.entries(
+  const grouped: [string, any[]][] = Object.entries(
     results.reduce((acc: Record<string, any[]>, r) => {
       acc[r._type] = acc[r._type] ?? [];
       acc[r._type].push(r);
       return acc;
-    }, {})
+    }, {} as Record<string, any[]>)
   );
 
   const handleSelect = (result: any) => {

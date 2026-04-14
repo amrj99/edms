@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import {
   ArrowLeft, FileText, Building2, FolderOpen, User, Calendar,
   Download, ExternalLink, Loader2, Paperclip, Tag, Hash, Globe,
-  Brain, History, Info, Archive, Ban, ChevronDown, AlertTriangle,
+  Brain, History, Info, Archive, Ban, ChevronDown, AlertTriangle, Clock,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { DocumentWorkflowPanel } from "@/components/workflow/DocumentWorkflowPanel";
 import { DocumentAiTab } from "@/components/documents/DocumentAiTab";
 import { DocumentRevisionsTab } from "@/components/documents/DocumentRevisionsTab";
+import { DocumentActivityTab } from "@/components/documents/DocumentActivityTab";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,11 +40,12 @@ const STATUS_COLORS: Record<string, string> = {
 
 const LIFECYCLE_LOCKED = new Set(["approved", "approved_with_comments", "issued", "archived", "obsolete", "superseded"]);
 
-type TabId = "overview" | "revisions" | "ai";
+type TabId = "overview" | "revisions" | "activity" | "ai";
 
 const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
   { id: "overview",  label: "Overview",   icon: Info },
   { id: "revisions", label: "Revisions",  icon: History },
+  { id: "activity",  label: "Activity",   icon: Clock },
   { id: "ai",        label: "AI Analysis", icon: Brain },
 ];
 
@@ -330,6 +332,10 @@ export default function DocumentDetailPage() {
 
           {activeTab === "revisions" && (
             <DocumentRevisionsTab documentId={docId} documentTitle={doc.title} />
+          )}
+
+          {activeTab === "activity" && (
+            <DocumentActivityTab documentId={docId} projectId={doc.projectId} />
           )}
 
           {activeTab === "ai" && (
