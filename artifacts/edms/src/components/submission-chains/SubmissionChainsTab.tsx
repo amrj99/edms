@@ -622,7 +622,9 @@ function CreateChainDialog({
     queryFn: async () => {
       const r = await fetch("/api/organizations");
       if (!r.ok) return [];
-      return r.json();
+      const data = await r.json();
+      // API returns { organizations: [...] } — extract the array safely
+      return Array.isArray(data) ? data : (data.organizations ?? []);
     },
     staleTime: 60_000,
   });
