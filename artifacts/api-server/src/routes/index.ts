@@ -42,6 +42,7 @@ import workflowEngineRouter from "./workflow-engine.js";
 import delegationsRouter from "./delegations.js";
 import projectRoleOverridesRouter from "./project-role-overrides.js";
 import projectGovernanceRouter from "./project-governance.js";
+import submissionChainsRouter from "./submission-chains.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 const router: IRouter = Router();
@@ -106,5 +107,6 @@ router.use("/workflow-engine", workflowEngineRouter);
 router.use("/delegations", delegationsRouter);
 router.use("/projects/:projectId", projectRoleOverridesRouter);
 router.use("/projects/:projectId", projectGovernanceRouter);
+router.use("/projects/:projectId/submission-chains", submissionChainsRouter);
 
 export default router;
