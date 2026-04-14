@@ -200,7 +200,7 @@ export default function ProjectDetail() {
 
         <div className="mt-6">
           <TabsContent value="documents">
-            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} />
+            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} onSwitchToChains={() => setActiveTab("submission-chains")} />
           </TabsContent>
           <TabsContent value="review">
             <ReviewTab projectId={projectId} />
@@ -293,7 +293,7 @@ const DOC_COLUMNS: ColumnDef[] = [
 ];
 const DOC_PINNED = ["docNum", "title"];
 
-function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void }) {
+function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal, onSwitchToChains }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void; onSwitchToChains?: () => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -978,6 +978,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                   </p>
                   <p className="text-xs text-blue-700/70 dark:text-blue-400 mt-0.5">
                     Rev {exactMatch.revision ?? "01"} · {String(exactMatch.status ?? "").replace(/_/g, " ")}
+                    {exactMatch.discipline ? ` · ${exactMatch.discipline}` : ""}
                   </p>
                 </div>
                 <Button
@@ -997,33 +998,46 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                     <FilePlus2 className="h-3.5 w-3.5" /> Upload New Revision
                   </Button>
                 )}
-              </div>
-            );
-          }
-          if (filtered.length === 0) {
-            return (
-              <div className="flex items-center gap-3 px-3 py-2.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
-                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-amber-900 dark:text-amber-300">
-                    No document found matching{" "}
-                    <span className="font-mono font-medium">"{searchQ.trim()}"</span>
-                  </p>
-                </div>
-                {perms.canCreateDocument && (
+                {onSwitchToChains && (
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 gap-1.5 shrink-0 border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
-                    onClick={() => setIsUploadOpen(true)}
+                    className="h-8 gap-1.5 shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
+                    title="Go to Submission Chains to add this document to a chain"
+                    onClick={onSwitchToChains}
                   >
-                    <Plus className="h-3.5 w-3.5" /> Create Document
+                    <Send className="h-3.5 w-3.5" /> Add to Chain
                   </Button>
                 )}
               </div>
             );
           }
-          return null;
+          // Always show "no exact match" when user has typed 3+ chars and no exact match exists.
+          // If partial matches exist in the table they will still be visible below.
+          return (
+            <div className="flex items-center gap-3 px-3 py-2.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-amber-900 dark:text-amber-300">
+                  No exact match for{" "}
+                  <span className="font-mono font-medium">"{searchQ.trim()}"</span>
+                  {filtered.length > 0 && (
+                    <span className="text-amber-700/70 dark:text-amber-500"> — {filtered.length} partial {filtered.length === 1 ? "result" : "results"} shown below</span>
+                  )}
+                </p>
+              </div>
+              {perms.canCreateDocument && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 shrink-0 border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                  onClick={() => setIsUploadOpen(true)}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Create Document
+                </Button>
+              )}
+            </div>
+          );
         })()}
 
         <div className="overflow-x-auto">
