@@ -961,6 +961,71 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
             >Reset widths</button>
           </div>
         </div>
+
+        {/* ── Quick-access bar: shows when search ≥ 3 chars ─────────────────── */}
+        {searchQ.trim().length >= 3 && (() => {
+          const q = searchQ.trim().toLowerCase();
+          const exactMatch = (allDocs as any[]).find(d => d.documentNumber?.toLowerCase() === q);
+          if (exactMatch) {
+            return (
+              <div className="flex items-center gap-3 px-3 py-2.5 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+                <Check className="h-4 w-4 text-blue-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-blue-900 dark:text-blue-200 flex items-center gap-2 flex-wrap">
+                    <span className="font-mono">{exactMatch.documentNumber}</span>
+                    <span className="text-blue-500/70">—</span>
+                    <span className="truncate">{exactMatch.title}</span>
+                  </p>
+                  <p className="text-xs text-blue-700/70 dark:text-blue-400 mt-0.5">
+                    Rev {exactMatch.revision ?? "01"} · {String(exactMatch.status ?? "").replace(/_/g, " ")}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
+                  onClick={() => setDocPreview(exactMatch)}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" /> Open
+                </Button>
+                {perms.canCreateDocument && (
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1.5 shrink-0 bg-blue-600 hover:bg-blue-700 text-white"
+                    onClick={() => setNewRevDoc(exactMatch)}
+                  >
+                    <FilePlus2 className="h-3.5 w-3.5" /> Upload New Revision
+                  </Button>
+                )}
+              </div>
+            );
+          }
+          if (filtered.length === 0) {
+            return (
+              <div className="flex items-center gap-3 px-3 py-2.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-amber-900 dark:text-amber-300">
+                    No document found matching{" "}
+                    <span className="font-mono font-medium">"{searchQ.trim()}"</span>
+                  </p>
+                </div>
+                {perms.canCreateDocument && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 shrink-0 border-amber-400 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400"
+                    onClick={() => setIsUploadOpen(true)}
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Create Document
+                  </Button>
+                )}
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         <div className="overflow-x-auto">
         <Table style={{ tableLayout: "fixed", minWidth: 850 }}>
           <TableHeader className="bg-muted/50">
