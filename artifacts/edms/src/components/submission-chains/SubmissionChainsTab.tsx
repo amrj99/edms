@@ -465,7 +465,11 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
   if (!mode) return null;
 
   const returnRequiresComments = mode === "return" && !comments.trim();
-  const canSubmit = !mutation.isPending && (mode !== "return" || !!comments.trim());
+  const activateRequiresDocs = mode === "activate" &&
+    chain.documents.filter(d => d.revisionCycle === chain.activeRevisionCycle).length === 0;
+  const canSubmit = !mutation.isPending &&
+    (mode !== "return" || !!comments.trim()) &&
+    !activateRequiresDocs;
 
   const titles: Record<NonNullable<ActionMode>, string> = {
     activate: "Activate Submission Chain",
@@ -570,9 +574,19 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
           )}
 
           {mode === "activate" && (
-            <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-3 py-2 text-xs text-blue-800 dark:text-blue-300">
-              Documents ({chain.documents.filter(d => d.revisionCycle === chain.activeRevisionCycle).length}) and parties ({chain.parties.length}) will be locked for this revision cycle.
-            </div>
+            activateRequiresDocs ? (
+              <div className="rounded-md bg-amber-50 border border-amber-300 px-3 py-2.5 text-xs text-amber-800 flex items-start gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
+                <span>
+                  <span className="font-medium block mb-0.5">No documents attached</span>
+                  At least one document must be linked to this chain before it can be activated. Close this dialog and use the Documents tab to add documents.
+                </span>
+              </div>
+            ) : (
+              <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 px-3 py-2 text-xs text-blue-800 dark:text-blue-300">
+                {chain.documents.filter(d => d.revisionCycle === chain.activeRevisionCycle).length} document{chain.documents.filter(d => d.revisionCycle === chain.activeRevisionCycle).length !== 1 ? "s" : ""} and {chain.parties.length} parties will be locked for this revision cycle.
+              </div>
+            )
           )}
         </div>
 
@@ -907,7 +921,30 @@ function ChainDetailSheet({
               </h3>
 
               {activeDocs.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic py-2">No documents added to this cycle yet.</p>
+                chain.currentStatus === "draft" ? (
+                  <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 p-5 flex flex-col items-center text-center gap-3">
+                    <div className="rounded-full bg-amber-100 p-2.5">
+                      <FileText className="h-5 w-5 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-amber-900">No documents attached yet</p>
+                      <p className="text-xs text-amber-700 mt-1 leading-relaxed max-w-xs">
+                        At least one document must be added before this chain can be activated. Go to the Documents tab, open a document, and link it to this chain.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-amber-400 text-amber-800 hover:bg-amber-100 gap-1.5"
+                      onClick={() => onOpenDocument(0)}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Go to Documents tab
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic py-2">No documents added to this cycle yet.</p>
+                )
               ) : (
                 <div className="rounded-md border overflow-hidden">
                   <table className="w-full text-xs">
