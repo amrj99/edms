@@ -11,14 +11,14 @@
  *  - Documents: clicking a row calls onOpenDocument(documentId)
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNowStrict, parseISO } from "date-fns";
 import {
   ArrowRight, ArrowLeft, ChevronRight, Plus, Loader2, X,
   Clock, Building2, FileText, RotateCcw, CheckCircle2,
   AlertTriangle, Hourglass, Send, Lock, GitMerge, Layers,
-  Trash2, ExternalLink, RefreshCw,
+  Trash2, ExternalLink, RefreshCw, Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +61,8 @@ interface ChainSummary {
   createdByName?: string | null;
   documentCount: number;
   stepCount: number;
+  currentAssignedUserId?: number | null;
+  currentAssignedUserName?: string | null;
 }
 
 interface AllowedParty {
@@ -69,6 +71,8 @@ interface AllowedParty {
   stepOrder: number;
   label?: string | null;
   orgName?: string | null;
+  defaultAssigneeId?: number | null;
+  defaultAssigneeName?: string | null;
 }
 
 interface ChainStep {
@@ -88,6 +92,17 @@ interface ChainStep {
   createdAt: string;
   actionedByName?: string | null;
   reviewedByName?: string | null;
+  assignedToUserId?: number | null;
+  assignedToUserName?: string | null;
+  reassignedAt?: string | null;
+  reassignedByName?: string | null;
+}
+
+interface UserOption {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
 }
 
 interface ChainDocument {
@@ -258,6 +273,17 @@ function StepTimeline({ steps }: { steps: ChainStep[] }) {
                   </div>
 
                   <div className="text-right shrink-0 space-y-0.5">
+                    {step.assignedToUserName && (
+                      <p className="text-[11px] text-blue-700 dark:text-blue-400 flex items-center gap-1 justify-end">
+                        <span className="text-muted-foreground font-normal">Assigned to</span>
+                        <span className="font-medium">{step.assignedToUserName}</span>
+                      </p>
+                    )}
+                    {step.reassignedAt && step.reassignedByName && (
+                      <p className="text-[11px] text-muted-foreground italic">
+                        Reassigned by {step.reassignedByName}
+                      </p>
+                    )}
                     <p className="text-[11px] text-muted-foreground">
                       {step.actionedByName ?? "—"}
                     </p>
@@ -312,7 +338,7 @@ function PartyBreadcrumb({
 
 // ─── Action panel ─────────────────────────────────────────────────────────────
 
-type ActionMode = "activate" | "forward" | "return" | "resubmit" | "close" | null;
+type ActionMode = "activate" | "forward" | "return" | "resubmit" | "close" | "reassign" | null;
 
 interface ActionPanelProps {
   chain: ChainDetail;
@@ -333,8 +359,10 @@ function ActionPanel({ chain, userOrgId, isAtLeastPM, onAction, isMutating }: Ac
   const canReturn     = currentStatus === "active"    && isCurrentHolder;
   const canResubmit   = currentStatus === "returned"  && isOriginator;
   const canClose      = !["draft", "closed"].includes(currentStatus) && isAtLeastPM;
+  // Reassign: DC+/PM in the current holder org, on active/returned chains
+  const canReassign   = ["active", "returned"].includes(currentStatus) && isCurrentHolder && isAtLeastPM;
 
-  const isWaiting = !canActivate && !canForward && !canReturn && !canResubmit && !canClose;
+  const isWaiting = !canActivate && !canForward && !canReturn && !canResubmit && !canClose && !canReassign;
   const isTerminal = ["approved", "approved_with_comments", "closed"].includes(currentStatus);
 
   if (isTerminal && !canClose) {
@@ -387,6 +415,11 @@ function ActionPanel({ chain, userOrgId, isAtLeastPM, onAction, isMutating }: Ac
           <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Resubmit
         </Button>
       )}
+      {canReassign && (
+        <Button size="sm" variant="ghost" onClick={() => onAction("reassign")} disabled={isMutating}>
+          <Users className="h-3.5 w-3.5 mr-1.5" /> Reassign
+        </Button>
+      )}
       {canClose && (
         <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => onAction("close")} disabled={isMutating}>
           <X className="h-3.5 w-3.5 mr-1.5" /> Close Chain
@@ -406,12 +439,52 @@ interface ActionDialogProps {
   projectId: number;
 }
 
+function useOrgMembers(projectId: number, orgId: number | null, enabled: boolean) {
+  return useQuery<UserOption[]>({
+    queryKey: ["submission-chain-members", projectId, orgId],
+    queryFn: async () => {
+      if (!orgId) return [];
+      const r = await fetch(`/api/projects/${projectId}/submission-chains/members?orgId=${orgId}`);
+      if (!r.ok) return [];
+      return r.json();
+    },
+    enabled: enabled && !!orgId,
+    staleTime: 60_000,
+  });
+}
+
 function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDialogProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [reviewCode, setReviewCode] = useState<string>("_none");
   const [comments, setComments] = useState("");
   const [closeReason, setCloseReason] = useState("");
+  const [assignedToUserId, setAssignedToUserId] = useState<string>("_none");
+  const [reassignReason, setReassignReason] = useState("");
+
+  // Determine the next org for forward user picker
+  const sortedParties = [...chain.parties].sort((a, b) => a.stepOrder - b.stepOrder);
+  const currentPartyIdx = sortedParties.findIndex(p => p.orgId === chain.currentOrgId);
+  const nextParty = currentPartyIdx >= 0 ? sortedParties[currentPartyIdx + 1] : null;
+
+  // Pre-fill assignedToUserId from nextParty.defaultAssigneeId for forward
+  const defaultAssigneeForForward = nextParty?.defaultAssigneeId;
+  const [forwardPickerInitialised, setForwardPickerInitialised] = useState(false);
+
+  // Load members for forward picker (next org) and reassign picker (current org)
+  const forwardOrgId = mode === "forward" ? (nextParty?.orgId ?? null) : null;
+  const reassignOrgId = mode === "reassign" ? chain.currentOrgId : null;
+  const { data: forwardMembers = [], isLoading: forwardMembersLoading } = useOrgMembers(projectId, forwardOrgId, mode === "forward");
+  const { data: reassignMembers = [], isLoading: reassignMembersLoading } = useOrgMembers(projectId, reassignOrgId, mode === "reassign");
+
+  // Once forward members load, pre-fill default assignee
+  useEffect(() => {
+    if (mode === "forward" && !forwardPickerInitialised && forwardMembers.length > 0 && defaultAssigneeForForward) {
+      const match = forwardMembers.find(m => m.id === defaultAssigneeForForward);
+      if (match) setAssignedToUserId(String(match.id));
+      setForwardPickerInitialised(true);
+    }
+  }, [mode, forwardMembers, defaultAssigneeForForward, forwardPickerInitialised]);
 
   const endpointMap: Record<NonNullable<ActionMode>, string> = {
     activate:  `/api/projects/${projectId}/submission-chains/${chain.id}/activate`,
@@ -419,6 +492,7 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
     return:    `/api/projects/${projectId}/submission-chains/${chain.id}/return`,
     resubmit:  `/api/projects/${projectId}/submission-chains/${chain.id}/resubmit`,
     close:     `/api/projects/${projectId}/submission-chains/${chain.id}/close`,
+    reassign:  `/api/projects/${projectId}/submission-chains/${chain.id}/reassign`,
   };
 
   const mutation = useMutation({
@@ -429,8 +503,15 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
         if (reviewCode !== "_none") body.reviewCode = reviewCode;
         if (comments.trim()) body.comments = comments.trim();
       }
+      if (mode === "forward" && assignedToUserId !== "_none") {
+        body.assignedToUserId = parseInt(assignedToUserId);
+      }
       if (mode === "resubmit" && comments.trim()) body.comments = comments.trim();
       if (mode === "close" && closeReason.trim()) body.reason = closeReason.trim();
+      if (mode === "reassign") {
+        body.assignedToUserId = parseInt(assignedToUserId);
+        if (reassignReason.trim()) body.reason = reassignReason.trim();
+      }
 
       const r = await fetch(endpointMap[mode], {
         method: "POST",
@@ -450,6 +531,7 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
         return:   "Returned successfully",
         resubmit: "Resubmitted — cycle advanced",
         close:    "Chain closed",
+        reassign: "Reassigned successfully",
       };
       toast({ title: labels[mode!] });
       queryClient.invalidateQueries({ queryKey: ["submission-chains", projectId] });
@@ -467,9 +549,11 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
   const returnRequiresComments = mode === "return" && !comments.trim();
   const activateRequiresDocs = mode === "activate" &&
     chain.documents.filter(d => d.revisionCycle === chain.activeRevisionCycle).length === 0;
+  const reassignRequiresUser = mode === "reassign" && assignedToUserId === "_none";
   const canSubmit = !mutation.isPending &&
     (mode !== "return" || !!comments.trim()) &&
-    !activateRequiresDocs;
+    !activateRequiresDocs &&
+    !reassignRequiresUser;
 
   const titles: Record<NonNullable<ActionMode>, string> = {
     activate: "Activate Submission Chain",
@@ -477,15 +561,47 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
     return:   "Return Submission",
     resubmit: "Resubmit",
     close:    "Close Chain",
+    reassign: "Reassign Step",
   };
 
   const descriptions: Record<NonNullable<ActionMode>, string> = {
     activate: `Activate "${chain.chainNumber}" to begin the submission workflow. The chain will be set to active and documents will be locked for this revision cycle.`,
-    forward:  "Forward the submission to the next party in the chain. Optionally assign a review code.",
+    forward:  "Forward the submission to the next party in the chain. Optionally assign a review code and a responsible person.",
     return:   "Return the submission to the previous party. A reason is required.",
     resubmit: `Resubmit to the chain's recipients. The revision cycle will advance from ${chain.activeRevisionCycle} to ${chain.activeRevisionCycle + 1}.`,
     close:    "Manually close this submission chain. This action cannot be undone.",
+    reassign: `Reassign the current step to a different person within ${chain.currentOrgName}.`,
   };
+
+  const memberPickerSelect = (
+    members: UserOption[],
+    isLoading: boolean,
+    value: string,
+    onChange: (v: string) => void,
+    orgName: string,
+  ) => (
+    <div>
+      <Label>
+        Assign to <span className="ml-1.5 text-xs text-muted-foreground font-normal">(optional)</span>
+      </Label>
+      <Select value={value} onValueChange={onChange} disabled={isLoading || members.length === 0}>
+        <SelectTrigger className="mt-1">
+          <SelectValue placeholder={isLoading ? "Loading members…" : members.length === 0 ? `No members in ${orgName}` : "Select person (optional)…"} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="_none">— No specific assignee —</SelectItem>
+          {members.map(m => (
+            <SelectItem key={m.id} value={String(m.id)}>
+              {m.name} <span className="text-muted-foreground text-xs">({m.email})</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {members.length === 0 && !isLoading && (
+        <p className="text-xs text-muted-foreground mt-1">No users found in {orgName} with project access.</p>
+      )}
+    </div>
+  );
 
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
@@ -501,12 +617,7 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
               {/* Review code */}
               <div>
                 <Label>
-                  Review Code
-                  {mode === "return" ? (
-                    <span className="ml-1.5 text-xs text-muted-foreground font-normal">(optional)</span>
-                  ) : (
-                    <span className="ml-1.5 text-xs text-muted-foreground font-normal">(optional)</span>
-                  )}
+                  Review Code <span className="ml-1.5 text-xs text-muted-foreground font-normal">(optional)</span>
                 </Label>
                 <Select value={reviewCode} onValueChange={setReviewCode}>
                   <SelectTrigger className="mt-1">
@@ -540,6 +651,15 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
                   <p className="text-xs text-destructive mt-1">A reason is required when returning.</p>
                 )}
               </div>
+
+              {/* Forward: user picker for next party */}
+              {mode === "forward" && nextParty && memberPickerSelect(
+                forwardMembers,
+                forwardMembersLoading,
+                assignedToUserId,
+                setAssignedToUserId,
+                nextParty.orgName ?? `Org #${nextParty.orgId}`,
+              )}
             </>
           )}
 
@@ -571,6 +691,55 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
                 placeholder="Reason for manual closure…"
               />
             </div>
+          )}
+
+          {mode === "reassign" && (
+            <>
+              <div>
+                <Label>
+                  Assign to <span className="text-destructive ml-1">*</span>
+                </Label>
+                <Select
+                  value={assignedToUserId}
+                  onValueChange={setAssignedToUserId}
+                  disabled={reassignMembersLoading || reassignMembers.length === 0}
+                >
+                  <SelectTrigger className={cn("mt-1", reassignRequiresUser && "border-amber-300")}>
+                    <SelectValue placeholder={
+                      reassignMembersLoading ? "Loading members…" :
+                      reassignMembers.length === 0 ? `No members in ${chain.currentOrgName}` :
+                      "Select person…"
+                    } />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none" disabled>— Select a person —</SelectItem>
+                    {reassignMembers.map(m => (
+                      <SelectItem key={m.id} value={String(m.id)}>
+                        {m.name} <span className="text-muted-foreground text-xs">({m.email})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {reassignRequiresUser && (
+                  <p className="text-xs text-destructive mt-1">Please select a person to assign this step to.</p>
+                )}
+                {reassignMembers.length === 0 && !reassignMembersLoading && (
+                  <p className="text-xs text-muted-foreground mt-1">No users found in {chain.currentOrgName} with project access.</p>
+                )}
+              </div>
+              <div>
+                <Label>
+                  Reason <span className="ml-1.5 text-xs text-muted-foreground font-normal">(optional)</span>
+                </Label>
+                <Textarea
+                  className="mt-1"
+                  rows={2}
+                  value={reassignReason}
+                  onChange={e => setReassignReason(e.target.value)}
+                  placeholder="Briefly explain the reason for reassignment…"
+                />
+              </div>
+            </>
           )}
 
           {mode === "activate" && (
@@ -610,6 +779,35 @@ function ActionDialog({ mode, chain, onClose, onSuccess, projectId }: ActionDial
 interface PartyRow {
   orgId: string;
   label: string;
+  defaultAssigneeId: string;
+}
+
+function PartyAssigneePicker({
+  projectId,
+  orgId,
+  value,
+  onChange,
+}: {
+  projectId: number;
+  orgId: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { data: members = [], isLoading } = useOrgMembers(projectId, orgId ? parseInt(orgId) : null, !!orgId);
+  if (!orgId) return null;
+  return (
+    <Select value={value || "_none"} onValueChange={v => onChange(v === "_none" ? "" : v)} disabled={isLoading || members.length === 0}>
+      <SelectTrigger className="h-9 w-[180px]">
+        <SelectValue placeholder={isLoading ? "Loading…" : members.length === 0 ? "No members" : "Default assignee…"} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="_none">No default</SelectItem>
+        {members.map(m => (
+          <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 function CreateChainDialog({
@@ -627,8 +825,8 @@ function CreateChainDialog({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [parties, setParties] = useState<PartyRow[]>([
-    { orgId: "", label: "" },
-    { orgId: "", label: "" },
+    { orgId: "", label: "", defaultAssigneeId: "" },
+    { orgId: "", label: "", defaultAssigneeId: "" },
   ]);
 
   const { data: orgs = [] } = useQuery<OrgOption[]>({
@@ -653,6 +851,7 @@ function CreateChainDialog({
           orgId: parseInt(p.orgId),
           stepOrder: i + 1,
           label: p.label.trim() || undefined,
+          defaultAssigneeId: p.defaultAssigneeId ? parseInt(p.defaultAssigneeId) : undefined,
         })),
       };
       const r = await fetch(`/api/projects/${projectId}/submission-chains`, {
@@ -677,7 +876,7 @@ function CreateChainDialog({
     },
   });
 
-  const addParty = () => setParties(p => [...p, { orgId: "", label: "" }]);
+  const addParty = () => setParties(p => [...p, { orgId: "", label: "", defaultAssigneeId: "" }]);
   const removeParty = (i: number) => setParties(p => p.filter((_, idx) => idx !== i));
   const updateParty = (i: number, field: keyof PartyRow, value: string) =>
     setParties(p => p.map((row, idx) => idx === i ? { ...row, [field]: value } : row));
@@ -737,49 +936,67 @@ function CreateChainDialog({
               </Button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {parties.map((row, i) => (
-                <div key={i} className="flex gap-2 items-start">
-                  {/* Step badge */}
-                  <div className="flex items-center justify-center w-7 h-9 text-xs font-mono text-muted-foreground shrink-0">
-                    {i + 1}
+                <div key={i} className="flex flex-col gap-1.5">
+                  <div className="flex gap-2 items-center">
+                    {/* Step badge */}
+                    <div className="flex items-center justify-center w-7 h-9 text-xs font-mono text-muted-foreground shrink-0">
+                      {i + 1}
+                    </div>
+
+                    {/* Org picker */}
+                    <Select value={row.orgId || "_none"} onValueChange={v => {
+                      updateParty(i, "orgId", v === "_none" ? "" : v);
+                      updateParty(i, "defaultAssigneeId", "");
+                    }}>
+                      <SelectTrigger className="flex-1 h-9">
+                        <SelectValue placeholder="Select organisation…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none" disabled>Select organisation…</SelectItem>
+                        {orgs.map(o => (
+                          <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    {/* Role label */}
+                    <Select value={row.label || "_none"} onValueChange={v => updateParty(i, "label", v === "_none" ? "" : v)}>
+                      <SelectTrigger className="w-[140px] h-9">
+                        <SelectValue placeholder="Role…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">No label</SelectItem>
+                        {ROLE_LABELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+
+                    {/* Remove — can't remove first two */}
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+                      disabled={parties.length <= 2}
+                      onClick={() => removeParty(i)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
 
-                  {/* Org picker */}
-                  <Select value={row.orgId || "_none"} onValueChange={v => updateParty(i, "orgId", v === "_none" ? "" : v)}>
-                    <SelectTrigger className="flex-1 h-9">
-                      <SelectValue placeholder="Select organisation…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none" disabled>Select organisation…</SelectItem>
-                      {orgs.map(o => (
-                        <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  {/* Role label */}
-                  <Select value={row.label || "_none"} onValueChange={v => updateParty(i, "label", v === "_none" ? "" : v)}>
-                    <SelectTrigger className="w-[140px] h-9">
-                      <SelectValue placeholder="Role…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">No label</SelectItem>
-                      {ROLE_LABELS.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-
-                  {/* Remove — can't remove first two */}
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-                    disabled={parties.length <= 2}
-                    onClick={() => removeParty(i)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  {/* Default assignee — only show when org is selected */}
+                  {row.orgId && (
+                    <div className="ml-9 flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground shrink-0">Default responsible:</span>
+                      <PartyAssigneePicker
+                        projectId={projectId}
+                        orgId={row.orgId}
+                        value={row.defaultAssigneeId}
+                        onChange={v => updateParty(i, "defaultAssigneeId", v)}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1023,6 +1240,7 @@ interface SubmissionChainsTabProps {
 export function SubmissionChainsTab({ projectId, onOpenDocument, isAtLeastPM }: SubmissionChainsTabProps) {
   const { user } = useAuth();
   const userOrgId = (user as any)?.organizationId ?? null;
+  const userId: number | null = (user as any)?.id ?? null;
 
   const [selectedChainId, setSelectedChainId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -1144,14 +1362,26 @@ export function SubmissionChainsTab({ projectId, onOpenDocument, isAtLeastPM }: 
                     <ChainStatusBadge status={chain.currentStatus} />
                   </TableCell>
                   <TableCell>
-                    <span className="text-sm">
-                      {chain.currentOrgName}
-                    </span>
-                    {chain.currentOrgId === userOrgId && (
-                      <span className="ml-1.5 text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-medium border border-blue-200">
-                        You
-                      </span>
-                    )}
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm">{chain.currentOrgName}</span>
+                        {/* "You" tag: assigned-to-user first, then org-level fallback */}
+                        {(chain.currentAssignedUserId
+                          ? chain.currentAssignedUserId === userId
+                          : chain.currentOrgId === userOrgId
+                        ) && (
+                          <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-medium border border-blue-200">
+                            You
+                          </span>
+                        )}
+                      </div>
+                      {chain.currentAssignedUserName && (
+                        <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                          <Users className="h-2.5 w-2.5" />
+                          {chain.currentAssignedUserName}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {["closed", "approved", "approved_with_comments"].includes(chain.currentStatus) ? (

@@ -41,6 +41,10 @@ export type NotificationEvent =
   | "sla.escalated"
   // Transmittal
   | "transmittal.issued"
+  // Submission Chain
+  | "submission_chain.forwarded"
+  | "submission_chain.returned"
+  | "submission_chain.reassigned"
   // Correspondence — delivered is mandatory direct delivery
   | "correspondence.delivered"
   | "correspondence.broadcast"

@@ -93,6 +93,9 @@ export const submissionChainAllowedPartiesTable = pgTable("submission_chain_allo
     .notNull(),
   stepOrder: integer("step_order").notNull(),        // 1-based; defines valid sequence
   label: text("label"),                              // optional role label: "Subcontractor", "MC", "Consultant", "Owner"
+  // User-level assignment: who is normally responsible in this org for this chain
+  defaultAssigneeId: integer("default_assignee_id")
+    .references(() => usersTable.id),
 });
 
 // ─── submission_chain_steps ───────────────────────────────────────────────────
@@ -140,6 +143,16 @@ export const submissionChainStepsTable = pgTable("submission_chain_steps", {
   // Never auto-populated.
   transmittalId: integer("transmittal_id")
     .references(() => transmittalsTable.id),
+
+  // User-level assignment — who in toOrg is specifically responsible for this step.
+  // Pre-filled from allowed_parties.default_assignee_id; overridable at forward time.
+  assignedToUserId: integer("assigned_to_user_id")
+    .references(() => usersTable.id),
+
+  // Reassignment audit — populated if a DC+/PM within toOrg changes the assignee
+  reassignedAt: timestamp("reassigned_at"),
+  reassignedById: integer("reassigned_by_id")
+    .references(() => usersTable.id),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

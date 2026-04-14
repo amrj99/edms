@@ -30,6 +30,7 @@ import {
   documentRevisionsTable,
   organizationsTable,
   projectsTable,
+  projectMembersTable,
   usersTable,
 } from "@workspace/db";
 import {
@@ -39,6 +40,8 @@ import { requireAuth } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { isAtLeast } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
+import { dispatchNotification } from "../lib/notifications/index.js";
+import { sendEmail } from "../lib/email.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -97,20 +100,85 @@ async function generateChainNumber(projectId: number): Promise<string> {
   return `SC-${code}-${year}-${seq}`;
 }
 
-/** Load ordered allowed parties with org names. */
+/** Load ordered allowed parties with org names and default assignee. */
 async function loadAllowedParties(chainId: number) {
   return db
     .select({
-      id:         submissionChainAllowedPartiesTable.id,
-      orgId:      submissionChainAllowedPartiesTable.orgId,
-      stepOrder:  submissionChainAllowedPartiesTable.stepOrder,
-      label:      submissionChainAllowedPartiesTable.label,
-      orgName:    organizationsTable.name,
+      id:                   submissionChainAllowedPartiesTable.id,
+      orgId:                submissionChainAllowedPartiesTable.orgId,
+      stepOrder:            submissionChainAllowedPartiesTable.stepOrder,
+      label:                submissionChainAllowedPartiesTable.label,
+      defaultAssigneeId:    submissionChainAllowedPartiesTable.defaultAssigneeId,
+      orgName:              organizationsTable.name,
+      defaultAssigneeName:  sql<string | null>`(
+        SELECT first_name || ' ' || last_name
+        FROM users WHERE id = ${submissionChainAllowedPartiesTable.defaultAssigneeId}
+      )`,
     })
     .from(submissionChainAllowedPartiesTable)
     .leftJoin(organizationsTable, eq(submissionChainAllowedPartiesTable.orgId, organizationsTable.id))
     .where(eq(submissionChainAllowedPartiesTable.chainId, chainId))
     .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
+}
+
+/**
+ * Validate that a user belongs to a given org AND has project access.
+ * Returns the user row on success, null on failure.
+ */
+async function validateAssignee(userId: number, orgId: number, projectId: number) {
+  const [user] = await db
+    .select({ id: usersTable.id, email: usersTable.email, organizationId: usersTable.organizationId,
+              firstName: usersTable.firstName, lastName: usersTable.lastName })
+    .from(usersTable)
+    .where(and(eq(usersTable.id, userId), eq(usersTable.organizationId, orgId)))
+    .limit(1);
+  if (!user) return null;
+
+  // Verify project membership
+  const [member] = await db
+    .select({ id: projectMembersTable.id })
+    .from(projectMembersTable)
+    .where(and(
+      eq(projectMembersTable.userId, userId),
+      eq(projectMembersTable.projectId, projectId),
+    ))
+    .limit(1);
+
+  return member ? user : null;
+}
+
+/**
+ * Build notification recipients for a step's assigned user.
+ * If assignedUserId is set, returns just that user.
+ * Otherwise falls back to DC+ members of the org who have project access.
+ */
+async function stepNotificationRecipients(
+  assignedUserId: number | null | undefined,
+  toOrgId: number,
+  projectId: number,
+) {
+  if (assignedUserId) {
+    const [u] = await db
+      .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+      .from(usersTable)
+      .where(eq(usersTable.id, assignedUserId))
+      .limit(1);
+    if (u) return [{ userId: u.id, email: u.email, name: `${u.firstName} ${u.lastName}` }];
+  }
+
+  // Fallback: DC+ users in the org with project access
+  const members = await db
+    .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName, role: projectMembersTable.role })
+    .from(projectMembersTable)
+    .innerJoin(usersTable, eq(projectMembersTable.userId, usersTable.id))
+    .where(and(
+      eq(projectMembersTable.projectId, projectId),
+      eq(usersTable.organizationId, toOrgId),
+    ));
+
+  return members
+    .filter(m => isAtLeast(m.role, "document_controller"))
+    .map(m => ({ userId: m.id, email: m.email, name: `${m.firstName} ${m.lastName}` }));
 }
 
 /** Load chain documents for a given revision cycle (or all cycles). */
@@ -144,32 +212,43 @@ async function loadChainDocuments(chainId: number, cycle?: number) {
     .orderBy(asc(submissionChainDocumentsTable.addedAt));
 }
 
-/** Load all steps for a chain. */
+/** Load all steps for a chain, including user-level assignment fields. */
 async function loadSteps(chainId: number) {
   return db
     .select({
-      id:             submissionChainStepsTable.id,
-      chainId:        submissionChainStepsTable.chainId,
-      stepNumber:     submissionChainStepsTable.stepNumber,
-      revisionCycle:  submissionChainStepsTable.revisionCycle,
-      action:         submissionChainStepsTable.action,
-      fromOrgId:      submissionChainStepsTable.fromOrgId,
-      toOrgId:        submissionChainStepsTable.toOrgId,
-      stepStatus:     submissionChainStepsTable.stepStatus,
-      reviewCode:     submissionChainStepsTable.reviewCode,
-      comments:       submissionChainStepsTable.comments,
-      reviewedAt:     submissionChainStepsTable.reviewedAt,
-      transmittalId:  submissionChainStepsTable.transmittalId,
-      createdAt:      submissionChainStepsTable.createdAt,
-      fromOrgName:    sql<string>`(SELECT name FROM organizations WHERE id = ${submissionChainStepsTable.fromOrgId})`,
-      toOrgName:      sql<string>`(SELECT name FROM organizations WHERE id = ${submissionChainStepsTable.toOrgId})`,
-      actionedByName: sql<string | null>`(
+      id:               submissionChainStepsTable.id,
+      chainId:          submissionChainStepsTable.chainId,
+      stepNumber:       submissionChainStepsTable.stepNumber,
+      revisionCycle:    submissionChainStepsTable.revisionCycle,
+      action:           submissionChainStepsTable.action,
+      fromOrgId:        submissionChainStepsTable.fromOrgId,
+      toOrgId:          submissionChainStepsTable.toOrgId,
+      stepStatus:       submissionChainStepsTable.stepStatus,
+      reviewCode:       submissionChainStepsTable.reviewCode,
+      comments:         submissionChainStepsTable.comments,
+      reviewedAt:       submissionChainStepsTable.reviewedAt,
+      transmittalId:    submissionChainStepsTable.transmittalId,
+      assignedToUserId: submissionChainStepsTable.assignedToUserId,
+      reassignedAt:     submissionChainStepsTable.reassignedAt,
+      reassignedById:   submissionChainStepsTable.reassignedById,
+      createdAt:        submissionChainStepsTable.createdAt,
+      fromOrgName:      sql<string>`(SELECT name FROM organizations WHERE id = ${submissionChainStepsTable.fromOrgId})`,
+      toOrgName:        sql<string>`(SELECT name FROM organizations WHERE id = ${submissionChainStepsTable.toOrgId})`,
+      actionedByName:   sql<string | null>`(
         SELECT first_name || ' ' || last_name
         FROM users WHERE id = ${submissionChainStepsTable.actionedById}
       )`,
-      reviewedByName: sql<string | null>`(
+      reviewedByName:   sql<string | null>`(
         SELECT first_name || ' ' || last_name
         FROM users WHERE id = ${submissionChainStepsTable.reviewedById}
+      )`,
+      assignedToUserName: sql<string | null>`(
+        SELECT first_name || ' ' || last_name
+        FROM users WHERE id = ${submissionChainStepsTable.assignedToUserId}
+      )`,
+      reassignedByName: sql<string | null>`(
+        SELECT first_name || ' ' || last_name
+        FROM users WHERE id = ${submissionChainStepsTable.reassignedById}
       )`,
     })
     .from(submissionChainStepsTable)
@@ -209,6 +288,19 @@ function chainSummarySelect() {
       stepCount: sql<number>`(
         SELECT COUNT(*)::int FROM submission_chain_steps
         WHERE chain_id = ${submissionChainsTable.id}
+      )`,
+      // Current step's assigned user (most recent step)
+      currentAssignedUserId: sql<number | null>`(
+        SELECT assigned_to_user_id FROM submission_chain_steps
+        WHERE chain_id = ${submissionChainsTable.id}
+        ORDER BY step_number DESC LIMIT 1
+      )`,
+      currentAssignedUserName: sql<string | null>`(
+        SELECT u.first_name || ' ' || u.last_name
+        FROM submission_chain_steps s
+        JOIN users u ON u.id = s.assigned_to_user_id
+        WHERE s.chain_id = ${submissionChainsTable.id}
+        ORDER BY s.step_number DESC LIMIT 1
       )`,
     })
     .from(submissionChainsTable);
@@ -252,6 +344,39 @@ router.get("/", async (req, res) => {
   }
 
   res.json(chains);
+});
+
+// ─── GET /members — project members in a given org (for user pickers) ─────────
+// Usage: GET /api/projects/:projectId/submission-chains/members?orgId=5
+
+router.get("/members", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
+
+  if (!orgId) { res.status(400).json({ error: "orgId query parameter is required" }); return; }
+
+  const members = await db
+    .select({
+      id:        usersTable.id,
+      firstName: usersTable.firstName,
+      lastName:  usersTable.lastName,
+      email:     usersTable.email,
+      role:      projectMembersTable.role,
+    })
+    .from(projectMembersTable)
+    .innerJoin(usersTable, eq(projectMembersTable.userId, usersTable.id))
+    .where(and(
+      eq(projectMembersTable.projectId, projectId),
+      eq(usersTable.organizationId, orgId),
+    ))
+    .orderBy(asc(usersTable.firstName), asc(usersTable.lastName));
+
+  res.json(members.map(m => ({
+    id:   m.id,
+    name: `${m.firstName} ${m.lastName}`,
+    email: m.email,
+    role: m.role,
+  })));
 });
 
 // ─── GET /:id — chain detail ──────────────────────────────────────────────────
@@ -343,6 +468,17 @@ router.post("/", async (req, res) => {
     activeRevisionCycle: 1,
   }).returning();
 
+  // Validate defaultAssigneeId for each party if provided
+  for (const p of allowedParties) {
+    if (p.defaultAssigneeId) {
+      const valid = await validateAssignee(parseInt(p.defaultAssigneeId), parseInt(p.orgId), projectId);
+      if (!valid) {
+        res.status(400).json({ error: `Default assignee ${p.defaultAssigneeId} is not a member of org ${p.orgId} with project access` });
+        return;
+      }
+    }
+  }
+
   // Insert allowed parties
   await db.insert(submissionChainAllowedPartiesTable).values(
     allowedParties.map((p: any) => ({
@@ -350,6 +486,7 @@ router.post("/", async (req, res) => {
       orgId: parseInt(p.orgId),
       stepOrder: parseInt(p.stepOrder),
       label: p.label?.trim() ?? null,
+      defaultAssigneeId: p.defaultAssigneeId ? parseInt(p.defaultAssigneeId) : null,
     })),
   );
 
@@ -450,7 +587,7 @@ router.post("/:id/parties", async (req, res) => {
     return;
   }
 
-  const { orgId, stepOrder, label } = req.body;
+  const { orgId, stepOrder, label, defaultAssigneeId } = req.body;
   if (!orgId || !stepOrder) { res.status(400).json({ error: "orgId and stepOrder are required" }); return; }
 
   // Ensure stepOrder is not already taken
@@ -469,11 +606,21 @@ router.post("/:id/parties", async (req, res) => {
     return;
   }
 
+  // Validate defaultAssigneeId if provided
+  if (defaultAssigneeId) {
+    const valid = await validateAssignee(parseInt(defaultAssigneeId), parseInt(orgId), projectId);
+    if (!valid) {
+      res.status(400).json({ error: "Default assignee must be a member of the specified organisation with project access" });
+      return;
+    }
+  }
+
   const [party] = await db.insert(submissionChainAllowedPartiesTable).values({
     chainId: id,
     orgId: parseInt(orgId),
     stepOrder: parseInt(stepOrder),
     label: label?.trim() ?? null,
+    defaultAssigneeId: defaultAssigneeId ? parseInt(defaultAssigneeId) : null,
   }).returning();
 
   res.status(201).json(party);
@@ -714,7 +861,7 @@ router.post("/:id/forward", async (req, res) => {
     return;
   }
 
-  const { reviewCode, comments, transmittalId } = req.body;
+  const { reviewCode, comments, transmittalId, assignedToUserId: rawAssignedUserId } = req.body;
 
   // Validate reviewCode if provided
   if (reviewCode && !["A", "B", "C", "D"].includes(reviewCode)) {
@@ -802,6 +949,22 @@ router.post("/:id/forward", async (req, res) => {
     return;
   }
 
+  // Resolve assignee for the next party:
+  // 1. Use explicitly provided assignedToUserId (validated)
+  // 2. Fall back to the next party's defaultAssigneeId
+  let resolvedAssigneeId: number | null = null;
+
+  if (rawAssignedUserId) {
+    const valid = await validateAssignee(parseInt(rawAssignedUserId), nextParty.orgId!, projectId);
+    if (!valid) {
+      res.status(400).json({ error: "Assigned user must be a member of the receiving organisation with project access" });
+      return;
+    }
+    resolvedAssigneeId = parseInt(rawAssignedUserId);
+  } else if (nextParty.defaultAssigneeId) {
+    resolvedAssigneeId = nextParty.defaultAssigneeId;
+  }
+
   // Normal forward — move to next party
   await db.insert(submissionChainStepsTable).values({
     chainId: id,
@@ -817,6 +980,7 @@ router.post("/:id/forward", async (req, res) => {
     reviewedById: reviewCode ? req.user!.id : null,
     reviewedAt: reviewCode ? new Date() : null,
     transmittalId: transmittalId ? parseInt(transmittalId) : null,
+    assignedToUserId: resolvedAssigneeId,
   });
 
   const [updated] = await db
@@ -837,9 +1001,28 @@ router.post("/:id/forward", async (req, res) => {
     entityType: "submission_chain",
     entityId: id,
     entityTitle: chain.chainNumber,
-    details: { toOrgId: nextParty.orgId, reviewCode: reviewCode ?? null },
+    details: { toOrgId: nextParty.orgId, reviewCode: reviewCode ?? null, assignedToUserId: resolvedAssigneeId },
     projectId,
   });
+
+  // Notify assigned user (or DC+ fallback) in the receiving org — fire-and-forget
+  stepNotificationRecipients(resolvedAssigneeId, nextParty.orgId!, projectId).then(recipients => {
+    if (recipients.length === 0) return;
+    dispatchNotification({
+      event: "submission_chain.forwarded",
+      recipients,
+      organizationId: nextParty.orgId!,
+      entityType: "submission_chain",
+      entityId: id,
+      sendEmail: (emails) => sendEmail(
+        emails,
+        `Submission Chain ${chain.chainNumber} forwarded to you`,
+        `<p>A submission chain (<strong>${chain.chainNumber}</strong> — ${chain.title}) has been forwarded to your organisation for review.</p>
+         ${resolvedAssigneeId ? `<p>You have been assigned as the responsible reviewer.</p>` : ""}
+         <p>Please log in to ArcScale EDMS to review and action this submission.</p>`,
+      ),
+    });
+  }).catch(() => {}); // silent — notifications must never block the response
 
   res.json({ chain: updated, finalised: false });
 });
@@ -897,6 +1080,10 @@ router.post("/:id/return", async (req, res) => {
   const prevParty = parties[currentPartyIndex - 1];
   const returningToOriginator = prevParty.stepOrder === 1;
 
+  // Resolve assignee for the receiving (previous) party:
+  // Use their defaultAssigneeId, or fall back to any DC+ in the org
+  const returnAssigneeId = prevParty.defaultAssigneeId ?? null;
+
   await db.insert(submissionChainStepsTable).values({
     chainId: id,
     stepNumber: nextStepNumber,
@@ -911,6 +1098,7 @@ router.post("/:id/return", async (req, res) => {
     reviewedById: req.user!.id,
     reviewedAt: new Date(),
     transmittalId: transmittalId ? parseInt(transmittalId) : null,
+    assignedToUserId: returnAssigneeId,
   });
 
   const newStatus = returningToOriginator ? "returned" : "active";
@@ -936,6 +1124,25 @@ router.post("/:id/return", async (req, res) => {
     details: { toOrgId: prevParty.orgId, reviewCode: reviewCode ?? null, returningToOriginator },
     projectId,
   });
+
+  // Notify assignee (or DC+ fallback) at the receiving org — fire-and-forget
+  stepNotificationRecipients(returnAssigneeId, prevParty.orgId!, projectId).then(recipients => {
+    if (recipients.length === 0) return;
+    dispatchNotification({
+      event: "submission_chain.returned",
+      recipients,
+      organizationId: prevParty.orgId!,
+      entityType: "submission_chain",
+      entityId: id,
+      sendEmail: (emails) => sendEmail(
+        emails,
+        `Submission Chain ${chain.chainNumber} returned to your organisation`,
+        `<p>Submission chain <strong>${chain.chainNumber}</strong> (${chain.title}) has been returned to your organisation for revision.</p>
+         <p><strong>Reason:</strong> ${comments.trim()}</p>
+         <p>Please log in to ArcScale EDMS to review comments and prepare a resubmission.</p>`,
+      ),
+    });
+  }).catch(() => {});
 
   res.json({ chain: updated, returningToOriginator });
 });
@@ -985,7 +1192,20 @@ router.post("/:id/resubmit", async (req, res) => {
     return;
   }
 
-  const { comments } = req.body;
+  const { comments, assignedToUserId: rawAssignedUserId } = req.body;
+
+  // Resolve assignee for the first recipient:
+  let resolvedAssigneeId: number | null = null;
+  if (rawAssignedUserId) {
+    const valid = await validateAssignee(parseInt(rawAssignedUserId), firstRecipient.orgId!, projectId);
+    if (!valid) {
+      res.status(400).json({ error: "Assigned user must be a member of the receiving organisation with project access" });
+      return;
+    }
+    resolvedAssigneeId = parseInt(rawAssignedUserId);
+  } else if (firstRecipient.defaultAssigneeId) {
+    resolvedAssigneeId = firstRecipient.defaultAssigneeId;
+  }
 
   await db.insert(submissionChainStepsTable).values({
     chainId: id,
@@ -998,6 +1218,7 @@ router.post("/:id/resubmit", async (req, res) => {
     stepStatus: "actioned",
     reviewCode: null,
     comments: comments?.trim() ?? null,
+    assignedToUserId: resolvedAssigneeId,
   });
 
   const [updated] = await db
@@ -1019,9 +1240,27 @@ router.post("/:id/resubmit", async (req, res) => {
     entityType: "submission_chain",
     entityId: id,
     entityTitle: chain.chainNumber,
-    details: { newRevisionCycle: newCycle },
+    details: { newRevisionCycle: newCycle, assignedToUserId: resolvedAssigneeId },
     projectId,
   });
+
+  // Notify assignee (or DC+ fallback) at the first recipient org — fire-and-forget
+  stepNotificationRecipients(resolvedAssigneeId, firstRecipient.orgId!, projectId).then(recipients => {
+    if (recipients.length === 0) return;
+    dispatchNotification({
+      event: "submission_chain.forwarded",
+      recipients,
+      organizationId: firstRecipient.orgId!,
+      entityType: "submission_chain",
+      entityId: id,
+      sendEmail: (emails) => sendEmail(
+        emails,
+        `Submission Chain ${chain.chainNumber} resubmitted — Cycle ${newCycle}`,
+        `<p>Submission chain <strong>${chain.chainNumber}</strong> (${chain.title}) has been resubmitted for review (Cycle ${newCycle}).</p>
+         <p>Please log in to ArcScale EDMS to review the updated documents and action this submission.</p>`,
+      ),
+    });
+  }).catch(() => {});
 
   res.json(updated);
 });
@@ -1067,6 +1306,94 @@ router.post("/:id/close", async (req, res) => {
   });
 
   res.json(updated);
+});
+
+// ─── POST /:id/reassign — reassign current step to another user in same org ───
+// Permission: DC+ or PM within currentOrgId.
+// The new assignee must belong to currentOrgId and have project access.
+
+router.post("/:id/reassign", async (req, res) => {
+  const projectId = parseInt(req.params.projectId);
+  const id = parseInt(req.params.id);
+  const role = await effectiveRole(req, projectId);
+  const userOrgId = req.user!.organizationId;
+
+  const chain = await loadChain(id, projectId);
+  if (!chain) { res.status(404).json({ error: "Submission chain not found" }); return; }
+
+  if (!["active", "returned"].includes(chain.currentStatus)) {
+    res.status(409).json({ error: "Reassignment is only allowed on active or returned chains" });
+    return;
+  }
+
+  // Caller must be in currentOrgId and at least DC
+  const isCurrentOrg = !userOrgId || userOrgId === chain.currentOrgId;
+  if (!isCurrentOrg || !isAtLeast(role, "document_controller")) {
+    res.status(403).json({ error: "Only the current holder organisation's Document Controller or above may reassign this step" });
+    return;
+  }
+
+  const { newAssigneeId, reason } = req.body;
+  if (!newAssigneeId) { res.status(400).json({ error: "newAssigneeId is required" }); return; }
+
+  // Validate the new assignee: must be in currentOrgId + project access
+  const newAssignee = await validateAssignee(parseInt(newAssigneeId), chain.currentOrgId, projectId);
+  if (!newAssignee) {
+    res.status(400).json({ error: "New assignee must be a member of the current holder organisation with project access" });
+    return;
+  }
+
+  // Find the latest step for this chain (the one currently pending action)
+  const [latestStep] = await db
+    .select({ id: submissionChainStepsTable.id, stepNumber: submissionChainStepsTable.stepNumber })
+    .from(submissionChainStepsTable)
+    .where(eq(submissionChainStepsTable.chainId, id))
+    .orderBy(desc(submissionChainStepsTable.stepNumber))
+    .limit(1);
+
+  if (!latestStep) {
+    res.status(400).json({ error: "No steps found for this chain — cannot reassign" });
+    return;
+  }
+
+  // Update the latest step's assignment
+  await db
+    .update(submissionChainStepsTable)
+    .set({
+      assignedToUserId: parseInt(newAssigneeId),
+      reassignedAt: new Date(),
+      reassignedById: req.user!.id,
+    })
+    .where(eq(submissionChainStepsTable.id, latestStep.id));
+
+  await createAuditLog({
+    userId: req.user!.id,
+    organizationId: req.user!.organizationId ?? undefined,
+    action: "submission_chain.reassigned",
+    entityType: "submission_chain",
+    entityId: id,
+    entityTitle: chain.chainNumber,
+    details: { newAssigneeId: parseInt(newAssigneeId), reason: reason?.trim() ?? null },
+    projectId,
+  });
+
+  // Notify the newly assigned user — fire-and-forget
+  dispatchNotification({
+    event: "submission_chain.reassigned",
+    recipients: [{ userId: newAssignee.id, email: newAssignee.email, name: `${newAssignee.firstName} ${newAssignee.lastName}` }],
+    organizationId: chain.currentOrgId,
+    entityType: "submission_chain",
+    entityId: id,
+    sendEmail: (emails) => sendEmail(
+      emails,
+      `Submission Chain ${chain.chainNumber} assigned to you`,
+      `<p>You have been assigned as the responsible reviewer for submission chain <strong>${chain.chainNumber}</strong> (${chain.title}).</p>
+       ${reason ? `<p><strong>Note from assignor:</strong> ${reason.trim()}</p>` : ""}
+       <p>Please log in to ArcScale EDMS to review and action this submission.</p>`,
+    ),
+  }).catch(() => {});
+
+  res.json({ success: true, newAssigneeId: newAssignee.id, newAssigneeName: `${newAssignee.firstName} ${newAssignee.lastName}` });
 });
 
 // ─── GET /:id/steps — step history ───────────────────────────────────────────
