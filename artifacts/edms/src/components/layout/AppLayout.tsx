@@ -739,12 +739,13 @@ function GlobalSearch() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 h-8 px-3 rounded-md border bg-muted/40 hover:bg-muted text-muted-foreground text-xs transition-colors"
-        title="Search (Ctrl+K)"
+        className="flex items-center gap-2 h-8 px-3 rounded-md border border-border/60 bg-muted/30 hover:bg-muted hover:border-border text-muted-foreground text-xs transition-all ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        title="Search — click or press Ctrl+K"
+        aria-label="Open search"
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
-        <span className="hidden sm:block w-32 text-start">{t("globalSearchPlaceholder")}</span>
-        <kbd className="hidden sm:block ms-auto font-mono text-xs bg-background/80 border rounded px-1 py-0.5">⌘K</kbd>
+        <span className="hidden sm:block w-28 text-start">Search…</span>
+        <kbd className="hidden sm:flex items-center ms-auto font-mono text-[10px] bg-background border rounded px-1 py-0.5 leading-none text-muted-foreground/70">⌘K</kbd>
       </button>
 
       {open && (
@@ -780,9 +781,34 @@ function GlobalSearch() {
             {/* ── Results area ───────────────────────────────────── */}
             <div className="max-h-[28rem] overflow-y-auto">
               {q.trim().length < 2 ? (
-                <div className="px-4 py-8 text-center space-y-1">
-                  <p className="text-sm text-muted-foreground">Type at least 2 characters to search</p>
-                  <p className="text-xs text-muted-foreground/60">Searches documents, projects, correspondence, and meetings</p>
+                /* ── Initial state: explain what this does ──────── */
+                <div className="px-5 py-5 space-y-4">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Quick search across</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { icon: FileText,     label: "Documents",     sub: "title, number, discipline" },
+                      { icon: FolderKanban, label: "Projects",      sub: "name, code" },
+                      { icon: Mail,         label: "Correspondence",sub: "subject, ref number" },
+                      { icon: CalendarDays, label: "Meetings",      sub: "title, agenda" },
+                    ] as const).map(({ icon: Icon, label, sub }) => (
+                      <div key={label} className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                        <Icon className="h-3.5 w-3.5 mt-0.5 text-muted-foreground shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium leading-none">{label}</p>
+                          <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{sub}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t">
+                    <p className="text-xs text-muted-foreground/60">Keyword match · exact words and phrases</p>
+                    <button
+                      className="text-xs text-primary hover:underline shrink-0"
+                      onClick={() => { closeSearch(); navigate("/search"); }}
+                    >
+                      Advanced Search →
+                    </button>
+                  </div>
                 </div>
               ) : isSearching ? (
                 <div className="px-4 py-8 text-center">
@@ -794,9 +820,24 @@ function GlobalSearch() {
                   <p className="text-xs text-muted-foreground">Could not reach the search service. Please try again.</p>
                 </div>
               ) : !hasQuery ? null : results.length === 0 ? (
-                <div className="px-4 py-8 text-center space-y-1">
-                  <p className="text-sm text-muted-foreground font-medium">No results for &ldquo;{debouncedQ}&rdquo;</p>
-                  <p className="text-xs text-muted-foreground/60">Try different keywords, or check the spelling</p>
+                <div className="px-5 py-6 space-y-3">
+                  <div className="text-center space-y-1">
+                    <p className="text-sm font-medium">No results for &ldquo;{debouncedQ}&rdquo;</p>
+                    <p className="text-xs text-muted-foreground">No documents, projects, correspondence, or meetings matched that keyword.</p>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 px-4 py-3 flex items-start gap-3">
+                    <Search className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium">Try the Search page</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Filter by project, date range, discipline, or status for a broader search.</p>
+                      <button
+                        className="text-xs text-primary hover:underline mt-1.5"
+                        onClick={() => { closeSearch(); navigate(`/search?q=${encodeURIComponent(debouncedQ)}`); }}
+                      >
+                        Open Search page with &ldquo;{debouncedQ}&rdquo; →
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="py-1">
