@@ -282,24 +282,24 @@ function chainSummarySelect() {
       )`,
       documentCount: sql<number>`(
         SELECT COUNT(*)::int FROM submission_chain_documents
-        WHERE chain_id = ${submissionChainsTable.id}
-          AND revision_cycle = ${submissionChainsTable.activeRevisionCycle}
+        WHERE chain_id = "submission_chains"."id"
+          AND revision_cycle = "submission_chains"."active_revision_cycle"
       )`,
       stepCount: sql<number>`(
         SELECT COUNT(*)::int FROM submission_chain_steps
-        WHERE chain_id = ${submissionChainsTable.id}
+        WHERE chain_id = "submission_chains"."id"
       )`,
       // Current step's assigned user (most recent step)
       currentAssignedUserId: sql<number | null>`(
         SELECT assigned_to_user_id FROM submission_chain_steps
-        WHERE chain_id = ${submissionChainsTable.id}
+        WHERE chain_id = "submission_chains"."id"
         ORDER BY step_number DESC LIMIT 1
       )`,
       currentAssignedUserName: sql<string | null>`(
         SELECT u.first_name || ' ' || u.last_name
         FROM submission_chain_steps s
         JOIN users u ON u.id = s.assigned_to_user_id
-        WHERE s.chain_id = ${submissionChainsTable.id}
+        WHERE s.chain_id = "submission_chains"."id"
         ORDER BY s.step_number DESC LIMIT 1
       )`,
     })
