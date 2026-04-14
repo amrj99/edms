@@ -65,6 +65,30 @@ DO $$ BEGIN ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'meeting_remind
 -- ─── SECTION 2: NEW COLUMNS ON EXISTING TABLES ────────────────────────────────
 
 -- organizations
+-- Enum for organization type (must exist before the column is added)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'organization_type') THEN
+    CREATE TYPE organization_type AS ENUM ('client', 'consultant', 'contractor', 'subcontractor');
+  END IF;
+END $$;
+
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS code                       text;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'organizations_code_unique'
+  ) THEN
+    ALTER TABLE organizations ADD CONSTRAINT organizations_code_unique UNIQUE (code);
+  END IF;
+END $$;
+
+-- Add type as nullable first, back-fill, then enforce NOT NULL
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS type organization_type;
+UPDATE organizations SET type = 'contractor' WHERE type IS NULL;
+ALTER TABLE organizations ALTER COLUMN type SET NOT NULL;
+ALTER TABLE organizations ALTER COLUMN type SET DEFAULT 'contractor';
+
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_email              text;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_phone              text;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS address                    text;
