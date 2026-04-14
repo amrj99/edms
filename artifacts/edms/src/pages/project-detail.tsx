@@ -9,7 +9,7 @@ import {
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
   LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
-  AlertTriangle, FilePlus2,
+  AlertTriangle, FilePlus2, GitMerge,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +39,7 @@ import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOver
 import { GovernanceDashboardTab } from "@/components/governance/GovernanceDashboardTab";
 import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
 import { RoleMatrix } from "@/components/governance/RoleMatrix";
+import { SubmissionChainsTab } from "@/components/submission-chains/SubmissionChainsTab";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -152,10 +153,13 @@ export default function ProjectDetail() {
   if (projLoading) return <div className="p-12 flex justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   if (!project) return <div>Project not found</div>;
 
+  const isAtLeastPM = ["system_owner", "admin", "project_manager"].includes(perms.effectiveRole ?? "");
+
   const tabs = [
     { value: "documents", icon: FileText, label: "Documents" },
     { value: "review", icon: ClipboardCheck, label: "Review" },
     { value: "transmittals", icon: Send, label: "Transmittals" },
+    { value: "submission-chains", icon: GitMerge, label: "Submission Chains" },
     { value: "correspondence", icon: Mail, label: "Correspondence" },
     { value: "packages", icon: Package, label: "Packages" },
     { value: "tasks", icon: CheckSquare, label: "Tasks" },
@@ -203,6 +207,15 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="transmittals">
             <TransmittalsTab projectId={projectId} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
+          </TabsContent>
+          <TabsContent value="submission-chains">
+            <SubmissionChainsTab
+              projectId={projectId}
+              isAtLeastPM={isAtLeastPM}
+              onOpenDocument={(docId) => {
+                setActiveTab("documents");
+              }}
+            />
           </TabsContent>
           <TabsContent value="correspondence">
             <CorrespondenceTab projectId={projectId} />
