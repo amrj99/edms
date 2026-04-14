@@ -409,13 +409,26 @@ router.get("/check-number", requireAuth, async (req, res) => {
   const number = (req.query.number as string)?.trim();
   if (!number) return res.status(400).json({ error: "number query param required" });
 
-  const existing = await db.select({ id: documentsTable.id, title: documentsTable.title })
+  const existing = await db.select({
+    id: documentsTable.id,
+    title: documentsTable.title,
+    revision: documentsTable.revision,
+    status: documentsTable.status,
+    discipline: documentsTable.discipline,
+  })
     .from(documentsTable)
     .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, number)))
     .limit(1);
 
   if (existing.length > 0) {
-    return res.json({ available: false, existingDocumentId: existing[0].id, existingTitle: existing[0].title });
+    return res.json({
+      available: false,
+      existingDocumentId: existing[0].id,
+      existingTitle: existing[0].title,
+      existingRevision: existing[0].revision,
+      existingStatus: existing[0].status,
+      existingDiscipline: existing[0].discipline,
+    });
   }
   return res.json({ available: true });
 });

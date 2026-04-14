@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Upload, Sparkles, Loader2, FileText } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Upload, Sparkles, Loader2, FileText, Check, AlertCircle, ExternalLink, FilePlus2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
+import { cn } from "@/lib/utils";
 
 const DOC_TYPES = [
   "general","drawing","specification","report","certificate",
@@ -34,6 +35,15 @@ export interface AIUploadResult {
   issuedBy: string;
 }
 
+interface DocNumberCheck {
+  checking: boolean;
+  available: boolean | null;
+  existingDocumentId?: number;
+  existingTitle?: string;
+  existingRevision?: string;
+  existingStatus?: string;
+}
+
 interface UploadWithAIDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -41,6 +51,8 @@ interface UploadWithAIDialogProps {
   projectCode?: string;
   projectName?: string;
   onSuccess: (result: AIUploadResult) => void;
+  onOpenDocument?: (docId: number) => void;
+  onUploadRevision?: (doc: { id: number; documentNumber: string; title: string; revision?: string }) => void;
 }
 
 export function UploadWithAIDialog({
@@ -50,6 +62,8 @@ export function UploadWithAIDialog({
   projectCode,
   projectName,
   onSuccess,
+  onOpenDocument,
+  onUploadRevision,
 }: UploadWithAIDialogProps) {
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [title, setTitle] = useState("");
@@ -63,6 +77,52 @@ export function UploadWithAIDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
 
+  // Inline document-number validation
+  const [docCheck, setDocCheck] = useState<DocNumberCheck>({ checking: false, available: null });
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const checkDocNumber = useCallback((number: string) => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    if (!number.trim()) {
+      setDocCheck({ checking: false, available: null });
+      return;
+    }
+    setDocCheck({ checking: true, available: null });
+    debounceTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/projects/${projectId}/documents/check-number?number=${encodeURIComponent(number.trim())}`,
+          { credentials: "include" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setDocCheck({
+            checking: false,
+            available: data.available,
+            existingDocumentId: data.existingDocumentId,
+            existingTitle: data.existingTitle,
+            existingRevision: data.existingRevision,
+            existingStatus: data.existingStatus,
+          });
+        } else {
+          setDocCheck({ checking: false, available: null });
+        }
+      } catch {
+        setDocCheck({ checking: false, available: null });
+      }
+    }, 400);
+  }, [projectId]);
+
+  // Reset check when dialog closes
+  useEffect(() => {
+    if (!open) setDocCheck({ checking: false, available: null });
+  }, [open]);
+
+  const handleDocNumberChange = (val: string) => {
+    setDocNumber(val);
+    checkDocNumber(val);
+  };
+
   const handleAIProcedureApply = (suggestion: Partial<{
     documentNumber: string;
     discipline: string;
@@ -70,7 +130,10 @@ export function UploadWithAIDialog({
     revision: string;
     title: string;
   }>) => {
-    if (suggestion.documentNumber) setDocNumber(suggestion.documentNumber);
+    if (suggestion.documentNumber) {
+      setDocNumber(suggestion.documentNumber);
+      checkDocNumber(suggestion.documentNumber);
+    }
     if (suggestion.discipline) setDiscipline(suggestion.discipline);
     if (suggestion.documentType) setDocType(suggestion.documentType);
     if (suggestion.revision) setRevision(suggestion.revision);
@@ -86,6 +149,7 @@ export function UploadWithAIDialog({
     const resolvedTitle = title.trim() || (uploadedFile ? uploadedFile.name.replace(/\.[^.]+$/, "") : "");
     if (!resolvedTitle) { setTitleError("Title is required."); return; }
     if (!uploadedFile) { setTitleError("Please upload a file first."); return; }
+    if (docCheck.available === false) return; // blocked by duplicate
     setTitleError(null);
     setIsSaving(true);
     try {
@@ -113,8 +177,11 @@ export function UploadWithAIDialog({
     setTitle(""); setDocNumber(""); setDiscipline(""); setRevision("01");
     setDocType("general"); setStatus("draft"); setSource(""); setIssuedBy("");
     setTitleError(null);
+    setDocCheck({ checking: false, available: null });
     onOpenChange(false);
   };
+
+  const isDuplicate = docCheck.available === false;
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -187,12 +254,84 @@ export function UploadWithAIDialog({
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Document Number</Label>
-                  <Input
-                    value={docNumber}
-                    onChange={e => setDocNumber(e.target.value)}
-                    placeholder="Auto-generated or from AI"
-                    className="mt-1 font-mono"
-                  />
+                  <div className="relative mt-1">
+                    <Input
+                      value={docNumber}
+                      onChange={e => handleDocNumberChange(e.target.value)}
+                      placeholder="Auto-generated or from AI"
+                      className={cn(
+                        "font-mono pr-7",
+                        isDuplicate && "border-amber-500 focus-visible:ring-amber-400/30",
+                        docCheck.available === true && "border-emerald-400 focus-visible:ring-emerald-400/30",
+                      )}
+                    />
+                    {docNumber && docCheck.checking && (
+                      <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground animate-spin" />
+                    )}
+                    {docNumber && docCheck.available === true && (
+                      <Check className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-500" />
+                    )}
+                    {docNumber && isDuplicate && (
+                      <AlertCircle className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-amber-500" />
+                    )}
+                  </div>
+
+                  {/* Found: existing document */}
+                  {isDuplicate && (
+                    <div className="mt-1.5 rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2.5 space-y-1.5">
+                      <p className="text-xs font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                        This document already exists
+                      </p>
+                      {docCheck.existingTitle && (
+                        <p className="text-xs text-amber-700 dark:text-amber-400">
+                          <span className="font-medium">{docCheck.existingTitle}</span>
+                          {(docCheck.existingRevision || docCheck.existingStatus) && (
+                            <span className="text-amber-600/80 dark:text-amber-500">
+                              {" · "}Rev {docCheck.existingRevision ?? "01"}
+                              {docCheck.existingStatus && <> · {docCheck.existingStatus.replace(/_/g, " ")}</>}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                      <div className="flex gap-3 pt-0.5">
+                        {onOpenDocument && docCheck.existingDocumentId && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                            onClick={() => { onOpenDocument(docCheck.existingDocumentId!); handleClose(); }}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" /> Open Document
+                          </button>
+                        )}
+                        {onUploadRevision && docCheck.existingDocumentId && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                            onClick={() => {
+                              onUploadRevision({
+                                id: docCheck.existingDocumentId!,
+                                documentNumber: docNumber,
+                                title: docCheck.existingTitle ?? "",
+                                revision: docCheck.existingRevision,
+                              });
+                              handleClose();
+                            }}
+                          >
+                            <FilePlus2 className="h-3.5 w-3.5" /> Upload New Revision
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Not found: confirm new document */}
+                  {docNumber && docCheck.available === true && (
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
+                      <Check className="h-3.5 w-3.5 shrink-0" />
+                      No document found — a new document will be created
+                    </p>
+                  )}
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Issued By</Label>
@@ -275,9 +414,11 @@ export function UploadWithAIDialog({
           <Button variant="outline" onClick={handleClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || !uploadedFile}>
+          <Button onClick={handleSave} disabled={isSaving || !uploadedFile || isDuplicate}>
             {isSaving ? (
               <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Saving…</>
+            ) : isDuplicate ? (
+              <><AlertCircle className="h-3.5 w-3.5 mr-1.5" /> Document number already exists</>
             ) : (
               <><Upload className="h-3.5 w-3.5 mr-1.5" /> Save Document</>
             )}

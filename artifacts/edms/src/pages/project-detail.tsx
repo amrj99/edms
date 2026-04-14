@@ -807,6 +807,15 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             projectCode={projectCode}
             projectName={projectName}
             onSuccess={handleMultiUploadSuccess}
+            onOpenDocument={id => {
+              setIsUploadOpen(false);
+              const doc = (allDocs as any[]).find(d => d.id === id);
+              if (doc) setDocPreview(doc);
+            }}
+            onUploadRevision={doc => {
+              setIsUploadOpen(false);
+              setNewRevDoc(doc);
+            }}
           />
           <UploadWithAIDialog
             open={isAIUploadOpen}
@@ -815,6 +824,15 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             projectCode={projectCode}
             projectName={projectName}
             onSuccess={handleAIUploadSuccess}
+            onOpenDocument={id => {
+              setIsAIUploadOpen(false);
+              const doc = (allDocs as any[]).find(d => d.id === id);
+              if (doc) setDocPreview(doc);
+            }}
+            onUploadRevision={doc => {
+              setIsAIUploadOpen(false);
+              setNewRevDoc(doc);
+            }}
           />
         </div>
       </div>

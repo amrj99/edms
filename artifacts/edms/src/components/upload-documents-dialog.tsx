@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type DragEvent, type ChangeEvent } from "react";
 import {
   FileText, Upload, X, Check, AlertCircle, Copy, Loader2,
-  ChevronDown, ChevronUp, ClipboardCopy, Sparkles,
+  ChevronDown, ChevronUp, ClipboardCopy, Sparkles, ExternalLink, FilePlus2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -47,6 +47,8 @@ interface UploadDocumentsDialogProps {
   projectCode?: string;
   projectName?: string;
   onSuccess: (docs: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }[]) => void;
+  onOpenDocument?: (docId: number) => void;
+  onUploadRevision?: (doc: { id: number; documentNumber: string; title: string; revision?: string }) => void;
 }
 
 function formatSize(bytes: number) {
@@ -116,9 +118,11 @@ interface DocNumberCheck {
   available: boolean | null;
   existingDocumentId?: number;
   existingTitle?: string;
+  existingRevision?: string;
+  existingStatus?: string;
 }
 
-export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCode, projectName, onSuccess }: UploadDocumentsDialogProps) {
+export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCode, projectName, onSuccess, onOpenDocument, onUploadRevision }: UploadDocumentsDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<StagedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -154,6 +158,8 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
               available: data.available,
               existingDocumentId: data.existingDocumentId,
               existingTitle: data.existingTitle,
+              existingRevision: data.existingRevision,
+              existingStatus: data.existingStatus,
             },
           }));
         } else {
@@ -480,7 +486,8 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                             placeholder="Auto-generated if blank"
                             className={cn(
                               "h-8 text-sm font-mono pr-7",
-                              docNumberChecks[entry.id]?.available === false && "border-amber-400 focus-visible:ring-amber-400/30"
+                              docNumberChecks[entry.id]?.available === false && "border-amber-500 focus-visible:ring-amber-400/30",
+                              docNumberChecks[entry.id]?.available === true && "border-emerald-400 focus-visible:ring-emerald-400/30",
                             )}
                             disabled={entry.uploadStatus === "uploading"}
                           />
@@ -494,16 +501,61 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                             <AlertCircle className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-amber-500" />
                           )}
                         </div>
+                        {/* Found: existing document — show details + actions */}
                         {docNumberChecks[entry.id]?.available === false && (
-                          <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1 flex items-start gap-1">
-                            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                            <span>
-                              Number already exists
-                              {docNumberChecks[entry.id]?.existingTitle && (
-                                <> — &ldquo;{docNumberChecks[entry.id]!.existingTitle}&rdquo;</>
+                          <div className="mt-1.5 rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2.5 py-2 space-y-1.5">
+                            <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3 shrink-0" />
+                              This document already exists
+                            </p>
+                            {docNumberChecks[entry.id]?.existingTitle && (
+                              <p className="text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
+                                <span className="font-medium">{docNumberChecks[entry.id]!.existingTitle}</span>
+                                {(docNumberChecks[entry.id]?.existingRevision || docNumberChecks[entry.id]?.existingStatus) && (
+                                  <span className="text-amber-600/80 dark:text-amber-500">
+                                    {" · "}Rev {docNumberChecks[entry.id]!.existingRevision ?? "01"}
+                                    {docNumberChecks[entry.id]!.existingStatus && (
+                                      <> · {docNumberChecks[entry.id]!.existingStatus!.replace(/_/g, " ")}</>
+                                    )}
+                                  </span>
+                                )}
+                              </p>
+                            )}
+                            <div className="flex gap-1.5 pt-0.5">
+                              {onOpenDocument && docNumberChecks[entry.id]?.existingDocumentId && (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                                  onClick={() => onOpenDocument(docNumberChecks[entry.id]!.existingDocumentId!)}
+                                >
+                                  <ExternalLink className="h-3 w-3" /> Open Document
+                                </button>
                               )}
-                              . Upload will be blocked. Change the number or leave blank for auto-generation.
-                            </span>
+                              {onUploadRevision && docNumberChecks[entry.id]?.existingDocumentId && (
+                                <>
+                                  {onOpenDocument && <span className="text-amber-400 text-[10px]">·</span>}
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400 hover:underline"
+                                    onClick={() => onUploadRevision({
+                                      id: docNumberChecks[entry.id]!.existingDocumentId!,
+                                      documentNumber: entry.meta.docNumber,
+                                      title: docNumberChecks[entry.id]!.existingTitle ?? "",
+                                      revision: docNumberChecks[entry.id]!.existingRevision,
+                                    })}
+                                  >
+                                    <FilePlus2 className="h-3 w-3" /> Upload New Revision
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        {/* Available: confirm new document will be created */}
+                        {entry.meta.docNumber && docNumberChecks[entry.id]?.available === true && (
+                          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1">
+                            <Check className="h-3 w-3 shrink-0" />
+                            No document found — a new document will be created
                           </p>
                         )}
                       </div>
