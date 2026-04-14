@@ -538,6 +538,11 @@ export function AppSidebar() {
           <p className="text-[10px] text-sidebar-foreground/30 px-1">
             © {new Date().getFullYear()} ArcScale EDMS
           </p>
+          {(import.meta.env.VITE_GIT_HASH && import.meta.env.VITE_GIT_HASH !== "unknown") && (
+            <p className="text-[10px] text-sidebar-foreground/20 px-1 font-mono" title={`Built: ${import.meta.env.VITE_BUILD_TIME ?? "unknown"}`}>
+              build {import.meta.env.VITE_GIT_HASH}
+            </p>
+          )}
         </div>
       </SidebarFooter>
 

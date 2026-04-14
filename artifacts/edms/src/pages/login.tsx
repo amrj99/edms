@@ -200,6 +200,11 @@ export default function Login() {
             {" / "}
             <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">Admin123!</span>
           </p>
+          {(import.meta.env.VITE_GIT_HASH && import.meta.env.VITE_GIT_HASH !== "unknown") && (
+            <p className="text-center text-[10px] text-muted-foreground/40 font-mono mt-1" title={`Built: ${import.meta.env.VITE_BUILD_TIME ?? "unknown"}`}>
+              build {import.meta.env.VITE_GIT_HASH} · {import.meta.env.VITE_BUILD_TIME?.slice(0, 10)}
+            </p>
+          )}
         </div>
       </div>
 

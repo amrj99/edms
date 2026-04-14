@@ -36,6 +36,13 @@ RUN pnpm run build
 FROM deps AS frontend-builder
 WORKDIR /app
 
+# Inject build identity — values come from deploy.sh --build-arg flags.
+# Vite bakes VITE_* env vars into the bundle at build time.
+ARG BUILD_TIME=unknown
+ARG GIT_HASH=unknown
+ENV VITE_BUILD_TIME=$BUILD_TIME
+ENV VITE_GIT_HASH=$GIT_HASH
+
 COPY tsconfig.base.json ./
 COPY lib/ ./lib/
 COPY artifacts/edms/ ./artifacts/edms/

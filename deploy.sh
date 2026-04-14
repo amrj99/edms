@@ -6,13 +6,12 @@
 #   cd /var/www/edms && bash deploy.sh
 #
 # What it does:
-#   1. Pulls latest code from GitHub
+#   1. Pulls latest code from GitHub + prints commit hash for verification
 #   2. Applies the full safe SQL migration (handles all missing tables/columns)
-#   3. Rebuilds the API Docker image with latest code (bakes in current schema)
-#   4. Restarts the API container (entrypoint runs drizzle-kit push for final sync)
+#   3. Rebuilds API + Frontend images with --no-cache, stamping git hash + time
+#   4. Force-recreates containers so the new image is always used
 #   5. Verifies the API is healthy
-#
-# The SQL migration + image rebuild combination guarantees full schema alignment.
+#   6. (Optional) Purges Cloudflare cache — set CF_API_TOKEN + CF_ZONE_ID in .env
 # =============================================================================
 
 set -e
@@ -30,12 +29,18 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── Step 1: Pull latest code ──────────────────────────────────────────────────
-echo "► [1/5] Pulling latest code from GitHub..."
+echo "► [1/6] Pulling latest code from GitHub..."
 git pull
+GIT_HASH=$(git rev-parse --short HEAD)
+GIT_FULL=$(git rev-parse HEAD)
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "  ✓ Code updated."
+echo "  → Commit : $GIT_FULL"
+echo "  → Short  : $GIT_HASH"
+echo "  → Built  : $BUILD_TIME"
 
 # ── Step 2: Apply SQL migration ───────────────────────────────────────────────
-echo "► [2/5] Applying full schema migration..."
+echo "► [2/6] Applying full schema migration..."
 if [ -f "$MIGRATION_FILE" ]; then
   docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" < "$MIGRATION_FILE"
   echo "  ✓ Migration applied."
@@ -44,17 +49,25 @@ else
 fi
 
 # ── Step 3: Rebuild ALL images (API + Frontend) ───────────────────────────────
-echo "► [3/5] Rebuilding API and frontend images with latest code..."
-docker compose -f "$COMPOSE_FILE" build --no-cache api frontend
+# --no-cache: always rebuild from source, never reuse layer cache.
+# --build-arg: bakes git hash + build time into the frontend bundle.
+echo "► [3/6] Rebuilding API and frontend images with latest code..."
+docker compose -f "$COMPOSE_FILE" build --no-cache \
+  --build-arg BUILD_TIME="$BUILD_TIME" \
+  --build-arg GIT_HASH="$GIT_HASH" \
+  api frontend
 echo "  ✓ Images rebuilt."
 
-# ── Step 4: Restart containers ────────────────────────────────────────────────
-echo "► [4/5] Restarting API and frontend containers..."
-docker compose -f "$COMPOSE_FILE" up -d api frontend
-echo "  ✓ Containers started."
+# ── Step 4: Force-recreate containers ────────────────────────────────────────
+# --force-recreate ensures Docker always swaps to the newly built image,
+# even if the compose spec (ports/volumes) hasn't changed. Without this,
+# Docker may leave the old container running despite a new image existing.
+echo "► [4/6] Force-recreating API and frontend containers..."
+docker compose -f "$COMPOSE_FILE" up -d --force-recreate api frontend
+echo "  ✓ Containers recreated."
 
 # ── Step 5: Health check ──────────────────────────────────────────────────────
-echo "► [5/5] Waiting for API to become healthy..."
+echo "► [5/6] Waiting for API to become healthy..."
 for i in $(seq 1 20); do
   sleep 3
   STATUS=$(docker inspect --format='{{.State.Health.Status}}' edms_api 2>/dev/null || echo "starting")
@@ -70,9 +83,37 @@ for i in $(seq 1 20); do
   fi
 done
 
+# ── Step 6: Cloudflare cache purge (optional) ─────────────────────────────────
+# Set CF_API_TOKEN and CF_ZONE_ID in /var/www/edms/.env (or export them) to enable.
+if [ -f "/var/www/edms/.env" ]; then
+  set -a; source /var/www/edms/.env; set +a
+fi
+echo "► [6/6] Cloudflare cache purge..."
+if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ZONE_ID" ]; then
+  PURGE_RESULT=$(curl -s -X POST \
+    "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+    -H "Authorization: Bearer ${CF_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    --data '{"purge_everything":true}')
+  if echo "$PURGE_RESULT" | grep -q '"success":true'; then
+    echo "  ✓ Cloudflare cache purged — all edges will fetch fresh content."
+  else
+    echo "  ⚠ Cloudflare purge failed: $PURGE_RESULT"
+  fi
+else
+  echo "  ℹ CF_API_TOKEN / CF_ZONE_ID not set — skipping Cloudflare purge."
+  echo "    To enable: add CF_API_TOKEN and CF_ZONE_ID to /var/www/edms/.env"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════"
-echo "  Deploy complete. To view API logs:"
+echo "  Deploy complete."
+echo "  Commit : $GIT_HASH  |  Built : $BUILD_TIME"
+echo ""
+echo "  Verify in UI: the sidebar footer shows the commit hash."
+echo "  Verify on VPS: docker inspect edms_frontend | grep -i created"
+echo ""
+echo "  To view API logs:"
 echo "    docker compose logs --tail=30 api"
 echo "══════════════════════════════════════════════════════"
 echo ""
