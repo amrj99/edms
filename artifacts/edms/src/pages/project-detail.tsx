@@ -354,6 +354,8 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const handleMultiUploadSuccess = async (
     uploads: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }[]
   ) => {
+    let failedCount = 0;
+    const duplicates: string[] = [];
     for (const u of uploads) {
       try {
         await createDoc.mutateAsync({
@@ -373,30 +375,58 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             fileSize: u.fileSize,
           } as any,
         });
-      } catch (_) {}
+      } catch (err: any) {
+        failedCount++;
+        const msg: string = err?.message ?? "";
+        if (msg.includes("409") || msg.toLowerCase().includes("already exists")) {
+          duplicates.push(u.meta.docNumber || u.fileName);
+        }
+      }
     }
-    setIsUploadOpen(false);
+    if (duplicates.length > 0) {
+      toast({
+        title: `${duplicates.length} duplicate document number${duplicates.length > 1 ? "s" : ""}`,
+        description: `${duplicates.join(", ")} already exist${duplicates.length === 1 ? "s" : ""} in this project. Use "Upload New Revision" for existing documents.`,
+        variant: "destructive",
+      });
+    } else if (failedCount > 0) {
+      toast({ title: `${failedCount} document${failedCount > 1 ? "s" : ""} failed to save`, variant: "destructive" });
+    }
+    if (failedCount < uploads.length) setIsUploadOpen(false);
   };
 
   const handleAIUploadSuccess = async (result: AIUploadResult) => {
-    await createDoc.mutateAsync({
-      projectId,
-      data: {
-        documentNumber: result.docNumber || `DOC-${Date.now()}`,
-        title: result.title || result.fileName.replace(/\.[^.]+$/, ""),
-        revision: result.revision || "01",
-        status: (result.status as any) || "draft",
-        discipline: result.discipline || undefined,
-        documentType: result.docType || "general",
-        source: result.source || undefined,
-        issuedBy: result.issuedBy || undefined,
-        fileUrl: result.fileUrl,
-        fileName: result.fileName,
-        fileSize: result.fileSize,
-      } as any,
-    });
-    toast({ title: "Document saved successfully" });
-    setIsAIUploadOpen(false);
+    try {
+      await createDoc.mutateAsync({
+        projectId,
+        data: {
+          documentNumber: result.docNumber || `DOC-${Date.now()}`,
+          title: result.title || result.fileName.replace(/\.[^.]+$/, ""),
+          revision: result.revision || "01",
+          status: (result.status as any) || "draft",
+          discipline: result.discipline || undefined,
+          documentType: result.docType || "general",
+          source: result.source || undefined,
+          issuedBy: result.issuedBy || undefined,
+          fileUrl: result.fileUrl,
+          fileName: result.fileName,
+          fileSize: result.fileSize,
+        } as any,
+      });
+      toast({ title: "Document saved successfully" });
+      setIsAIUploadOpen(false);
+    } catch (err: any) {
+      const msg: string = err?.message ?? "";
+      if (msg.includes("409") || msg.toLowerCase().includes("already exists")) {
+        toast({
+          title: "Document number already exists",
+          description: `"${result.docNumber}" is already used in this project. Change the document number, or use Upload New Revision for the existing document.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Failed to save document", description: msg || "An unexpected error occurred.", variant: "destructive" });
+      }
+    }
   };
 
   const updateDoc = useMutation({
