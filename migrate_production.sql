@@ -768,5 +768,145 @@ CREATE TABLE IF NOT EXISTS skill_executions (
 ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS external_emails text;
 ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS cc_emails text;
 
--- ─── SECTION 5: DONE ──────────────────────────────────────────────────────────
+-- ─── SECTION 6: Document numbering ────────────────────────────────────────────
+
+-- document_number column (added when numbered-document feature landed).
+-- Step 1: Add nullable so existing rows don't violate NOT NULL.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_number text;
+
+-- Step 2: Back-fill existing rows so they each get a unique placeholder.
+UPDATE documents SET document_number = 'DOC-' || id::text WHERE document_number IS NULL;
+
+-- Step 3: Enforce NOT NULL now that every row has a value.
+ALTER TABLE documents ALTER COLUMN document_number SET NOT NULL;
+ALTER TABLE documents ALTER COLUMN document_number SET DEFAULT '';
+
+-- Step 4: Unique constraint (project_id, document_number) — safe because data is now unique.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'documents_project_number_unique'
+  ) THEN
+    ALTER TABLE documents
+      ADD CONSTRAINT documents_project_number_unique UNIQUE (project_id, document_number);
+  END IF;
+END $$;
+
+-- document_sequences: tracks per-project/org/discipline/doctype auto-increment sequences.
+CREATE TABLE IF NOT EXISTS document_sequences (
+  id              serial PRIMARY KEY,
+  project_id      integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  organization_id integer NOT NULL REFERENCES organizations(id),
+  discipline      text    NOT NULL DEFAULT '',
+  doc_type        text    NOT NULL DEFAULT '',
+  last_seq        integer NOT NULL DEFAULT 0
+);
+
+-- document_files: additional file attachments on a document.
+CREATE TABLE IF NOT EXISTS document_files (
+  id              serial PRIMARY KEY,
+  organization_id integer REFERENCES organizations(id),
+  document_id     integer NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  file_name       text    NOT NULL,
+  file_url        text    NOT NULL,
+  file_size       integer,
+  file_type       text,
+  uploaded_by_id  integer REFERENCES users(id),
+  created_at      timestamp NOT NULL DEFAULT now()
+);
+
+-- document_revisions: file_carried_forward column (added with revision UX improvements).
+ALTER TABLE document_revisions ADD COLUMN IF NOT EXISTS file_carried_forward boolean NOT NULL DEFAULT false;
+
+-- ─── SECTION 6: DONE ──────────────────────────────────────────────────────────
+
+-- ─── SECTION 7: Submission Chains ─────────────────────────────────────────────
+
+-- Enums (safe — only created if they don't already exist).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'submission_chain_status') THEN
+    CREATE TYPE submission_chain_status AS ENUM (
+      'draft', 'active', 'returned', 'approved', 'approved_with_comments', 'closed'
+    );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'chain_step_action') THEN
+    CREATE TYPE chain_step_action AS ENUM ('forward', 'return');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'chain_step_status') THEN
+    CREATE TYPE chain_step_status AS ENUM ('pending', 'under_review', 'reviewed', 'actioned');
+  END IF;
+END $$;
+
+-- submission_chains: the top-level workflow entity.
+CREATE TABLE IF NOT EXISTS submission_chains (
+  id                      serial PRIMARY KEY,
+  chain_number            text NOT NULL UNIQUE,
+  title                   text NOT NULL,
+  description             text,
+  project_id              integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  originating_org_id      integer NOT NULL REFERENCES organizations(id),
+  current_org_id          integer NOT NULL REFERENCES organizations(id),
+  current_status          submission_chain_status NOT NULL DEFAULT 'draft',
+  active_revision_cycle   integer NOT NULL DEFAULT 1,
+  current_step_started_at timestamp NOT NULL DEFAULT now(),
+  auto_closed_at          timestamp,
+  created_by_id           integer NOT NULL REFERENCES users(id),
+  created_at              timestamp NOT NULL DEFAULT now(),
+  updated_at              timestamp NOT NULL DEFAULT now()
+);
+
+-- submission_chain_allowed_parties: organisations allowed in the chain and their step order.
+CREATE TABLE IF NOT EXISTS submission_chain_allowed_parties (
+  id                  serial PRIMARY KEY,
+  chain_id            integer NOT NULL REFERENCES submission_chains(id) ON DELETE CASCADE,
+  org_id              integer NOT NULL REFERENCES organizations(id),
+  step_order          integer NOT NULL,
+  label               text,
+  default_assignee_id integer REFERENCES users(id)
+);
+
+-- submission_chain_steps: one row per forward/return movement event.
+CREATE TABLE IF NOT EXISTS submission_chain_steps (
+  id                  serial PRIMARY KEY,
+  chain_id            integer NOT NULL REFERENCES submission_chains(id) ON DELETE CASCADE,
+  step_number         integer NOT NULL,
+  revision_cycle      integer NOT NULL,
+  action              chain_step_action NOT NULL,
+  from_org_id         integer NOT NULL REFERENCES organizations(id),
+  to_org_id           integer NOT NULL REFERENCES organizations(id),
+  actioned_by_id      integer REFERENCES users(id),
+  step_status         chain_step_status NOT NULL DEFAULT 'pending',
+  review_code         text,
+  comments            text,
+  reviewed_by_id      integer REFERENCES users(id),
+  reviewed_at         timestamp,
+  transmittal_id      integer REFERENCES transmittals(id),
+  assigned_to_user_id integer REFERENCES users(id),
+  reassigned_at       timestamp,
+  reassigned_by_id    integer REFERENCES users(id),
+  created_at          timestamp NOT NULL DEFAULT now()
+);
+
+-- submission_chain_documents: tracks which revision of each document is in scope per cycle.
+CREATE TABLE IF NOT EXISTS submission_chain_documents (
+  id             serial PRIMARY KEY,
+  chain_id       integer NOT NULL REFERENCES submission_chains(id) ON DELETE CASCADE,
+  document_id    integer NOT NULL REFERENCES documents(id),
+  revision_id    integer NOT NULL REFERENCES document_revisions(id),
+  revision_cycle integer NOT NULL,
+  added_by_id    integer REFERENCES users(id),
+  added_at       timestamp NOT NULL DEFAULT now()
+);
+
+-- ─── SECTION 7: DONE ──────────────────────────────────────────────────────────
+
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;
