@@ -35,7 +35,15 @@ services:
       JWT_SECRET: ${JWT_SECRET:-edms-secret-key-change-in-production}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-edms-refresh-key-change-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      # Default storage for self-hosted VPS deployments.
+      # ── Email (Resend) ──────────────────────────────────────────────────────
+      # Set RESEND_API_KEY in your .env — without it all emails are silently skipped.
+      # FROM_EMAIL must match a verified domain in your Resend dashboard.
+      # APP_URL is used in email links — set to your public HTTPS domain.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-}
+      FROM_NAME: ${FROM_NAME:-ArcScale EDMS}
+      APP_URL: ${APP_URL:-}
+      # ── Default storage for self-hosted VPS deployments ─────────────────────
       # Override per-org via Admin → Storage settings.
       # Change DEFAULT_STORAGE_TYPE to "s3" and set S3_* vars to use MinIO / S3.
       DEFAULT_STORAGE_TYPE: ${DEFAULT_STORAGE_TYPE:-onpremise}
