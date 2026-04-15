@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { organizationsTable } from "./organizations";
+import { documentsTable } from "./documents";
 
 export const correspondenceTypeEnum = pgEnum("correspondence_type", [
   "transmittal",
@@ -115,6 +116,30 @@ export const correspondenceSequencesTable = pgTable(
   ]
 );
 
+// ─── Correspondence ↔ Document many-to-many join ─────────────────────────────
+// A single correspondence item may reference multiple documents, and a document
+// may appear in multiple correspondence items. This replaces the old single-FK
+// `linkedDocumentId` field on the correspondence table for new associations.
+// The legacy field is retained for backward compatibility with existing data.
+export const correspondenceDocumentsTable = pgTable(
+  "correspondence_documents",
+  {
+    id:               serial("id").primaryKey(),
+    correspondenceId: integer("correspondence_id")
+                        .references(() => correspondenceTable.id, { onDelete: "cascade" })
+                        .notNull(),
+    documentId:       integer("document_id")
+                        .references(() => documentsTable.id, { onDelete: "cascade" })
+                        .notNull(),
+    createdAt:        timestamp("created_at").defaultNow().notNull(),
+    createdById:      integer("created_by_id").references(() => usersTable.id),
+    note:             text("note"),
+  },
+  (t) => [
+    uniqueIndex("correspondence_documents_uniq").on(t.correspondenceId, t.documentId),
+  ]
+);
+
 export const insertCorrespondenceSchema = createInsertSchema(correspondenceTable).omit({
   id: true,
   createdAt: true,
@@ -124,3 +149,4 @@ export const insertCorrespondenceSchema = createInsertSchema(correspondenceTable
 export type InsertCorrespondence = z.infer<typeof insertCorrespondenceSchema>;
 export type Correspondence = typeof correspondenceTable.$inferSelect;
 export type CorrespondenceSequence = typeof correspondenceSequencesTable.$inferSelect;
+export type CorrespondenceDocument = typeof correspondenceDocumentsTable.$inferSelect;

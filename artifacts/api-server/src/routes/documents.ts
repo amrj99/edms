@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
@@ -697,10 +697,40 @@ router.get("/:id/activity", requireAuth, async (req, res) => {
       href: `/projects/${chain.projectId}/submission-chains`,
     }));
 
-  // 4 ── Merge & sort chronologically (newest first) ─────────────────────────
-  // Future: correspondence events appended here without any shape change
-  const events = [...revisionEvents, ...transmittalEvents, ...chainEvents]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // 4 ── Correspondence (via correspondence_documents join table) ───────────────
+  const corrRows = await db
+    .select({
+      corr: correspondenceTable,
+      link: correspondenceDocumentsTable,
+    })
+    .from(correspondenceDocumentsTable)
+    .innerJoin(correspondenceTable, eq(correspondenceDocumentsTable.correspondenceId, correspondenceTable.id))
+    .where(eq(correspondenceDocumentsTable.documentId, docId))
+    .orderBy(desc(correspondenceTable.createdAt));
+
+  const seenCorr = new Set<number>();
+  const correspondenceEvents = corrRows
+    .filter(({ corr }) => { if (seenCorr.has(corr.id)) return false; seenCorr.add(corr.id); return true; })
+    .map(({ corr }) => ({
+      id:     `corr-${corr.id}`,
+      type:   "correspondence" as const,
+      date:   (corr.sentAt ?? corr.createdAt as Date).toISOString(),
+      title:  corr.subject || corr.referenceNumber || `Correspondence #${corr.id}`,
+      status: corr.status ?? null,
+      meta: {
+        referenceNumber: corr.referenceNumber ?? null,
+        subject:         corr.subject ?? null,
+        direction:       corr.direction ?? null,
+        type:            corr.type ?? null,
+        priority:        corr.priority ?? null,
+        dueDate:         corr.dueDate ? (corr.dueDate as Date).toISOString() : null,
+      },
+      href: `/projects/${corr.projectId}/correspondence`,
+    }));
+
+  // 5 ── Merge & sort chronologically (oldest first — lifecycle narrative) ─────
+  const events = [...revisionEvents, ...transmittalEvents, ...chainEvents, ...correspondenceEvents]
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   res.json({ events, total: events.length });
 });

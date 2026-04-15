@@ -253,7 +253,7 @@ export function DocumentActivityTab({ documentId, projectId }: DocumentActivityT
         <div>
           <p className="text-sm font-medium">No activity yet</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Revisions uploaded, transmittals, and submission chains will appear here.
+            Revisions, transmittals, submission chains, and linked correspondence will appear here as they occur.
           </p>
         </div>
       </div>
@@ -289,7 +289,7 @@ export function DocumentActivityTab({ documentId, projectId }: DocumentActivityT
             </span>
           );
         })}
-        <span className="ms-auto text-[10px] italic">Correspondence linking coming soon</span>
+        <span className="ms-auto text-[10px] text-muted-foreground/60">Revisions · Transmittals · Chains · Correspondence</span>
       </div>
 
       {/* Timeline grouped by day */}
