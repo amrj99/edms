@@ -10,14 +10,14 @@ const CURRENT_YEAR = new Date().getFullYear();
 export function TermsOfUseModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
             Terms of Use
           </DialogTitle>
         </DialogHeader>
-        <ScrollArea className="flex-1 pr-4">
+        <ScrollArea className="flex-1 min-h-0 pr-4">
           <div className="space-y-5 text-sm leading-relaxed">
             <p className="text-xs text-muted-foreground">Effective as of 1 January 2024 · Version 1.0</p>
 
@@ -100,14 +100,14 @@ export function TermsOfUseModal({ open, onOpenChange }: { open: boolean; onOpenC
 export function PrivacyPolicyModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
             Privacy Policy
           </DialogTitle>
         </DialogHeader>
-        <ScrollArea className="flex-1 pr-4">
+        <ScrollArea className="flex-1 min-h-0 pr-4">
           <div className="space-y-5 text-sm leading-relaxed">
             <p className="text-xs text-muted-foreground">Effective as of 1 January 2024 · Version 1.0</p>
 
