@@ -38,10 +38,14 @@ WORKDIR /app
 
 # Inject build identity — values come from deploy.sh --build-arg flags.
 # Vite bakes VITE_* env vars into the bundle at build time.
+# IMPORTANT: Any VITE_* var used in the app MUST be declared here as ARG + ENV,
+# otherwise it will never be visible inside the container during `vite build`.
 ARG BUILD_TIME=unknown
 ARG GIT_HASH=unknown
+ARG VITE_OWNER_NAME=ArcScale EDMS
 ENV VITE_BUILD_TIME=$BUILD_TIME
 ENV VITE_GIT_HASH=$GIT_HASH
+ENV VITE_OWNER_NAME=$VITE_OWNER_NAME
 
 COPY tsconfig.base.json ./
 COPY lib/ ./lib/

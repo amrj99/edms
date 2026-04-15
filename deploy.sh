@@ -22,6 +22,14 @@ DB_USER="edms"
 DB_NAME="edms"
 MIGRATION_FILE="/var/www/edms/migrate_production.sql"
 
+# ── Load .env early so all variables (VITE_*, CF_*, etc.) are available ───────
+# This must run before any step that needs env vars — especially the build step,
+# because VITE_* vars must be passed as --build-arg to docker compose build.
+if [ -f "/var/www/edms/.env" ]; then
+  set -a; source /var/www/edms/.env; set +a
+  echo "  ✓ .env loaded."
+fi
+
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║        ArcScale EDMS — Production Deploy             ║"
@@ -55,6 +63,7 @@ echo "► [3/6] Rebuilding API and frontend images with latest code..."
 docker compose -f "$COMPOSE_FILE" build --no-cache \
   --build-arg BUILD_TIME="$BUILD_TIME" \
   --build-arg GIT_HASH="$GIT_HASH" \
+  --build-arg VITE_OWNER_NAME="${VITE_OWNER_NAME:-ArcScale EDMS}" \
   api frontend
 echo "  ✓ Images rebuilt."
 
@@ -84,10 +93,8 @@ for i in $(seq 1 20); do
 done
 
 # ── Step 6: Cloudflare cache purge (optional) ─────────────────────────────────
-# Set CF_API_TOKEN and CF_ZONE_ID in /var/www/edms/.env (or export them) to enable.
-if [ -f "/var/www/edms/.env" ]; then
-  set -a; source /var/www/edms/.env; set +a
-fi
+# Set CF_API_TOKEN and CF_ZONE_ID in /var/www/edms/.env to enable.
+# (.env is already sourced at the top of this script)
 echo "► [6/6] Cloudflare cache purge..."
 if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ZONE_ID" ]; then
   PURGE_RESULT=$(curl -s -X POST \
