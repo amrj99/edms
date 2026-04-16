@@ -165,6 +165,12 @@ ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS first_read_at       timestam
 ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS share_token         text;
 ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS share_expires_at    timestamp;
 ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS share_password_hash text;
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS recalled_at         timestamp;
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS recalled_by_id      integer REFERENCES users(id);
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS due_date            timestamp;
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS sent_at             timestamp;
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS closed_at           timestamp;
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS updated_at          timestamp NOT NULL DEFAULT now();
 
 -- notifications
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);
