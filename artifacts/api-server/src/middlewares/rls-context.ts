@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { isSysAdmin } from "../lib/auth.js";
+import { isSystemOwner } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
 
 /**
@@ -30,7 +30,7 @@ import { logger } from "../lib/logger.js";
 export async function setRlsContext(req: Request, _res: Response, next: NextFunction): Promise<void> {
   if (!req.user) return next();
 
-  const value = isSysAdmin(req.user) ? "" : String(req.user.organizationId ?? "");
+  const value = isSystemOwner(req.user) ? "" : String(req.user.organizationId ?? "");
 
   try {
     await db.execute(sql`SELECT set_config('app.current_org_id', ${value}, FALSE)`);

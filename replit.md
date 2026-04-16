@@ -33,7 +33,7 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **AI Integration:** Utilizes Replit AI Integrations (OpenAI proxy) for document analysis, task prioritization, and natural language search.
 - **OpenAPI Specification:** Used for API definition and client code generation via Orval.
 - **UI/UX Design:** Consistent layouts, theming, reusable React components, and interactive elements. Admin panels provide comprehensive configuration.
-- **Multi-Organization Isolation:** Ensures data separation between different organizations, with a focus on project and user data isolation.
+- **Multi-Organization Isolation:** Enforced at two levels: (1) SQL-level WHERE clauses on all list endpoints (meetings, action-items, documents, projects, correspondence); (2) `assertOrgMatch()` in `org-scope.ts` guards individual resource access. `isSystemOwner()` is the cross-tenant bypass — not `isSysAdmin()`. Org `admin` users are always scoped to their own organization. Only `system_owner` role spans all tenants.
 - **Module Licensing:** Per-organization feature flags control module access (e.g., dashboard, deliverables, registers, notifications), enforced via API middleware and UI components.
 - **Workflow Approvals:** Implements submit/approve/reject workflows for various records (e.g., NCR, ITR, Transmittal) with associated UI components and audit logging.
 - **Frontend Permission Hook:** `artifacts/edms/src/hooks/usePermissions.ts` — mirrors the backend rank model. Used in all UI surfaces to gate actions. Use `perms.canXxx` flags; for assignment-based actions, use `canSetReviewCode(isAssigned)` / `canCompleteReview(isAssigned)`.
@@ -45,7 +45,7 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **Real-Time WebSockets (Socket.io):** Enables real-time updates for notifications, chat, document, and task events.
 - **Circuit Breaker for Rules:** Implements a circuit breaker pattern for automation rules to prevent continuous execution of failing rules.
 - **Usage Monitoring Dashboard:** Provides per-organization metrics for documents, correspondence, AI calls, rule executions, and user seats.
-- **Onboarding (Self-Service Org Registration):** Allows new organizations and their administrators to register through a public endpoint.
+- **Onboarding (Invite-Only):** Public self-registration is disabled (`registrationEnabled=false` in system_settings). Internal user creation via `POST /api/users` (Admin panel → Add User) is unaffected. System owner or org admin can create users, invite them, and assign them to organizations at any time.
 - **Stripe Billing:** Integrated for managing subscription plans, user limits, and storage limits, with webhook handling for payment events.
 - **Elasticsearch Search:** Provides full-text search capabilities, falling back to SQL search if Elasticsearch is not configured.
 

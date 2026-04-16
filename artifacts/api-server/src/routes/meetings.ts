@@ -4,8 +4,8 @@ import {
   meetingsTable, meetingAttendeesTable, meetingActionItemsTable,
   meetingAttachmentsTable, usersTable, projectsTable, notificationsTable,
 } from "@workspace/db";
-import { eq, desc, and, or, ilike, inArray, lt, ne, count } from "drizzle-orm";
-import { requireAuth, requireRole, isSysAdmin } from "../lib/auth.js";
+import { eq, desc, and, or, ilike, inArray, lt, ne, count, isNull, type SQL } from "drizzle-orm";
+import { requireAuth, requireRole, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
@@ -19,22 +19,34 @@ function fmtRef(id: number): string {
 
 // ─── List meetings ─────────────────────────────────────────────────────────────
 router.get("/", async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const orgId  = req.user!.organizationId;
+  const user   = req.user!;
+  const orgId  = user.organizationId;
 
   const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
   const status    = req.query.status as string | undefined;
   const q         = req.query.q as string | undefined;
 
-  let projectIds: number[] | undefined;
+  // ── Build SQL WHERE conditions ───────────────────────────────────────────────
+  // system_owner sees all meetings. All other users are strictly org-scoped.
+  // Meetings with null organizationId are system-level and never shown to org users.
+  const sqlConditions: SQL<unknown>[] = [];
+
+  if (!isSystemOwner(user)) {
+    if (!orgId) {
+      res.json({ meetings: [] });
+      return;
+    }
+    // Enforce tenant isolation at the database level.
+    // This covers both project-scoped meetings and org-level meetings (projectId = null).
+    sqlConditions.push(eq(meetingsTable.organizationId, orgId) as SQL<unknown>);
+  }
+
   if (projectId) {
-    projectIds = [projectId];
-  } else if (orgId) {
-    const projs = await db
-      .select({ id: projectsTable.id })
-      .from(projectsTable)
-      .where(eq(projectsTable.organizationId, orgId));
-    projectIds = projs.map(p => p.id);
+    sqlConditions.push(eq(meetingsTable.projectId, projectId) as SQL<unknown>);
+  }
+
+  if (status) {
+    sqlConditions.push(eq(meetingsTable.status, status) as SQL<unknown>);
   }
 
   const rows = await db
@@ -54,21 +66,20 @@ router.get("/", async (req: Request, res: Response) => {
     .from(meetingsTable)
     .leftJoin(usersTable, eq(meetingsTable.organizedById, usersTable.id))
     .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+    .where(sqlConditions.length > 0 ? and(...sqlConditions) : undefined)
     .orderBy(desc(meetingsTable.meetingDate));
 
-  const filtered = rows.filter(row => {
-    if (status && row.meeting.status !== status) return false;
-    if (projectIds && row.meeting.projectId && !projectIds.includes(row.meeting.projectId)) return false;
-    if (q) {
-      const lq = q.toLowerCase();
-      return (
-        row.meeting.title.toLowerCase().includes(lq) ||
-        row.meeting.referenceNumber?.toLowerCase().includes(lq) ||
-        row.meeting.agenda?.toLowerCase().includes(lq)
-      );
-    }
-    return true;
-  });
+  // Apply free-text search in JS (no index needed for low-cardinality searches)
+  const filtered = q
+    ? rows.filter(row => {
+        const lq = q.toLowerCase();
+        return (
+          row.meeting.title.toLowerCase().includes(lq) ||
+          row.meeting.referenceNumber?.toLowerCase().includes(lq) ||
+          row.meeting.agenda?.toLowerCase().includes(lq)
+        );
+      })
+    : rows;
 
   const meetings = filtered.map(r => ({
     ...r.meeting,
@@ -81,20 +92,25 @@ router.get("/", async (req: Request, res: Response) => {
 
 // ─── Cross-project action items list ──────────────────────────────────────────
 router.get("/action-items", async (req: Request, res: Response) => {
-  const userId    = req.user!.id;
-  const orgId     = req.user!.organizationId;
+  const user      = req.user!;
+  const orgId     = user.organizationId;
   const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
   const status    = req.query.status as string | undefined;
   const overdue   = req.query.overdue === "true";
   const assignee  = req.query.assignee ? parseInt(req.query.assignee as string) : undefined;
 
-  // Resolve visible projects
-  let allowedProjectIds: number[] | undefined;
+  // ── SQL-level org isolation ───────────────────────────────────────────────────
+  // Action items are fetched via their parent meeting. We filter on
+  // meetingsTable.organizationId to enforce tenant boundaries at the DB level.
+  const sqlConditions: SQL<unknown>[] = [];
+
+  if (!isSystemOwner(user)) {
+    if (!orgId) { res.json({ actionItems: [] }); return; }
+    sqlConditions.push(eq(meetingsTable.organizationId, orgId) as SQL<unknown>);
+  }
+
   if (projectId) {
-    allowedProjectIds = [projectId];
-  } else if (orgId) {
-    const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
-    allowedProjectIds = projs.map(p => p.id);
+    sqlConditions.push(eq(meetingsTable.projectId, projectId) as SQL<unknown>);
   }
 
   const rows = await db.select({
@@ -107,11 +123,11 @@ router.get("/action-items", async (req: Request, res: Response) => {
     .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
     .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
     .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+    .where(sqlConditions.length > 0 ? and(...sqlConditions) : undefined)
     .orderBy(desc(meetingActionItemsTable.createdAt));
 
   const now = new Date();
   const filtered = rows.filter(r => {
-    if (allowedProjectIds && r.meeting.projectId && !allowedProjectIds.includes(r.meeting.projectId)) return false;
     if (status && r.item.status !== status) return false;
     if (overdue && !(r.item.dueDate && r.item.dueDate < now && r.item.status !== "done")) return false;
     if (assignee && r.item.assignedToId !== assignee) return false;

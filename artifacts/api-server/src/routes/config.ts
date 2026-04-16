@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { orgConfigTable, systemSettingsTable, organizationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSystemOwner } from "../lib/auth.js";
 
 const router = Router();
 
@@ -31,8 +31,8 @@ router.get("/organizations-public", async (_req, res) => {
 
 router.put("/system-settings", requireAuth, async (req, res) => {
   const user = (req as any).user;
-  if (!isSysAdmin(user)) {
-    res.status(403).json({ error: "System admin only" });
+  if (!isSystemOwner(user)) {
+    res.status(403).json({ error: "System owner only" });
     return;
   }
   const { registrationEnabled } = req.body ?? {};

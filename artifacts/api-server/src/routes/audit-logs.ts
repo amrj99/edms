@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { auditLogsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, gte, lte, ilike, or, isNull, count, type SQL } from "drizzle-orm";
-import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
 
 const router = Router();
 
@@ -86,7 +86,7 @@ router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
   const conditions: SQL<unknown>[] = [];
 
   const currentUser = req.user!;
-  if (!isSysAdmin(currentUser)) {
+  if (!isSystemOwner(currentUser)) {
     if (!currentUser.organizationId) {
       res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
       return;
@@ -166,7 +166,7 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
   const conditions: SQL<unknown>[] = [];
 
   const currentUser = req.user!;
-  if (!isSysAdmin(currentUser)) {
+  if (!isSystemOwner(currentUser)) {
     if (!currentUser.organizationId) {
       res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
       return;
@@ -242,7 +242,7 @@ router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res)
   const conditions: SQL<unknown>[] = [];
 
   const currentUser = req.user!;
-  if (!isSysAdmin(currentUser)) {
+  if (!isSystemOwner(currentUser)) {
     if (!currentUser.organizationId) {
       res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
       return;

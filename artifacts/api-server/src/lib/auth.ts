@@ -123,13 +123,30 @@ export function requireRole(...roles: string[]) {
   };
 }
 
+/**
+ * Returns true ONLY for the platform-level system owner.
+ * Use this for cross-tenant operations — listing all organizations,
+ * global server config, applying subscription tiers across orgs, etc.
+ *
+ * Do NOT use this where org-level admins should also have access.
+ * For that, use isSysAdmin() which covers admin + system_owner.
+ */
+export function isSystemOwner(user: AuthUser): boolean {
+  return user.role === "system_owner";
+}
+
+/**
+ * Returns true for organization admins AND the platform system owner.
+ * Use this for elevated within-org operations where both roles need access.
+ * Do NOT use for cross-org operations — use isSystemOwner() there.
+ */
 export function isSysAdmin(user: AuthUser): boolean {
   return user.role === "system_owner" || user.role === "admin";
 }
 
 export function requireSysAdmin(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) { res.status(401).json({ error: "Unauthorized" }); return; }
-  if (!isSysAdmin(req.user)) { res.status(403).json({ error: "Forbidden", message: "System admin required" }); return; }
+  if (!isSystemOwner(req.user)) { res.status(403).json({ error: "Forbidden", message: "System owner required" }); return; }
   next();
 }
 

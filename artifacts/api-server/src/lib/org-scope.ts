@@ -13,7 +13,7 @@
  */
 
 import { Request, Response, NextFunction } from "express";
-import { isSysAdmin } from "./auth.js";
+import { isSysAdmin, isSystemOwner } from "./auth.js";
 import { createAuditLog } from "./audit.js";
 
 declare global {
@@ -44,7 +44,7 @@ export function requireOrgScope(req: Request, res: Response, next: NextFunction)
 
   const orgId = user.organizationId;
 
-  if (!orgId && !isSysAdmin(user)) {
+  if (!orgId && !isSystemOwner(user)) {
     res.status(403).json({
       error: "Forbidden",
       message: "Your account has no organization assigned. Contact a system administrator.",
@@ -85,6 +85,7 @@ export function requireOrgScope(req: Request, res: Response, next: NextFunction)
  * Returns false and writes a 403 response if the check fails (caller must return immediately).
  *
  * system_owner always passes — they are not org-scoped.
+ * org admin (admin role) must still match their own organizationId.
  *
  * Example:
  *   const doc = await fetchDoc(id);
@@ -97,7 +98,7 @@ export function assertOrgMatch(
 ): boolean {
   const user = req.user!;
 
-  if (isSysAdmin(user)) return true;
+  if (isSystemOwner(user)) return true;
 
   if (!resourceOrgId || resourceOrgId !== user.organizationId) {
     res.status(403).json({

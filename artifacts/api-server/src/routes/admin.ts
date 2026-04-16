@@ -10,7 +10,7 @@ import {
   projectMembersTable, subscriptionsTable,
 } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
-import { requireAuth, isSysAdmin, requireRole } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
@@ -246,7 +246,7 @@ router.get("/usage", async (req, res) => {
     ruleExecutions: sum("ruleExecutions"), itr: sum("itr"), ncr: sum("ncr"), noc: sum("noc"),
   };
 
-  res.json({ orgs: result, totals, isSysAdmin: isSysAdmin(user) });
+  res.json({ orgs: result, totals, isSysAdmin: isSystemOwner(user) });
 });
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
@@ -704,7 +704,7 @@ router.get("/ai-quota", requireAuth, async (req, res) => {
 
 // PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (sysadmin only)
 router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
-  if (!isSysAdmin(req.user!)) return res.status(403).json({ error: "System owner access required" });
+  if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
 
   const orgId = parseInt(req.params.orgId);
   const { tier } = req.body as { tier: SubscriptionTier };
@@ -748,7 +748,7 @@ router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, 
  * Both values are optional; 0 means unlimited.
  */
 router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
-  if (!isSysAdmin(req.user!)) return res.status(403).json({ error: "System owner access required" });
+  if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
 
   const orgId = parseInt(req.params.orgId);
   if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 
@@ -52,7 +52,9 @@ router.get("/", requireAuth, async (req, res) => {
   }
 
   // ── Standard org-scoped query ────────────────────────────────────────────────
-  const orgId = isSysAdmin(caller)
+  // Only system_owner may query across orgs via ?organizationId=. Org admins
+  // are always scoped to their own organization.
+  const orgId = isSystemOwner(caller)
     ? requestedOrgId
     : caller.organizationId ?? undefined;
 

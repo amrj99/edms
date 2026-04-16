@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
@@ -10,7 +10,7 @@ const router = Router();
 router.get("/", requireAuth, async (req, res) => {
   const user = req.user!;
 
-  if (isSysAdmin(user)) {
+  if (isSystemOwner(user)) {
     const orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
     const userCounts = await db.select({ orgId: usersTable.organizationId, cnt: count() }).from(usersTable).groupBy(usersTable.organizationId);
     const projectCounts = await db.select({ orgId: projectsTable.organizationId, cnt: count() }).from(projectsTable).groupBy(projectsTable.organizationId);
@@ -39,7 +39,7 @@ router.get("/", requireAuth, async (req, res) => {
 
 // Cross-org stats for system_owner dashboard widget
 router.get("/cross-org-stats", requireAuth, async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
   const projectRows = await db.select({ id: projectsTable.id, orgId: projectsTable.organizationId }).from(projectsTable);
@@ -86,7 +86,7 @@ router.get("/cross-org-stats", requireAuth, async (req, res) => {
 });
 
 router.post("/", requireAuth, async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;
   if (!name || !type) {
     res.status(400).json({ error: "Bad Request", message: "name and type are required" });
@@ -147,7 +147,7 @@ router.put("/:id", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const id = parseInt(req.params.id);
   await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
   res.status(204).send();
