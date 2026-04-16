@@ -96,7 +96,9 @@ router.use("/profile", profileRouter);
 router.use("/meetings", meetingsRouter);
 router.use("/chat", requireModule("chat"), chatRouter);
 router.use("/modules", modulesRouter);
-router.use("/dev", devRouter);
+if (process.env.NODE_ENV !== "production") {
+  router.use("/dev", devRouter);
+}
 router.use("/calendar", calendarRouter);
 router.use("/", notificationSummaryRouter);
 router.use("/rules", rulesRouter);
