@@ -11,7 +11,7 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { CorrespondencePermissions } from "../lib/permissions.js";
@@ -228,8 +228,21 @@ async function createCorrespondence(
 
   const requiresResponse = rawRequiresResponse === true || rawRequiresResponse === "true";
 
-  const orgId = caller.organizationId;
-  if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
+  // system_owner with no org assignment may pass organizationId in the request body
+  // to specify which org context to attribute this correspondence to.
+  const orgId: number | undefined =
+    caller.organizationId ??
+    (isSystemOwner(caller) && req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
+
+  if (!orgId) {
+    res.status(400).json({
+      error: "No organization context",
+      message: isSystemOwner(caller)
+        ? "Select an organization context before sending correspondence. Pass organizationId in the request or use the org switcher."
+        : "Your account is not assigned to an organization. Contact your administrator.",
+    });
+    return;
+  }
   if (!subject?.trim()) { res.status(400).json({ error: "subject is required" }); return; }
   if (!type) { res.status(400).json({ error: "type is required" }); return; }
 
@@ -808,8 +821,15 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
   const contextProjectId = req.params.projectId ? parseInt(req.params.projectId) : null;
   const parentId = parseInt(req.params.id);
   const caller = req.user!;
+  // For replies, inherit org from the parent correspondence if caller has none (system_owner case)
   const orgId = caller.organizationId;
-  if (!orgId) { res.status(400).json({ error: "User has no organization" }); return; }
+  if (!orgId) {
+    res.status(400).json({
+      error: "No organization context",
+      message: "Your account has no assigned organization. Use the org switcher to select an organization before replying.",
+    });
+    return;
+  }
 
   // Only member+ can reply to correspondence
   const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
