@@ -43,6 +43,8 @@ export const migrationJobsTable = pgTable("migration_jobs", {
   importedCount: integer("imported_count"),
   skippedCount: integer("skipped_count"),
   failedCount: integer("failed_count"),
+  incompleteCount: integer("incomplete_count"),             // imported but flagged as incomplete
+  revisedCount: integer("revised_count"),                   // imported as new revision of existing doc
   // Summary of generated registers
   generatedRegisters: jsonb("generated_registers").default([]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -82,6 +84,11 @@ export const migrationItemsTable = pgTable("migration_items", {
   revision: text("revision"),
   docDate: text("doc_date"),
   issuer: text("issuer"),
+  // Conflict detection — populated after analysis when doc number matches an existing project document
+  conflictDocumentId: integer("conflict_document_id"),          // existing document's ID (null = no conflict)
+  conflictDocumentTitle: text("conflict_document_title"),       // existing document's title (denormalised for display)
+  conflictDocumentRevision: text("conflict_document_revision"), // existing document's current revision
+  importMode: text("import_mode").default("new_document"),      // "new_document" | "new_revision"
   // Workflow
   status: migrationItemStatusEnum("status").notNull().default("pending"),
   skip: integer("skip").notNull().default(0),

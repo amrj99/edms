@@ -3,11 +3,10 @@ import multer from "multer";
 import { db } from "@workspace/db";
 import {
   migrationJobsTable, migrationItemsTable, documentsTable, foldersTable,
-  projectsTable, organizationsTable, documentStatusEnum,
+  projectsTable, organizationsTable, documentRevisionsTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { uploadBuffer } from "../lib/orgStorage.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const router = Router({ mergeParams: true });
@@ -25,6 +24,52 @@ function planFromTier(tier: string | null | undefined): { plan: string; maxFiles
   const t = (tier ?? "free").toLowerCase();
   const maxFiles = PLAN_LIMITS[t] ?? 0;
   return { plan: t, maxFiles };
+}
+
+// ── Conflict detection ────────────────────────────────────────────────────────
+// After analysis, check each item's document number against existing project docs.
+// Populates conflictDocumentId / Title / Revision on matched items.
+async function runConflictDetection(jobId: number, projectId: number) {
+  const items = await db.select().from(migrationItemsTable)
+    .where(eq(migrationItemsTable.jobId, jobId));
+
+  // Collect all candidate document numbers (user override > extracted)
+  const candidates = items
+    .map(i => ({ id: i.id, number: (i.code || i.extractedCode || "").trim() }))
+    .filter(c => c.number.length > 0 && !c.number.startsWith("IMP-"));
+
+  if (candidates.length === 0) return;
+
+  // Single query — fetch all existing docs in project that match any candidate number
+  const numbers = [...new Set(candidates.map(c => c.number))];
+  const existing = await db
+    .select({
+      id: documentsTable.id,
+      documentNumber: documentsTable.documentNumber,
+      title: documentsTable.title,
+      revision: documentsTable.revision,
+    })
+    .from(documentsTable)
+    .where(and(
+      eq(documentsTable.projectId, projectId),
+      inArray(documentsTable.documentNumber, numbers),
+    ));
+
+  if (existing.length === 0) return;
+
+  const byNumber = new Map(existing.map(d => [d.documentNumber, d]));
+
+  // Update conflicting items
+  for (const c of candidates) {
+    const match = byNumber.get(c.number);
+    if (!match) continue;
+    await db.update(migrationItemsTable).set({
+      conflictDocumentId: match.id,
+      conflictDocumentTitle: match.title,
+      conflictDocumentRevision: match.revision,
+      importMode: "new_revision",   // Default to "new_revision" — the safe choice for conflicts
+    }).where(eq(migrationItemsTable.id, c.id));
+  }
 }
 
 // ── GET /api/migrations — list jobs for current org ──────────────────────────
@@ -99,7 +144,7 @@ router.post("/", requireAuth, async (req, res) => {
 });
 
 // ── POST /api/migrations/:id/analyze — AI-extract metadata per item ──────────
-// Uses filename + folder path to infer document metadata
+// Uses filename + folder path to infer document metadata, then runs conflict detection.
 router.post("/:id/analyze", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
@@ -114,7 +159,7 @@ router.post("/:id/analyze", requireAuth, async (req, res) => {
     .where(eq(migrationJobsTable.id, id));
   res.json({ message: "Analysis started", jobId: id });
 
-  // Fire-and-forget: analyze all items in background
+  // Fire-and-forget: analyze all items in background, then run conflict detection
   setImmediate(async () => {
     try {
       const items = await db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id));
@@ -185,6 +230,11 @@ router.post("/:id/analyze", requireAuth, async (req, res) => {
         }
       }
 
+      // Run conflict detection against existing project documents
+      try {
+        await runConflictDetection(id, job.projectId);
+      } catch (_) {}
+
       await db.update(migrationJobsTable).set({ status: "awaiting_review", updatedAt: new Date() })
         .where(eq(migrationJobsTable.id, id));
     } catch (err) {
@@ -204,7 +254,8 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
   if (!job) return res.status(404).json({ error: "Job not found" });
 
-  const { title, code, discipline, docType, revision, docDate, issuer, skip, status } = req.body;
+  const { title, code, discipline, docType, revision, docDate, issuer, skip, status, importMode } = req.body;
+
   // Normalise skip: handle boolean, number, or string "true"/"false"/"1"/"0"
   const skipNorm = skip !== undefined
     ? (skip === true || skip === 1 || skip === "true" || skip === "1" ? 1 : 0)
@@ -212,6 +263,45 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
   const derivedStatus = skipNorm !== undefined
     ? (skipNorm ? "skipped" : "confirmed")
     : (status ?? undefined);
+
+  // If the document number is being changed, re-check for conflicts
+  let conflictFields: {
+    conflictDocumentId?: number | null;
+    conflictDocumentTitle?: string | null;
+    conflictDocumentRevision?: string | null;
+    importMode?: string;
+  } = {};
+
+  if (code !== undefined) {
+    const newCode = (code ?? "").trim();
+    if (newCode.length > 0 && !newCode.startsWith("IMP-")) {
+      const [existing] = await db
+        .select({ id: documentsTable.id, title: documentsTable.title, revision: documentsTable.revision })
+        .from(documentsTable)
+        .where(and(
+          eq(documentsTable.projectId, job.projectId),
+          eq(documentsTable.documentNumber, newCode),
+        ))
+        .limit(1);
+      if (existing) {
+        conflictFields = {
+          conflictDocumentId: existing.id,
+          conflictDocumentTitle: existing.title,
+          conflictDocumentRevision: existing.revision,
+          importMode: importMode ?? "new_revision",
+        };
+      } else {
+        // New code — clear any existing conflict
+        conflictFields = {
+          conflictDocumentId: null,
+          conflictDocumentTitle: null,
+          conflictDocumentRevision: null,
+          importMode: "new_document",
+        };
+      }
+    }
+  }
+
   const [updated] = await db.update(migrationItemsTable).set({
     title: title ?? undefined,
     code: code ?? undefined,
@@ -222,17 +312,28 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
     issuer: issuer ?? undefined,
     skip: skipNorm,
     status: derivedStatus,
+    importMode: conflictFields.importMode ?? (importMode ?? undefined),
+    ...(conflictFields.conflictDocumentId !== undefined ? {
+      conflictDocumentId: conflictFields.conflictDocumentId,
+      conflictDocumentTitle: conflictFields.conflictDocumentTitle,
+      conflictDocumentRevision: conflictFields.conflictDocumentRevision,
+    } : {}),
   }).where(and(eq(migrationItemsTable.id, itemId), eq(migrationItemsTable.jobId, id)))
     .returning();
   if (!updated) return res.status(404).json({ error: "Item not found" });
   res.json(updated);
 });
 
-// ── POST /api/migrations/:id/bulk-action — bulk confirm/skip ──────────────────
+// ── POST /api/migrations/:id/bulk-action ─────────────────────────────────────
+// action: "confirm" | "skip" | "set_revision" | "set_new_document"
+// filter: "high" | "all" | "unreadable" | "conflicts"
 router.post("/:id/bulk-action", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
-  const { action, filter } = req.body as { action: "confirm" | "skip"; filter: "high" | "all" | "unreadable" };
+  const { action, filter } = req.body as {
+    action: "confirm" | "skip" | "set_revision" | "set_new_document";
+    filter: "high" | "all" | "unreadable" | "conflicts";
+  };
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
@@ -242,14 +343,29 @@ router.post("/:id/bulk-action", requireAuth, async (req, res) => {
   let targets = allItems;
   if (filter === "high") targets = allItems.filter(i => i.confidenceLabel === "high");
   if (filter === "unreadable") targets = allItems.filter(i => i.confidenceLabel === "unreadable");
+  if (filter === "conflicts") targets = allItems.filter(i => !!i.conflictDocumentId);
 
   if (targets.length === 0) return res.json({ updated: 0 });
 
   const ids = targets.map(i => i.id);
-  await db.update(migrationItemsTable).set({
-    skip: action === "skip" ? 1 : 0,
-    status: action === "skip" ? "skipped" : "confirmed",
-  }).where(inArray(migrationItemsTable.id, ids));
+
+  if (action === "confirm" || action === "skip") {
+    await db.update(migrationItemsTable).set({
+      skip: action === "skip" ? 1 : 0,
+      status: action === "skip" ? "skipped" : "confirmed",
+    }).where(inArray(migrationItemsTable.id, ids));
+  } else if (action === "set_revision") {
+    // Only applies to items that actually have a conflict
+    const conflictIds = ids.filter(i => targets.find(t => t.id === i)?.conflictDocumentId);
+    if (conflictIds.length > 0) {
+      await db.update(migrationItemsTable).set({ importMode: "new_revision" })
+        .where(inArray(migrationItemsTable.id, conflictIds));
+    }
+    return res.json({ updated: conflictIds.length });
+  } else if (action === "set_new_document") {
+    await db.update(migrationItemsTable).set({ importMode: "new_document" })
+      .where(inArray(migrationItemsTable.id, ids));
+  }
 
   res.json({ updated: ids.length });
 });
@@ -320,6 +436,8 @@ router.post("/:id/execute", requireAuth, async (req, res) => {
 
       let importedCount = 0;
       let failedCount = 0;
+      let incompleteCount = 0;
+      let revisedCount = 0;
       const correspondenceItems: typeof confirmed = [];
       const transmittalItems: typeof confirmed = [];
 
@@ -341,6 +459,75 @@ router.post("/:id/execute", requireAuth, async (req, res) => {
             fileUrl = `${job.baseUrl.replace(/\/$/, "")}/${item.filePath}`;
           }
 
+          // ── Completeness check ────────────────────────────────────────────
+          const hasRealDocNumber = !documentNumber.startsWith("IMP-");
+          const hasRealTitle = !!(item.title || item.extractedTitle);
+          const hasDisciplineOrType = !!(discipline || documentType);
+          const isIncomplete = !hasRealDocNumber || !hasRealTitle || !hasDisciplineOrType;
+          const missingFields: string[] = [];
+          if (!hasRealDocNumber) missingFields.push("documentNumber");
+          if (!hasRealTitle) missingFields.push("title");
+          if (!hasDisciplineOrType) missingFields.push("disciplineOrType");
+
+          const docMetadata: Record<string, unknown> = {
+            importedFromMigration: id,
+            originalPath: item.filePath,
+            ...(isIncomplete ? { incomplete: true, missingFields } : {}),
+          };
+
+          // ── Revision matching path ────────────────────────────────────────
+          if (item.importMode === "new_revision" && item.conflictDocumentId) {
+            // Update the existing document with the new revision data
+            const [existing] = await db.select()
+              .from(documentsTable)
+              .where(eq(documentsTable.id, item.conflictDocumentId))
+              .limit(1);
+
+            if (existing) {
+              await db.update(documentsTable).set({
+                revision,
+                fileUrl: fileUrl ?? existing.fileUrl,
+                fileName: item.fileName,
+                fileSize: item.fileSize ?? existing.fileSize,
+                status: "draft",
+                metadata: {
+                  ...(typeof existing.metadata === "object" && existing.metadata !== null ? existing.metadata : {}),
+                  ...docMetadata,
+                },
+                updatedAt: new Date(),
+              }).where(eq(documentsTable.id, item.conflictDocumentId));
+
+              await db.insert(documentRevisionsTable).values({
+                documentId: item.conflictDocumentId,
+                revision,
+                status: "draft",
+                fileUrl: fileUrl ?? existing.fileUrl ?? null,
+                fileName: item.fileName,
+                comment: `Imported revision ${revision} from migration job #${id}`,
+                createdById: job.createdById,
+              });
+
+              await db.update(migrationItemsTable).set({
+                status: "imported",
+                importedDocumentId: item.conflictDocumentId,
+                importedAt: new Date(),
+              }).where(eq(migrationItemsTable.id, item.id));
+
+              importedCount++;
+              revisedCount++;
+              if (isIncomplete) incompleteCount++;
+
+              const dtype = (documentType ?? "").toLowerCase();
+              if (dtype.includes("correspondence") || dtype.includes("letter") || item.extractedIsReply) {
+                correspondenceItems.push(item);
+              }
+              if (dtype.includes("transmittal")) transmittalItems.push(item);
+              continue;
+            }
+            // If the conflict doc no longer exists, fall through to create new
+          }
+
+          // ── New document path ─────────────────────────────────────────────
           const [doc] = await db.insert(documentsTable).values({
             organizationId: orgId!,
             projectId: job.projectId,
@@ -356,8 +543,19 @@ router.post("/:id/execute", requireAuth, async (req, res) => {
             fileSize: item.fileSize ?? null,
             status: "draft",
             createdById: job.createdById,
-            metadata: { importedFromMigration: id, originalPath: item.filePath },
+            metadata: docMetadata,
           }).returning();
+
+          // Save initial revision record
+          await db.insert(documentRevisionsTable).values({
+            documentId: doc.id,
+            revision: doc.revision,
+            status: "draft",
+            fileUrl: doc.fileUrl,
+            fileName: doc.fileName,
+            comment: `Imported from migration job #${id}`,
+            createdById: job.createdById,
+          });
 
           await db.update(migrationItemsTable).set({
             status: "imported",
@@ -366,6 +564,7 @@ router.post("/:id/execute", requireAuth, async (req, res) => {
           }).where(eq(migrationItemsTable.id, item.id));
 
           importedCount++;
+          if (isIncomplete) incompleteCount++;
 
           // Track for register generation
           const dtype = (documentType ?? "").toLowerCase();
@@ -392,14 +591,14 @@ router.post("/:id/execute", requireAuth, async (req, res) => {
         importedCount,
         skippedCount: skipped.length,
         failedCount,
+        incompleteCount,
+        revisedCount,
         generatedRegisters: generatedRegisters as any,
         updatedAt: new Date(),
       }).where(eq(migrationJobsTable.id, id));
     } catch (err) {
-      await db.update(migrationJobsTable).set({
-        status: "failed",
-        updatedAt: new Date(),
-      }).where(eq(migrationJobsTable.id, id));
+      await db.update(migrationJobsTable).set({ status: "failed", updatedAt: new Date() })
+        .where(eq(migrationJobsTable.id, id));
     }
   });
 });
