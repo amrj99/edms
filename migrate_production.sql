@@ -933,4 +933,19 @@ CREATE TABLE IF NOT EXISTS submission_chain_documents (
 
 -- ─── SECTION 7: DONE ──────────────────────────────────────────────────────────
 
+-- ─── SECTION 8: Migration Wizard — Revision Matching + Completeness Flagging ──
+-- New columns added to support conflict detection and post-import cleanup.
+
+-- migration_jobs: track revised and incomplete document counts
+ALTER TABLE migration_jobs ADD COLUMN IF NOT EXISTS incomplete_count integer;
+ALTER TABLE migration_jobs ADD COLUMN IF NOT EXISTS revised_count    integer;
+
+-- migration_items: conflict detection fields (populated after AI analysis)
+ALTER TABLE migration_items ADD COLUMN IF NOT EXISTS conflict_document_id       integer;
+ALTER TABLE migration_items ADD COLUMN IF NOT EXISTS conflict_document_title    text;
+ALTER TABLE migration_items ADD COLUMN IF NOT EXISTS conflict_document_revision text;
+ALTER TABLE migration_items ADD COLUMN IF NOT EXISTS import_mode                text DEFAULT 'new_document';
+
+-- ─── SECTION 8: DONE ──────────────────────────────────────────────────────────
+
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;
