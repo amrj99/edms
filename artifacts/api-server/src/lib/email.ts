@@ -357,7 +357,7 @@ export async function sendCorrespondenceDeliveryEmail(opts: {
         <p style="font-size:13px;font-weight:600;color:#374151;margin:0 0 8px;">Referenced Documents</p>
         ${(opts.documentLinks ?? []).map(d =>
           `<div style="padding:4px 0;font-size:13px;">
-            <a href="${APP_URL}/projects/${d.projectId}/documents/${d.documentId}" style="color:#1e40af;">${d.name}</a>
+            <a href="${APP_URL}/documents/${d.documentId}" style="color:#1e40af;">${d.name}</a>
             <span style="color:#9ca3af;font-size:11px;"> (permission-controlled)</span>
           </div>`
         ).join("")}
@@ -368,7 +368,7 @@ export async function sendCorrespondenceDeliveryEmail(opts: {
     ? `<div class="info-row">
         <span class="label">Linked Transmittal</span>
         <span class="value">
-          <a href="${APP_URL}/projects/${opts.projectId}/transmittals/${opts.transmittalId}" style="color:#1e40af;">
+          <a href="${APP_URL}/projects/${opts.projectId}" style="color:#1e40af;">
             ${opts.transmittalNumber ?? `TRN-${opts.transmittalId}`}
           </a>
         </span>
