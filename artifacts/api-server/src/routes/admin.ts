@@ -21,7 +21,7 @@ router.use(requireAuth);
 
 // ─── System Info ──────────────────────────────────────────────────────────────
 router.get("/system-info", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const user = req.user!;
   const countRow = async (table: any) => {
     const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(table);
@@ -74,7 +74,7 @@ router.get("/storage-usage", async (req, res) => {
   const configMap = new Map(configs.map(c => [c.organizationId, c]));
 
   let orgs: any[] = [];
-  if (isSysAdmin(user)) {
+  if (isSystemOwner(user)) {
     orgs = await db.select().from(organizationsTable);
   } else if (user.organizationId) {
     orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
@@ -111,7 +111,7 @@ router.get("/usage", async (req, res) => {
   const user = req.user!;
 
   let orgs: any[] = [];
-  if (isSysAdmin(user)) {
+  if (isSystemOwner(user)) {
     orgs = await db.select().from(organizationsTable);
   } else if (user.organizationId) {
     orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
@@ -251,7 +251,7 @@ router.get("/usage", async (req, res) => {
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
 router.put("/storage-config/:orgId", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const orgId = parseInt(req.params.orgId);
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
@@ -280,7 +280,7 @@ router.get("/backup", async (req, res) => {
   const orgId = user.organizationId;
 
   let projectsFilter = await db.select().from(projectsTable);
-  if (!isSysAdmin(user) && orgId) {
+  if (!isSystemOwner(user) && orgId) {
     projectsFilter = projectsFilter.filter(p => p.organizationId === orgId);
   }
   const projectIds = new Set(projectsFilter.map(p => p.id));
@@ -296,7 +296,7 @@ router.get("/backup", async (req, res) => {
 
   const scopeByProject = (rows: any[]) => rows.filter(r => !r.projectId || projectIds.has(r.projectId));
 
-  const safeUsers = (isSysAdmin(user) ? allUsers : allUsers.filter(u => u.organizationId === orgId))
+  const safeUsers = (isSystemOwner(user) ? allUsers : allUsers.filter(u => u.organizationId === orgId))
     .map(({ passwordHash, ...u }: any) => u);
 
   const backup = {
@@ -305,7 +305,7 @@ router.get("/backup", async (req, res) => {
     organizationId: orgId ?? null,
     tables: {
       users: safeUsers,
-      organizations: isSysAdmin(user) ? allOrgs : allOrgs.filter(o => o.id === orgId),
+      organizations: isSystemOwner(user) ? allOrgs : allOrgs.filter(o => o.id === orgId),
       projects: projectsFilter,
       documents: scopeByProject(allDocuments),
       correspondence: scopeByProject(allCorrespondence),
@@ -326,7 +326,7 @@ router.get("/backup", async (req, res) => {
 
 // ─── Restore validation (dry-run) ─────────────────────────────────────────────
 router.post("/restore/validate", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const { backup } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
     res.status(400).json({ error: "Invalid backup format. Expected {version, exportedAt, tables}." });
@@ -346,7 +346,7 @@ router.post("/restore/validate", async (req, res) => {
 
 // ─── Restore (actual) ─────────────────────────────────────────────────────────
 router.post("/restore", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden — system admin required" }); return; }
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden — system owner required" }); return; }
 
   const { backup, confirmed } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
