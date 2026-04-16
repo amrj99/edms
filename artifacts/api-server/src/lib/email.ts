@@ -342,9 +342,7 @@ export async function sendCorrespondenceDeliveryEmail(opts: {
     low:    '<span class="badge badge-gray">Low</span>',
   };
 
-  const corrUrl = opts.projectId
-    ? `${APP_URL}/projects/${opts.projectId}/correspondence/${opts.correspondenceId}`
-    : `${APP_URL}/correspondence/${opts.correspondenceId}`;
+  const corrUrl = `${APP_URL}/correspondence?openCorr=${opts.correspondenceId}`;
 
   const toList = opts.toNames.length > 0
     ? opts.toNames.map(n => `<span style="margin-right:8px;">${n}</span>`).join("")
