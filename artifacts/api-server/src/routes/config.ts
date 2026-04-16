@@ -20,8 +20,13 @@ router.get("/system-settings", async (_req, res) => {
   res.json({ registrationEnabled: registrationEnabled === "true" });
 });
 
-// Public: list organizations for the registration form
+// Public: list organizations for the registration form (only when registration is enabled)
 router.get("/organizations-public", async (_req, res) => {
+  const registrationEnabled = await getSystemSetting("registrationEnabled");
+  if (registrationEnabled !== "true") {
+    res.json({ organizations: [] });
+    return;
+  }
   const orgs = await db.select({
     id: organizationsTable.id,
     name: organizationsTable.name,

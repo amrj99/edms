@@ -9,13 +9,13 @@ interface AdminUser {
   firstName: string;
   lastName: string;
   password: string;
-  role: "admin";
+  role: "admin" | "system_owner";
 }
 
 const DEFAULT_ADMINS: AdminUser[] = [
   {
     email: "admin@admin.com",
-    firstName: "System",
+    firstName: "AdminTest",
     lastName: "Admin",
     password: "Admin123!",
     role: "admin",
@@ -25,7 +25,7 @@ const DEFAULT_ADMINS: AdminUser[] = [
     firstName: "System",
     lastName: "Owner",
     password: "Owner123!",
-    role: "admin",
+    role: "system_owner",
   },
 ];
 
@@ -40,15 +40,13 @@ export async function seedDefaultAdmin(): Promise<void> {
 
       if (existing.length > 0) {
         const user = existing[0];
+        const updates: Record<string, unknown> = { role: admin.role, isActive: true, updatedAt: new Date() };
         // Re-hash if using legacy SHA-256 hash (not starting with $2b)
         if (!user.passwordHash.startsWith("$2")) {
-          const newHash = await hashPassword(admin.password);
-          await db
-            .update(usersTable)
-            .set({ passwordHash: newHash, role: "admin", isActive: true, updatedAt: new Date() })
-            .where(eq(usersTable.email, admin.email));
+          updates.passwordHash = await hashPassword(admin.password);
           logger.info({ email: admin.email }, "Admin password upgraded from SHA-256 to bcrypt");
         }
+        await db.update(usersTable).set(updates as any).where(eq(usersTable.email, admin.email));
         continue;
       }
 

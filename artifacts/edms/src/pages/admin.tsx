@@ -61,6 +61,7 @@ export default function Admin() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const isOwner = user?.role === "system_owner" || user?.role === "admin";
+  const isSysOwner = user?.role === "system_owner";
 
   const { data: config, isLoading: configLoading } = useQuery({
     queryKey: ["config"],
@@ -419,10 +420,12 @@ export default function Admin() {
 
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />{t("orgSwitcherAll")}</CardTitle>
-              <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); setCreateOrgOpen(true); }}>
-                <Plus className="h-3.5 w-3.5" /> {t("addOrganization")}
-              </Button>
+              <CardTitle className="text-base flex items-center gap-2"><Building2 className="h-4 w-4" />{isSysOwner ? t("orgSwitcherAll") : "My Organization"}</CardTitle>
+              {isSysOwner && (
+                <Button size="sm" className="gap-1.5 h-8 text-xs" onClick={() => { setOrgForm({ name: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" }); setCreateOrgOpen(true); }}>
+                  <Plus className="h-3.5 w-3.5" /> {t("addOrganization")}
+                </Button>
+              )}
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -451,9 +454,11 @@ export default function Admin() {
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", code: org.code ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDeleteOrg(org)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
+                          {isSysOwner && (
+                            <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => setDeleteOrg(org)}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1884,6 +1889,8 @@ function StorageTab() {
 function SystemTab() {
   const { t } = useI18n();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isSysOwner = user?.role === "system_owner";
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpResult, setSmtpResult] = useState<{ success: boolean; message: string } | null>(null);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
@@ -2114,41 +2121,43 @@ function SystemTab() {
         </Card>
       </div>
 
-      {/* Access Control */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2"><ShieldCheck className="h-4 w-4" />Access Control</CardTitle>
-          <CardDescription>Control how users can access and register in the system</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between rounded-lg border p-4">
-            <div className="space-y-0.5">
-              <p className="text-sm font-medium">Public Self-Registration</p>
-              <p className="text-xs text-muted-foreground">
-                When enabled, anyone can create an account at /register. When disabled, only admins can create user accounts.
-              </p>
+      {/* Access Control — system_owner only */}
+      {isSysOwner && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2"><ShieldCheck className="h-4 w-4" />Access Control</CardTitle>
+            <CardDescription>Control how users can access and register in the system</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <p className="text-sm font-medium">Public Self-Registration</p>
+                <p className="text-xs text-muted-foreground">
+                  When enabled, anyone can create an account at /register. When disabled, only admins can create user accounts.
+                </p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={systemSettings?.registrationEnabled ?? true}
+                onClick={() => updateSystemSettings.mutate({ registrationEnabled: !(systemSettings?.registrationEnabled ?? true) })}
+                disabled={updateSystemSettings.isPending}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${(systemSettings?.registrationEnabled ?? true) ? "bg-primary" : "bg-input"}`}
+              >
+                <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-0 transition-transform ${(systemSettings?.registrationEnabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
+              </button>
             </div>
-            <button
-              role="switch"
-              aria-checked={systemSettings?.registrationEnabled ?? true}
-              onClick={() => updateSystemSettings.mutate({ registrationEnabled: !(systemSettings?.registrationEnabled ?? true) })}
-              disabled={updateSystemSettings.isPending}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${(systemSettings?.registrationEnabled ?? true) ? "bg-primary" : "bg-input"}`}
-            >
-              <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-0 transition-transform ${(systemSettings?.registrationEnabled ?? true) ? "translate-x-6" : "translate-x-1"}`} />
-            </button>
-          </div>
-          {!(systemSettings?.registrationEnabled ?? true) && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Public registration is disabled. New users can only be created by administrators from the Users tab above.</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            {!(systemSettings?.registrationEnabled ?? true) && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>Public registration is disabled. New users can only be created by administrators from the Users tab above.</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Test Data Seed */}
-      <Card>
+      {/* Test Data Seed — system_owner only */}
+      {isSysOwner && <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><Database className="h-4 w-4" />Seed Test Data</CardTitle>
           <CardDescription>Populate the system with realistic sample documents, correspondence, meetings, NCR, ITR, NOC, transmittals, and deliverables for testing and demos.</CardDescription>
@@ -2198,7 +2207,7 @@ function SystemTab() {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Backup & Restore */}
       <Card>

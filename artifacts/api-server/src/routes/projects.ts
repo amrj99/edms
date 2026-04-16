@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { projectsTable, projectMembersTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
 import { eq, count, and } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 
@@ -24,7 +24,7 @@ function pgErrCode(err: unknown): string | undefined {
 // ─── GET / ────────────────────────────────────────────────────────────────────
 router.get("/", requireAuth, async (req, res) => {
   const user = req.user!;
-  const effectiveOrgId = isSysAdmin(user) && req.query.organizationId
+  const effectiveOrgId = isSystemOwner(user) && req.query.organizationId
     ? parseInt(req.query.organizationId as string)
     : user.organizationId;
 
@@ -58,7 +58,7 @@ router.get("/", requireAuth, async (req, res) => {
 router.post("/", requireAuth, async (req, res) => {
   const user = req.user!;
   const { name, code, description, status, startDate, endDate } = req.body;
-  const organizationId = isSysAdmin(user) && req.body.organizationId
+  const organizationId = isSystemOwner(user) && req.body.organizationId
     ? parseInt(String(req.body.organizationId))
     : user.organizationId;
 
@@ -223,7 +223,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   if (!results[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
-  if (!isSysAdmin(user) && results[0].project.organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && results[0].project.organizationId !== user.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
@@ -238,12 +238,12 @@ router.put("/:id", requireAuth, async (req, res) => {
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
-  if (!isSysAdmin(user) && existing.organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && existing.organizationId !== user.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
   const { name, code, description, status, startDate, endDate } = req.body;
-  const organizationId = isSysAdmin(user) && req.body.organizationId ? req.body.organizationId : existing.organizationId;
+  const organizationId = isSystemOwner(user) && req.body.organizationId ? req.body.organizationId : existing.organizationId;
 
   // Validate status
   if (status && !(VALID_STATUSES as readonly string[]).includes(status)) {
@@ -310,7 +310,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
-  if (!isSysAdmin(user) && existing.organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && existing.organizationId !== user.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   await db.delete(projectMembersTable).where(eq(projectMembersTable.projectId, id));

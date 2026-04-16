@@ -5,7 +5,7 @@ import {
   projectsTable, projectMembersTable, organizationsTable, orgConfigTable, documentSequencesTable,
 } from "@workspace/db";
 import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import {
   analyzeDocument,
   analyzeCorrespondence,
@@ -45,7 +45,7 @@ router.post("/documents/:id/analyze", async (req, res) => {
   const doc = docs[0];
 
   // Verify the caller has access to the document's project
-  if (!isSysAdmin(caller)) {
+  if (!isSystemOwner(caller)) {
     const [project] = await db.select({ organizationId: projectsTable.organizationId })
       .from(projectsTable).where(eq(projectsTable.id, doc.projectId)).limit(1);
     const isSameOrg = project?.organizationId === caller.organizationId;
@@ -85,7 +85,7 @@ router.post("/correspondence/:id/analyze", async (req, res) => {
   const corr = items[0];
 
   // Org isolation: correspondence is org-scoped
-  if (!isSysAdmin(caller) && corr.organizationId !== caller.organizationId) {
+  if (!isSystemOwner(caller) && corr.organizationId !== caller.organizationId) {
     res.status(403).json({ error: "Access denied" }); return;
   }
 
@@ -112,7 +112,7 @@ router.post("/tasks/prioritize", async (req, res) => {
   const conditions: any[] = [];
 
   // Always scope to the caller's org to prevent cross-org task access
-  if (!isSysAdmin(caller) && caller.organizationId) {
+  if (!isSystemOwner(caller) && caller.organizationId) {
     conditions.push(eq(tasksTable.organizationId, caller.organizationId));
   }
 
@@ -558,8 +558,8 @@ router.get("/provider", async (req, res) => {
 
 router.put("/provider", async (req, res) => {
   const user = req.user!;
-  if (!isSysAdmin(user)) {
-    res.status(403).json({ error: "System admin only" });
+  if (!isSystemOwner(user)) {
+    res.status(403).json({ error: "System owner only" });
     return;
   }
   const { provider, fastModel, smartModel } = req.body ?? {};

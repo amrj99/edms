@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 
 const router = Router();
 
@@ -162,8 +162,8 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   if (!result) { res.status(404).json({ error: "Document not found" }); return; }
 
-  // Org boundary check (sys admin bypasses all below)
-  if (!isSysAdmin(user)) {
+  // Org boundary check (system_owner bypasses all below; org admins are still org-scoped)
+  if (!isSystemOwner(user)) {
     if (result.project?.organizationId !== user.organizationId) {
       res.status(403).json({ error: "Forbidden" }); return;
     }
