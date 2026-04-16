@@ -836,15 +836,6 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
   const contextProjectId = req.params.projectId ? parseInt(req.params.projectId) : null;
   const parentId = parseInt(req.params.id);
   const caller = req.user!;
-  // For replies, inherit org from the parent correspondence if caller has none (system_owner case)
-  const orgId = caller.organizationId;
-  if (!orgId) {
-    res.status(400).json({
-      error: "No organization context",
-      message: "Your account has no assigned organization. Use the org switcher to select an organization before replying.",
-    });
-    return;
-  }
 
   // Only member+ can reply to correspondence
   const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
@@ -854,10 +845,26 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
 
   const { subject, type, body, toUserIds, ccUserIds } = req.body;
 
-  const parent = await db.select({ projectId: correspondenceTable.projectId, scope: correspondenceTable.scope })
+  const parent = await db.select({
+      projectId: correspondenceTable.projectId,
+      scope: correspondenceTable.scope,
+      organizationId: correspondenceTable.organizationId,
+    })
     .from(correspondenceTable)
     .where(eq(correspondenceTable.id, parentId))
     .limit(1);
+
+  // Derive org: caller's org first, then inherit from parent correspondence (system_owner case)
+  const orgId: number | null = caller.organizationId ?? parent[0]?.organizationId ?? null;
+  if (!orgId) {
+    res.status(400).json({
+      error: "No organization context",
+      message: isSystemOwner(caller)
+        ? "Cannot determine organization context. The parent correspondence has no organization assigned."
+        : "Your account is not assigned to an organization. Contact your administrator.",
+    });
+    return;
+  }
 
   const effectiveProjectId = contextProjectId ?? parent[0]?.projectId ?? null;
   const scope = parent[0]?.scope ?? "project";

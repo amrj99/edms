@@ -129,6 +129,7 @@ export async function reindexAll(): Promise<{ indexed: number; errors: number }>
 export interface SearchParams {
   q: string;
   projectId?: number;
+  organizationId?: number;
   type?: "document" | "correspondence" | "meeting" | "project" | "all";
   discipline?: string;
   status?: string;
@@ -231,9 +232,11 @@ async function elasticsearchSearch(es: any, params: SearchParams): Promise<Searc
 
 // ─── SQL fallback backend ─────────────────────────────────────────────────────
 async function sqlSearch(params: SearchParams): Promise<SearchResults> {
-  const { q, projectId, type, discipline, status } = params;
+  const { q, projectId, organizationId, type, discipline, status } = params;
   const pat = `%${q}%`;
   const pId = projectId ?? undefined;
+  // organizationId=undefined → system_owner cross-tenant view (no filter)
+  const orgFilter = organizationId ?? undefined;
 
   let documents: any[] = [];
   let correspondence: any[] = [];
@@ -259,6 +262,7 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
       .where(
         and(
           pId ? eq(documentsTable.projectId, pId) : undefined,
+          orgFilter ? eq(documentsTable.organizationId, orgFilter) : undefined,
           or(
             ilike(documentsTable.title, pat),
             ilike(documentsTable.documentNumber, pat),
@@ -299,6 +303,7 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
       .where(
         and(
           pId ? eq(correspondenceTable.projectId, pId) : undefined,
+          orgFilter ? eq(correspondenceTable.organizationId, orgFilter) : undefined,
           or(
             ilike(correspondenceTable.subject, pat),
             ilike(correspondenceTable.body, pat),
@@ -335,6 +340,7 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
       .where(
         and(
           pId ? eq(meetingsTable.projectId, pId) : undefined,
+          orgFilter ? eq(meetingsTable.organizationId, orgFilter) : undefined,
           or(
             ilike(meetingsTable.title, pat),
             ilike(meetingsTable.agenda, pat),
@@ -359,10 +365,13 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
       .select()
       .from(projectsTable)
       .where(
-        or(
-          ilike(projectsTable.name, pat),
-          ilike(projectsTable.code, pat),
-          ilike(projectsTable.description, pat),
+        and(
+          orgFilter ? eq(projectsTable.organizationId, orgFilter) : undefined,
+          or(
+            ilike(projectsTable.name, pat),
+            ilike(projectsTable.code, pat),
+            ilike(projectsTable.description, pat),
+          ),
         ),
       )
       .orderBy(desc(projectsTable.updatedAt))
