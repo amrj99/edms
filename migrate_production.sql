@@ -954,4 +954,154 @@ ALTER TABLE migration_items ADD COLUMN IF NOT EXISTS import_mode                
 
 -- ─── SECTION 8: DONE ──────────────────────────────────────────────────────────
 
+-- ─── SECTION 9: Missing tables (packages, correspondence sub-tables, registers) ─
+-- These tables are defined in the Drizzle schema but were omitted from earlier
+-- migration sections. Using CREATE TABLE IF NOT EXISTS so safe to run on any DB.
+
+-- packages (project document packages / WBS groupings)
+CREATE TABLE IF NOT EXISTS packages (
+  id            serial PRIMARY KEY,
+  name          text NOT NULL,
+  code          text NOT NULL,
+  description   text,
+  project_id    integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_id integer NOT NULL REFERENCES users(id),
+  created_at    timestamp NOT NULL DEFAULT now(),
+  updated_at    timestamp NOT NULL DEFAULT now()
+);
+
+-- correspondence_recipients (To: recipients for a correspondence item)
+CREATE TABLE IF NOT EXISTS correspondence_recipients (
+  id                serial PRIMARY KEY,
+  correspondence_id integer NOT NULL REFERENCES correspondence(id) ON DELETE CASCADE,
+  user_id           integer NOT NULL REFERENCES users(id)
+);
+
+-- correspondence_attachments (file attachments on correspondence items)
+CREATE TABLE IF NOT EXISTS correspondence_attachments (
+  id                serial PRIMARY KEY,
+  correspondence_id integer NOT NULL REFERENCES correspondence(id) ON DELETE CASCADE,
+  file_name         text NOT NULL,
+  file_url          text NOT NULL,
+  file_size         integer,
+  uploaded_at       timestamp NOT NULL DEFAULT now()
+);
+
+-- correspondence_documents (many-to-many: correspondence ↔ documents)
+CREATE TABLE IF NOT EXISTS correspondence_documents (
+  id                serial PRIMARY KEY,
+  correspondence_id integer NOT NULL REFERENCES correspondence(id) ON DELETE CASCADE,
+  document_id       integer NOT NULL REFERENCES documents(id)     ON DELETE CASCADE,
+  created_at        timestamp NOT NULL DEFAULT now(),
+  created_by_id     integer REFERENCES users(id),
+  note              text
+);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE indexname = 'correspondence_documents_uniq'
+  ) THEN
+    CREATE UNIQUE INDEX correspondence_documents_uniq
+      ON correspondence_documents (correspondence_id, document_id);
+  END IF;
+END $$;
+
+-- ─── Registers: ENUMs ──────────────────────────────────────────────────────────
+
+DO $$ BEGIN
+  CREATE TYPE inspection_type   AS ENUM ('itr','mir');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE inspection_status AS ENUM ('pending','scheduled','in_progress','passed','failed','cancelled');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ncr_type   AS ENUM ('ncr','sor');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ncr_status AS ENUM ('open','in_progress','closed','voided');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE noc_status AS ENUM ('pending','approved','rejected','expired');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- inspection_requests (ITR / MIR)
+CREATE TABLE IF NOT EXISTS inspection_requests (
+  id                    serial PRIMARY KEY,
+  request_number        text NOT NULL,
+  type                  inspection_type   NOT NULL DEFAULT 'itr',
+  description           text,
+  location              text,
+  date                  timestamp,
+  status                inspection_status NOT NULL DEFAULT 'pending',
+  contractor            text,
+  linked_correspondence_id integer,
+  linked_document_id    integer REFERENCES documents(id),
+  remarks               text,
+  direction             text,
+  party_type            text,
+  review_code           text,
+  organization_id       integer REFERENCES organizations(id),
+  project_id            integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_id         integer NOT NULL REFERENCES users(id),
+  approval_status       approval_status NOT NULL DEFAULT 'none',
+  approved_by_id        integer REFERENCES users(id),
+  approval_comment      text,
+  approved_at           timestamp,
+  created_at            timestamp NOT NULL DEFAULT now(),
+  updated_at            timestamp NOT NULL DEFAULT now()
+);
+
+-- ncr_records (Non-Conformance Reports / Site Observation Reports)
+CREATE TABLE IF NOT EXISTS ncr_records (
+  id                       serial PRIMARY KEY,
+  report_number            text NOT NULL,
+  type                     ncr_type   NOT NULL DEFAULT 'ncr',
+  description              text,
+  location                 text,
+  raised_by                text,
+  status                   ncr_status NOT NULL DEFAULT 'open',
+  corrective_action        text,
+  close_date               timestamp,
+  linked_document_id       integer REFERENCES documents(id),
+  linked_correspondence_id integer,
+  remarks                  text,
+  direction                text,
+  party_type               text,
+  review_code              text,
+  organization_id          integer REFERENCES organizations(id),
+  project_id               integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_id            integer NOT NULL REFERENCES users(id),
+  approval_status          approval_status NOT NULL DEFAULT 'none',
+  approved_by_id           integer REFERENCES users(id),
+  approval_comment         text,
+  approved_at              timestamp,
+  created_at               timestamp NOT NULL DEFAULT now(),
+  updated_at               timestamp NOT NULL DEFAULT now()
+);
+
+-- noc_records (No-Objection Certificates)
+CREATE TABLE IF NOT EXISTS noc_records (
+  id                       serial PRIMARY KEY,
+  noc_number               text NOT NULL,
+  authority                text,
+  date                     timestamp,
+  status                   noc_status NOT NULL DEFAULT 'pending',
+  linked_document_id       integer REFERENCES documents(id),
+  linked_correspondence_id integer,
+  remarks                  text,
+  direction                text,
+  party_type               text,
+  organization_id          integer REFERENCES organizations(id),
+  project_id               integer NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_id            integer NOT NULL REFERENCES users(id),
+  created_at               timestamp NOT NULL DEFAULT now(),
+  updated_at               timestamp NOT NULL DEFAULT now()
+);
+
+-- ─── SECTION 9: DONE ──────────────────────────────────────────────────────────
+
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;
