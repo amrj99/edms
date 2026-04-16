@@ -228,17 +228,32 @@ async function createCorrespondence(
 
   const requiresResponse = rawRequiresResponse === true || rawRequiresResponse === "true";
 
-  // system_owner with no org assignment may pass organizationId in the request body
-  // to specify which org context to attribute this correspondence to.
-  const orgId: number | undefined =
+  // Resolve effective project ID early so we can derive orgId from it if needed
+  const effectiveProjectIdForOrg: number | null =
+    contextProjectId ?? (bodyProjectId ? parseInt(bodyProjectId) : null);
+
+  // Determine org context:
+  // 1. Use the caller's own org if set (normal case)
+  // 2. Accept an explicit organizationId from the request body (system_owner override)
+  // 3. Derive from the project if the user is system_owner with no org assigned
+  let orgId: number | undefined =
     caller.organizationId ??
-    (isSystemOwner(caller) && req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
+    (req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
+
+  if (!orgId && isSystemOwner(caller) && effectiveProjectIdForOrg) {
+    const [proj] = await db
+      .select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, effectiveProjectIdForOrg))
+      .limit(1);
+    orgId = proj?.organizationId ?? undefined;
+  }
 
   if (!orgId) {
     res.status(400).json({
       error: "No organization context",
       message: isSystemOwner(caller)
-        ? "Select an organization context before sending correspondence. Pass organizationId in the request or use the org switcher."
+        ? "Select a project first — the organization context will be derived from the project."
         : "Your account is not assigned to an organization. Contact your administrator.",
     });
     return;
