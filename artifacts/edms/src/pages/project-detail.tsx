@@ -2088,12 +2088,14 @@ const TRS_PINNED = ["trsNo", "actions"];
 // Self-contained component. Receives a key= prop from TransmittalsTab so React
 // fully re-mounts (and resets all state) each time the dialog is opened.
 function CreateTransmittalDialog({
-  open, onClose, initialDocIds, projectId,
+  open, onClose, initialDocIds, projectId, projectName, projectCode,
 }: {
   open: boolean;
   onClose: () => void;
   initialDocIds: number[];
   projectId: number;
+  projectName?: string;
+  projectCode?: string;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -2252,6 +2254,11 @@ function CreateTransmittalDialog({
         <DialogContent className="sm:max-w-[620px] flex flex-col max-h-[90vh] p-0 gap-0">
           <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
             <DialogTitle>Create Transmittal</DialogTitle>
+            {(projectName || projectCode) && (
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Project: <span className="font-medium text-foreground">{projectCode ? `[${projectCode}]` : ""} {projectName ?? ""}</span>
+              </p>
+            )}
           </DialogHeader>
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
 
@@ -2626,6 +2633,8 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
         onClose={() => setCreateOpen(false)}
         initialDocIds={createInitialDocs}
         projectId={projectId}
+        projectName={project.name}
+        projectCode={project.code}
       />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
