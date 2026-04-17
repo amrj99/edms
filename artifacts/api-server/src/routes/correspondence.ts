@@ -860,8 +860,8 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
     res.status(400).json({
       error: "No organization context",
       message: isSystemOwner(caller)
-        ? "Cannot determine organization context. The parent correspondence has no organization assigned."
-        : "Your account is not assigned to an organization. Contact your administrator.",
+        ? "This correspondence is not linked to any organization, so a reply cannot be sent. Please contact a system administrator to correct the correspondence data."
+        : "Your account is not assigned to an organization. Please contact your administrator to resolve this before sending correspondence.",
     });
     return;
   }
