@@ -35,6 +35,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-edms-secret-key-change-in-production}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-edms-refresh-key-change-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # ── AI (OpenRouter) ─────────────────────────────────────────────────────
+      # Required for Document AI Analysis. Get a free key at openrouter.ai/keys
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # ── Email (Resend) ──────────────────────────────────────────────────────
       # Set RESEND_API_KEY in your .env — without it all emails are silently skipped.
       # FROM_EMAIL must match a verified domain in your Resend dashboard.

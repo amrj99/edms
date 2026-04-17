@@ -6,17 +6,64 @@ import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
 
 const rawPort = process.env["PORT"];
 
-// ── Security startup checks ────────────────────────────────────────────────────
-const DEFAULT_JWT = "edms-secret-key-change-in-production";
-if (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEFAULT_JWT) {
-  const msg = process.env.NODE_ENV === "production"
-    ? "CRITICAL: JWT_SECRET is using the default insecure value. Set JWT_SECRET in your .env file immediately."
-    : "WARNING: JWT_SECRET is not set. Using insecure default (acceptable for local dev only).";
-  console.warn(`[Security] ${msg}`);
-}
-if (!process.env.OPENROUTER_API_KEY && process.env.NODE_ENV === "production") {
-  console.warn("[AI] OPENROUTER_API_KEY is not set. Document AI Analysis will fail until this is configured.");
-}
+// ── Runtime environment validation ────────────────────────────────────────────
+// Critical secrets — fail-fast in production if missing or using defaults.
+// Optional vars — warn only, never crash.
+(function validateEnv() {
+  const isProd = process.env.NODE_ENV === "production";
+
+  // ── FAIL-FAST secrets (missing/default in production = hard exit) ──────────
+  const DEFAULT_JWT     = "edms-secret-key-change-in-production";
+  const DEFAULT_REFRESH = "edms-refresh-key-change-in-production";
+
+  const criticalErrors: string[] = [];
+
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEFAULT_JWT) {
+    if (isProd) {
+      criticalErrors.push("JWT_SECRET is missing or using the insecure default value");
+    } else {
+      console.warn("[Security] WARNING: JWT_SECRET not set — using insecure default (dev only).");
+    }
+  }
+
+  if (!process.env.REFRESH_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET === DEFAULT_REFRESH) {
+    if (isProd) {
+      criticalErrors.push("REFRESH_TOKEN_SECRET is missing or using the insecure default value");
+    } else {
+      console.warn("[Security] WARNING: REFRESH_TOKEN_SECRET not set — using insecure default (dev only).");
+    }
+  }
+
+  if (criticalErrors.length > 0) {
+    console.error("");
+    console.error("╔══════════════════════════════════════════════════════════════╗");
+    console.error("║  FATAL: Critical environment variables are not set properly  ║");
+    console.error("╠══════════════════════════════════════════════════════════════╣");
+    criticalErrors.forEach(e => console.error(`║  ✗ ${e.padEnd(58)}║`));
+    console.error("╠══════════════════════════════════════════════════════════════╣");
+    console.error("║  Set these in /var/www/edms/.env and redeploy.               ║");
+    console.error("╚══════════════════════════════════════════════════════════════╝");
+    console.error("");
+    process.exit(1);
+  }
+
+  // ── Soft warnings (missing = degraded functionality, not crash) ────────────
+  const softChecks: Array<{ key: string; label: string }> = [
+    { key: "OPENROUTER_API_KEY", label: "Document AI Analysis will be unavailable" },
+    { key: "RESEND_API_KEY",     label: "Email notifications will be silently skipped" },
+    { key: "FROM_EMAIL",         label: "Emails will be sent from Resend sandbox address" },
+    { key: "APP_URL",            label: "Email links will not resolve correctly" },
+    { key: "ALLOWED_ORIGINS",    label: "CORS may be misconfigured for production" },
+  ];
+
+  if (isProd) {
+    const missing = softChecks.filter(c => !process.env[c.key]);
+    if (missing.length > 0) {
+      console.warn("[Config] The following optional env vars are not set:");
+      missing.forEach(c => console.warn(`  ⚠  ${c.key}: ${c.label}`));
+    }
+  }
+})();
 
 if (!rawPort) {
   throw new Error("PORT environment variable is required but was not provided.");
