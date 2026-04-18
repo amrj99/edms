@@ -194,7 +194,16 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
                     size="icon"
                     className="h-6 w-6"
                     title="Preview"
-                    onClick={() => window.open(file.fileUrl, "_blank")}
+                    onClick={async () => {
+                      const url = file.fileUrl;
+                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
+                      const tok = localStorage.getItem("edms_token");
+                      try {
+                        const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                        if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                        else window.open(url, "_blank");
+                      } catch { window.open(url, "_blank"); }
+                    }}
                   >
                     <Eye className="h-3.5 w-3.5" />
                   </Button>
@@ -204,11 +213,24 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
                   size="icon"
                   className="h-6 w-6"
                   title="Download"
-                  asChild
+                  onClick={async () => {
+                    const url = file.fileUrl;
+                    const filename = file.fileName;
+                    if (!url?.startsWith("/api/storage/")) {
+                      const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
+                    }
+                    const tok = localStorage.getItem("edms_token");
+                    try {
+                      const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+                      if (!r.ok) throw new Error();
+                      const blob = await r.blob();
+                      const blobUrl = URL.createObjectURL(blob);
+                      const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
+                      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                    } catch { window.open(url, "_blank"); }
+                  }}
                 >
-                  <a href={file.fileUrl} download={file.fileName} target="_blank" rel="noopener noreferrer">
-                    <Download className="h-3.5 w-3.5" />
-                  </a>
+                  <Download className="h-3.5 w-3.5" />
                 </Button>
                 {canEdit && (
                   <Button

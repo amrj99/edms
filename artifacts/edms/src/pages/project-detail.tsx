@@ -33,6 +33,7 @@ import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 import { useColumnVisibility, type ColumnDef } from "@/hooks/useColumnVisibility";
 import { ColumnVisibilityMenu } from "@/components/ui/column-visibility-menu";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { usePreviewUrl } from "@/hooks/use-preview-url";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
 import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
@@ -82,6 +83,104 @@ const REVIEW_DECISION_OPTIONS = [
   { value: "for_revision",          label: "Revise",                icon: "↩", activeClass: "border-amber-500 bg-amber-50 text-amber-700" },
   { value: "rejected",              label: "Rejected",              icon: "✗", activeClass: "border-red-500 bg-red-50 text-red-700" },
 ] as const;
+
+// ─── Document Preview Content ────────────────────────────────────────────────
+// Separate component so usePreviewUrl hook is always called unconditionally.
+function DocumentPreviewContent({ doc }: { doc: any }) {
+  const ext = ((doc.fileName || doc.fileUrl || "") as string).split(".").pop()?.toLowerCase() ?? "";
+  const isPdf   = ext === "pdf";
+  const isImage = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
+
+  const previewState = usePreviewUrl(doc.fileUrl);
+
+  if (!doc.fileUrl) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+        <FileText className="h-16 w-16 opacity-20" />
+        <div className="text-center">
+          <p className="text-sm font-medium">{doc.title}</p>
+          <p className="text-xs mt-1">No file attached to this document.</p>
+        </div>
+        <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
+          <p><span className="font-medium">Number:</span> {doc.documentNumber}</p>
+          <p><span className="font-medium">Revision:</span> {doc.revision ?? "01"}</p>
+          <p><span className="font-medium">Discipline:</span> {doc.discipline || "—"}</p>
+          <p><span className="font-medium">Status:</span> {doc.status || "—"}</p>
+          <p><span className="font-medium">Issued by:</span> {doc.issuedBy || "—"}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (previewState.status === "loading") {
+    return (
+      <div className="w-full h-full flex items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <span className="text-sm">Loading preview…</span>
+      </div>
+    );
+  }
+
+  if (previewState.status === "error") {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+        <FileText className="h-16 w-16 opacity-20" />
+        <p className="text-sm">{previewState.message}</p>
+        <Button variant="outline" size="sm" asChild>
+          <a href={doc.fileUrl} target="_blank" rel="noreferrer">
+            <ExternalLink className="h-4 w-4 mr-2" />Open File
+          </a>
+        </Button>
+      </div>
+    );
+  }
+
+  const authenticatedUrl = previewState.url;
+
+  if (isPdf) {
+    return (
+      <iframe
+        key={authenticatedUrl}
+        src={authenticatedUrl}
+        className="w-full h-full border-0"
+        title={doc.title}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      />
+    );
+  }
+
+  if (isImage) {
+    return (
+      <div className="w-full h-full flex items-center justify-center p-4 overflow-auto">
+        <img
+          src={authenticatedUrl}
+          alt={doc.title}
+          className="max-w-full max-h-full object-contain rounded shadow"
+        />
+      </div>
+    );
+  }
+
+  // Unsupported file type — show placeholder with download option
+  return (
+    <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
+      <FileText className="h-16 w-16 opacity-20" />
+      <p className="text-sm">No in-browser preview for this file type.</p>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" asChild>
+          <a href={doc.fileUrl} target="_blank" rel="noreferrer">
+            <ExternalLink className="h-4 w-4 mr-2" />Open File
+          </a>
+        </Button>
+        <Button variant="outline" size="sm" asChild>
+          <a href={doc.fileUrl} download={doc.fileName || doc.title}>
+            <FileDown className="h-4 w-4 mr-2" />Download
+          </a>
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 // ─── Revision History Sheet ──────────────────────────────────────────────────
 function RevisionHistorySheet({ doc, projectId, open, onClose }: { doc: any; projectId: number; open: boolean; onClose: () => void }) {
@@ -1535,15 +1634,39 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
               </Button>
               {docPreview?.fileUrl && (
                 <>
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
-                    <a href={docPreview.fileUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
-                    </a>
+                  <Button
+                    variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                    onClick={async () => {
+                      const url = docPreview.fileUrl;
+                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
+                      const tok = localStorage.getItem("edms_token");
+                      const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                      if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                      else window.open(url, "_blank");
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
                   </Button>
-                  <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" asChild>
-                    <a href={docPreview.fileUrl} download={docPreview.fileName || docPreview.title}>
-                      <FileDown className="h-3.5 w-3.5" /> Download
-                    </a>
+                  <Button
+                    variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                    onClick={async () => {
+                      const url = docPreview.fileUrl;
+                      const filename = docPreview.fileName || docPreview.title || "download";
+                      if (!url?.startsWith("/api/storage/")) {
+                        const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
+                      }
+                      const tok = localStorage.getItem("edms_token");
+                      try {
+                        const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+                        if (!r.ok) throw new Error();
+                        const blob = await r.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
+                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                      } catch { window.open(url, "_blank"); }
+                    }}
+                  >
+                    <FileDown className="h-3.5 w-3.5" /> Download
                   </Button>
                 </>
               )}
@@ -1552,52 +1675,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
           <div className="flex-1 overflow-hidden flex flex-row">
             {/* Main preview area */}
             <div className="flex-1 overflow-hidden bg-muted/30">
-              {docPreview?.fileUrl ? (() => {
-                const url: string = docPreview.fileUrl;
-                const ext = (docPreview.fileName || url).split(".").pop()?.toLowerCase() ?? "";
-                const isPdf = ext === "pdf" || url.includes(".pdf");
-                const isImg = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
-                if (isPdf) {
-                  return (
-                    <iframe
-                      src={url}
-                      className="w-full h-full border-0"
-                      title={docPreview.title}
-                    />
-                  );
-                } else if (isImg) {
-                  return (
-                    <div className="w-full h-full flex items-center justify-center p-4">
-                      <img src={url} alt={docPreview.title} className="max-w-full max-h-full object-contain rounded shadow" />
-                    </div>
-                  );
-                } else {
-                  return (
-                    <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-                      <FileText className="h-16 w-16 opacity-30" />
-                      <p className="text-sm">No in-browser preview available for this file type.</p>
-                      <Button variant="outline" size="sm" asChild>
-                        <a href={url} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4 mr-2" />Open File</a>
-                      </Button>
-                    </div>
-                  );
-                }
-              })() : (
-                <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-                  <FileText className="h-16 w-16 opacity-30" />
-                  <div className="text-center">
-                    <p className="text-sm font-medium">{docPreview?.title}</p>
-                    <p className="text-xs mt-1">No file attached to this document.</p>
-                  </div>
-                  <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
-                    <p><span className="font-medium">Number:</span> {docPreview?.documentNumber}</p>
-                    <p><span className="font-medium">Revision:</span> {docPreview?.revision ?? "01"}</p>
-                    <p><span className="font-medium">Discipline:</span> {docPreview?.discipline || "—"}</p>
-                    <p><span className="font-medium">Status:</span> {docPreview?.status || "—"}</p>
-                    <p><span className="font-medium">Issued by:</span> {docPreview?.issuedBy || "—"}</p>
-                  </div>
-                </div>
-              )}
+              {docPreview && <DocumentPreviewContent doc={docPreview} />}
             </div>
             {/* Attachments side panel */}
             {docPreview && (

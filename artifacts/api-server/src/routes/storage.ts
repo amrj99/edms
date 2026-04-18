@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import { Readable } from "stream";
 import path from "path";
 import fs from "fs";
@@ -6,8 +6,75 @@ import { eq } from "drizzle-orm";
 import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { requestUpload, streamOnPremFile, getS3PresignedGetUrl } from "../lib/orgStorage.js";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+
+// ─── MIME type detection ──────────────────────────────────────────────────────
+const MIME_MAP: Record<string, string> = {
+  pdf:  "application/pdf",
+  png:  "image/png",
+  jpg:  "image/jpeg",
+  jpeg: "image/jpeg",
+  gif:  "image/gif",
+  svg:  "image/svg+xml",
+  webp: "image/webp",
+  bmp:  "image/bmp",
+  txt:  "text/plain",
+  html: "text/html",
+  htm:  "text/html",
+  json: "application/json",
+  xml:  "application/xml",
+  csv:  "text/csv",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls:  "application/vnd.ms-excel",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  doc:  "application/msword",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ppt:  "application/vnd.ms-powerpoint",
+  zip:  "application/zip",
+  dwg:  "image/vnd.dwg",
+  dxf:  "image/vnd.dxf",
+  mp4:  "video/mp4",
+  mp3:  "audio/mpeg",
+};
+
+function getMimeType(filename: string): string {
+  const ext = path.extname(filename).replace(".", "").toLowerCase();
+  return MIME_MAP[ext] ?? "application/octet-stream";
+}
+
+// ─── View-token middleware ────────────────────────────────────────────────────
+// Accepts either: Authorization: Bearer <jwt>  OR  ?vt=<view-token>
+// If a view token is used, the token payload must contain the expected file path.
+function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const viewToken = req.query.vt as string | undefined;
+
+    if (viewToken) {
+      const payload = verifyToken(viewToken) as Record<string, unknown> | null;
+      if (!payload || payload.type !== "view_file") {
+        res.status(401).json({ error: "Invalid or expired view token" });
+        return;
+      }
+      const expectedPath = expectedPathFn(req);
+      if (payload.url !== expectedPath) {
+        res.status(403).json({ error: "View token does not match this file" });
+        return;
+      }
+      // Inject minimal user context for downstream org-access checks
+      (req as any).user = {
+        id: payload.userId as number,
+        organizationId: payload.orgId as number | null,
+        role: payload.role as string ?? "member",
+      };
+      next();
+      return;
+    }
+
+    // Fall back to standard Bearer auth
+    requireAuth(req, res, next);
+  };
+}
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -62,6 +129,42 @@ function s3KeyBelongsToOrg(objectKey: string, orgId: number): boolean {
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
+
+/**
+ * GET /view-token?url=<encodedStorageUrl>
+ * Issues a short-lived (5 min) signed token that allows a browser (iframe, img, etc.)
+ * to load a private storage file without sending an Authorization header.
+ * Only API-internal storage URLs are accepted — external URLs are rejected.
+ */
+router.get("/view-token", requireAuth, (req: Request, res: Response) => {
+  const rawUrl = req.query.url as string | undefined;
+  if (!rawUrl) {
+    res.status(400).json({ error: "url query parameter is required" });
+    return;
+  }
+
+  const decodedUrl = decodeURIComponent(rawUrl);
+
+  // Security: only allow URLs pointing to our own storage endpoints
+  const allowedPrefixes = ["/api/storage/onpremise/", "/api/storage/objects/", "/api/storage/s3-object/"];
+  if (!allowedPrefixes.some(p => decodedUrl.startsWith(p))) {
+    res.status(400).json({ error: "URL is not a valid internal storage path" });
+    return;
+  }
+
+  const token = signToken(
+    {
+      type: "view_file",
+      url: decodedUrl,
+      userId: req.user!.id,
+      orgId: req.user!.organizationId ?? null,
+      role: req.user!.role,
+    },
+    300, // 5 minutes
+  );
+
+  res.json({ token, expiresIn: 300 });
+});
 
 /**
  * POST /uploads/request-url
@@ -271,7 +374,7 @@ router.get("/objects/*path", requireAuth, async (req: Request, res: Response) =>
  */
 router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
-  requireAuth,
+  requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
   async (req: Request, res: Response) => {
     const { orgId, projectId, fileType, filename } = req.params;
     const targetOrgId = parseInt(orgId);
@@ -326,7 +429,12 @@ router.get(
       res.status(404).json({ error: "File not found" });
       return;
     }
+
+    const mimeType = getMimeType(safeFilename);
+    res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
+    // Allow iframe embedding from the same origin
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
     stream.pipe(res);
   },
 );
