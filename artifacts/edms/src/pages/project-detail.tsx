@@ -8,7 +8,7 @@ import {
   Layers, UserCheck, FileDown, Trash2, ChevronDown,
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
-  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search,
+  LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search, FolderInput,
   AlertTriangle, FilePlus2, GitMerge,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
@@ -401,7 +401,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     useColumnVisibility(`docs-${projectId}`, DOC_COLUMNS);
   const [, navigate] = useLocation();
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
-  const { data, isLoading } = useListDocuments(projectId);
+  const { data, isLoading, refetch: refetchDocs } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isAIUploadOpen, setIsAIUploadOpen] = useState(false);
   const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
@@ -449,6 +449,37 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const [shareDoc, setShareDoc] = useState<any>(null);
   const [docShareForm, setDocShareForm] = useState({ expiresInDays: "30", password: "" });
   const [docShareResult, setDocShareResult] = useState<{ shareUrl: string; expiresAt: string | null } | null>(null);
+
+  // Move to Folder state
+  const [moveToFolderDoc, setMoveToFolderDoc] = useState<any>(null);
+  const { data: folderPickData } = useQuery({
+    queryKey: ["project-folders", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/documents/folders`);
+      if (!r.ok) return { folders: [] };
+      return r.json();
+    },
+    enabled: !!moveToFolderDoc,
+  });
+  const pickerFolders: any[] = folderPickData?.folders ?? [];
+  const moveToFolderMut = useMutation({
+    mutationFn: async ({ docId, folderId }: { docId: number; folderId: number | null }) => {
+      const token = localStorage.getItem("edms_token");
+      const r = await fetch(`/api/projects/${projectId}/documents/${docId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ folderId }),
+      });
+      if (!r.ok) throw new Error("Failed to move document");
+      return r.json();
+    },
+    onSuccess: () => {
+      refetchDocs();
+      setMoveToFolderDoc(null);
+      toast({ title: "Document moved successfully" });
+    },
+    onError: () => toast({ title: "Failed to move document", variant: "destructive" }),
+  });
 
   const handleMultiUploadSuccess = async (
     uploads: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }[]
@@ -872,6 +903,9 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
               </Button>
             </>
           )}
+          <Button size="sm" variant="outline" className="h-9 w-9 p-0" title="Refresh documents" onClick={() => refetchDocs()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
           <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={runValidation} disabled={validating || allDocs.length === 0}>
             <ShieldAlert className="h-3.5 w-3.5" />
             {validating ? "Validating..." : "Validate"}
@@ -1347,6 +1381,12 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                       }}>
                         <Link2 className="h-4 w-4" />
                       </Button>
+                      {(perms.canEditDocument || doc.createdById === user?.id) && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Move to folder"
+                          onClick={() => setMoveToFolderDoc(doc)}>
+                          <FolderInput className="h-4 w-4" />
+                        </Button>
+                      )}
                       {doc.fileUrl && (
                         <Button variant="ghost" size="icon" className="h-8 w-8" title="Download" asChild>
                           <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"><Download className="h-4 w-4" /></a>
@@ -1951,6 +1991,45 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
           <DialogFooter>
             <Button variant="outline" onClick={() => setValidateOpen(false)}>Close</Button>
             {!validating && <Button onClick={runValidation} variant="outline" className="gap-2"><RefreshCw className="h-4 w-4" />Re-run</Button>}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Move to Folder Dialog */}
+      <Dialog open={!!moveToFolderDoc} onOpenChange={open => !open && setMoveToFolderDoc(null)}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><FolderInput className="h-4 w-4" /> Move to Folder</DialogTitle>
+          </DialogHeader>
+          {moveToFolderDoc && (
+            <div className="space-y-4 py-1">
+              <div className="bg-muted/40 rounded-lg p-3 border">
+                <p className="font-mono font-semibold text-primary text-xs">{moveToFolderDoc.documentNumber}</p>
+                <p className="text-muted-foreground text-xs mt-0.5 truncate">{moveToFolderDoc.title}</p>
+              </div>
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">Select destination folder</Label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  value={moveToFolderDoc.folderId ? String(moveToFolderDoc.folderId) : "_root"}
+                  onChange={e => {
+                    const val = e.target.value;
+                    moveToFolderMut.mutate({ docId: moveToFolderDoc.id, folderId: val === "_root" ? null : Number(val) });
+                  }}
+                >
+                  <option value="_root">— Root (no folder) —</option>
+                  {pickerFolders.map((f: any) => (
+                    <option key={f.id} value={String(f.id)}>{f.name}</option>
+                  ))}
+                </select>
+                {pickerFolders.length === 0 && (
+                  <p className="text-xs text-muted-foreground mt-2">No folders in this project yet. Create folders from the Folders panel.</p>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveToFolderDoc(null)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -6,7 +6,7 @@ import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  FileText, Search, Send, Download, Eye, ExternalLink,
+  FileText, Search, Send, Download, Sparkles, ExternalLink,
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
   Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
   ArrowUp, ArrowDown, ChevronsUpDown, Trash2, Paperclip,
@@ -647,9 +647,9 @@ export default function DocumentsPage() {
                           </a>
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" className="h-7 w-7" title="Open Document"
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/30" title="AI Analysis / Open Document"
                         onClick={() => navigate(`/documents/${doc.id}`)}>
-                        <Eye className="h-3.5 w-3.5" />
+                        <Sparkles className="h-3.5 w-3.5" />
                       </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" title="Files"
                         onClick={() => setFilesDoc(doc)}>
@@ -797,17 +797,23 @@ export default function DocumentsPage() {
 
       {/* Create Transmittal Dialog */}
       <Dialog open={!!workflowDoc} onOpenChange={open => { if (!open) { setWorkflowDoc(null); setWfAttachIds([]); } }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
+        <DialogContent className="max-w-lg max-h-[88vh] flex flex-col">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2">
               <Send className="h-4 w-4" />
               Create Transmittal
             </DialogTitle>
+            {workflowDoc?.projectName && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                <Building2 className="h-3 w-3" />
+                <span className="font-semibold text-foreground">{workflowDoc.projectName}</span>
+              </p>
+            )}
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 overflow-y-auto flex-1 pr-1">
             <div className="bg-muted/40 rounded-lg p-3 text-sm">
-              <p className="font-medium">{workflowDoc?.documentNumber}</p>
-              <p className="text-muted-foreground text-xs mt-0.5">{workflowDoc?.title}</p>
+              <p className="font-mono font-semibold text-primary text-xs">{workflowDoc?.documentNumber}</p>
+              <p className="font-medium text-sm mt-0.5">{workflowDoc?.title}</p>
             </div>
 
             {/* Attachments */}
@@ -918,7 +924,7 @@ export default function DocumentsPage() {
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => { setWorkflowDoc(null); setWfAttachIds([]); }}>Cancel</Button>
             <Button
               onClick={() => sendForWorkflow.mutate()}

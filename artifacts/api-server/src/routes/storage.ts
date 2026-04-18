@@ -343,30 +343,47 @@ router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
  * GET /objects/*
  * Serve private objects from cloud storage. Requires authentication.
  */
-router.get("/objects/*path", requireAuth, async (req: Request, res: Response) => {
-  try {
+router.get(
+  "/objects/*path",
+  requireAuthOrViewToken(req => {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
-    const objectPath = `/objects/${wildcardPath}`;
-    const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
-    const response = await objectStorageService.downloadObject(objectFile);
-    res.status(response.status);
-    response.headers.forEach((value, key) => res.setHeader(key, value));
-    if (response.body) {
-      const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
-      nodeStream.pipe(res);
-    } else {
-      res.end();
+    return `/api/storage/objects/${wildcardPath}`;
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      const raw = req.params.path;
+      const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
+      const objectPath = `/objects/${wildcardPath}`;
+      const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+      const response = await objectStorageService.downloadObject(objectFile);
+      // Set Content-Type based on filename before piping the stream
+      const filename = wildcardPath.split("/").pop() ?? "";
+      const mimeType = getMimeType(filename);
+      res.setHeader("Content-Type", mimeType);
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+      // Forward remaining headers from object storage (but not Content-Type — we set it)
+      response.headers.forEach((value, key) => {
+        if (key.toLowerCase() !== "content-type") res.setHeader(key, value);
+      });
+      res.status(response.status);
+      if (response.body) {
+        const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+        nodeStream.pipe(res);
+      } else {
+        res.end();
+      }
+    } catch (error: any) {
+      if (error instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Object not found" });
+        return;
+      }
+      console.error("Error serving object:", error);
+      res.status(500).json({ error: "Failed to serve object" });
     }
-  } catch (error: any) {
-    if (error instanceof ObjectNotFoundError) {
-      res.status(404).json({ error: "Object not found" });
-      return;
-    }
-    console.error("Error serving object:", error);
-    res.status(500).json({ error: "Failed to serve object" });
-  }
-});
+  },
+);
 
 /**
  * GET /onpremise/:orgId/:projectId/:fileType/:filename
