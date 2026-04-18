@@ -121,16 +121,21 @@ function DocumentPreviewContent({ doc }: { doc: any }) {
     );
   }
 
-  if (previewState.status === "error") {
+  if (previewState.status === "error" || previewState.status === "not-previewable") {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
         <FileText className="h-16 w-16 opacity-20" />
-        <p className="text-sm">{previewState.message}</p>
-        <Button variant="outline" size="sm" asChild>
-          <a href={doc.fileUrl} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-4 w-4 mr-2" />Open File
-          </a>
-        </Button>
+        <div className="text-center">
+          <p className="text-sm font-medium">{doc.title}</p>
+          <p className="text-xs mt-1 max-w-xs text-center">{previewState.message}</p>
+        </div>
+        <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
+          <p><span className="font-medium">Number:</span> {doc.documentNumber}</p>
+          <p><span className="font-medium">Revision:</span> {doc.revision ?? "01"}</p>
+          <p><span className="font-medium">Discipline:</span> {doc.discipline || "—"}</p>
+          <p><span className="font-medium">Status:</span> {doc.status || "—"}</p>
+          {doc.fileName && <p><span className="font-medium">File:</span> {doc.fileName}</p>}
+        </div>
       </div>
     );
   }

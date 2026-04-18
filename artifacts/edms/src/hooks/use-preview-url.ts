@@ -1,20 +1,19 @@
 /**
  * usePreviewUrl — resolves an authenticated URL for inline file preview.
  *
- * For files served through our own /api/storage/* endpoints, the browser cannot
- * add an Authorization header when loading an <iframe> or <img> tag directly.
- * This hook exchanges the file URL for a short-lived view token (5 min) and
- * returns a URL with ?vt=<token> appended, which the storage endpoint accepts
- * without a Bearer header.
- *
- * For external URLs (S3 presigned URLs, etc.) the URL is returned as-is.
+ * URL classification:
+ *  1. Internal storage (/api/storage/*)  → fetch a short-lived view token, return URL?vt=<token>
+ *  2. Browser-loadable external (http/https)  → return as-is
+ *  3. Everything else (seed paths, s3://, /mnt/…, relative paths) → return "not-previewable" error
+ *     so the UI can show a graceful fallback instead of loading a broken path.
  */
 import { useState, useEffect, useRef } from "react";
 
 type PreviewState =
   | { status: "loading" }
   | { status: "ready"; url: string }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  | { status: "not-previewable"; message: string };
 
 const INTERNAL_PREFIXES = [
   "/api/storage/onpremise/",
@@ -24,6 +23,10 @@ const INTERNAL_PREFIXES = [
 
 function isInternalStorageUrl(url: string): boolean {
   return INTERNAL_PREFIXES.some(p => url.startsWith(p));
+}
+
+function isBrowserLoadableUrl(url: string): boolean {
+  return url.startsWith("http://") || url.startsWith("https://");
 }
 
 export function usePreviewUrl(fileUrl: string | null | undefined): PreviewState {
@@ -36,43 +39,52 @@ export function usePreviewUrl(fileUrl: string | null | undefined): PreviewState 
       return;
     }
 
-    // External URLs (S3 presigned, CDN, etc.) — use directly
-    if (!isInternalStorageUrl(fileUrl)) {
+    // Internal storage URL — needs a view token
+    if (isInternalStorageUrl(fileUrl)) {
+      setState({ status: "loading" });
+
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      const token = localStorage.getItem("edms_token");
+      if (!token) {
+        setState({ status: "error", message: "Not authenticated. Please refresh the page." });
+        return;
+      }
+
+      fetch(`/api/storage/view-token?url=${encodeURIComponent(fileUrl)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      })
+        .then(r => {
+          if (!r.ok) throw new Error(`Token request failed (${r.status})`);
+          return r.json();
+        })
+        .then((data: { token: string }) => {
+          if (ctrl.signal.aborted) return;
+          setState({ status: "ready", url: `${fileUrl}?vt=${data.token}` });
+        })
+        .catch(err => {
+          if (err.name === "AbortError") return;
+          setState({ status: "error", message: "Could not load preview. Try downloading the file." });
+        });
+
+      return () => ctrl.abort();
+    }
+
+    // Browser-loadable external URL (http/https) — use directly
+    if (isBrowserLoadableUrl(fileUrl)) {
       setState({ status: "ready", url: fileUrl });
       return;
     }
 
-    // Internal storage URL — needs a view token
-    setState({ status: "loading" });
-
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-
-    const token = localStorage.getItem("edms_token");
-    if (!token) {
-      setState({ status: "error", message: "Not authenticated. Please refresh the page." });
-      return;
-    }
-
-    fetch(`/api/storage/view-token?url=${encodeURIComponent(fileUrl)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: ctrl.signal,
-    })
-      .then(r => {
-        if (!r.ok) throw new Error(`Token request failed (${r.status})`);
-        return r.json();
-      })
-      .then((data: { token: string }) => {
-        if (ctrl.signal.aborted) return;
-        setState({ status: "ready", url: `${fileUrl}?vt=${data.token}` });
-      })
-      .catch(err => {
-        if (err.name === "AbortError") return;
-        setState({ status: "error", message: "Could not load preview. Try downloading the file." });
-      });
-
-    return () => ctrl.abort();
+    // Not previewable: seed paths, s3:// URIs, /mnt/ paths, or other non-HTTP references
+    // These are stored references that cannot be loaded by the browser directly.
+    setState({
+      status: "not-previewable",
+      message: "This file is stored at a path that cannot be previewed in the browser.",
+    });
   }, [fileUrl]);
 
   return state;
