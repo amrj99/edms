@@ -2,10 +2,15 @@
  * usePreviewUrl — resolves an authenticated URL for inline file preview.
  *
  * URL classification:
- *  1. Internal storage (/api/storage/*)  → fetch a short-lived view token, return URL?vt=<token>
+ *  1. Internal storage (/api/storage/*)  → fetch a short-lived view token, return URL?vt=<token>&ct=<mime>
  *  2. Browser-loadable external (http/https)  → return as-is
  *  3. Everything else (seed paths, s3://, /mnt/…, relative paths) → return "not-previewable" error
  *     so the UI can show a graceful fallback instead of loading a broken path.
+ *
+ * @param fileUrl   The raw storage URL to resolve.
+ * @param mimeType  Optional MIME type hint (e.g. "application/pdf"). When provided, the server
+ *                  uses it to set the correct Content-Type header instead of guessing from the
+ *                  UUID-based filename. This is critical for inline PDF rendering in iframes.
  */
 import { useState, useEffect, useRef } from "react";
 
@@ -30,7 +35,10 @@ function isBrowserLoadableUrl(url: string): boolean {
   return url.startsWith("http://") || url.startsWith("https://");
 }
 
-export function usePreviewUrl(fileUrl: string | null | undefined): PreviewState {
+export function usePreviewUrl(
+  fileUrl: string | null | undefined,
+  mimeType?: string | null,
+): PreviewState {
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const abortRef = useRef<AbortController | null>(null);
 
@@ -64,7 +72,10 @@ export function usePreviewUrl(fileUrl: string | null | undefined): PreviewState 
         })
         .then((data: { token: string }) => {
           if (ctrl.signal.aborted) return;
-          setState({ status: "ready", url: `${fileUrl}?vt=${data.token}` });
+          // Append ?ct= so the server uses the correct Content-Type instead of guessing
+          // from the UUID-based filename (which has no extension → defaults to octet-stream).
+          const ctPart = mimeType ? `&ct=${encodeURIComponent(mimeType)}` : "";
+          setState({ status: "ready", url: `${fileUrl}?vt=${data.token}${ctPart}` });
         })
         .catch(err => {
           if (err.name === "AbortError") return;
@@ -86,7 +97,7 @@ export function usePreviewUrl(fileUrl: string | null | undefined): PreviewState 
       status: "not-previewable",
       message: "This file is stored at a path that cannot be previewed in the browser.",
     });
-  }, [fileUrl]);
+  }, [fileUrl, mimeType]);
 
   return state;
 }

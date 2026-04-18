@@ -107,7 +107,7 @@ export default function DocumentsPage() {
 
   // Quick preview dialog
   const [docPreview, setDocPreview] = useState<any>(null);
-  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string } | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string; fileType?: string | null } | null>(null);
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
@@ -860,7 +860,7 @@ export default function DocumentsPage() {
                   documentId={docPreview.id}
                   projectId={docPreview.projectId}
                   canEdit={false}
-                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName })}
+                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName, fileType: file.fileType })}
                   activeFileUrl={previewAttachment?.fileUrl ?? null}
                 />
               </div>

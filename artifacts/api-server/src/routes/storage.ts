@@ -357,9 +357,17 @@ router.get(
       const objectPath = `/objects/${wildcardPath}`;
       const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
       const response = await objectStorageService.downloadObject(objectFile);
-      // Set Content-Type based on filename before piping the stream
+      // Set Content-Type — prefer the ?ct= hint from the client (validated against whitelist)
+      // over inferred-from-filename, because files are stored with UUID keys (no extension).
       const filename = wildcardPath.split("/").pop() ?? "";
-      const mimeType = getMimeType(filename);
+      const SAFE_INLINE_TYPES = new Set([
+        "application/pdf",
+        "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
+        "text/plain", "text/csv",
+        "video/mp4",
+      ]);
+      const ctHint = req.query.ct as string | undefined;
+      const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint)) ? ctHint : getMimeType(filename);
       res.setHeader("Content-Type", mimeType);
       res.setHeader("X-Frame-Options", "SAMEORIGIN");
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);

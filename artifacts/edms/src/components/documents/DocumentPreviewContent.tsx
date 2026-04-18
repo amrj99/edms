@@ -2,24 +2,44 @@ import { usePreviewUrl } from "@/hooks/use-preview-url";
 import { FileText, Loader2, ExternalLink, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+interface OverrideFile {
+  fileUrl: string;
+  fileName: string;
+  /** MIME type stored in document_files.file_type — used for renderer selection and Content-Type hint. */
+  fileType?: string | null;
+}
+
 interface PreviewProps {
   doc: any;
   /**
    * When set, the middle pane previews this file instead of doc.fileUrl.
    * Used by the quick-preview dialog when the user clicks Eye on an attachment.
    */
-  overrideFile?: { fileUrl: string; fileName: string } | null;
+  overrideFile?: OverrideFile | null;
+}
+
+function isPdfMime(mimeType: string | null | undefined, ext: string): boolean {
+  if (mimeType) return mimeType.includes("pdf");
+  return ext === "pdf";
+}
+
+function isImageMime(mimeType: string | null | undefined, ext: string): boolean {
+  if (mimeType) return mimeType.startsWith("image/");
+  return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext);
 }
 
 export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
-  const activeUrl  = overrideFile ? overrideFile.fileUrl  : doc.fileUrl;
-  const activeName = overrideFile ? overrideFile.fileName : (doc.fileName || doc.title || "");
+  const activeUrl   = overrideFile ? overrideFile.fileUrl  : doc.fileUrl;
+  const activeName  = overrideFile ? overrideFile.fileName : (doc.fileName || doc.title || "");
+  // Prefer MIME type from DB (reliable) over filename-extension inference (breaks for UUID filenames)
+  const activeMime  = overrideFile ? (overrideFile.fileType ?? null) : (doc.fileType ?? null);
 
-  const ext = (activeName as string).split(".").pop()?.toLowerCase() ?? "";
-  const isPdf   = ext === "pdf";
-  const isImage = ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext);
+  const ext     = (activeName as string).split(".").pop()?.toLowerCase() ?? "";
+  const isPdf   = isPdfMime(activeMime, ext);
+  const isImage = isImageMime(activeMime, ext);
 
-  const previewState = usePreviewUrl(activeUrl);
+  // Pass activeMime so the server sets the correct Content-Type on UUID-named files
+  const previewState = usePreviewUrl(activeUrl, activeMime);
 
   if (!activeUrl) {
     return (

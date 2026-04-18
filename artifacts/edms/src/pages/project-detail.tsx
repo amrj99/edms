@@ -318,7 +318,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [docPreview, setDocPreview] = useState<any>(null);
-  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string } | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string; fileType?: string | null } | null>(null);
   const [revHistoryDoc, setRevHistoryDoc] = useState<any>(null);
   const [validateOpen, setValidateOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<any>(null);
@@ -1662,7 +1662,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                   documentId={docPreview.id}
                   projectId={projectId}
                   canEdit={perms.canEditDocument || docPreview?.createdById === user?.id}
-                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName })}
+                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName, fileType: file.fileType })}
                   activeFileUrl={previewAttachment?.fileUrl ?? null}
                 />
               </div>
