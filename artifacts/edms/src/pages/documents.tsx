@@ -838,7 +838,13 @@ export default function DocumentsPage() {
           </DialogHeader>
           <div className="flex-1 overflow-hidden flex flex-row">
             <div className="flex-1 overflow-hidden bg-muted/30">
-              {docPreview && <DocumentPreviewContent doc={docPreview} overrideFile={previewAttachment} />}
+              {docPreview && (
+                <DocumentPreviewContent
+                  key={previewAttachment?.fileUrl ?? (docPreview.fileUrl ?? "no-file")}
+                  doc={docPreview}
+                  overrideFile={previewAttachment}
+                />
+              )}
             </div>
             {docPreview && (
               <div className="w-72 border-l bg-card overflow-y-auto p-3 shrink-0 flex flex-col gap-3">

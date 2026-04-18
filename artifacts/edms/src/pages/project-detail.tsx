@@ -1639,7 +1639,13 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
           <div className="flex-1 overflow-hidden flex flex-row">
             {/* Main preview area */}
             <div className="flex-1 overflow-hidden bg-muted/30">
-              {docPreview && <DocumentPreviewContent doc={docPreview} overrideFile={previewAttachment} />}
+              {docPreview && (
+                <DocumentPreviewContent
+                  key={previewAttachment?.fileUrl ?? (docPreview.fileUrl ?? "no-file")}
+                  doc={docPreview}
+                  overrideFile={previewAttachment}
+                />
+              )}
             </div>
             {/* Attachments side panel */}
             {docPreview && (
