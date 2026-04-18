@@ -1,12 +1,13 @@
 import { useState, useMemo } from "react";
 import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
+import { DocumentPreviewContent } from "@/components/documents/DocumentPreviewContent";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  FileText, Search, Send, Download, Sparkles, ExternalLink,
+  FileText, Search, Send, Download, Sparkles, ExternalLink, FileDown,
   Filter, X, ChevronDown, Loader2, Building2, FolderOpen,
   Plus, RefreshCw, History, Star, Clock, CheckCircle2, User,
   ArrowUp, ArrowDown, ChevronsUpDown, Trash2, Paperclip,
@@ -103,6 +104,9 @@ export default function DocumentsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
   const [moveToFolderDoc, setMoveToFolderDoc] = useState<any>(null);
+
+  // Quick preview dialog
+  const [docPreview, setDocPreview] = useState<any>(null);
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
@@ -606,14 +610,21 @@ export default function DocumentsPage() {
               ) : displayDocs.map((doc: any) => (
                 <TableRow
                   key={doc.id}
-                  className="hover:bg-muted/20 group cursor-pointer"
-                  onClick={() => navigate(`/documents/${doc.id}`)}
+                  className="hover:bg-muted/20 group"
                 >
-                  <TableCell className="font-mono text-xs font-semibold text-primary truncate">{doc.documentNumber}</TableCell>
-                  <TableCell>
+                  <TableCell
+                    className="font-mono text-xs font-semibold text-primary truncate cursor-pointer hover:underline underline-offset-2"
+                    onClick={() => navigate(`/documents/${doc.id}`)}
+                    title="Open full document page"
+                  >{doc.documentNumber}</TableCell>
+                  <TableCell
+                    className="cursor-pointer"
+                    onClick={() => setDocPreview(doc)}
+                    title="Click to quick preview"
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-sm font-medium truncate" title={doc.title}>{doc.title}</span>
+                      <span className="text-sm font-medium truncate hover:underline underline-offset-2" title={doc.title}>{doc.title}</span>
                     </div>
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground truncate">{doc.projectName || "—"}</TableCell>
@@ -740,6 +751,87 @@ export default function DocumentsPage() {
           </ScrollArea>
         </SheetContent>
       </Sheet>
+
+      {/* Quick Preview Dialog */}
+      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) setDocPreview(null); }}>
+        <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-4 py-3 border-b shrink-0 flex flex-row items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <FileText className="h-5 w-5 text-primary shrink-0" />
+              <div className="min-w-0">
+                <DialogTitle className="text-sm font-semibold truncate">{docPreview?.title}</DialogTitle>
+                <p className="text-xs text-muted-foreground font-mono">{docPreview?.documentNumber} · Rev {docPreview?.revision ?? "01"}</p>
+                {docPreview?.projectName && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                    <Building2 className="h-3 w-3" />
+                    {docPreview.projectName}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                onClick={() => { setDocPreview(null); navigate(`/documents/${docPreview?.id}`); }}
+              >
+                <ExternalLink className="h-3.5 w-3.5" /> Full Page
+              </Button>
+              {docPreview?.fileUrl && (
+                <>
+                  <Button
+                    variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                    onClick={async () => {
+                      const url = docPreview.fileUrl;
+                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
+                      const tok = localStorage.getItem("edms_token");
+                      const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                      if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                      else window.open(url, "_blank");
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
+                  </Button>
+                  <Button
+                    variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                    onClick={async () => {
+                      const url = docPreview.fileUrl;
+                      const filename = docPreview.fileName || docPreview.title || "download";
+                      if (!url?.startsWith("/api/storage/")) {
+                        const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
+                      }
+                      const tok = localStorage.getItem("edms_token");
+                      try {
+                        const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+                        if (!r.ok) throw new Error();
+                        const blob = await r.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
+                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                      } catch { window.open(url, "_blank"); }
+                    }}
+                  >
+                    <FileDown className="h-3.5 w-3.5" /> Download
+                  </Button>
+                </>
+              )}
+            </div>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden flex flex-row">
+            <div className="flex-1 overflow-hidden bg-muted/30">
+              {docPreview && <DocumentPreviewContent doc={docPreview} />}
+            </div>
+            {docPreview && (
+              <div className="w-72 border-l bg-card overflow-y-auto p-3 shrink-0 flex flex-col gap-3">
+                <DocumentFilesPanel
+                  documentId={docPreview.id}
+                  projectId={docPreview.projectId}
+                  canEdit={false}
+                />
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Move to Folder Dialog */}
       <Dialog open={!!moveToFolderDoc} onOpenChange={open => !open && setMoveToFolderDoc(null)}>

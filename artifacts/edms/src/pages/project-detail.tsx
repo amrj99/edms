@@ -33,7 +33,7 @@ import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 import { useColumnVisibility, type ColumnDef } from "@/hooks/useColumnVisibility";
 import { ColumnVisibilityMenu } from "@/components/ui/column-visibility-menu";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
-import { usePreviewUrl } from "@/hooks/use-preview-url";
+import { DocumentPreviewContent } from "@/components/documents/DocumentPreviewContent";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
 import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
@@ -83,109 +83,6 @@ const REVIEW_DECISION_OPTIONS = [
   { value: "for_revision",          label: "Revise",                icon: "↩", activeClass: "border-amber-500 bg-amber-50 text-amber-700" },
   { value: "rejected",              label: "Rejected",              icon: "✗", activeClass: "border-red-500 bg-red-50 text-red-700" },
 ] as const;
-
-// ─── Document Preview Content ────────────────────────────────────────────────
-// Separate component so usePreviewUrl hook is always called unconditionally.
-function DocumentPreviewContent({ doc }: { doc: any }) {
-  const ext = ((doc.fileName || doc.fileUrl || "") as string).split(".").pop()?.toLowerCase() ?? "";
-  const isPdf   = ext === "pdf";
-  const isImage = ["jpg","jpeg","png","gif","webp","svg","bmp"].includes(ext);
-
-  const previewState = usePreviewUrl(doc.fileUrl);
-
-  if (!doc.fileUrl) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-        <FileText className="h-16 w-16 opacity-20" />
-        <div className="text-center">
-          <p className="text-sm font-medium">{doc.title}</p>
-          <p className="text-xs mt-1">No file attached to this document.</p>
-        </div>
-        <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
-          <p><span className="font-medium">Number:</span> {doc.documentNumber}</p>
-          <p><span className="font-medium">Revision:</span> {doc.revision ?? "01"}</p>
-          <p><span className="font-medium">Discipline:</span> {doc.discipline || "—"}</p>
-          <p><span className="font-medium">Status:</span> {doc.status || "—"}</p>
-          <p><span className="font-medium">Issued by:</span> {doc.issuedBy || "—"}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (previewState.status === "loading") {
-    return (
-      <div className="w-full h-full flex items-center justify-center gap-3 text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
-        <span className="text-sm">Loading preview…</span>
-      </div>
-    );
-  }
-
-  if (previewState.status === "error" || previewState.status === "not-previewable") {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-        <FileText className="h-16 w-16 opacity-20" />
-        <div className="text-center">
-          <p className="text-sm font-medium">{doc.title}</p>
-          <p className="text-xs mt-1 max-w-xs text-center">{previewState.message}</p>
-        </div>
-        <div className="bg-muted rounded-lg p-4 text-xs space-y-1 text-left w-64">
-          <p><span className="font-medium">Number:</span> {doc.documentNumber}</p>
-          <p><span className="font-medium">Revision:</span> {doc.revision ?? "01"}</p>
-          <p><span className="font-medium">Discipline:</span> {doc.discipline || "—"}</p>
-          <p><span className="font-medium">Status:</span> {doc.status || "—"}</p>
-          {doc.fileName && <p><span className="font-medium">File:</span> {doc.fileName}</p>}
-        </div>
-      </div>
-    );
-  }
-
-  const authenticatedUrl = previewState.url;
-
-  if (isPdf) {
-    return (
-      <iframe
-        key={authenticatedUrl}
-        src={authenticatedUrl}
-        className="w-full h-full border-0"
-        title={doc.title}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-      />
-    );
-  }
-
-  if (isImage) {
-    return (
-      <div className="w-full h-full flex items-center justify-center p-4 overflow-auto">
-        <img
-          src={authenticatedUrl}
-          alt={doc.title}
-          className="max-w-full max-h-full object-contain rounded shadow"
-        />
-      </div>
-    );
-  }
-
-  // Unsupported file type — show placeholder with download option
-  return (
-    <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-      <FileText className="h-16 w-16 opacity-20" />
-      <p className="text-sm">No in-browser preview for this file type.</p>
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" asChild>
-          <a href={doc.fileUrl} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-4 w-4 mr-2" />Open File
-          </a>
-        </Button>
-        <Button variant="outline" size="sm" asChild>
-          <a href={doc.fileUrl} download={doc.fileName || doc.title}>
-            <FileDown className="h-4 w-4 mr-2" />Download
-          </a>
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 // ─── Revision History Sheet ──────────────────────────────────────────────────
 function RevisionHistorySheet({ doc, projectId, open, onClose }: { doc: any; projectId: number; open: boolean; onClose: () => void }) {
@@ -1306,13 +1203,13 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                   </TableCell>
                   <TableCell
                     className="font-mono text-xs font-medium cursor-pointer hover:text-primary hover:underline underline-offset-2"
-                    onClick={() => setDocPreview(doc)}
-                    title="Click to preview document"
+                    onClick={() => navigate(`/documents/${doc.id}`)}
+                    title="Open full document page"
                   >{doc.documentNumber}</TableCell>
                   <TableCell
                     className="font-medium cursor-pointer hover:text-primary"
                     onClick={() => setDocPreview(doc)}
-                    title="Click to preview document"
+                    title="Click to quick preview"
                   >
                     <div className="flex items-center gap-2">
                       <FileText className="h-4 w-4 text-primary/70 shrink-0" />

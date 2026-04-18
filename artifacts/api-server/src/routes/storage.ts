@@ -461,47 +461,60 @@ router.get(
  * Serve S3-stored files via presigned URL. Enforces strict org ownership.
  * Object key format: {orgId}/{projectId}/{fileType}/{filename}
  */
-router.get("/s3-object/:objectKey", requireAuth, async (req: Request, res: Response) => {
+router.get(
+  "/s3-object/:objectKey",
+  requireAuthOrViewToken(req => `/api/storage/s3-object/${req.params.objectKey}`),
+  async (req: Request, res: Response) => {
   const rawKey = req.params.objectKey;
   const orgIdStr = req.query.orgId as string;
 
-  const orgId = orgIdStr ? parseInt(orgIdStr) : req.user!.organizationId;
+  const objectKeyDecoded = decodeURIComponent(rawKey);
+  // Derive orgId: query param > key prefix (format: {orgId}/...) > session user
+  const keyOrgId = parseInt(objectKeyDecoded.split("/")[0]) || null;
+  const orgId = orgIdStr
+    ? parseInt(orgIdStr)
+    : (req.user?.organizationId ?? keyOrgId ?? 0);
+
   if (!orgId || !rawKey) {
     res.status(400).json({ error: "Missing orgId or objectKey" });
     return;
   }
 
   try {
-    const objectKey = decodeURIComponent(rawKey);
+    const objectKey = objectKeyDecoded;
 
     // ── Ownership check: key must start with orgId/ ───────────────────────────
     if (!s3KeyBelongsToOrg(objectKey, orgId)) {
-      // Key prefix doesn't match — could be spoofing attempt
-      await createAuditLog({
-        userId: req.user?.id,
-        organizationId: req.user?.organizationId ?? undefined,
-        action: "UNAUTHORIZED_STORAGE_ACCESS",
-        entityType: "file",
-        entityId: 0,
-        entityTitle: objectKey,
-        details: {
-          route: "s3-object",
-          claimedOrgId: orgId,
-          objectKey,
-          ip: req.ip,
-        },
-        ipAddress: req.ip,
-      });
+      // Key prefix doesn't match — could be spoofing attempt; only audit-log for real users
+      if (req.user) {
+        await createAuditLog({
+          userId: req.user.id,
+          organizationId: req.user.organizationId ?? undefined,
+          action: "UNAUTHORIZED_STORAGE_ACCESS",
+          entityType: "file",
+          entityId: 0,
+          entityTitle: objectKey,
+          details: {
+            route: "s3-object",
+            claimedOrgId: orgId,
+            objectKey,
+            ip: req.ip,
+          },
+          ipAddress: req.ip,
+        });
+      }
       res.status(403).json({ error: "Access denied: object key does not belong to the specified organization" });
       return;
     }
 
-    // If user belongs to a different org (and is not system_owner), deny
-    const allowed = await assertOrgAccess(req, res, orgId, {
-      route: "s3-object",
-      key: objectKey,
-    });
-    if (!allowed) return;
+    // Skip assertOrgAccess for view-token requests (token already validated the path)
+    if (req.user) {
+      const allowed = await assertOrgAccess(req, res, orgId, {
+        route: "s3-object",
+        key: objectKey,
+      });
+      if (!allowed) return;
+    }
 
     const presignedUrl = await getS3PresignedGetUrl(orgId, objectKey, 600);
     if (!presignedUrl) {
