@@ -107,6 +107,7 @@ export default function DocumentsPage() {
 
   // Quick preview dialog
   const [docPreview, setDocPreview] = useState<any>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string } | null>(null);
 
   // Version history sheet
   const [historyDoc, setHistoryDoc] = useState<any>(null);
@@ -772,7 +773,7 @@ export default function DocumentsPage() {
       </Sheet>
 
       {/* Quick Preview Dialog */}
-      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) setDocPreview(null); }}>
+      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) { setDocPreview(null); setPreviewAttachment(null); } }}>
         <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-4 py-3 border-b shrink-0 flex flex-row items-center justify-between gap-2">
             <div className="flex items-center gap-3 min-w-0">
@@ -837,14 +838,24 @@ export default function DocumentsPage() {
           </DialogHeader>
           <div className="flex-1 overflow-hidden flex flex-row">
             <div className="flex-1 overflow-hidden bg-muted/30">
-              {docPreview && <DocumentPreviewContent doc={docPreview} />}
+              {docPreview && <DocumentPreviewContent doc={docPreview} overrideFile={previewAttachment} />}
             </div>
             {docPreview && (
               <div className="w-72 border-l bg-card overflow-y-auto p-3 shrink-0 flex flex-col gap-3">
+                {previewAttachment && (
+                  <button
+                    className="text-xs text-primary flex items-center gap-1 hover:underline"
+                    onClick={() => setPreviewAttachment(null)}
+                  >
+                    ← Back to main document file
+                  </button>
+                )}
                 <DocumentFilesPanel
                   documentId={docPreview.id}
                   projectId={docPreview.projectId}
                   canEdit={false}
+                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName })}
+                  activeFileUrl={previewAttachment?.fileUrl ?? null}
                 />
               </div>
             )}

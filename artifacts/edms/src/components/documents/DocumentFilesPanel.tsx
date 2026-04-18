@@ -2,6 +2,14 @@
  * DocumentFilesPanel
  * Shows all files attached to a document in a list.
  * Supports add, remove, download, and (where browser allows) preview.
+ *
+ * Props:
+ *   onPreview  – if provided, Eye icon calls this instead of window.open.
+ *                Parent is responsible for rendering the preview.
+ *                Eye icon is shown for ALL files when onPreview is provided
+ *                (the middle pane handles "not previewable" gracefully).
+ *                Without onPreview, Eye is shown only for PDF/image files.
+ *   activeFileUrl – URL of the currently selected attachment (for highlight)
  */
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -12,8 +20,9 @@ import {
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
-interface DocumentFile {
+export interface DocumentFile {
   id: number;
   documentId: number;
   fileUrl: string;
@@ -29,6 +38,8 @@ interface DocumentFilesPanelProps {
   documentId: number;
   projectId: number;
   canEdit?: boolean;
+  onPreview?: (file: DocumentFile) => void;
+  activeFileUrl?: string | null;
 }
 
 function FileIcon({ fileType, fileName }: { fileType?: string | null; fileName: string }) {
@@ -50,14 +61,20 @@ function formatBytes(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function isPreviewable(file: DocumentFile): boolean {
+function isNativelyPreviewable(file: DocumentFile): boolean {
   const ext = file.fileName.split(".").pop()?.toLowerCase() ?? "";
   const type = file.fileType ?? "";
   return type.includes("pdf") || ext === "pdf" ||
     type.includes("image") || ["png","jpg","jpeg","gif","svg","webp"].includes(ext);
 }
 
-export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: DocumentFilesPanelProps) {
+export function DocumentFilesPanel({
+  documentId,
+  projectId,
+  canEdit = true,
+  onPreview,
+  activeFileUrl,
+}: DocumentFilesPanelProps) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,7 +118,6 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
         formData.append("files", file);
       }
 
-      // POST multipart/form-data — browser sets Content-Type + boundary automatically
       const res = await fetch(
         `/api/projects/${projectId}/documents/${documentId}/files`,
         { method: "POST", credentials: "include", body: formData },
@@ -120,6 +136,33 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleDownload(file: DocumentFile) {
+    const url = file.fileUrl;
+    const filename = file.fileName;
+    const isInternal = url?.startsWith("/api/storage/") || url?.startsWith("/objects/");
+    if (!url || !isInternal) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      return;
+    }
+    const tok = localStorage.getItem("edms_token");
+    try {
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+      if (!r.ok) throw new Error();
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch {
+      window.open(url, "_blank");
     }
   }
 
@@ -169,87 +212,96 @@ export function DocumentFilesPanel({ documentId, projectId, canEdit = true }: Do
         </p>
       ) : (
         <ul className="space-y-1.5">
-          {files.map(file => (
-            <li
-              key={file.id}
-              className="flex items-center gap-2.5 p-2 rounded-md border bg-card hover:bg-muted/40 transition-colors group"
-            >
-              <FileIcon fileType={file.fileType} fileName={file.fileName} />
+          {files.map(file => {
+            const isActive = activeFileUrl === file.fileUrl;
+            const showEye = onPreview ? true : isNativelyPreviewable(file);
+            return (
+              <li
+                key={file.id}
+                className={cn(
+                  "flex items-center gap-2.5 p-2 rounded-md border transition-colors group",
+                  isActive
+                    ? "bg-primary/10 border-primary/30"
+                    : "bg-card hover:bg-muted/40",
+                )}
+              >
+                <FileIcon fileType={file.fileType} fileName={file.fileName} />
 
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium truncate" title={file.fileName}>
-                  {file.fileName}
-                </p>
-                <p className="text-[10px] text-muted-foreground">
-                  {formatBytes(file.fileSize)}
-                  {file.uploadedByName && ` · ${file.uploadedByName}`}
-                  {file.createdAt && ` · ${format(new Date(file.createdAt), "dd MMM yyyy")}`}
-                </p>
-              </div>
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={cn(
+                      "text-xs font-medium truncate",
+                      isActive && "text-primary",
+                    )}
+                    title={file.fileName}
+                  >
+                    {file.fileName}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {formatBytes(file.fileSize)}
+                    {file.uploadedByName && ` · ${file.uploadedByName}`}
+                    {file.createdAt && ` · ${format(new Date(file.createdAt), "dd MMM yyyy")}`}
+                  </p>
+                </div>
 
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                {isPreviewable(file) && (
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {showEye && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-6 w-6",
+                        isActive && "text-primary",
+                      )}
+                      title="Preview in pane"
+                      onClick={() => {
+                        if (onPreview) {
+                          onPreview(file);
+                        } else {
+                          (async () => {
+                            const url = file.fileUrl;
+                            if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
+                            const tok = localStorage.getItem("edms_token");
+                            try {
+                              const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                              if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                              else window.open(url, "_blank");
+                            } catch { window.open(url, "_blank"); }
+                          })();
+                        }
+                      }}
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6"
-                    title="Preview"
-                    onClick={async () => {
-                      const url = file.fileUrl;
-                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
-                      const tok = localStorage.getItem("edms_token");
-                      try {
-                        const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                        if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
-                        else window.open(url, "_blank");
-                      } catch { window.open(url, "_blank"); }
-                    }}
+                    title="Download"
+                    onClick={() => handleDownload(file)}
                   >
-                    <Eye className="h-3.5 w-3.5" />
+                    <Download className="h-3.5 w-3.5" />
                   </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  title="Download"
-                  onClick={async () => {
-                    const url = file.fileUrl;
-                    const filename = file.fileName;
-                    if (!url?.startsWith("/api/storage/")) {
-                      const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
-                    }
-                    const tok = localStorage.getItem("edms_token");
-                    try {
-                      const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
-                      if (!r.ok) throw new Error();
-                      const blob = await r.blob();
-                      const blobUrl = URL.createObjectURL(blob);
-                      const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
-                      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                    } catch { window.open(url, "_blank"); }
-                  }}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 text-destructive"
-                    title="Remove"
-                    onClick={() => {
-                      if (confirm(`Remove "${file.fileName}"?`)) {
-                        deleteMutation.mutate(file.id);
-                      }
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            </li>
-          ))}
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 text-destructive"
+                      title="Remove"
+                      onClick={() => {
+                        if (confirm(`Remove "${file.fileName}"?`)) {
+                          deleteMutation.mutate(file.id);
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -318,6 +318,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [docPreview, setDocPreview] = useState<any>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string } | null>(null);
   const [revHistoryDoc, setRevHistoryDoc] = useState<any>(null);
   const [validateOpen, setValidateOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<any>(null);
@@ -1581,7 +1582,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
       </Dialog>
 
       {/* Document Preview Dialog */}
-      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) setDocPreview(null); }}>
+      <Dialog open={!!docPreview} onOpenChange={v => { if (!v) { setDocPreview(null); setPreviewAttachment(null); } }}>
         <DialogContent className="max-w-5xl w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-4 py-3 border-b shrink-0 flex flex-row items-center justify-between gap-2">
             <div className="flex items-center gap-3 min-w-0">
@@ -1638,15 +1639,25 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
           <div className="flex-1 overflow-hidden flex flex-row">
             {/* Main preview area */}
             <div className="flex-1 overflow-hidden bg-muted/30">
-              {docPreview && <DocumentPreviewContent doc={docPreview} />}
+              {docPreview && <DocumentPreviewContent doc={docPreview} overrideFile={previewAttachment} />}
             </div>
             {/* Attachments side panel */}
             {docPreview && (
               <div className="w-72 border-l bg-card overflow-y-auto p-3 shrink-0 flex flex-col gap-3">
+                {previewAttachment && (
+                  <button
+                    className="text-xs text-primary flex items-center gap-1 hover:underline"
+                    onClick={() => setPreviewAttachment(null)}
+                  >
+                    ← Back to main document file
+                  </button>
+                )}
                 <DocumentFilesPanel
                   documentId={docPreview.id}
                   projectId={projectId}
                   canEdit={perms.canEditDocument || docPreview?.createdById === user?.id}
+                  onPreview={file => setPreviewAttachment({ fileUrl: file.fileUrl, fileName: file.fileName })}
+                  activeFileUrl={previewAttachment?.fileUrl ?? null}
                 />
               </div>
             )}
