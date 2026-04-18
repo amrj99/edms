@@ -19,6 +19,7 @@ const INTERNAL_PREFIXES = [
   "/api/storage/onpremise/",
   "/api/storage/objects/",
   "/api/storage/s3-object/",
+  "/objects/",   // legacy format — normalized in DB but kept here as safety net
 ];
 
 function isInternalStorageUrl(url: string): boolean {

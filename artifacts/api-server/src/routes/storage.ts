@@ -146,7 +146,7 @@ router.get("/view-token", requireAuth, (req: Request, res: Response) => {
   const decodedUrl = decodeURIComponent(rawUrl);
 
   // Security: only allow URLs pointing to our own storage endpoints
-  const allowedPrefixes = ["/api/storage/onpremise/", "/api/storage/objects/", "/api/storage/s3-object/"];
+  const allowedPrefixes = ["/api/storage/onpremise/", "/api/storage/objects/", "/api/storage/s3-object/", "/objects/"];
   if (!allowedPrefixes.some(p => decodedUrl.startsWith(p))) {
     res.status(400).json({ error: "URL is not a valid internal storage path" });
     return;

@@ -652,10 +652,29 @@ export default function DocumentsPage() {
                   <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       {doc.fileUrl && (
-                        <Button variant="ghost" size="icon" className="h-7 w-7" asChild title="Download">
-                          <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
-                            <Download className="h-3.5 w-3.5" />
-                          </a>
+                        <Button
+                          variant="ghost" size="icon" className="h-7 w-7" title="Download"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const url = doc.fileUrl as string;
+                            const filename = doc.fileName || doc.title || "download";
+                            const tok = localStorage.getItem("edms_token");
+                            const isInternal = url.startsWith("/api/storage/") || url.startsWith("/objects/");
+                            if (!isInternal) { window.open(url, "_blank"); return; }
+                            try {
+                              const vtr = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                              const { token } = vtr.ok ? await vtr.json() : { token: null };
+                              const fetchUrl = token ? `${url}?vt=${token}` : url;
+                              const r = await fetch(fetchUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
+                              if (!r.ok) throw new Error();
+                              const blob = await r.blob();
+                              const blobUrl = URL.createObjectURL(blob);
+                              const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
+                              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                            } catch { window.open(url, "_blank"); }
+                          }}
+                        >
+                          <Download className="h-3.5 w-3.5" />
                         </Button>
                       )}
                       <Button variant="ghost" size="icon" className="h-7 w-7 text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/30" title="AI Analysis / Open Document"

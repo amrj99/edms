@@ -91,14 +91,32 @@ export function DocumentPreviewContent({ doc }: { doc: any }) {
       <p className="text-sm">No in-browser preview for this file type.</p>
       <div className="flex gap-2">
         <Button variant="outline" size="sm" asChild>
-          <a href={doc.fileUrl} target="_blank" rel="noreferrer">
+          <a href={authenticatedUrl} target="_blank" rel="noreferrer">
             <ExternalLink className="h-4 w-4 mr-2" />Open File
           </a>
         </Button>
-        <Button variant="outline" size="sm" asChild>
-          <a href={doc.fileUrl} download={doc.fileName || doc.title}>
-            <FileDown className="h-4 w-4 mr-2" />Download
-          </a>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const filename = doc.fileName || doc.title || "download";
+            try {
+              const tok = localStorage.getItem("edms_token");
+              const r = await fetch(authenticatedUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
+              if (!r.ok) throw new Error();
+              const blob = await r.blob();
+              const blobUrl = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = blobUrl;
+              a.download = filename;
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+            } catch {
+              window.open(authenticatedUrl, "_blank");
+            }
+          }}
+        >
+          <FileDown className="h-4 w-4 mr-2" />Download
         </Button>
       </div>
     </div>

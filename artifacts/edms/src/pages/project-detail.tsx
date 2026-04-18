@@ -1290,8 +1290,29 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                         </Button>
                       )}
                       {doc.fileUrl && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Download" asChild>
-                          <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"><Download className="h-4 w-4" /></a>
+                        <Button
+                          variant="ghost" size="icon" className="h-8 w-8" title="Download"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const url = doc.fileUrl as string;
+                            const filename = doc.fileName || doc.title || "download";
+                            const tok = localStorage.getItem("edms_token");
+                            const isInternal = url.startsWith("/api/storage/") || url.startsWith("/objects/");
+                            if (!isInternal) { window.open(url, "_blank"); return; }
+                            try {
+                              const vtr = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
+                              const { token } = vtr.ok ? await vtr.json() : { token: null };
+                              const fetchUrl = token ? `${url}?vt=${token}` : url;
+                              const r = await fetch(fetchUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
+                              if (!r.ok) throw new Error();
+                              const blob = await r.blob();
+                              const blobUrl = URL.createObjectURL(blob);
+                              const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
+                              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+                            } catch { window.open(url, "_blank"); }
+                          }}
+                        >
+                          <Download className="h-4 w-4" />
                         </Button>
                       )}
                     </div>
