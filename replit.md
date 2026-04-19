@@ -74,6 +74,121 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 - **AI Insights Dashboard (Phase 4):** A dedicated `/ai-insights` page shows organisation-wide risk distribution, documents needing attention (high/critical urgency), duplicate detection signals (discipline+type density per project), and a future-ready workflow bottleneck placeholder. All data is loaded lazily — no AI calls on render.
 - **Document Number Uniqueness (Phase 3):** Unique constraint on `(project_id, document_number)`. Upload dialog has a debounced check (400 ms) with inline amber warning when a number is taken.
 
+## Production Deployment — Known Issues & Solutions
+
+> **Server**: VPS at `/var/www/edms` | Docker Compose | Cloudflare proxy → Nginx → Express
+> **Deploy command**: `cd /var/www/edms && bash deploy.sh`
+> **Canonical domain**: `https://www.arcscale.org` (non-www redirects to www)
+
+---
+
+### ISSUE 1: Site doesn't open — `ERR_CONNECTION_TIMED_OUT`
+
+**Symptoms**: Browser shows "This site can't be reached" or timeout error.
+
+**Cause A — Corporate/Fortinet network (most common)**
+The Fortinet SSL inspection system blocks HTTPS connections. `ERR_CERT_AUTHORITY_INVALID` or timeout.
+- **Fix**: Test from mobile data (not corporate WiFi). If it opens → it's the network, not the server.
+- **Permanent fix**: IT admin must whitelist `arcscale.org` in Fortinet, or install the corporate CA cert.
+
+**Cause B — Cloudflare DNS set to "DNS Only" (grey cloud)**
+Browser tries to connect directly to server port 443 → no SSL cert on server → timeout.
+- **Fix**: Cloudflare Dashboard → DNS → A records for `arcscale.org` and `www` → set icon to **orange (Proxied)**.
+- SSL/TLS → set to **Flexible**.
+- Edge Certificates → enable **Always Use HTTPS**.
+
+**Cause C — Firewall on VPS**
+```bash
+sudo ufw status          # if inactive, rules aren't applied
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
+
+**Cause D — Docker containers crashed**
+```bash
+docker ps                             # check all containers are Up
+docker compose logs --tail=30 api    # check API logs
+```
+
+---
+
+### ISSUE 2: File preview blocked by Chrome — `X-Frame-Options: DENY`
+
+**Symptoms**: "Unsafe attempt to load URL … from frame with URL chrome-error://chromewebdata/"
+Iframe shows Chrome's error page instead of PDF/image.
+
+**Root cause**: Helmet sets `X-Frame-Options: DENY` globally on all API responses.
+File-serving routes must remove this header so the browser allows iframe embedding.
+The view token (5-min signed JWT) is the security layer — clickjacking protection is redundant here.
+
+**Fix applied in commits**:
+- `51c72d0`: Added `res.removeHeader("X-Frame-Options")` in success path of storage routes
+- `6acf1e3`: Removed `add_header X-Frame-Options` from `nginx.conf` server block
+- `ebb3b68`: Moved `res.removeHeader` to top of route handler (before early returns)
+- `bef8f17`: Added `allowIframe` middleware **before** `requireAuthOrViewToken` so even 401/403/404 responses have no X-Frame-Options
+
+**Verification after deploy**:
+```bash
+# Must return EMPTY (no x-frame header even on 401)
+curl -si "https://www.arcscale.org/api/storage/onpremise/1/1/document/FILENAME.pdf?vt=TOKEN" 2>/dev/null | grep -i "x-frame"
+```
+
+---
+
+### ISSUE 3: www vs non-www origin mismatch in iframe
+
+**Symptoms**: Preview URL shows `www.arcscale.org` but page is on `arcscale.org` (or vice versa).
+Chrome treats them as different origins for `X-Frame-Options: SAMEORIGIN`.
+
+**Fix applied in `6acf1e3`**:
+`nginx.conf` has a canonical redirect server block:
+```nginx
+server {
+    listen 80;
+    server_name arcscale.org;
+    return 301 https://www.arcscale.org$request_uri;
+}
+```
+All traffic is normalized to `www.arcscale.org`. The preview URL is always relative (`/api/storage/...`) so the browser resolves it to the same origin as the page.
+
+---
+
+### ISSUE 4: Session expired / 401 on API calls
+
+**Symptoms**: Console shows `api/auth/me → 401`, `[socket] Connection error: Invalid token`.
+
+**Fix**: Log out and log back in. The JWT access token (15 min) or refresh token (7 days) expired.
+In the browser: Ctrl+Shift+Delete → clear cookies/local storage → log in again.
+
+---
+
+### ISSUE 5: Preview shows "This file cannot be previewed"
+
+**Symptoms**: Grey icon with message in preview panel.
+
+**Cause**: File URL stored in DB is a legacy path (`s3://`, `/mnt/`, `seed/...`) that bypasses the unified storage router.
+
+**This is expected behavior** for seed data and legacy files. The preview pipeline classifies these as `not-previewable` and shows a fallback UI with a Download button.
+New uploads always store `/api/storage/...` paths and are previewable.
+
+---
+
+### Deploy checklist
+
+```bash
+cd /var/www/edms && bash deploy.sh
+```
+All 7 steps should show ✓:
+1. Code updated (git pull)
+2. Migration applied
+3. Images rebuilt
+4. Containers recreated
+5. API healthy
+6. Env vars verified
+7. Cloudflare cache purge (skipped unless CF_API_TOKEN set in .env)
+
+---
+
 ## External Dependencies
 
 - **Database:** PostgreSQL
