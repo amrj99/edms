@@ -10,6 +10,7 @@ import { orgConfigTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { ObjectStorageService } from "./objectStorage.js";
 import { decrypt } from "./encryption.js";
+import { getEffectiveOnPremPath, isCloudStorageAvailable, ensureDir } from "./storageConfig.js";
 
 const cloudStorage = new ObjectStorageService();
 
@@ -95,31 +96,32 @@ export async function requestUpload(params: {
   const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
   const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
 
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? "cloud";
+  // Smart default: if Replit cloud storage is not available (VPS without PRIVATE_OBJECT_DIR),
+  // automatically use on-premise mode instead of crashing.
+  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
 
   // ── On-Premise ─────────────────────────────────────────────────────────────
   if (storageType === "onpremise") {
-    const basePath = cfg?.storagePath || envStoragePath;
-    if (basePath) {
-      const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const absPath = buildOnPremPath(
-        basePath,
-        organizationId,
-        projectId ?? null,
-        fileType,
-        safeFile,
-      );
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      // The client cannot PUT directly to a filesystem path.
-      // We expose an API endpoint that receives the binary body and writes it to disk.
-      return {
-        mode: "onpremise",
-        uploadURL: `/api/storage/uploads/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-        filePath: absPath,
-        objectPath: absPath,
-        serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-      };
-    }
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
+    const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const absPath = buildOnPremPath(
+      basePath,
+      organizationId,
+      projectId ?? null,
+      fileType,
+      safeFile,
+    );
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    // The client cannot PUT directly to a filesystem path.
+    // We expose an API endpoint that receives the binary body and writes it to disk.
+    return {
+      mode: "onpremise",
+      uploadURL: `/api/storage/uploads/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+      filePath: absPath,
+      objectPath: absPath,
+      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+    };
   }
 
   // ── Amazon S3 / S3-Compatible (MinIO, DigitalOcean Spaces, Backblaze …) ────
@@ -227,21 +229,22 @@ export async function uploadBuffer(params: {
   const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
   const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
 
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? "cloud";
+  // Smart default: if Replit cloud storage is not available (VPS without PRIVATE_OBJECT_DIR),
+  // automatically use on-premise mode instead of crashing.
+  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
 
   // ── On-Premise ─────────────────────────────────────────────────────────────
   if (storageType === "onpremise") {
-    const basePath = cfg?.storagePath || envStoragePath;
-    if (basePath) {
-      const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, buffer);
-      return {
-        mode: "onpremise",
-        objectPath: absPath,
-        serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-      };
-    }
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
+    const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true, mode: 0o750 });
+    fs.writeFileSync(absPath, buffer);
+    return {
+      mode: "onpremise",
+      objectPath: absPath,
+      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+    };
   }
 
   // ── Amazon S3 / S3-Compatible ───────────────────────────────────────────────
@@ -272,9 +275,28 @@ export async function uploadBuffer(params: {
 }
 
 async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: string): Promise<UploadBufferResult> {
-  const privateObjectDir = process.env.PRIVATE_OBJECT_DIR;
-  if (!privateObjectDir) throw new Error("PRIVATE_OBJECT_DIR not set");
+  // If Replit/GCS cloud storage is not available (no PRIVATE_OBJECT_DIR),
+  // fall back to on-premise filesystem storage instead of crashing.
+  if (!isCloudStorageAvailable()) {
+    const basePath = getEffectiveOnPremPath(null);
+    const uploadsDir = path.join(basePath, "uploads");
+    ensureDir(uploadsDir);
+    const absPath = path.join(uploadsDir, safeFile);
+    fs.writeFileSync(absPath, buffer);
+    console.info(
+      `[storage] uploadToCloud: PRIVATE_OBJECT_DIR not set — ` +
+      `wrote file to on-premise fallback: ${absPath}`,
+    );
+    return {
+      mode: "onpremise",
+      objectPath: absPath,
+      // The /onpremise route uses orgId/projectId/fileType/filename segments.
+      // For system-level uploads (no org), we use org=0/project=0/type=uploads.
+      serveUrl: `/api/storage/onpremise/0/0/uploads/${safeFile}`,
+    };
+  }
 
+  const privateObjectDir = process.env.PRIVATE_OBJECT_DIR!;
   const fullPath = `${privateObjectDir}/uploads/${safeFile}`;
   const parts = fullPath.startsWith("/") ? fullPath.slice(1).split("/") : fullPath.split("/");
   const bucketName = parts[0];

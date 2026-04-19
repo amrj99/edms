@@ -3,6 +3,7 @@ import app from "./app.js";
 import { initSocket } from "./lib/socket.js";
 import { logger } from "./lib/logger.js";
 import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
+import { validateStorageAtStartup } from "./lib/storageConfig.js";
 
 const rawPort = process.env["PORT"];
 
@@ -64,6 +65,11 @@ const rawPort = process.env["PORT"];
     }
   }
 })();
+
+// ── Storage configuration validation ──────────────────────────────────────────
+// Resolves effective storage mode, auto-creates directories, and logs a clear
+// summary so operators can verify the setup at a glance.
+validateStorageAtStartup();
 
 if (!rawPort) {
   throw new Error("PORT environment variable is required but was not provided.");

@@ -8,6 +8,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.
 import { requestUpload, getS3PresignedGetUrl } from "../lib/orgStorage.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { getEffectiveOnPremPath } from "../lib/storageConfig.js";
 
 // ─── MIME type detection ──────────────────────────────────────────────────────
 const MIME_MAP: Record<string, string> = {
@@ -266,12 +267,7 @@ router.put(
       .where(eq(orgConfigTable.organizationId, targetOrgId));
 
     const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
-    const basePath = cfg?.storagePath || envStoragePath;
-
-    if (!basePath) {
-      res.status(500).json({ error: "On-premise storage path not configured" });
-      return;
-    }
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
 
     // ── Path traversal guard ─────────────────────────────────────────────────
     const safeFilename = path.basename(filename);
@@ -289,7 +285,7 @@ router.put(
 
     // ── Write file ───────────────────────────────────────────────────────────
     try {
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o750 });
       const body = req.body as Buffer;
       if (!body || body.length === 0) {
         res.status(400).json({ error: "Empty file body" });
@@ -419,14 +415,9 @@ router.get(
       .from(orgConfigTable)
       .where(eq(orgConfigTable.organizationId, targetOrgId));
 
-    // Mirror the upload endpoint: fall back to DEFAULT_STORAGE_PATH env var
+    // Mirror the upload endpoint: use getEffectiveOnPremPath for consistent fallback
     const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
-    const basePath = cfg?.storagePath || envStoragePath;
-
-    if (!basePath) {
-      res.status(404).json({ error: "On-premise storage not configured" });
-      return;
-    }
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
 
     // ── Path traversal guard ──────────────────────────────────────────────────
     const safeFilename = path.basename(filename);
