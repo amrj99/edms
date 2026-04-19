@@ -18,6 +18,22 @@ interface PreviewProps {
   overrideFile?: OverrideFile | null;
 }
 
+// Fallback MIME map for when file_type is not stored in the database.
+// Ensures the correct Content-Type is still sent to the server for UUID-named files.
+const EXT_MIME: Record<string, string> = {
+  pdf:  "application/pdf",
+  png:  "image/png",
+  jpg:  "image/jpeg",
+  jpeg: "image/jpeg",
+  gif:  "image/gif",
+  webp: "image/webp",
+  svg:  "image/svg+xml",
+  bmp:  "image/bmp",
+  mp4:  "video/mp4",
+  txt:  "text/plain",
+  csv:  "text/csv",
+};
+
 function isPdfMime(mimeType: string | null | undefined, ext: string): boolean {
   if (mimeType) return mimeType.includes("pdf");
   return ext === "pdf";
@@ -31,10 +47,14 @@ function isImageMime(mimeType: string | null | undefined, ext: string): boolean 
 export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
   const activeUrl   = overrideFile ? overrideFile.fileUrl  : doc.fileUrl;
   const activeName  = overrideFile ? overrideFile.fileName : (doc.fileName || doc.title || "");
-  // Prefer MIME type from DB (reliable) over filename-extension inference (breaks for UUID filenames)
-  const activeMime  = overrideFile ? (overrideFile.fileType ?? null) : (doc.fileType ?? null);
 
   const ext     = (activeName as string).split(".").pop()?.toLowerCase() ?? "";
+  // Use DB file_type if available; otherwise infer MIME from filename extension.
+  // This ensures ?ct= is always forwarded to the server so UUID-named files get the
+  // correct Content-Type (not application/octet-stream which causes blank iframes).
+  const rawMime = overrideFile ? (overrideFile.fileType ?? null) : (doc.fileType ?? null);
+  const activeMime = rawMime ?? EXT_MIME[ext] ?? null;
+
   const isPdf   = isPdfMime(activeMime, ext);
   const isImage = isImageMime(activeMime, ext);
 
