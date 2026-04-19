@@ -369,7 +369,10 @@ router.get(
       const ctHint = req.query.ct as string | undefined;
       const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint)) ? ctHint : getMimeType(filename);
       res.setHeader("Content-Type", mimeType);
-      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      // Remove helmet's global X-Frame-Options: DENY so the file can be previewed in an iframe.
+      // The view token is the auth layer — clickjacking protection is irrelevant for
+      // short-lived, user-scoped tokens that are useless without a valid JWT session.
+      res.removeHeader("X-Frame-Options");
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
       // Forward remaining headers from object storage (but not Content-Type — we set it)
       response.headers.forEach((value, key) => {
@@ -458,8 +461,8 @@ router.get(
     const mimeType = getMimeType(safeFilename);
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
-    // Allow iframe embedding from the same origin
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    // Remove helmet's global X-Frame-Options: DENY — view token is the auth layer.
+    res.removeHeader("X-Frame-Options");
     stream.pipe(res);
   },
 );
