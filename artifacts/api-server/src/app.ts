@@ -30,76 +30,30 @@ app.set("trust proxy", 1);
 // Reads CF-Connecting-IP > X-Forwarded-For > req.ip and sets req.realIp.
 app.use(extractRealIp);
 
-// ─── iframe allowance for file-serving routes (must run BEFORE Helmet) ────────
-// Storage routes (/api/storage/objects/* and /api/storage/onpremise/*) are
-// embedded in <iframe> elements for inline PDF/image preview. Chrome blocks
-// iframes when X-Frame-Options: DENY is present — even on 401/403/404 responses.
-//
-// Strategy (three-layer defence):
-//   1. Override res.setHeader here (app level, before Helmet) to silently drop
-//      any subsequent attempt to set X-Frame-Options on these paths.
-//   2. Helmet is configured with frameguard: false (no global XFO header).
-//   3. A follow-up middleware re-adds XFO: DENY on every OTHER path so the
-//      rest of the app keeps full clickjacking protection.
-//   4. nginx is also configured with proxy_hide_header X-Frame-Options on
-//      these locations as a final safety net.
+// ─── Security headers (Cloudflare-compatible) ─────────────────────────────────
+// Helmet is applied conditionally: file-serving routes (/api/storage/objects/*
+// and /api/storage/onpremise/*) are embedded in <iframe> elements for PDF/image
+// preview — Helmet is skipped entirely for these paths so X-Frame-Options is
+// never emitted. All other routes receive full Helmet protection including
+// frameguard: deny for clickjacking protection.
 //
 // Security note: the view token (5-min signed JWT, user-scoped) IS the
-// clickjacking protection for file routes — XFO is redundant there.
+// clickjacking protection for file routes — X-Frame-Options is redundant there.
 const FILE_ROUTE_RE = /^\/api\/storage\/(objects|onpremise)\//;
 
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!FILE_ROUTE_RE.test(req.path)) return next();
+  if (FILE_ROUTE_RE.test(req.path)) return next(); // skip Helmet for file routes
 
-  // Remove immediately (covers headers already set before this middleware)
-  res.removeHeader("X-Frame-Options");
-  res.removeHeader("Content-Security-Policy");
-
-  // Override setHeader so ANY subsequent middleware (auth, error handler, Helmet
-  // residuals) that tries to add X-Frame-Options is silently blocked.
-  const _origSetHeader = res.setHeader.bind(res);
-  (res as any).setHeader = function (name: string, value: unknown) {
-    if (typeof name === "string" && name.toLowerCase() === "x-frame-options") {
-      return res; // drop silently
-    }
-    return _origSetHeader(name, value as any);
-  };
-
-  next();
-});
-
-// ─── Security headers (Cloudflare-compatible) ─────────────────────────────────
-app.use(
-  helmet({
+  return helmet({
+    frameguard: { action: "deny" },
     crossOriginEmbedderPolicy: false,
     contentSecurityPolicy: false,
-
-    // Strict-Transport-Security: HTTPS is terminated at Cloudflare but it's
-    // still good practice to send HSTS so browsers remember to use HTTPS.
     strictTransportSecurity: isProd
       ? { maxAge: 31_536_000, includeSubDomains: true }
       : false,
-
-    // Prevent browsers from sniffing content types
     noSniff: true,
-
-    // frameguard disabled globally — we re-apply it manually below on all
-    // non-file routes so the rest of the app keeps clickjacking protection.
-    frameguard: false,
-
-    // Referrer-Policy
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-  }),
-);
-
-// Re-apply X-Frame-Options: DENY on every route that is NOT a file-serving
-// route. This preserves full clickjacking protection for the SPA + API while
-// leaving file preview routes iframe-friendly.
-app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!FILE_ROUTE_RE.test(req.path)) {
-    res.setHeader("X-Frame-Options", "DENY");
-  }
-  next();
+  })(req, res, next);
 });
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────

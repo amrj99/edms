@@ -5,7 +5,7 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
-import { requestUpload, streamOnPremFile, getS3PresignedGetUrl } from "../lib/orgStorage.js";
+import { requestUpload, getS3PresignedGetUrl } from "../lib/orgStorage.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
@@ -81,40 +81,13 @@ const objectStorageService = new ObjectStorageService();
 
 // ─── Security helpers ─────────────────────────────────────────────────────────
 
-/**
- * Middleware: remove X-Frame-Options from the response before ANY other
- * middleware or handler runs on file-serving routes.
- *
- * Why here (before requireAuthOrViewToken) and not inside the handler:
- *   - Helmet sets X-Frame-Options: DENY globally on every response object.
- *   - If requireAuthOrViewToken rejects the token (401) or assertOrgAccess
- *     denies access (403), those responses are sent from middleware — the
- *     route handler body never executes, so res.removeHeader() inside it
- *     would never be called.
- *   - Placing the removal here guarantees it runs for ALL responses on these
- *     routes (200, 400, 401, 403, 404…) so Chrome never blocks the iframe.
- *   - Security note: the view token IS the clickjacking protection — it is
- *     short-lived (5 min), user-scoped, and cryptographically signed.
- */
-function allowIframe(_req: Request, res: Response, next: NextFunction): void {
-  // Remove any header that may already be set
-  res.removeHeader("X-Frame-Options");
-  res.removeHeader("Content-Security-Policy");
-
-  // Override setHeader as a belt-and-suspenders guard: even if a downstream
-  // middleware (auth 401, error handler) tries to add X-Frame-Options back,
-  // the call is silently dropped. This mirrors the app-level guard in app.ts
-  // and ensures the router-level middleware chain is also covered.
-  const _origSetHeader = res.setHeader.bind(res);
-  (res as any).setHeader = function (name: string, value: unknown) {
-    if (typeof name === "string" && name.toLowerCase() === "x-frame-options") {
-      return res;
-    }
-    return _origSetHeader(name, value as any);
-  };
-
-  next();
-}
+// ─── Safe inline MIME types (shared by /objects and /onpremise routes) ────────
+const SAFE_INLINE_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
+  "text/plain", "text/csv",
+  "video/mp4",
+]);
 
 /**
  * Log an unauthorized storage access attempt and return false.
@@ -380,7 +353,6 @@ router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
  */
 router.get(
   "/objects/*path",
-  allowIframe,
   requireAuthOrViewToken(req => {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -396,12 +368,6 @@ router.get(
       // Set Content-Type — prefer the ?ct= hint from the client (validated against whitelist)
       // over inferred-from-filename, because files are stored with UUID keys (no extension).
       const filename = wildcardPath.split("/").pop() ?? "";
-      const SAFE_INLINE_TYPES = new Set([
-        "application/pdf",
-        "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/bmp",
-        "text/plain", "text/csv",
-        "video/mp4",
-      ]);
       const ctHint = req.query.ct as string | undefined;
       const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint)) ? ctHint : getMimeType(filename);
       res.setHeader("Content-Type", mimeType);
@@ -430,11 +396,12 @@ router.get(
 
 /**
  * GET /onpremise/:orgId/:projectId/:fileType/:filename
- * Serve on-premise files. Enforces strict org ownership.
+ * Serve on-premise files with full HTTP Range support.
+ * Supports: 200 full response, 206 partial content, 416 range-not-satisfiable.
+ * Enforces strict org ownership.
  */
 router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
-  allowIframe,
   requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
   async (req: Request, res: Response) => {
     const { orgId, projectId, fileType, filename } = req.params;
@@ -461,7 +428,7 @@ router.get(
       return;
     }
 
-    // Path traversal guard — prevent ../../ attacks
+    // ── Path traversal guard ──────────────────────────────────────────────────
     const safeFilename = path.basename(filename);
     if (safeFilename !== filename) {
       res.status(400).json({ error: "Invalid filename" });
@@ -469,7 +436,6 @@ router.get(
     }
 
     const absPath = path.join(basePath, orgId, projectId, fileType, safeFilename);
-    // Ensure final path stays within configured base directory
     if (!absPath.startsWith(path.resolve(basePath))) {
       await createAuditLog({
         userId: req.user?.id,
@@ -485,16 +451,62 @@ router.get(
       return;
     }
 
-    const stream = streamOnPremFile(absPath);
-    if (!stream) {
+    // ── Stat file (get size for Range + Content-Length) ───────────────────────
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(absPath);
+    } catch {
       res.status(404).json({ error: "File not found" });
       return;
     }
+    const fileSize = stat.size;
 
-    const mimeType = getMimeType(safeFilename);
+    // ── MIME type: prefer validated ?ct= hint, fall back to extension ─────────
+    const ctHint = req.query.ct as string | undefined;
+    const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint))
+      ? ctHint
+      : getMimeType(safeFilename);
+
+    // ── Common response headers ───────────────────────────────────────────────
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
-    stream.pipe(res);
+    res.setHeader("Accept-Ranges", "bytes");
+
+    // ── HTTP Range handling ───────────────────────────────────────────────────
+    const rangeHeader = req.headers.range;
+
+    if (rangeHeader) {
+      const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+      if (!match) {
+        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`).end();
+        return;
+      }
+
+      const rawStart = match[1];
+      const rawEnd   = match[2];
+
+      // bytes=-N means last N bytes; bytes=N- means from N to end
+      const start = rawStart !== "" ? parseInt(rawStart, 10) : fileSize - parseInt(rawEnd, 10);
+      const end   = rawEnd   !== "" ? parseInt(rawEnd,   10) : fileSize - 1;
+
+      if (isNaN(start) || isNaN(end) || start > end || end >= fileSize || start < 0) {
+        res.status(416).setHeader("Content-Range", `bytes */${fileSize}`).end();
+        return;
+      }
+
+      const chunkSize = end - start + 1;
+      res.status(206);
+      res.setHeader("Content-Range",  `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader("Content-Length", String(chunkSize));
+
+      fs.createReadStream(absPath, { start, end }).pipe(res);
+      return;
+    }
+
+    // ── Full file ─────────────────────────────────────────────────────────────
+    res.status(200);
+    res.setHeader("Content-Length", String(fileSize));
+    fs.createReadStream(absPath).pipe(res);
   },
 );
 

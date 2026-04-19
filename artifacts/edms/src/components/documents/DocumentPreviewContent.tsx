@@ -119,7 +119,7 @@ export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
         src={authenticatedUrl}
         className="w-full h-full border-0"
         title={activeName}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
       />
     );
   }
