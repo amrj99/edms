@@ -97,7 +97,22 @@ const objectStorageService = new ObjectStorageService();
  *     short-lived (5 min), user-scoped, and cryptographically signed.
  */
 function allowIframe(_req: Request, res: Response, next: NextFunction): void {
+  // Remove any header that may already be set
   res.removeHeader("X-Frame-Options");
+  res.removeHeader("Content-Security-Policy");
+
+  // Override setHeader as a belt-and-suspenders guard: even if a downstream
+  // middleware (auth 401, error handler) tries to add X-Frame-Options back,
+  // the call is silently dropped. This mirrors the app-level guard in app.ts
+  // and ensures the router-level middleware chain is also covered.
+  const _origSetHeader = res.setHeader.bind(res);
+  (res as any).setHeader = function (name: string, value: unknown) {
+    if (typeof name === "string" && name.toLowerCase() === "x-frame-options") {
+      return res;
+    }
+    return _origSetHeader(name, value as any);
+  };
+
   next();
 }
 
