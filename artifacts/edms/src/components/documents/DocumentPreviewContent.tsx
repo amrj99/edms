@@ -114,7 +114,7 @@ export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
 
   if (isPdf) {
     if (!authenticatedUrl) return null;
-    console.log("PDF URL:", authenticatedUrl);
+    console.log("FINAL PDF URL:", authenticatedUrl);
     return (
       <iframe
         key={authenticatedUrl}

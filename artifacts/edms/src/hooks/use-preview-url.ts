@@ -41,9 +41,14 @@ export function usePreviewUrl(
 ): PreviewState {
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const abortRef = useRef<AbortController | null>(null);
+  const callCount = useRef(0);
 
   useEffect(() => {
+    const callId = ++callCount.current;
+    console.log(`[usePreviewUrl #${callId}] fileUrl="${fileUrl}" mimeType="${mimeType}"`);
+
     if (!fileUrl) {
+      console.warn(`[usePreviewUrl #${callId}] No fileUrl — setting error`);
       setState({ status: "error", message: "No file attached to this document." });
       return;
     }
@@ -56,43 +61,69 @@ export function usePreviewUrl(
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
-      const token = localStorage.getItem("edms_token");
-      if (!token) {
+      const authToken = localStorage.getItem("edms_token");
+      console.log(`[usePreviewUrl #${callId}] auth token present=${!!authToken}`);
+
+      if (!authToken) {
+        console.error(`[usePreviewUrl #${callId}] No auth token in localStorage`);
         setState({ status: "error", message: "Not authenticated. Please refresh the page." });
         return;
       }
 
-      fetch(`/api/storage/view-token?url=${encodeURIComponent(fileUrl)}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const viewTokenUrl = `/api/storage/view-token?url=${encodeURIComponent(fileUrl)}`;
+      console.log(`[usePreviewUrl #${callId}] Fetching view-token: ${viewTokenUrl}`);
+
+      fetch(viewTokenUrl, {
+        headers: { Authorization: `Bearer ${authToken}` },
         signal: ctrl.signal,
       })
         .then(r => {
+          console.log(`[usePreviewUrl #${callId}] view-token response status=${r.status} ok=${r.ok}`);
           if (!r.ok) throw new Error(`Token request failed (${r.status})`);
           return r.json();
         })
         .then((data: { token: string }) => {
-          if (ctrl.signal.aborted) return;
-          // Append ?ct= so the server uses the correct Content-Type instead of guessing
-          // from the UUID-based filename (which has no extension → defaults to octet-stream).
+          if (ctrl.signal.aborted) {
+            console.log(`[usePreviewUrl #${callId}] Aborted — ignoring token`);
+            return;
+          }
+          console.log(`[usePreviewUrl #${callId}] VIEW TOKEN present=${!!data?.token} type=${typeof data?.token} length=${data?.token?.length ?? 0}`);
+
+          if (!data?.token) {
+            console.error(`[usePreviewUrl #${callId}] Token missing in response:`, data);
+            setState({ status: "error", message: "Could not load preview. Try downloading the file." });
+            return;
+          }
+
           const ctPart = mimeType ? `&ct=${encodeURIComponent(mimeType)}` : "";
-          setState({ status: "ready", url: `${fileUrl}?vt=${data.token}${ctPart}` });
+          const finalUrl = `${fileUrl}?vt=${data.token}${ctPart}`;
+          console.log(`[usePreviewUrl #${callId}] FINAL PDF URL: ${finalUrl}`);
+          setState({ status: "ready", url: finalUrl });
         })
         .catch(err => {
-          if (err.name === "AbortError") return;
+          if (err.name === "AbortError") {
+            console.log(`[usePreviewUrl #${callId}] Fetch aborted`);
+            return;
+          }
+          console.error(`[usePreviewUrl #${callId}] Fetch error:`, err);
           setState({ status: "error", message: "Could not load preview. Try downloading the file." });
         });
 
-      return () => ctrl.abort();
+      return () => {
+        console.log(`[usePreviewUrl #${callId}] Cleanup — aborting fetch`);
+        ctrl.abort();
+      };
     }
 
     // Browser-loadable external URL (http/https) — use directly
     if (isBrowserLoadableUrl(fileUrl)) {
+      console.log(`[usePreviewUrl #${callId}] External URL — using directly`);
       setState({ status: "ready", url: fileUrl });
       return;
     }
 
     // Not previewable: seed paths, s3:// URIs, /mnt/ paths, or other non-HTTP references
-    // These are stored references that cannot be loaded by the browser directly.
+    console.warn(`[usePreviewUrl #${callId}] Not previewable: "${fileUrl}"`);
     setState({
       status: "not-previewable",
       message: "This file is stored at a path that cannot be previewed in the browser.",
