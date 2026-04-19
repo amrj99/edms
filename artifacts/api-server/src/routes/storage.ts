@@ -82,6 +82,26 @@ const objectStorageService = new ObjectStorageService();
 // ─── Security helpers ─────────────────────────────────────────────────────────
 
 /**
+ * Middleware: remove X-Frame-Options from the response before ANY other
+ * middleware or handler runs on file-serving routes.
+ *
+ * Why here (before requireAuthOrViewToken) and not inside the handler:
+ *   - Helmet sets X-Frame-Options: DENY globally on every response object.
+ *   - If requireAuthOrViewToken rejects the token (401) or assertOrgAccess
+ *     denies access (403), those responses are sent from middleware — the
+ *     route handler body never executes, so res.removeHeader() inside it
+ *     would never be called.
+ *   - Placing the removal here guarantees it runs for ALL responses on these
+ *     routes (200, 400, 401, 403, 404…) so Chrome never blocks the iframe.
+ *   - Security note: the view token IS the clickjacking protection — it is
+ *     short-lived (5 min), user-scoped, and cryptographically signed.
+ */
+function allowIframe(_req: Request, res: Response, next: NextFunction): void {
+  res.removeHeader("X-Frame-Options");
+  next();
+}
+
+/**
  * Log an unauthorized storage access attempt and return false.
  * Returns true when access is permitted.
  */
@@ -345,15 +365,13 @@ router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
  */
 router.get(
   "/objects/*path",
+  allowIframe,
   requireAuthOrViewToken(req => {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
     return `/api/storage/objects/${wildcardPath}`;
   }),
   async (req: Request, res: Response) => {
-    // Remove X-Frame-Options at the very top so ALL responses from this route
-    // (200, 404, 500…) allow iframe embedding. Auth is the protection layer here.
-    res.removeHeader("X-Frame-Options");
     try {
       const raw = req.params.path;
       const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -401,12 +419,9 @@ router.get(
  */
 router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
+  allowIframe,
   requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
   async (req: Request, res: Response) => {
-    // Remove X-Frame-Options at the very top so ALL responses from this route
-    // (200, 400, 404…) allow iframe embedding. View token is the protection layer.
-    res.removeHeader("X-Frame-Options");
-
     const { orgId, projectId, fileType, filename } = req.params;
     const targetOrgId = parseInt(orgId);
 
