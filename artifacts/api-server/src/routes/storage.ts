@@ -351,6 +351,9 @@ router.get(
     return `/api/storage/objects/${wildcardPath}`;
   }),
   async (req: Request, res: Response) => {
+    // Remove X-Frame-Options at the very top so ALL responses from this route
+    // (200, 404, 500…) allow iframe embedding. Auth is the protection layer here.
+    res.removeHeader("X-Frame-Options");
     try {
       const raw = req.params.path;
       const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -369,10 +372,6 @@ router.get(
       const ctHint = req.query.ct as string | undefined;
       const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint)) ? ctHint : getMimeType(filename);
       res.setHeader("Content-Type", mimeType);
-      // Remove helmet's global X-Frame-Options: DENY so the file can be previewed in an iframe.
-      // The view token is the auth layer — clickjacking protection is irrelevant for
-      // short-lived, user-scoped tokens that are useless without a valid JWT session.
-      res.removeHeader("X-Frame-Options");
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
       // Forward remaining headers from object storage (but not Content-Type — we set it)
       response.headers.forEach((value, key) => {
@@ -404,6 +403,10 @@ router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
   requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
   async (req: Request, res: Response) => {
+    // Remove X-Frame-Options at the very top so ALL responses from this route
+    // (200, 400, 404…) allow iframe embedding. View token is the protection layer.
+    res.removeHeader("X-Frame-Options");
+
     const { orgId, projectId, fileType, filename } = req.params;
     const targetOrgId = parseInt(orgId);
 
@@ -461,8 +464,6 @@ router.get(
     const mimeType = getMimeType(safeFilename);
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
-    // Remove helmet's global X-Frame-Options: DENY — view token is the auth layer.
-    res.removeHeader("X-Frame-Options");
     stream.pipe(res);
   },
 );
