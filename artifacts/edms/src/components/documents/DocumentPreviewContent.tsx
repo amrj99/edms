@@ -113,13 +113,14 @@ export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
   const authenticatedUrl = previewState.url;
 
   if (isPdf) {
+    if (!authenticatedUrl) return null;
+    console.log("PDF URL:", authenticatedUrl);
     return (
       <iframe
         key={authenticatedUrl}
         src={authenticatedUrl}
-        className="w-full h-full border-0"
-        title={activeName}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
+        title="PDF Preview"
+        style={{ width: "100%", height: "100%", border: 0 }}
       />
     );
   }
