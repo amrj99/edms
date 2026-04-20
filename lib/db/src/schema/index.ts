@@ -23,3 +23,4 @@ export * from "./skills";
 export * from "./migrations";
 export * from "./governance";
 export * from "./submission-chains";
+export * from "./plan-catalog";

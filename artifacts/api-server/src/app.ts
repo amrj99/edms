@@ -7,6 +7,7 @@ import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
+import { seedPlans } from "./lib/seed-plans.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { extractRealIp } from "./middlewares/real-ip.js";
@@ -172,6 +173,13 @@ seedDefaultAdmin().catch((err) => {
 // configured organization. Safe to call multiple times (idempotent).
 backfillOrgConfig().catch((err) => {
   logger.error({ err }, "[backfill] org_config startup backfill failed — continuing, but unconfigured orgs may be denied access");
+});
+
+// Phase 2 foundation — populate the plans catalog table from hardcoded PLANS array.
+// Shadow mode: no behavior change. getResolvedPlan() uses these rows for mismatch logging.
+// Safe to call multiple times (upsert — will update plan fields if changed).
+seedPlans().catch((err) => {
+  logger.error({ err }, "[seed-plans] startup plan seed failed — getResolvedPlan() will log warnings until plans are seeded");
 });
 
 // Idempotent — enables RLS + org-isolation policies on all critical tables.
