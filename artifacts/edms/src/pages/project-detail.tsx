@@ -207,7 +207,7 @@ export default function ProjectDetail() {
             <ReviewTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="transmittals">
-            <TransmittalsTab projectId={projectId} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
+            <TransmittalsTab projectId={projectId} projectName={project.name} projectCode={project.code} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
           </TabsContent>
           <TabsContent value="submission-chains">
             <SubmissionChainsTab
@@ -2514,8 +2514,10 @@ function CreateTransmittalDialog({
   );
 }
 
-function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
+function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, onPrefillConsumed }: {
   projectId: number;
+  projectName: string;
+  projectCode: string;
   prefillDocIds?: number[] | null;
   onPrefillConsumed?: () => void;
 }) {
@@ -2751,8 +2753,8 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
         onClose={() => setCreateOpen(false)}
         initialDocIds={createInitialDocs}
         projectId={projectId}
-        projectName={project.name}
-        projectCode={project.code}
+        projectName={projectName}
+        projectCode={projectCode}
       />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
