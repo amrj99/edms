@@ -8,6 +8,7 @@ import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { seedPlans } from "./lib/seed-plans.js";
+import { resetModulesToPlan } from "./lib/reset-modules-to-plan.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { extractRealIp } from "./middlewares/real-ip.js";
@@ -180,6 +181,13 @@ backfillOrgConfig().catch((err) => {
 // Safe to call multiple times (upsert — will update plan fields if changed).
 seedPlans().catch((err) => {
   logger.error({ err }, "[seed-plans] startup plan seed failed — getResolvedPlan() will log warnings until plans are seeded");
+});
+
+// Phase 2.95 — Reset org_config.modules to exactly match plan defaults.
+// Eliminates all plan_gap and orphan mismatches on test/demo data.
+// Safe to call multiple times — skips orgs where modules already match.
+resetModulesToPlan().catch((err) => {
+  logger.error({ err }, "[reset-modules] startup module reset failed — org modules may not match plan defaults");
 });
 
 // Idempotent — enables RLS + org-isolation policies on all critical tables.
