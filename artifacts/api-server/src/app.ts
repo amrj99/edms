@@ -9,6 +9,7 @@ import { seedDefaultAdmin } from "./lib/seed.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { seedPlans } from "./lib/seed-plans.js";
 import { resetModulesToPlan } from "./lib/reset-modules-to-plan.js";
+import { startModuleSyncScheduler } from "./lib/module-sync-scheduler.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { extractRealIp } from "./middlewares/real-ip.js";
@@ -189,6 +190,12 @@ seedPlans().catch((err) => {
 resetModulesToPlan().catch((err) => {
   logger.error({ err }, "[reset-modules] startup module reset failed — org modules may not match plan defaults");
 });
+
+// Phase 3 — Start periodic module sync scheduler.
+// Syncs org_config.modules for all orgs every 30 min (first run after 2 min).
+// Applies plan defaults + active org_feature_overrides.
+// Continues on per-org error — never crashes the process.
+startModuleSyncScheduler();
 
 // Idempotent — enables RLS + org-isolation policies on all critical tables.
 initRlsPolicies().catch((err) => {
