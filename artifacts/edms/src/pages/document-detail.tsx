@@ -314,6 +314,24 @@ export default function DocumentDetailPage() {
                 </>
               )}
 
+              {/* Departments — Phase B data classification */}
+              {doc.departments && doc.departments.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Departments</h3>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {doc.departments.map((dept: any) => (
+                        <Badge key={dept.id} variant="outline" className="font-mono text-xs">{dept.code}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
               <Separator />
 
               <DocumentWorkflowPanel documentId={docId} documentType={doc.documentType} />

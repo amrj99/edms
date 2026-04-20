@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 
@@ -194,6 +194,13 @@ router.get("/:id", requireAuth, async (req, res) => {
     .where(eq(documentFilesTable.documentId, id))
     .orderBy(desc(documentFilesTable.createdAt));
 
+  // Fetch departments (Phase B — data only, no enforcement)
+  const deptRows = await db
+    .select({ id: departmentsTable.id, code: departmentsTable.code, name: departmentsTable.name })
+    .from(documentDepartmentsTable)
+    .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
+    .where(eq(documentDepartmentsTable.documentId, id));
+
   res.json({
     ...result.doc,
     projectName: result.project?.name,
@@ -206,6 +213,7 @@ router.get("/:id", requireAuth, async (req, res) => {
       ...file,
       uploaderName: uploader ? `${uploader.firstName} ${uploader.lastName}` : undefined,
     })),
+    departments: deptRows,
   });
 });
 

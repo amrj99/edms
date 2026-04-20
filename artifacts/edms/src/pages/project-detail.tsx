@@ -166,6 +166,7 @@ export default function ProjectDetail() {
     { value: "tasks", icon: CheckSquare, label: "Tasks" },
     { value: "workflows", icon: GitBranch, label: "Workflows" },
     { value: "members", icon: Users, label: "Members" },
+    { value: "departments", icon: Building2, label: "Departments" },
     { value: "role-overrides", icon: ShieldCheck, label: "Role Overrides" },
     ...(perms.canEditDocument ? [{ value: "governance", icon: LayoutList, label: "Governance" }] : []),
   ];
@@ -236,6 +237,9 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="members">
             <MembersTab projectId={projectId} />
+          </TabsContent>
+          <TabsContent value="departments">
+            <ProjectDepartmentsTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="role-overrides">
             <ProjectRoleOverridesTab projectId={projectId} />
@@ -333,6 +337,9 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
   const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
+  // Department assignments for the edit dialog (Phase B — data only)
+  const [editDocDeptIds, setEditDocDeptIds] = useState<Set<number>>(new Set());
+  const [editDocOrigDeptIds, setEditDocOrigDeptIds] = useState<Set<number>>(new Set());
   // New Revision dialog state
   const [newRevDoc, setNewRevDoc] = useState<any>(null);
   const [newRevForm, setNewRevForm] = useState({ revision: "", notes: "" });
@@ -462,20 +469,68 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     }
   };
 
+  // ── Department queries for edit dialog (Phase B) ─────────────────────────
+  const { data: orgDeptsRaw } = useQuery({
+    queryKey: ["org-departments"],
+    queryFn: async () => {
+      const r = await fetch("/api/departments");
+      return r.ok ? r.json() : [];
+    },
+  });
+  const orgDepts: any[] = Array.isArray(orgDeptsRaw) ? orgDeptsRaw.filter((d: any) => d.isActive !== false) : [];
+
+  const { data: editDocDeptsRaw } = useQuery({
+    queryKey: ["doc-departments", editDoc?.id],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/documents/${editDoc!.id}/departments`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!editDoc,
+  });
+
+  useEffect(() => {
+    if (editDocDeptsRaw) {
+      const ids = new Set<number>((editDocDeptsRaw as any[]).map((d: any) => d.id));
+      setEditDocDeptIds(ids);
+      setEditDocOrigDeptIds(new Set(ids));
+    }
+  }, [editDocDeptsRaw]);
+
   const updateDoc = useMutation({
     mutationFn: async (data: any) => {
-      const r = await fetch(`/api/projects/${projectId}/documents/${editDoc!.id}`, {
+      const docId = editDoc!.id;
+      const r = await fetch(`/api/projects/${projectId}/documents/${docId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       if (!r.ok) throw new Error("Failed to update");
+
+      // Sync department assignments (Phase B — no enforcement)
+      for (const id of editDocOrigDeptIds) {
+        if (!editDocDeptIds.has(id)) {
+          await fetch(`/api/projects/${projectId}/documents/${docId}/departments/${id}`, { method: "DELETE" });
+        }
+      }
+      for (const id of editDocDeptIds) {
+        if (!editDocOrigDeptIds.has(id)) {
+          await fetch(`/api/projects/${projectId}/documents/${docId}/departments`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ departmentId: id }),
+          });
+        }
+      }
+
       return r.json();
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["documents", projectId] });
+      qc.invalidateQueries({ queryKey: ["doc-departments", editDoc?.id] });
       setEditDoc(null);
       setEditFile(null);
+      setEditDocDeptIds(new Set());
+      setEditDocOrigDeptIds(new Set());
       toast({ title: "Document updated" });
     },
     onError: () => toast({ title: "Failed to update document", variant: "destructive" }),
@@ -1241,6 +1296,9 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                       </Button>
                       {(perms.canEditDocument || doc.createdById === user?.id) && (
                         <Button variant="ghost" size="icon" className="h-8 w-8" title="Edit document metadata" onClick={() => {
+                          setEditDocDeptIds(new Set());
+                          setEditDocOrigDeptIds(new Set());
+                          qc.invalidateQueries({ queryKey: ["doc-departments", doc.id] });
                           setEditDoc(doc);
                           setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
                           setEditFile(null);
@@ -1328,7 +1386,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
       </div>
 
       {/* Edit Document Dialog */}
-      <Dialog open={!!editDoc} onOpenChange={v => { if (!v) { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); } }}>
+      <Dialog open={!!editDoc} onOpenChange={v => { if (!v) { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); setEditDocDeptIds(new Set()); setEditDocOrigDeptIds(new Set()); } }}>
         <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Pencil className="h-4 w-4" /> Edit Document</DialogTitle></DialogHeader>
           <div className="space-y-4 py-2">
@@ -1370,6 +1428,37 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
               <Label>Description</Label>
               <Textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} className="mt-1" rows={3} />
             </div>
+            {/* Departments — Phase B data-only classification */}
+            {orgDepts.length > 0 && (
+              <div>
+                <Label className="mb-2 block flex items-center gap-1.5"><Building2 className="h-3.5 w-3.5" /> Departments</Label>
+                <div className="flex flex-wrap gap-2">
+                  {orgDepts.map((d: any) => {
+                    const checked = editDocDeptIds.has(d.id);
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setEditDocDeptIds(prev => {
+                          const next = new Set(prev);
+                          if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                          return next;
+                        })}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+                          checked
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                        }`}
+                      >
+                        <span className="font-mono">{d.code}</span>
+                        <span>— {d.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1.5">Click to toggle department classification. No access control applied yet.</p>
+              </div>
+            )}
             <div>
               <Label className="mb-2 block">Replace Primary File <span className="text-muted-foreground font-normal">(optional — for metadata-only edits leave blank)</span></Label>
               <FileDropZone onUpload={setEditFile} label="Drop replacement file here" />
@@ -1419,7 +1508,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setEditDoc(null); setEditFile(null); setEditAdditionalFiles([]); setEditDocDeptIds(new Set()); setEditDocOrigDeptIds(new Set()); }}>Cancel</Button>
             <Button
               onClick={() => {
                 const existing: any[] = Array.isArray(editDoc?.additionalFiles) ? editDoc.additionalFiles : [];
@@ -4561,6 +4650,158 @@ function ReviewTab({ projectId }: { projectId: number }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Project Departments Tab (Phase B — data layer, no enforcement) ──────────
+function ProjectDepartmentsTab({ projectId }: { projectId: number }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addDeptId, setAddDeptId] = useState("");
+
+  const { data: assignedRaw, isLoading } = useQuery({
+    queryKey: ["project-departments", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/departments`);
+      return r.ok ? r.json() : [];
+    },
+  });
+  const assigned: any[] = Array.isArray(assignedRaw) ? assignedRaw : [];
+
+  const { data: allDeptsRaw } = useQuery({
+    queryKey: ["org-departments"],
+    queryFn: async () => {
+      const r = await fetch("/api/departments");
+      return r.ok ? r.json() : [];
+    },
+  });
+  const allDepts: any[] = Array.isArray(allDeptsRaw) ? allDeptsRaw.filter((d: any) => d.isActive !== false) : [];
+  const assignedIds = new Set(assigned.map((d: any) => d.id));
+  const available = allDepts.filter((d: any) => !assignedIds.has(d.id));
+
+  const assignDept = useMutation({
+    mutationFn: async (departmentId: number) => {
+      const r = await fetch(`/api/projects/${projectId}/departments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ departmentId }),
+      });
+      if (!r.ok) throw new Error("Failed to assign department");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project-departments", projectId] });
+      setAddOpen(false);
+      setAddDeptId("");
+      toast({ title: "Department assigned to project" });
+    },
+    onError: (e: any) => toast({ title: "Failed to assign department", description: e?.message, variant: "destructive" }),
+  });
+
+  const removeDept = useMutation({
+    mutationFn: async (departmentId: number) => {
+      await fetch(`/api/projects/${projectId}/departments/${departmentId}`, { method: "DELETE" });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project-departments", projectId] });
+      toast({ title: "Department removed from project" });
+    },
+    onError: () => toast({ title: "Failed to remove department", variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold">Project Departments</h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Classify this project by department. Used for future access control — no restrictions applied yet.
+          </p>
+        </div>
+        {available.length > 0 && (
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4 mr-1.5" /> Add Department
+          </Button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+      ) : assigned.length === 0 ? (
+        <div className="text-center py-12 border rounded-lg bg-muted/20">
+          <Building2 className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
+          <p className="text-sm font-medium text-muted-foreground">No departments assigned</p>
+          <p className="text-xs text-muted-foreground mt-1">Assign departments to classify this project for future access control.</p>
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Code</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Assigned</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {assigned.map((dept: any) => (
+              <TableRow key={dept.id}>
+                <TableCell>
+                  <Badge variant="outline" className="font-mono text-xs">{dept.code}</Badge>
+                </TableCell>
+                <TableCell className="font-medium">{dept.name}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {dept.assignedAt ? format(new Date(dept.assignedAt), "dd MMM yyyy") : "—"}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                    onClick={() => removeDept.mutate(dept.id)}
+                    disabled={removeDept.isPending}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      {/* Add Department Dialog */}
+      <Dialog open={addOpen} onOpenChange={v => { setAddOpen(v); if (!v) setAddDeptId(""); }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Building2 className="h-4 w-4" /> Add Department</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <Label className="text-xs">Select Department</Label>
+            <Select value={addDeptId} onValueChange={setAddDeptId}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder="Choose a department…" /></SelectTrigger>
+              <SelectContent>
+                {available.map((d: any) => (
+                  <SelectItem key={d.id} value={String(d.id)}>
+                    <span className="font-mono text-xs mr-2">{d.code}</span> {d.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setAddOpen(false); setAddDeptId(""); }}>Cancel</Button>
+            <Button
+              disabled={!addDeptId || assignDept.isPending}
+              onClick={() => assignDept.mutate(parseInt(addDeptId))}
+            >
+              {assignDept.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Adding…</> : "Add Department"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

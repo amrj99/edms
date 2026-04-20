@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { db } from "@workspace/db";
-import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
@@ -1280,6 +1280,50 @@ router.patch("/:id/obsolete", requireAuth, async (req, res) => {
   });
 
   res.json(updated);
+});
+
+// ─── Document Departments (Phase B — data layer, no enforcement) ──────────────
+
+// GET  /api/projects/:projectId/documents/:id/departments
+router.get("/:id/departments", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const rows = await db
+    .select({
+      id:           departmentsTable.id,
+      code:         departmentsTable.code,
+      name:         departmentsTable.name,
+      assignedAt:   documentDepartmentsTable.assignedAt,
+    })
+    .from(documentDepartmentsTable)
+    .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
+    .where(eq(documentDepartmentsTable.documentId, id));
+  res.json(rows);
+});
+
+// POST /api/projects/:projectId/documents/:id/departments  { departmentId }
+router.post("/:id/departments", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const { departmentId } = req.body;
+  if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
+  const [row] = await db
+    .insert(documentDepartmentsTable)
+    .values({ documentId: id, departmentId: parseInt(departmentId) })
+    .onConflictDoNothing()
+    .returning();
+  res.status(201).json(row ?? { ok: true });
+});
+
+// DELETE /api/projects/:projectId/documents/:id/departments/:departmentId
+router.delete("/:id/departments/:departmentId", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id);
+  const departmentId = parseInt(req.params.departmentId);
+  await db
+    .delete(documentDepartmentsTable)
+    .where(and(
+      eq(documentDepartmentsTable.documentId, id),
+      eq(documentDepartmentsTable.departmentId, departmentId),
+    ));
+  res.json({ ok: true });
 });
 
 export default router;
