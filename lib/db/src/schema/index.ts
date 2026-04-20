@@ -24,3 +24,4 @@ export * from "./migrations";
 export * from "./governance";
 export * from "./submission-chains";
 export * from "./plan-catalog";
+export * from "./departments";

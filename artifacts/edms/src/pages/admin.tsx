@@ -107,6 +107,16 @@ export default function Admin() {
   // Project assignment state
   const [assignUser, setAssignUser] = useState<any>(null);
 
+  // Departments state
+  const [deptDialogOpen, setDeptDialogOpen]       = useState(false);
+  const [deptEditTarget, setDeptEditTarget]         = useState<any>(null);
+  const [deptMembersOpen, setDeptMembersOpen]       = useState(false);
+  const [deptMembersTarget, setDeptMembersTarget]   = useState<any>(null);
+  const [addMemberOpen, setAddMemberOpen]           = useState(false);
+  const [addMemberDept, setAddMemberDept]           = useState<any>(null);
+  const [deptForm, setDeptForm] = useState({ code: "", name: "", description: "" });
+  const [addMemberUserId, setAddMemberUserId]       = useState("");
+
   if (config && !form) setForm({ ...config });
 
   const save = useMutation({
@@ -217,6 +227,97 @@ export default function Admin() {
       qc.invalidateQueries({ queryKey: ["project-members"] });
       toast({ title: "User removed from project" });
     },
+  });
+
+  // ─── Departments queries & mutations ────────────────────────────────────────
+  const { data: departmentsData = [], isLoading: deptsLoading } = useQuery({
+    queryKey: ["departments"],
+    queryFn: async () => { const r = await fetch("/api/departments"); return r.ok ? r.json() : []; },
+  });
+
+  const { data: deptMembersData = [], isLoading: deptMembersLoading } = useQuery({
+    queryKey: ["dept-members", deptMembersTarget?.id],
+    queryFn: async () => {
+      const r = await fetch(`/api/departments/${deptMembersTarget!.id}/members`);
+      return r.ok ? r.json() : [];
+    },
+    enabled: !!deptMembersTarget,
+  });
+
+  const createDept = useMutation({
+    mutationFn: async (data: any) => {
+      const r = await fetch("/api/departments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["departments"] });
+      setDeptDialogOpen(false);
+      setDeptForm({ code: "", name: "", description: "" });
+      toast({ title: "Department created" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to create department", variant: "destructive" }),
+  });
+
+  const updateDept = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+      const r = await fetch(`/api/departments/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["departments"] });
+      setDeptEditTarget(null);
+      toast({ title: "Department updated" });
+    },
+    onError: () => toast({ title: "Failed to update department", variant: "destructive" }),
+  });
+
+  const deleteDept = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/departments/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Failed");
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["departments"] }); toast({ title: "Department deleted" }); },
+    onError: () => toast({ title: "Failed to delete department", variant: "destructive" }),
+  });
+
+  const addDeptMember = useMutation({
+    mutationFn: async ({ deptId, userId }: { deptId: number; userId: number }) => {
+      const r = await fetch(`/api/departments/${deptId}/members`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId }) });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      return r.json();
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["dept-members", vars.deptId] });
+      qc.invalidateQueries({ queryKey: ["departments"] });
+      setAddMemberOpen(false);
+      setAddMemberUserId("");
+      toast({ title: "User added to department" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to add user", variant: "destructive" }),
+  });
+
+  const removeDeptMember = useMutation({
+    mutationFn: async ({ deptId, userId }: { deptId: number; userId: number }) => {
+      await fetch(`/api/departments/${deptId}/members/${userId}`, { method: "DELETE" });
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ["dept-members", vars.deptId] });
+      qc.invalidateQueries({ queryKey: ["departments"] });
+      toast({ title: "User removed from department" });
+    },
+    onError: () => toast({ title: "Failed to remove user", variant: "destructive" }),
+  });
+
+  const toggleDeptActive = useMutation({
+    mutationFn: async ({ id, isActive }: { id: number; isActive: boolean }) => {
+      const r = await fetch(`/api/departments/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ isActive }) });
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["departments"] }); toast({ title: "Department updated" }); },
+    onError: () => toast({ title: "Failed", variant: "destructive" }),
   });
 
   // Org management state
@@ -339,6 +440,7 @@ export default function Admin() {
             { value: "organization", label: "Organization", icon: Building2 },
             { value: "users", label: "Users", icon: Users },
             { value: "project-assign", label: "Project Assignment", icon: FolderKanban },
+            { value: "departments", label: "Departments", icon: Users },
             { value: "metadata", label: "Metadata", icon: Layers },
             { value: "corrtypes", label: "Corr. Types", icon: FileType },
             { value: "numbering", label: "Numbering", icon: Hash },
@@ -880,6 +982,276 @@ export default function Admin() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* ─── Departments ─────────────────────────────────────────────────── */}
+        <TabsContent value="departments" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Departments
+                </CardTitle>
+                <CardDescription>
+                  Organize users into departments. Department membership controls document visibility in future phases.
+                </CardDescription>
+              </div>
+              {isOwner && (
+                <Button
+                  size="sm"
+                  className="gap-2 shrink-0"
+                  onClick={() => { setDeptEditTarget(null); setDeptForm({ code: "", name: "", description: "" }); setDeptDialogOpen(true); }}
+                >
+                  <Plus className="h-4 w-4" /> New Department
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent>
+              {deptsLoading ? (
+                <div className="flex items-center gap-2 text-muted-foreground py-8 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading departments…
+                </div>
+              ) : (departmentsData as any[]).length === 0 ? (
+                <div className="text-center py-12 border rounded-lg border-dashed">
+                  <Users className="h-8 w-8 mx-auto mb-3 text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">No departments yet</p>
+                  {isOwner && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-4 gap-2"
+                      onClick={() => { setDeptEditTarget(null); setDeptForm({ code: "", name: "", description: "" }); setDeptDialogOpen(true); }}
+                    >
+                      <Plus className="h-4 w-4" /> Create first department
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="text-center">Members</TableHead>
+                      <TableHead className="text-center">Active</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(departmentsData as any[]).map((dept: any) => (
+                      <TableRow key={dept.id}>
+                        <TableCell>
+                          <Badge variant="outline" className="font-mono text-xs">{dept.code}</Badge>
+                        </TableCell>
+                        <TableCell className="font-medium">{dept.name}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
+                          {dept.description || <span className="italic opacity-50">—</span>}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <button
+                            className="text-primary hover:underline text-sm font-medium"
+                            onClick={() => { setDeptMembersTarget(dept); setDeptMembersOpen(true); }}
+                          >
+                            {dept.memberCount ?? 0}
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {isOwner ? (
+                            <Switch
+                              checked={dept.isActive}
+                              onCheckedChange={(v) => toggleDeptActive.mutate({ id: dept.id, isActive: v })}
+                            />
+                          ) : (
+                            dept.isActive
+                              ? <Badge className="bg-green-100 text-green-700 text-xs">Active</Badge>
+                              : <Badge variant="outline" className="text-xs">Inactive</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => {
+                                setDeptEditTarget(dept);
+                                setDeptForm({ code: dept.code, name: dept.name, description: dept.description || "" });
+                                setDeptDialogOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              onClick={() => { if (confirm(`Delete department "${dept.name}"? This will remove all member assignments.`)) deleteDept.mutate(dept.id); }}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Create / Edit Department dialog */}
+          <Dialog open={deptDialogOpen} onOpenChange={(v) => { setDeptDialogOpen(v); if (!v) { setDeptEditTarget(null); setDeptForm({ code: "", name: "", description: "" }); } }}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{deptEditTarget ? "Edit Department" : "New Department"}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div>
+                  <Label className="text-xs">Code <span className="text-destructive">*</span></Label>
+                  <Input
+                    className="mt-1 font-mono text-sm"
+                    placeholder="e.g. engineering, finance, qa_qc"
+                    value={deptForm.code}
+                    onChange={e => setDeptForm(f => ({ ...f, code: e.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Unique lowercase identifier within your organization</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Name <span className="text-destructive">*</span></Label>
+                  <Input
+                    className="mt-1"
+                    placeholder="e.g. Engineering, Finance, QA/QC"
+                    value={deptForm.name}
+                    onChange={e => setDeptForm(f => ({ ...f, name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Description</Label>
+                  <Input
+                    className="mt-1"
+                    placeholder="Optional description"
+                    value={deptForm.description}
+                    onChange={e => setDeptForm(f => ({ ...f, description: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeptDialogOpen(false)}>Cancel</Button>
+                <Button
+                  disabled={!deptForm.code.trim() || !deptForm.name.trim() || createDept.isPending || updateDept.isPending}
+                  onClick={() => {
+                    if (deptEditTarget) {
+                      updateDept.mutate({ id: deptEditTarget.id, data: deptForm });
+                    } else {
+                      createDept.mutate(deptForm);
+                    }
+                  }}
+                >
+                  {(createDept.isPending || updateDept.isPending) ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</> : deptEditTarget ? "Save Changes" : "Create Department"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Department Members dialog */}
+          <Dialog open={deptMembersOpen} onOpenChange={(v) => { setDeptMembersOpen(v); if (!v) setDeptMembersTarget(null); }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  {deptMembersTarget?.name} — Members
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                {isOwner && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-2 w-full"
+                    onClick={() => { setAddMemberDept(deptMembersTarget); setAddMemberOpen(true); }}
+                  >
+                    <UserPlus className="h-4 w-4" /> Add User
+                  </Button>
+                )}
+                {deptMembersLoading ? (
+                  <div className="flex items-center gap-2 text-muted-foreground py-6 justify-center">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+                  </div>
+                ) : (deptMembersData as any[]).length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6 border rounded-lg border-dashed">
+                    No members in this department yet
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {(deptMembersData as any[]).map((m: any) => (
+                      <div key={m.userId} className="flex items-center gap-3 p-2.5 rounded-lg border">
+                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
+                          {m.firstName?.[0]}{m.lastName?.[0]}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-sm truncate">{m.firstName} {m.lastName}</p>
+                          <p className="text-xs text-muted-foreground truncate">{m.email}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {m.isPrimary && <Badge className="text-xs bg-blue-100 text-blue-700">Primary</Badge>}
+                          <Badge variant="outline" className={`text-xs capitalize ${ROLE_BADGE[m.role] || ""}`}>{m.role?.replace(/_/g, " ")}</Badge>
+                          {isOwner && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              onClick={() => removeDeptMember.mutate({ deptId: deptMembersTarget!.id, userId: m.userId })}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Add member to department dialog */}
+          <Dialog open={addMemberOpen} onOpenChange={(v) => { setAddMemberOpen(v); if (!v) setAddMemberUserId(""); }}>
+            <DialogContent className="max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Add User to {addMemberDept?.name}</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div>
+                  <Label className="text-xs">Select User</Label>
+                  <Select value={addMemberUserId} onValueChange={setAddMemberUserId}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Choose a user…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {((usersData as any)?.users || [])
+                        .filter((u: any) => !(deptMembersData as any[]).some((m: any) => m.userId === u.id))
+                        .map((u: any) => (
+                          <SelectItem key={u.id} value={String(u.id)}>
+                            {u.firstName} {u.lastName} ({u.email})
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAddMemberOpen(false)}>Cancel</Button>
+                <Button
+                  disabled={!addMemberUserId || addDeptMember.isPending}
+                  onClick={() => addDeptMember.mutate({ deptId: addMemberDept!.id, userId: parseInt(addMemberUserId) })}
+                >
+                  {addDeptMember.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Adding…</> : "Add User"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* Metadata Management */}

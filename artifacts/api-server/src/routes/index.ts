@@ -43,6 +43,7 @@ import delegationsRouter from "./delegations.js";
 import projectRoleOverridesRouter from "./project-role-overrides.js";
 import projectGovernanceRouter from "./project-governance.js";
 import submissionChainsRouter from "./submission-chains.js";
+import departmentsRouter from "./departments.js";
 import { requireModule } from "../middlewares/require-module.js";
 import { requireOrg } from "../middlewares/require-org.js";
 import { shadowPlanMiddleware } from "../middlewares/shadow-plan-middleware.js";
@@ -124,5 +125,6 @@ router.use("/delegations", delegationsRouter);
 router.use("/projects/:projectId", projectRoleOverridesRouter);
 router.use("/projects/:projectId", projectGovernanceRouter);
 router.use("/projects/:projectId/submission-chains", submissionChainsRouter);
+router.use("/departments", departmentsRouter);
 
 export default router;
