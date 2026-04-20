@@ -2550,14 +2550,18 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
   }, [prefillDocIds]);
   const [addItemDocId, setAddItemDocId] = useState("_none");
 
-  const { data: transmittalsData, isLoading } = useQuery({
+  const { data: transmittalsData, isLoading, isError: isTrsError, error: trsError } = useQuery({
     queryKey: ["transmittals", projectId],
     queryFn: async () => {
       const r = await fetch(`/api/projects/${projectId}/transmittals`);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw Object.assign(new Error(body.message ?? "Failed to load transmittals"), { code: body.error, status: r.status });
+      }
       return r.json();
     },
   });
-  const allTransmittals = Array.isArray(transmittalsData) ? transmittalsData : (transmittalsData?.transmittals ?? transmittalsData ?? []);
+  const allTransmittals: any[] = Array.isArray(transmittalsData) ? transmittalsData : Array.isArray(transmittalsData?.transmittals) ? transmittalsData.transmittals : [];
   const transmittals = allTransmittals.filter((t: any) =>
     directionFilter === "all" || (t.direction ?? "") === directionFilter
   );
@@ -2686,6 +2690,23 @@ function TransmittalsTab({ projectId, prefillDocIds, onPrefillConsumed }: {
     });
     refetchDetail();
   };
+
+  if (isTrsError) {
+    const isModuleDisabled = (trsError as any)?.code === "MODULE_DISABLED";
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+        <Send className="h-10 w-10 text-muted-foreground/40" />
+        <p className="font-semibold text-base">
+          {isModuleDisabled ? "Transmittals not available on your plan" : "Could not load transmittals"}
+        </p>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          {isModuleDisabled
+            ? "The Transmittals register requires a Professional plan or higher. Contact your administrator to upgrade."
+            : (trsError as any)?.message ?? "An unexpected error occurred. Please refresh and try again."}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
