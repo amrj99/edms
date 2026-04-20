@@ -1,33 +1,31 @@
 /**
- * seedPlans — populate the `plans` table from the canonical PLANS array.
+ * seedPlans — ensure the plan-catalog tables exist, then populate `plans`.
  *
- * Safe to call multiple times:
- *   - Uses INSERT … ON CONFLICT (plan_id) DO UPDATE, so re-runs are idempotent.
- *   - Will update all fields if the hardcoded config changes (e.g. price change).
- *   - Runs at startup (see app.ts) before any request is served.
+ * SELF-BOOTSTRAPPING: this function creates the three Phase-2 tables using
+ * CREATE TABLE IF NOT EXISTS before attempting any INSERT.  This means:
+ *   - drizzle-kit push is NOT required for these tables in any environment.
+ *   - No interactive prompts, no CI/Docker breakage.
+ *   - Idempotent — safe to run on every startup.
  *
- * No behavior change:
- *   - The plans table is shadow-only in Phase 2.
- *   - No route or middleware reads from it for enforcement yet.
- *   - getResolvedPlan() reads it only for mismatch-detection logging.
+ * Why not drizzle-kit push?
+ *   drizzle-kit push asks interactive questions ("is this a rename or a new
+ *   table?") that cannot be answered non-interactively.  A production Docker
+ *   container cannot respond, so the push times out or is never run, leaving
+ *   the tables absent.  Self-bootstrapping DDL is the only reliable pattern.
  *
- * Plan ID mapping from migration PLAN_LIMITS (routes/migrations.ts):
- *   free → 0 files, starter → 0 files, basic → 200, professional → 1000, enterprise → Infinity
- *
- * Plan ID mapping from rate-limit TIER_RPM (tenant-rate-limit.ts):
- *   free → 300, starter → 400, basic → 600, professional → 1500, enterprise → null (unlimited)
+ * Shadow mode (Phase 2):
+ *   - No existing route or middleware reads from these tables for enforcement.
+ *   - getResolvedPlan() reads `plans` only for mismatch-detection logging.
+ *   - No old columns removed.  No production behaviour changed.
  */
 
 import { db } from "@workspace/db";
-import { plansTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
-// ─── Plan definitions ─────────────────────────────────────────────────────────
-// Mirrors PLANS in lib/plans.ts plus the implicit "free" plan and inline limits
-// from routes/migrations.ts and middlewares/tenant-rate-limit.ts.
-// This is the single consolidation point — in Phase 3+ the plans table becomes
-// the SSOT and these hardcoded values can be removed.
+// ─── Plan seed data ───────────────────────────────────────────────────────────
+// Mirrors PLANS in lib/plans.ts + inline limits from routes/migrations.ts
+// and middlewares/tenant-rate-limit.ts.  Phase 3+ will make this the SSOT.
 
 const PLAN_SEED_DATA = [
   {
@@ -37,12 +35,12 @@ const PLAN_SEED_DATA = [
     priceAed:           0,
     currency:           "aed",
     interval:           "month",
-    maxUsers:           null,           // no enforced limit in code currently
-    storageMb:          0,              // no storage quota auto-set
-    migrationMaxFiles:  0,              // migration wizard disabled on free
-    rateLimitRpm:       300,
+    maxUsers:           null as number | null,
+    storageMb:          0,
+    migrationMaxFiles:  0,
+    rateLimitRpm:       300 as number | null,
     features:           [] as string[],
-    stripePriceEnv:     null,
+    stripePriceEnv:     null as string | null,
     isActive:           true,
   },
   {
@@ -52,10 +50,10 @@ const PLAN_SEED_DATA = [
     priceAed:           45,
     currency:           "aed",
     interval:           "month",
-    maxUsers:           10,
-    storageMb:          5120,           // 5 GB
-    migrationMaxFiles:  0,              // migration wizard disabled on starter
-    rateLimitRpm:       400,
+    maxUsers:           10 as number | null,
+    storageMb:          5120,
+    migrationMaxFiles:  0,
+    rateLimitRpm:       400 as number | null,
     features:           [
       "Up to 10 users",
       "5 GB storage",
@@ -63,7 +61,7 @@ const PLAN_SEED_DATA = [
       "Standard support",
       "Document versioning",
     ] as string[],
-    stripePriceEnv:     "STRIPE_PRICE_STARTER",
+    stripePriceEnv:     "STRIPE_PRICE_STARTER" as string | null,
     isActive:           true,
   },
   {
@@ -73,10 +71,10 @@ const PLAN_SEED_DATA = [
     priceAed:           65,
     currency:           "aed",
     interval:           "month",
-    maxUsers:           25,
-    storageMb:          25600,          // 25 GB
+    maxUsers:           25 as number | null,
+    storageMb:          25600,
     migrationMaxFiles:  200,
-    rateLimitRpm:       600,
+    rateLimitRpm:       600 as number | null,
     features:           [
       "Up to 25 users",
       "25 GB storage",
@@ -85,7 +83,7 @@ const PLAN_SEED_DATA = [
       "AI-assisted linking",
       "Rules engine",
     ] as string[],
-    stripePriceEnv:     "STRIPE_PRICE_BASIC",
+    stripePriceEnv:     "STRIPE_PRICE_BASIC" as string | null,
     isActive:           true,
   },
   {
@@ -95,10 +93,10 @@ const PLAN_SEED_DATA = [
     priceAed:           80,
     currency:           "aed",
     interval:           "month",
-    maxUsers:           100,
-    storageMb:          102400,         // 100 GB
+    maxUsers:           100 as number | null,
+    storageMb:          102400,
     migrationMaxFiles:  1000,
-    rateLimitRpm:       1500,
+    rateLimitRpm:       1500 as number | null,
     features:           [
       "Up to 100 users",
       "100 GB storage",
@@ -108,7 +106,7 @@ const PLAN_SEED_DATA = [
       "Custom workflows",
       "API access",
     ] as string[],
-    stripePriceEnv:     "STRIPE_PRICE_PROFESSIONAL",
+    stripePriceEnv:     "STRIPE_PRICE_PROFESSIONAL" as string | null,
     isActive:           true,
   },
   {
@@ -118,10 +116,10 @@ const PLAN_SEED_DATA = [
     priceAed:           95,
     currency:           "aed",
     interval:           "month",
-    maxUsers:           null,           // unlimited
-    storageMb:          1048576,        // 1 TB
-    migrationMaxFiles:  -1,             // -1 = unlimited
-    rateLimitRpm:       null,           // null = unlimited (no rate limit)
+    maxUsers:           null as number | null,
+    storageMb:          1048576,
+    migrationMaxFiles:  -1,
+    rateLimitRpm:       null as number | null,
     features:           [
       "Unlimited users",
       "1 TB storage",
@@ -132,13 +130,83 @@ const PLAN_SEED_DATA = [
       "Custom integrations",
       "SSO / SAML",
     ] as string[],
-    stripePriceEnv:     "STRIPE_PRICE_ENTERPRISE",
+    stripePriceEnv:     "STRIPE_PRICE_ENTERPRISE" as string | null,
     isActive:           true,
   },
-] as const;
+];
+
+// ─── DDL: ensure tables exist ─────────────────────────────────────────────────
+// Called at the start of seedPlans() so the function is completely
+// self-contained and works in any environment without drizzle-kit.
+
+async function ensureTablesExist(): Promise<void> {
+  // plans — no foreign keys, safe to create first
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS plans (
+      id                   SERIAL PRIMARY KEY,
+      plan_id              TEXT    NOT NULL UNIQUE,
+      name                 TEXT    NOT NULL,
+      description          TEXT,
+      price_aed            INTEGER NOT NULL DEFAULT 0,
+      currency             TEXT    NOT NULL DEFAULT 'aed',
+      interval             TEXT    NOT NULL DEFAULT 'month',
+      max_users            INTEGER,
+      storage_mb           INTEGER NOT NULL DEFAULT 0,
+      migration_max_files  INTEGER NOT NULL DEFAULT 0,
+      rate_limit_rpm       INTEGER,
+      features             JSONB   NOT NULL DEFAULT '[]',
+      stripe_price_env     TEXT,
+      is_active            BOOLEAN NOT NULL DEFAULT true,
+      created_at           TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at           TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  // org_feature_overrides — references organizations + users (both exist in prod)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS org_feature_overrides (
+      id                 SERIAL PRIMARY KEY,
+      organization_id    INTEGER NOT NULL
+                           REFERENCES organizations(id) ON DELETE CASCADE,
+      feature_key        TEXT    NOT NULL,
+      is_enabled         BOOLEAN NOT NULL,
+      reason             TEXT,
+      granted_by_user_id INTEGER REFERENCES users(id),
+      expires_at         TIMESTAMP,
+      created_at         TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at         TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT org_feature_overrides_org_feature_uq
+        UNIQUE (organization_id, feature_key)
+    )
+  `);
+
+  // org_quota_overrides — same FK pattern
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS org_quota_overrides (
+      id                 SERIAL PRIMARY KEY,
+      organization_id    INTEGER NOT NULL
+                           REFERENCES organizations(id) ON DELETE CASCADE,
+      quota_key          TEXT    NOT NULL,
+      quota_value        INTEGER NOT NULL,
+      reason             TEXT,
+      granted_by_user_id INTEGER REFERENCES users(id),
+      expires_at         TIMESTAMP,
+      created_at         TIMESTAMP NOT NULL DEFAULT now(),
+      updated_at         TIMESTAMP NOT NULL DEFAULT now(),
+      CONSTRAINT org_quota_overrides_org_quota_uq
+        UNIQUE (organization_id, quota_key)
+    )
+  `);
+}
+
+// ─── seedPlans ────────────────────────────────────────────────────────────────
 
 export async function seedPlans(): Promise<void> {
   try {
+    // 1️⃣  Guarantee tables exist before any DML
+    await ensureTablesExist();
+
+    // 2️⃣  Upsert all plans
     let seeded = 0;
     let updated = 0;
 
@@ -160,19 +228,19 @@ export async function seedPlans(): Promise<void> {
           now(), now()
         )
         ON CONFLICT (plan_id) DO UPDATE SET
-          name               = EXCLUDED.name,
-          description        = EXCLUDED.description,
-          price_aed          = EXCLUDED.price_aed,
-          currency           = EXCLUDED.currency,
-          interval           = EXCLUDED.interval,
-          max_users          = EXCLUDED.max_users,
-          storage_mb         = EXCLUDED.storage_mb,
+          name                = EXCLUDED.name,
+          description         = EXCLUDED.description,
+          price_aed           = EXCLUDED.price_aed,
+          currency            = EXCLUDED.currency,
+          interval            = EXCLUDED.interval,
+          max_users           = EXCLUDED.max_users,
+          storage_mb          = EXCLUDED.storage_mb,
           migration_max_files = EXCLUDED.migration_max_files,
-          rate_limit_rpm     = EXCLUDED.rate_limit_rpm,
-          features           = EXCLUDED.features,
-          stripe_price_env   = EXCLUDED.stripe_price_env,
-          is_active          = EXCLUDED.is_active,
-          updated_at         = now()
+          rate_limit_rpm      = EXCLUDED.rate_limit_rpm,
+          features            = EXCLUDED.features,
+          stripe_price_env    = EXCLUDED.stripe_price_env,
+          is_active           = EXCLUDED.is_active,
+          updated_at          = now()
         RETURNING (xmax = 0) AS inserted
       `);
 
@@ -186,9 +254,10 @@ export async function seedPlans(): Promise<void> {
       "[seed-plans] plans table seeded successfully",
     );
   } catch (err) {
+    // Non-fatal in shadow mode — log and continue startup
     logger.error(
       { err },
-      "[seed-plans] failed to seed plans table — system continues, but getResolvedPlan() will log warnings",
+      "[seed-plans] failed — getResolvedPlan() will log warnings until resolved",
     );
   }
 }
