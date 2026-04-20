@@ -1589,12 +1589,15 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("itr", ITR_COLS.map(c => c.key));
   const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError: isModuleError, error: queryError } = useQuery({
     queryKey: ["rpt-itr", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
       if (filters.projectId !== "_all") {
         const r = await fetch(`/api/projects/${filters.projectId}/inspection-requests`);
-        if (!r.ok) throw new Error("Failed");
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw Object.assign(new Error(body.message ?? "Failed"), { code: body.error, status: r.status });
+        }
         return r.json();
       }
       if (!isCrossOrg || projects.length === 0) return { inspectionRequests: [] };
@@ -1647,6 +1650,15 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
   });
+
+  if (isModuleError && (queryError as any)?.code === "MODULE_DISABLED") {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground justify-center">
+        <ShieldAlert className="h-4 w-4 shrink-0" />
+        Inspection Requests (Registers module) are not available on your plan. Contact your administrator to upgrade.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -1871,12 +1883,15 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("ncr", NCR_COLS.map(c => c.key));
   const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError: isModuleError, error: queryError } = useQuery({
     queryKey: ["rpt-ncr", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
       if (filters.projectId !== "_all") {
         const r = await fetch(`/api/projects/${filters.projectId}/ncr-records`);
-        if (!r.ok) throw new Error("Failed");
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw Object.assign(new Error(body.message ?? "Failed"), { code: body.error, status: r.status });
+        }
         return r.json();
       }
       if (!isCrossOrg || projects.length === 0) return { ncrRecords: [] };
@@ -1928,6 +1943,15 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
   });
+
+  if (isModuleError && (queryError as any)?.code === "MODULE_DISABLED") {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground justify-center">
+        <ShieldAlert className="h-4 w-4 shrink-0" />
+        NCR/SOR records (Registers module) are not available on your plan. Contact your administrator to upgrade.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -2137,12 +2161,15 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
   const toggleSort = (key: string) => { if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortKey(key); setSortDir("asc"); } };
   const [form, setForm] = useState({ nocNumber: "", authority: "", date: "", status: "pending", linkedDocumentId: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError: isModuleError, error: queryError } = useQuery({
     queryKey: ["rpt-noc", filters.projectId, projects.map((p: any) => p.id).join(",")],
     queryFn: async () => {
       if (filters.projectId !== "_all") {
         const r = await fetch(`/api/projects/${filters.projectId}/noc-records`);
-        if (!r.ok) throw new Error("Failed");
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw Object.assign(new Error(body.message ?? "Failed"), { code: body.error, status: r.status });
+        }
         return r.json();
       }
       if (!isCrossOrg || projects.length === 0) return { nocRecords: [] };
@@ -2208,6 +2235,15 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
     { key: "remarks", label: t("remarks") },
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
+
+  if (isModuleError && (queryError as any)?.code === "MODULE_DISABLED") {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground justify-center">
+        <ShieldAlert className="h-4 w-4 shrink-0" />
+        NOC records (Registers module) are not available on your plan. Contact your administrator to upgrade.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">

@@ -21,6 +21,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import {
   ClipboardList, Plus, Search, Filter, X, FileSpreadsheet, FileText as FileTextIcon,
   Printer, Loader2, Edit2, Trash2, Link as LinkIcon, Calendar, User, ArrowUp, ArrowDown,
+  ShieldAlert,
 } from "lucide-react";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -81,12 +82,15 @@ export default function DeliverablesPage() {
   });
   const projects: any[] = projectsData?.projects ?? [];
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, isError: isModuleError, error: queryError, refetch } = useQuery({
     queryKey: ["deliverables", projectId],
     queryFn: async () => {
       if (projectId === "_all") return { deliverables: [] };
       const r = await fetch(`/api/projects/${projectId}/deliverables`);
-      if (!r.ok) throw new Error("Failed");
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw Object.assign(new Error(body.message ?? "Failed to load deliverables"), { code: body.error, status: r.status });
+      }
       return r.json();
     },
     enabled: projectId !== "_all",
@@ -219,6 +223,15 @@ export default function DeliverablesPage() {
   };
 
   const statusCounts = DELIVERABLE_STATUSES.reduce((acc, s) => ({ ...acc, [s]: all.filter(d => d.status === s).length }), {} as Record<string, number>);
+
+  if (isModuleError && (queryError as any)?.code === "MODULE_DISABLED") {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground justify-center">
+        <ShieldAlert className="h-4 w-4 shrink-0" />
+        Deliverables tracking is not available on your plan. Contact your administrator to upgrade.
+      </div>
+    );
+  }
 
   return (
     <div className={`space-y-5 ${isRtl ? "font-[Tahoma,Arial,sans-serif] text-right" : ""}`} dir={isRtl ? "rtl" : "ltr"}>

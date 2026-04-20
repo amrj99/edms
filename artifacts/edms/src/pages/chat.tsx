@@ -469,9 +469,16 @@ export default function ChatPage() {
 
   // ─── Data fetching ─────────────────────────────────────────────────────────
 
-  const { data: groupsData, refetch: refetchGroups } = useQuery({
+  const { data: groupsData, isError: isGroupsError, error: groupsError, refetch: refetchGroups } = useQuery({
     queryKey: ["chat-groups"],
-    queryFn: async () => { const r = await fetch("/api/chat/groups"); return r.json(); },
+    queryFn: async () => {
+      const r = await fetch("/api/chat/groups");
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw Object.assign(new Error(body.message ?? "Failed to load chat"), { code: body.error, status: r.status });
+      }
+      return r.json();
+    },
     refetchInterval: 5000,
   });
 
@@ -634,7 +641,7 @@ export default function ChatPage() {
   const totalUnread = groups.reduce((sum, g) => sum + g.unreadCount, 0);
   const hasOrg = !!(user as any)?.organizationId;
 
-  if (!modules.chat) {
+  if (!modules.chat || (isGroupsError && (groupsError as any)?.code === "MODULE_DISABLED")) {
     return <ModuleDisabledView />;
   }
 
