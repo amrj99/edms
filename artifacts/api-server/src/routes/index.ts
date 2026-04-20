@@ -44,6 +44,7 @@ import projectRoleOverridesRouter from "./project-role-overrides.js";
 import projectGovernanceRouter from "./project-governance.js";
 import submissionChainsRouter from "./submission-chains.js";
 import { requireModule } from "../middlewares/require-module.js";
+import { requireOrg } from "../middlewares/require-org.js";
 
 const router: IRouter = Router();
 
@@ -68,6 +69,12 @@ router.use((req, res, next) => {
 
 // ── Per-tenant rate limiting (org subscription tier, Cloudflare-aware) ──────────
 router.use(tenantRateLimit);
+
+// ── Organization membership enforcement (Phase 0 security fix) ────────────────
+// Authenticated users (except system_owner) must belong to an organization.
+// system_owner intentionally has no org — they span all tenants by design.
+// Unauthenticated requests pass through and are caught by requireAuth in each route.
+router.use(requireOrg);
 
 router.use("/organizations", organizationsRouter);
 router.use("/users", usersRouter);

@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
+import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { extractRealIp } from "./middlewares/real-ip.js";
@@ -164,6 +165,13 @@ if (!_jwtSecret || _jwtSecret === "edms-secret-key-change-in-production") {
 
 seedDefaultAdmin().catch((err) => {
   logger.error({ err }, "Seed failed — continuing anyway");
+});
+
+// Phase 0 security fix — ensure every org has an org_config row so the
+// fail-closed requireModule middleware never denies access to a legitimately
+// configured organization. Safe to call multiple times (idempotent).
+backfillOrgConfig().catch((err) => {
+  logger.error({ err }, "[backfill] org_config startup backfill failed — continuing, but unconfigured orgs may be denied access");
 });
 
 // Idempotent — enables RLS + org-isolation policies on all critical tables.

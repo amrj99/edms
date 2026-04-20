@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable } from "@workspace/db";
+import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable, orgConfigTable } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
 
@@ -105,6 +106,18 @@ router.post("/", requireAuth, async (req, res) => {
     throw err;
   }
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "organization", entityId: org.id, entityTitle: org.name });
+
+  // Create default org_config row so the fail-closed module check never blocks this org.
+  // All modules enabled by default for new orgs; Phase 1 will enforce plan-based defaults.
+  try {
+    await db.insert(orgConfigTable).values({
+      organizationId: org.id,
+      modules: { dashboard: true, deliverables: true, registers: true, notifications: true, chat: true },
+    }).onConflictDoNothing();
+  } catch (cfgErr) {
+    logger.error({ err: cfgErr, orgId: org.id }, "[org-create] Failed to create default org_config — org created but will need manual config setup");
+  }
+
   res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
 });
 
