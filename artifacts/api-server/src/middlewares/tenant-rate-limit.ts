@@ -1,40 +1,32 @@
 import { Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
-import { db, orgConfigTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
+import { getOrgPlan } from "../lib/plan-service.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
 // ─── Requests-per-minute caps per subscription tier ────────────────────────────
 const TIER_RPM: Record<string, number | null> = {
   free:         300,
+  starter:      400,
   basic:        600,
   professional: 1500,
   enterprise:   null, // unlimited — skip the limiter entirely
 };
 
 // ─── Org-tier cache (5-minute TTL) ────────────────────────────────────────────
+// Caches the resolved plan id from plan-service (subscriptions table → SSOT).
 const tierCache = new Map<number, { tier: string; expiresAt: number }>();
 
 async function getOrgTier(orgId: number): Promise<string> {
   const cached = tierCache.get(orgId);
   if (cached && cached.expiresAt > Date.now()) return cached.tier;
 
-  try {
-    const [cfg] = await db
-      .select({ subscriptionTier: orgConfigTable.subscriptionTier })
-      .from(orgConfigTable)
-      .where(eq(orgConfigTable.organizationId, orgId))
-      .limit(1);
-
-    const tier = cfg?.subscriptionTier ?? "free";
-    tierCache.set(orgId, { tier, expiresAt: Date.now() + 5 * 60_000 });
-    return tier;
-  } catch (err) {
-    logger.warn({ err, orgId }, "tenant-rate-limit: tier lookup failed — defaulting to 'free'");
-    return "free";
-  }
+  // Phase 1: resolve via PlanService — subscriptions table is SSOT.
+  // Falls back to organizations.subscription_tier with a WARN log when missing.
+  const tier = await getOrgPlan(orgId);
+  tierCache.set(orgId, { tier, expiresAt: Date.now() + 5 * 60_000 });
+  return tier;
 }
 
 /** Invalidate a cached tier (call after PUT /api/admin/ai-tier changes the tier). */

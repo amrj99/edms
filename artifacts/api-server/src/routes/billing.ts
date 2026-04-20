@@ -11,6 +11,7 @@ import {
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { PLANS, getDefaultModulesForPlan } from "../lib/plans.js";
+import { getOrgPlan } from "../lib/plan-service.js";
 
 export { PLANS };
 
@@ -105,17 +106,21 @@ router.get("/status", requireAuth, async (req, res) => {
     if (!sub) {
       const legacyData = await getOrgStripeData(orgId);
       if (legacyData.subscriptionId || legacyData.customerId) {
+        // Phase 1: resolve the plan via SSOT (falls back to org.subscriptionTier with WARN)
+        const resolvedPlanId = legacyData.planId ?? await getOrgPlan(orgId);
         sub = await upsertSubscription(orgId, {
-          planId: legacyData.planId ?? org.subscriptionTier ?? "free",
+          planId: resolvedPlanId,
           stripeCustomerId: legacyData.customerId ?? null,
           stripeSubscriptionId: legacyData.subscriptionId ?? null,
           status: legacyData.subscriptionId ? "active" : "free",
         });
-        logger.info({ orgId }, "Lazily migrated subscription from system_settings to subscriptions table");
+        logger.info({ orgId, resolvedPlanId }, "Lazily migrated subscription from system_settings to subscriptions table");
       }
     }
 
-    const tier = org.subscriptionTier ?? "free";
+    // Phase 1: resolve tier from SSOT (subscriptions.plan_id → fallback to org.subscription_tier).
+    // If sub exists we already have the plan_id; getOrgPlan avoids a redundant DB call.
+    const tier = sub?.planId ?? await getOrgPlan(orgId);
     const currentPlan = PLANS.find(p => p.id === tier) ?? null;
 
     // Try to refresh live status from Stripe if configured

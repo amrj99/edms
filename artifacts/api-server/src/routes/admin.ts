@@ -208,6 +208,8 @@ router.get("/usage", async (req, res) => {
 
   const result = orgs.map(org => {
     const sub = subMap.get(org.id);
+    // Phase 1 SSOT: subscriptions.plan_id is primary; org.subscriptionTier is legacy fallback.
+    // Both are pre-fetched in the batch queries above — no extra DB call needed.
     const billingPlan    = sub?.planId ?? org.subscriptionTier ?? "free";
     const billingStatus  = sub?.status ?? "free";
     const plan           = PLANS.find(p => p.id === billingPlan) ?? null;

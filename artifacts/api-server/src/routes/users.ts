@@ -5,6 +5,7 @@ import { eq, count, and, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
+import { getOrgPlan } from "../lib/plan-service.js";
 
 const router = Router();
 
@@ -91,12 +92,9 @@ router.post("/", requireAuth, async (req, res) => {
   // Enforce per-plan user limit
   const targetOrgId = organizationId ? parseInt(String(organizationId)) : req.user!.organizationId;
   if (targetOrgId) {
-    const [org] = await db
-      .select({ subscriptionTier: organizationsTable.subscriptionTier })
-      .from(organizationsTable)
-      .where(eq(organizationsTable.id, targetOrgId));
-
-    const plan = PLANS.find(p => p.id === (org?.subscriptionTier ?? "free"));
+    // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
+    const planId = await getOrgPlan(targetOrgId);
+    const plan = PLANS.find(p => p.id === planId);
     if (plan && plan.maxUsers !== null) {
       const [uc] = await db
         .select({ cnt: count() })

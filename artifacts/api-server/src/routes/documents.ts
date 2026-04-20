@@ -3,6 +3,7 @@ import multer from "multer";
 import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
+import { getOrgPlan } from "../lib/plan-service.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
@@ -1084,14 +1085,16 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
     const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
     const totalNewMb = totalNewBytes / (1024 * 1024);
 
-    const [org] = await db
-      .select({ subscriptionTier: organizationsTable.subscriptionTier, storageUsedMb: organizationsTable.storageUsedMb })
+    // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
+    const [orgStorage] = await db
+      .select({ storageUsedMb: organizationsTable.storageUsedMb })
       .from(organizationsTable)
       .where(eq(organizationsTable.id, orgId));
 
-    const plan = PLANS.find(p => p.id === (org?.subscriptionTier ?? "free"));
-    if (plan && org) {
-      const usedMb = org.storageUsedMb ?? 0;
+    const planId = await getOrgPlan(orgId);
+    const plan = PLANS.find(p => p.id === planId);
+    if (plan && orgStorage) {
+      const usedMb = orgStorage.storageUsedMb ?? 0;
       if (usedMb + totalNewMb > plan.storageMb) {
         return res.status(403).json({
           error: "STORAGE_LIMIT_REACHED",

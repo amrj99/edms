@@ -3,10 +3,11 @@ import multer from "multer";
 import { db } from "@workspace/db";
 import {
   migrationJobsTable, migrationItemsTable, documentsTable, foldersTable,
-  projectsTable, organizationsTable, documentRevisionsTable,
+  projectsTable, documentRevisionsTable,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { getOrgPlan } from "../lib/plan-service.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 const router = Router({ mergeParams: true });
@@ -107,9 +108,9 @@ router.post("/", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "projectId and non-empty files array required" });
   }
 
-  // Load org to get subscription tier
-  const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId));
-  const { plan, maxFiles } = planFromTier(org?.subscriptionTier);
+  // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
+  const planId = await getOrgPlan(orgId);
+  const { plan, maxFiles } = planFromTier(planId);
 
   if (maxFiles === 0) {
     return res.status(403).json({ error: "Migration Wizard is not available on your current plan. Upgrade to Basic or higher." });
