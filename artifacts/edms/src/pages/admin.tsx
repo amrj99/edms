@@ -78,6 +78,13 @@ export default function Admin() {
     queryFn: async () => { const r = await fetch("/api/organizations"); return r.json(); },
   });
 
+  const { data: orgPlansData } = useQuery({
+    queryKey: ["admin-org-plans"],
+    queryFn: async () => { const r = await fetch("/api/admin/org-plans"); return r.ok ? r.json() : { plans: [] }; },
+    enabled: isSysOwner,
+  });
+  const orgPlanMap: Record<number, string> = Object.fromEntries((orgPlansData?.plans ?? []).map((p: any) => [p.orgId, p.planId]));
+
   const { data: projectsData } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
@@ -217,6 +224,8 @@ export default function Admin() {
   const [editOrg, setEditOrg] = useState<any>(null);
   const [deleteOrg, setDeleteOrg] = useState<any>(null);
   const [orgForm, setOrgForm] = useState({ name: "", code: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" });
+  const [changePlanOrg, setChangePlanOrg] = useState<any>(null);
+  const [selectedPlan, setSelectedPlan] = useState("free");
 
   const createOrg = useMutation({
     mutationFn: async (data: any) => {
@@ -245,6 +254,24 @@ export default function Admin() {
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["organizations"] }); qc.invalidateQueries({ queryKey: ["admin-storage-usage"] }); setDeleteOrg(null); toast({ title: t("orgDeleted") }); },
     onError: () => toast({ title: "Failed to delete organization", variant: "destructive" }),
+  });
+
+  const changePlan = useMutation({
+    mutationFn: async ({ orgId, planId }: { orgId: number; planId: string }) => {
+      const r = await fetch(`/api/admin/organizations/${orgId}/change-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId }),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-org-plans"] });
+      setChangePlanOrg(null);
+      toast({ title: "Plan updated successfully" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to change plan", variant: "destructive" }),
   });
 
   const addCorrType = () => {
@@ -436,12 +463,13 @@ export default function Admin() {
                     <TableHead className="text-xs text-center">{t("orgProjects")}</TableHead>
                     <TableHead className="text-xs text-center">{t("orgMembers")}</TableHead>
                     <TableHead className="text-xs">{t("orgContactEmail")}</TableHead>
+                    <TableHead className="text-xs">Plan</TableHead>
                     <TableHead className="text-xs text-right">{t("orgActions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={6} className="py-10 text-center text-muted-foreground text-sm">{t("noOrgsFound")}</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground text-sm">{t("noOrgsFound")}</TableCell></TableRow>
                   ) : orgs.map((org: any) => (
                     <TableRow key={org.id}>
                       <TableCell className="font-medium text-sm">{org.name}</TableCell>
@@ -449,6 +477,20 @@ export default function Admin() {
                       <TableCell className="text-xs text-center font-mono">{org.projectCount ?? 0}</TableCell>
                       <TableCell className="text-xs text-center font-mono">{org.userCount ?? 0}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{org.contactEmail || "—"}</TableCell>
+                      <TableCell>
+                        {isSysOwner ? (
+                          <button
+                            onClick={() => { setChangePlanOrg(org); setSelectedPlan(orgPlanMap[org.id] ?? "free"); }}
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize cursor-pointer hover:opacity-75 ${planBadgeClass(orgPlanMap[org.id] ?? "free")}`}
+                          >
+                            {orgPlanMap[org.id] ?? "—"}
+                          </button>
+                        ) : (
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ${planBadgeClass(orgPlanMap[org.id] ?? "free")}`}>
+                            {orgPlanMap[org.id] ?? "—"}
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setOrgForm({ name: org.name ?? "", code: org.code ?? "", type: org.type ?? "contractor", contactEmail: org.contactEmail ?? "", contactPhone: org.contactPhone ?? "", address: org.address ?? "" }); setEditOrg(org); }}>
@@ -467,6 +509,48 @@ export default function Admin() {
               </Table>
             </CardContent>
           </Card>
+
+          {/* Change Plan Dialog */}
+          <Dialog open={!!changePlanOrg} onOpenChange={v => { if (!v) setChangePlanOrg(null); }}>
+            <DialogContent className="sm:max-w-[380px]">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CreditCard className="h-4 w-4" /> Change Plan
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 py-2">
+                <p className="text-sm text-muted-foreground">
+                  Organization: <span className="font-medium text-foreground">{changePlanOrg?.name}</span>
+                </p>
+                <div>
+                  <Label className="text-xs mb-1 block">Select Plan</Label>
+                  <Select value={selectedPlan} onValueChange={setSelectedPlan}>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="free">Free</SelectItem>
+                      <SelectItem value="starter">Starter</SelectItem>
+                      <SelectItem value="basic">Basic</SelectItem>
+                      <SelectItem value="professional">Professional</SelectItem>
+                      <SelectItem value="enterprise">Enterprise</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" size="sm" onClick={() => setChangePlanOrg(null)}>Cancel</Button>
+                <Button
+                  size="sm"
+                  disabled={changePlan.isPending}
+                  onClick={() => changePlanOrg && changePlan.mutate({ orgId: changePlanOrg.id, planId: selectedPlan })}
+                >
+                  {changePlan.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                  Save Plan
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* Full User Management */}

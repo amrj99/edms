@@ -14,6 +14,7 @@ import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
+import { syncOrgModules } from "../lib/module-sync-service.js";
 
 const router = Router();
 
@@ -779,6 +780,40 @@ router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req
 
   const quota = await getOrgAiQuota(orgId);
   res.json({ organizationId: orgId, limits: { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit } });
+});
+
+// ─── Plan Management ──────────────────────────────────────────────────────────
+
+router.get("/org-plans", async (req, res) => {
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  const rows = await db
+    .select({
+      orgId: organizationsTable.id,
+      orgName: organizationsTable.name,
+      planId: sql<string>`COALESCE(${subscriptionsTable.planId}, ${organizationsTable.subscriptionTier}, 'free')`,
+    })
+    .from(organizationsTable)
+    .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id));
+  res.json({ plans: rows });
+});
+
+router.post("/organizations/:orgId/change-plan", async (req, res) => {
+  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  const orgId = parseInt(req.params.orgId);
+  const { planId } = req.body as { planId: string };
+  if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
+  const validPlanIds = ["free", ...PLANS.map(p => p.id)];
+  if (!validPlanIds.includes(planId)) { res.status(400).json({ error: "Invalid planId" }); return; }
+  const [org] = await db.select({ id: organizationsTable.id }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+  if (!org) { res.status(404).json({ error: "Organization not found" }); return; }
+  await db.insert(subscriptionsTable)
+    .values({ organizationId: orgId, planId, status: "active" })
+    .onConflictDoUpdate({
+      target: subscriptionsTable.organizationId,
+      set: { planId, status: "active", updatedAt: new Date() },
+    });
+  await syncOrgModules(orgId);
+  res.json({ ok: true, orgId, planId });
 });
 
 export default router;
