@@ -1,51 +1,145 @@
 /**
  * PlanService — single source of truth for an organisation's subscription plan.
  *
- * ─── getOrgPlan(orgId) — PRODUCTION function (unchanged behavior) ──────────────
+ * ─── getOrgPlan(orgId) — PRODUCTION function (behavior unchanged) ────────────
  *
  *   Resolution order (Phase 1):
  *     1. subscriptions.plan_id            — PRIMARY SSOT (Stripe-managed)
- *     2. organizations.subscription_tier  — LEGACY FALLBACK (kept for backward
- *                                           compatibility; will be removed in Phase 2)
+ *     2. organizations.subscription_tier  — LEGACY FALLBACK
  *
- *   When the fallback is used, a WARN log is emitted so operators can identify
- *   organisations that have not yet been migrated to the subscriptions table.
+ *   Never throws. Returns "free" on any unrecoverable error.
  *
- * ─── getResolvedPlan(orgId) — SHADOW function (Phase 2 foundation) ────────────
+ * ─── getResolvedPlan(orgId) — SHADOW function (Phase 2.5) ───────────────────
  *
- *   Shadow-mode: reads the new `plans`, `org_feature_overrides`, and
- *   `org_quota_overrides` tables and returns a rich ResolvedPlan object.
- *   Logs mismatches between the DB-sourced plan and the legacy-sourced plan.
+ *   Reads the plans catalog + org overrides + org_config.modules and:
+ *     - Emits plan.config.features and plan.config.quotas at INFO
+ *     - Compares org_config.modules  vs getDefaultModulesForPlan(planId) → mismatch WARN
+ *     - Compares legacy TIER_RPM     vs plans.rate_limit_rpm              → mismatch WARN
+ *     - Compares legacy PLAN_LIMITS  vs plans.migration_max_files         → mismatch WARN
  *
- *   NOT used by any route or middleware yet. Intended for:
- *     - Verifying the plans table is seeded and consistent.
- *     - Logging metrics for fallback and mismatch rates.
- *     - Building the migration path to Phase 3+ enforcement.
+ *   NOT used by any route or middleware for enforcement yet.
+ *   Called fire-and-forget from shadowPlanMiddleware (see shadow-plan-middleware.ts).
  *
- * Usage:
- *   import { getOrgPlan } from "../lib/plan-service.js";          // production
- *   import { getResolvedPlan } from "../lib/plan-service.js";     // shadow
+ * ─── LEGACY VALUES for mismatch comparison ───────────────────────────────────
+ *
+ *   These are copied from:
+ *     - TIER_RPM   in middlewares/tenant-rate-limit.ts
+ *     - PLAN_LIMITS in routes/migrations.ts
+ *
+ *   They are NOT used for enforcement here — comparison only.
+ *   When Phase 3 switches to catalog-driven enforcement, these can be removed.
  */
 
 import { db } from "@workspace/db";
 import {
   subscriptionsTable, organizationsTable,
   plansTable, orgFeatureOverridesTable, orgQuotaOverridesTable,
+  orgConfigTable,
 } from "@workspace/db";
 import { eq, and, or, isNull, gt } from "drizzle-orm";
 import { logger } from "./logger.js";
+import { getDefaultModulesForPlan } from "./plans.js";
+
+// ─── Legacy limit maps (shadow comparison only — do NOT use for enforcement) ──
+
+/** Mirrors TIER_RPM in middlewares/tenant-rate-limit.ts */
+const LEGACY_TIER_RPM: Record<string, number | null> = {
+  free:         300,
+  starter:      400,
+  basic:        600,
+  professional: 1500,
+  enterprise:   null,
+};
+
+/** Mirrors PLAN_LIMITS in routes/migrations.ts (-1 = Infinity in the legacy map) */
+const LEGACY_PLAN_LIMITS: Record<string, number> = {
+  free:         0,
+  starter:      0,
+  basic:        200,
+  professional: 1000,
+  enterprise:   -1,   // Infinity in migrations.ts
+};
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+export type PlanSource = "subscriptions" | "org_fallback" | "default_free";
+
+/** Named quota limits resolved for this org (effective = plan default + overrides). */
+export interface PlanQuotas {
+  maxUsers:           number | null;   // null = unlimited
+  storageMb:          number | null;
+  migrationMaxFiles:  number | null;   // 0 = wizard disabled, -1 = unlimited
+  rateLimitRpm:       number | null;   // null = unlimited
+}
+
+/** One module whose org_config value differs from the plan's expected default. */
+export interface ModuleMismatch {
+  module:      string;
+  orgValue:    boolean;   // what org_config.modules currently has
+  planDefault: boolean;   // what getDefaultModulesForPlan(planId) says it should be
+}
+
+/** One quota where the legacy hardcoded value differs from the plans catalog. */
+export interface QuotaMismatch {
+  quota:        string;
+  legacyValue:  number | null;  // value in TIER_RPM / PLAN_LIMITS
+  catalogValue: number | null;  // value in plans table
+}
+
+export interface MismatchReport {
+  modules:       ModuleMismatch[];
+  quotas:        QuotaMismatch[];
+  hasMismatches: boolean;
+}
+
+export interface ResolvedPlan {
+  // ── Plan identity ────────────────────────────────────────────────────────────
+  planId:  string;
+  source:  PlanSource;
+  name:    string | null;
+  priceAed: number | null;
+
+  // ── Plan features (marketing copy from plans catalog) ────────────────────────
+  config: {
+    features: string[];   // e.g. ["Up to 25 users", "25 GB storage", …]
+    quotas:   PlanQuotas; // effective (plan default + org overrides applied)
+  };
+
+  // ── Raw plan defaults (before overrides) ─────────────────────────────────────
+  maxUsers:           number | null;
+  storageMb:          number | null;
+  migrationMaxFiles:  number | null;
+  rateLimitRpm:       number | null;
+
+  // ── Per-org overrides ────────────────────────────────────────────────────────
+  featureOverrides: Record<string, boolean>;
+  quotaOverrides:   Record<string, number>;
+
+  // ── Effective values (plan defaults with org overrides applied) ───────────────
+  effectiveMaxUsers:           number | null;
+  effectiveStorageMb:          number | null;
+  effectiveMigrationMaxFiles:  number | null;
+  effectiveRateLimitRpm:       number | null;
+
+  // ── Mismatch report (shadow comparison, never enforced) ──────────────────────
+  mismatch: MismatchReport;
+
+  // ── Diagnostics ──────────────────────────────────────────────────────────────
+  planNotInCatalog:   boolean;
+  hasFeatureOverrides: boolean;
+  hasQuotaOverrides:   boolean;
+}
 
 // ─── getOrgPlan ───────────────────────────────────────────────────────────────
 // PRODUCTION — returns plan ID string. Behavior unchanged from Phase 1.
 
 /**
  * Resolve the active subscription plan ID for an organisation.
- *
- * Returns a plan id string: "free" | "starter" | "basic" | "professional" | "enterprise".
+ * Returns "free" | "starter" | "basic" | "professional" | "enterprise".
  * Never throws — returns "free" on any unrecoverable error.
  */
 export async function getOrgPlan(orgId: number): Promise<string> {
-  // ── 1. Primary: subscriptions.plan_id ─────────────────────────────────────
+  // 1. Primary: subscriptions.plan_id
   try {
     const [sub] = await db
       .select({ planId: subscriptionsTable.planId })
@@ -53,17 +147,15 @@ export async function getOrgPlan(orgId: number): Promise<string> {
       .where(eq(subscriptionsTable.organizationId, orgId))
       .limit(1);
 
-    if (sub?.planId) {
-      return sub.planId;
-    }
+    if (sub?.planId) return sub.planId;
   } catch (err) {
     logger.error(
       { err, orgId },
-      "[plan-service] DB error reading subscriptions table — attempting legacy fallback",
+      "[plan-service] DB error reading subscriptions — attempting legacy fallback",
     );
   }
 
-  // ── 2. Legacy fallback: organizations.subscription_tier ──────────────────
+  // 2. Legacy fallback: organizations.subscription_tier
   try {
     const [org] = await db
       .select({ subscriptionTier: organizationsTable.subscriptionTier })
@@ -72,87 +164,42 @@ export async function getOrgPlan(orgId: number): Promise<string> {
       .limit(1);
 
     const tier = org?.subscriptionTier ?? "free";
-
     logger.warn(
       { orgId, fallbackTier: tier },
-      "[plan-service] SSOT FALLBACK: no subscriptions row found for org — " +
-      "using organizations.subscription_tier. " +
-      "Run the subscription backfill script to migrate this org to the subscriptions table.",
+      "[plan-service] SSOT FALLBACK: no subscriptions row — using organizations.subscription_tier",
     );
-
     return tier;
   } catch (err) {
     logger.error(
       { err, orgId },
-      "[plan-service] DB error reading organizations.subscription_tier — defaulting to 'free'",
+      "[plan-service] DB error reading subscription_tier — defaulting to 'free'",
     );
     return "free";
   }
 }
 
-// ─── ResolvedPlan ─────────────────────────────────────────────────────────────
-// Rich plan object returned by getResolvedPlan(). Shadow mode only.
-
-export type PlanSource = "subscriptions" | "org_fallback" | "default_free";
-
-export interface ResolvedPlan {
-  /** The plan ID resolved by getOrgPlan() — the current production source */
-  planId: string;
-  /** How the planId was resolved by getOrgPlan() */
-  source: PlanSource;
-
-  // ── Plan definition (from plans table, or null if plan not in DB yet) ──────
-  name: string | null;
-  priceAed: number | null;
-  /** Max users from plan — null = unlimited */
-  maxUsers: number | null;
-  /** Storage quota from plan in MB */
-  storageMb: number | null;
-  /** Max files per migration job (-1 = unlimited, 0 = disabled) */
-  migrationMaxFiles: number | null;
-  /** Rate limit RPM — null = unlimited */
-  rateLimitRpm: number | null;
-
-  // ── Per-org overrides (from org_feature_overrides / org_quota_overrides) ───
-  featureOverrides: Record<string, boolean>;
-  quotaOverrides: Record<string, number>;
-
-  // ── Effective values (plan defaults with overrides applied) ─────────────────
-  effectiveMaxUsers: number | null;
-  effectiveStorageMb: number | null;
-  effectiveMigrationMaxFiles: number | null;
-  effectiveRateLimitRpm: number | null;
-
-  // ── Diagnostics ──────────────────────────────────────────────────────────────
-  /** true if the plans table has no row for this planId */
-  planNotInCatalog: boolean;
-  /** true if plan derived from org_feature_overrides has active entries */
-  hasFeatureOverrides: boolean;
-  /** true if plan derived from org_quota_overrides has active entries */
-  hasQuotaOverrides: boolean;
-}
-
 // ─── getResolvedPlan ──────────────────────────────────────────────────────────
-// SHADOW MODE — not called by any route or middleware yet.
-// Reads the new plan catalog tables and logs mismatches.
+// SHADOW MODE (Phase 2.5) — called fire-and-forget, no enforcement.
 
 /**
- * Shadow-mode plan resolver. Returns a rich ResolvedPlan object combining:
+ * Shadow-mode plan resolver. Returns a rich ResolvedPlan with:
  *   - Current production plan ID (from getOrgPlan)
- *   - Plan definition from the plans catalog table
- *   - Per-org feature and quota overrides
+ *   - Full plan config (features + quotas) from the plans catalog
+ *   - Per-org overrides from org_feature_overrides / org_quota_overrides
+ *   - Mismatch report: org_config.modules vs plan defaults; legacy quotas vs catalog
  *
  * Logs:
- *   - WARN if plan ID is not in the plans catalog (catalog needs seeding)
- *   - INFO when overrides are active for this org
- *   - INFO on every call with full resolution context (for metrics)
+ *   INFO  — plan.config.features and plan.config.quotas on every call
+ *   WARN  — plan_not_in_catalog
+ *   WARN  — any module or quota mismatch found
+ *   INFO  — full resolution context (for metrics / dashboards)
  *
- * Never throws. Returns a safe default plan if anything fails.
+ * Never throws. Returns a safe default plan on any failure.
  */
 export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
   const now = new Date();
 
-  // ── Step 1: Get the current production plan ID (unchanged behavior) ────────
+  // ── Step 1: Resolve plan ID (same logic as getOrgPlan, no extra DB round-trip) ─
   let planId = "free";
   let source: PlanSource = "default_free";
 
@@ -179,7 +226,7 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
     logger.error({ err, orgId }, "[plan-service:shadow] error resolving plan ID — using free");
   }
 
-  // ── Step 2: Look up plan definition in the plans catalog ──────────────────
+  // ── Step 2: Look up plan definition in the plans catalog ───────────────────
   let planRow: typeof plansTable.$inferSelect | null = null;
   let planNotInCatalog = false;
 
@@ -195,8 +242,7 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
       planNotInCatalog = true;
       logger.warn(
         { orgId, planId, source },
-        "[plan-service:shadow] plan_not_in_catalog: planId not found in plans table — " +
-        "run seedPlans() to populate. Effective limits will be null until seeded.",
+        "[plan-service:shadow] plan_not_in_catalog: run seedPlans() to populate",
       );
     }
   } catch (err) {
@@ -212,19 +258,12 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
     const rows = await db
       .select()
       .from(orgFeatureOverridesTable)
-      .where(
-        and(
-          eq(orgFeatureOverridesTable.organizationId, orgId),
-          or(
-            isNull(orgFeatureOverridesTable.expiresAt),
-            gt(orgFeatureOverridesTable.expiresAt, now),
-          ),
-        ),
-      );
+      .where(and(
+        eq(orgFeatureOverridesTable.organizationId, orgId),
+        or(isNull(orgFeatureOverridesTable.expiresAt), gt(orgFeatureOverridesTable.expiresAt, now)),
+      ));
 
-    for (const row of rows) {
-      featureOverrides[row.featureKey] = row.isEnabled;
-    }
+    for (const row of rows) featureOverrides[row.featureKey] = row.isEnabled;
     hasFeatureOverrides = rows.length > 0;
 
     if (hasFeatureOverrides) {
@@ -245,19 +284,12 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
     const rows = await db
       .select()
       .from(orgQuotaOverridesTable)
-      .where(
-        and(
-          eq(orgQuotaOverridesTable.organizationId, orgId),
-          or(
-            isNull(orgQuotaOverridesTable.expiresAt),
-            gt(orgQuotaOverridesTable.expiresAt, now),
-          ),
-        ),
-      );
+      .where(and(
+        eq(orgQuotaOverridesTable.organizationId, orgId),
+        or(isNull(orgQuotaOverridesTable.expiresAt), gt(orgQuotaOverridesTable.expiresAt, now)),
+      ));
 
-    for (const row of rows) {
-      quotaOverrides[row.quotaKey] = row.quotaValue;
-    }
+    for (const row of rows) quotaOverrides[row.quotaKey] = row.quotaValue;
     hasQuotaOverrides = rows.length > 0;
 
     if (hasQuotaOverrides) {
@@ -270,13 +302,12 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
     logger.error({ err, orgId }, "[plan-service:shadow] DB error reading org_quota_overrides");
   }
 
-  // ── Step 5: Compute effective values (plan defaults + overrides) ──────────
+  // ── Step 5: Compute effective values (plan defaults + quota overrides) ─────
   const baseMaxUsers          = planRow?.maxUsers          ?? null;
   const baseStorageMb         = planRow?.storageMb         ?? null;
   const baseMigrationMaxFiles = planRow?.migrationMaxFiles ?? null;
   const baseRateLimitRpm      = planRow?.rateLimitRpm      ?? null;
 
-  // Override wins if present; -1 in quota means unlimited → map to null
   const applyQuota = (base: number | null, key: string): number | null => {
     if (!(key in quotaOverrides)) return base;
     const v = quotaOverrides[key];
@@ -288,21 +319,111 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
   const effectiveMigrationMaxFiles = applyQuota(baseMigrationMaxFiles, "migration_max_files");
   const effectiveRateLimitRpm      = applyQuota(baseRateLimitRpm, "rate_limit_rpm");
 
-  // ── Step 6: Emit resolution summary for metrics ───────────────────────────
+  // ── Step 6: Module mismatch — org_config.modules vs plan defaults ──────────
+  // Reads org_config to compare what the org has enabled vs what the plan says
+  // it should have.  Logs WARN on any mismatch.  Does NOT change org_config.
+  const moduleMismatches: ModuleMismatch[] = [];
+
+  try {
+    const [cfg] = await db
+      .select({ modules: orgConfigTable.modules })
+      .from(orgConfigTable)
+      .where(eq(orgConfigTable.organizationId, orgId))
+      .limit(1);
+
+    if (cfg?.modules) {
+      const orgModules = cfg.modules as Record<string, boolean>;
+      const planModules = getDefaultModulesForPlan(planId);
+
+      for (const [mod, planDefault] of Object.entries(planModules)) {
+        const orgValue = orgModules[mod] ?? true; // missing key = enabled (backfill policy)
+        if (orgValue !== planDefault) {
+          moduleMismatches.push({ module: mod, orgValue, planDefault });
+        }
+      }
+
+      if (moduleMismatches.length > 0) {
+        logger.warn(
+          { orgId, planId, mismatches: moduleMismatches },
+          "[plan-service:shadow] MODULE_MISMATCH: org_config.modules differs from plan defaults — " +
+          "org may have been manually configured, or plan changed after org_config was set. " +
+          "No enforcement change (shadow mode).",
+        );
+      }
+    }
+  } catch (err) {
+    logger.error({ err, orgId }, "[plan-service:shadow] DB error reading org_config for mismatch check");
+  }
+
+  // ── Step 7: Quota mismatch — legacy hardcoded values vs plans catalog ──────
+  // Compares what the running middleware actually uses (TIER_RPM, PLAN_LIMITS)
+  // with what the plans catalog row says.  Logs WARN on any mismatch.
+  const quotaMismatches: QuotaMismatch[] = [];
+
+  if (planRow) {
+    // Rate-limit RPM
+    const legacyRpm     = LEGACY_TIER_RPM[planId] ?? null;
+    const catalogRpm    = planRow.rateLimitRpm ?? null;
+    if (legacyRpm !== catalogRpm) {
+      quotaMismatches.push({
+        quota:        "rate_limit_rpm",
+        legacyValue:  legacyRpm,
+        catalogValue: catalogRpm,
+      });
+    }
+
+    // Migration max files (-1 in catalog = unlimited = Infinity in legacy)
+    const legacyMigration  = LEGACY_PLAN_LIMITS[planId] ?? 0;
+    const catalogMigration = planRow.migrationMaxFiles ?? 0;
+    // Normalise: Infinity in legacy = -1 in catalog
+    const legacyNorm = legacyMigration === Infinity ? -1 : legacyMigration;
+    if (legacyNorm !== catalogMigration) {
+      quotaMismatches.push({
+        quota:        "migration_max_files",
+        legacyValue:  legacyNorm,
+        catalogValue: catalogMigration,
+      });
+    }
+
+    if (quotaMismatches.length > 0) {
+      logger.warn(
+        { orgId, planId, mismatches: quotaMismatches },
+        "[plan-service:shadow] QUOTA_MISMATCH: legacy hardcoded limits differ from plans catalog — " +
+        "catalog values are authoritative in Phase 3+. No enforcement change (shadow mode).",
+      );
+    }
+  }
+
+  const mismatch: MismatchReport = {
+    modules:       moduleMismatches,
+    quotas:        quotaMismatches,
+    hasMismatches: moduleMismatches.length > 0 || quotaMismatches.length > 0,
+  };
+
+  // ── Step 8: Build config object and log resolution summary ─────────────────
+  const planFeatures = planRow
+    ? (Array.isArray(planRow.features) ? (planRow.features as string[]) : [])
+    : [];
+
+  const effectiveQuotas: PlanQuotas = {
+    maxUsers:          effectiveMaxUsers,
+    storageMb:         effectiveStorageMb,
+    migrationMaxFiles: effectiveMigrationMaxFiles,
+    rateLimitRpm:      effectiveRateLimitRpm,
+  };
+
+  // Log plan.config.features and plan.config.quotas on every call
   logger.info(
     {
       orgId,
       planId,
       source,
+      "plan.config.features": planFeatures,
+      "plan.config.quotas":   effectiveQuotas,
       planNotInCatalog,
       hasFeatureOverrides,
       hasQuotaOverrides,
-      effective: {
-        maxUsers:          effectiveMaxUsers,
-        storageMb:         effectiveStorageMb,
-        migrationMaxFiles: effectiveMigrationMaxFiles,
-        rateLimitRpm:      effectiveRateLimitRpm,
-      },
+      hasMismatches: mismatch.hasMismatches,
     },
     "[plan-service:shadow] resolved plan",
   );
@@ -310,8 +431,12 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
   return {
     planId,
     source,
-    name:               planRow?.name               ?? null,
-    priceAed:           planRow?.priceAed            ?? null,
+    name:               planRow?.name      ?? null,
+    priceAed:           planRow?.priceAed  ?? null,
+    config: {
+      features: planFeatures,
+      quotas:   effectiveQuotas,
+    },
     maxUsers:           baseMaxUsers,
     storageMb:          baseStorageMb,
     migrationMaxFiles:  baseMigrationMaxFiles,
@@ -322,6 +447,7 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
     effectiveStorageMb,
     effectiveMigrationMaxFiles,
     effectiveRateLimitRpm,
+    mismatch,
     planNotInCatalog,
     hasFeatureOverrides,
     hasQuotaOverrides,

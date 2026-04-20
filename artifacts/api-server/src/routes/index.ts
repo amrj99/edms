@@ -45,6 +45,7 @@ import projectGovernanceRouter from "./project-governance.js";
 import submissionChainsRouter from "./submission-chains.js";
 import { requireModule } from "../middlewares/require-module.js";
 import { requireOrg } from "../middlewares/require-org.js";
+import { shadowPlanMiddleware } from "../middlewares/shadow-plan-middleware.js";
 
 const router: IRouter = Router();
 
@@ -75,6 +76,12 @@ router.use(tenantRateLimit);
 // system_owner intentionally has no org — they span all tenants by design.
 // Unauthenticated requests pass through and are caught by requireAuth in each route.
 router.use(requireOrg);
+
+// ── Phase 2.5 shadow plan integration ─────────────────────────────────────────
+// Fire-and-forget: calls getResolvedPlan() once per org per 5 minutes to emit
+// plan.config.features, plan.config.quotas, and any module/quota mismatches.
+// Always non-blocking (next() called before any async work). No enforcement.
+router.use(shadowPlanMiddleware);
 
 router.use("/organizations", organizationsRouter);
 router.use("/users", usersRouter);
