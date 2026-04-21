@@ -1303,8 +1303,29 @@ router.get("/:id/departments", requireAuth, async (req, res) => {
 // POST /api/projects/:projectId/documents/:id/departments  { departmentId }
 router.post("/:id/departments", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
+
+  // Multi-tenant guard: department must belong to the same org as the project
+  const [project] = await db
+    .select({ organizationId: projectsTable.organizationId })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId))
+    .limit(1);
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  const [dept] = await db
+    .select({ organizationId: departmentsTable.organizationId })
+    .from(departmentsTable)
+    .where(eq(departmentsTable.id, parseInt(departmentId)))
+    .limit(1);
+  if (!dept) { res.status(404).json({ error: "Department not found" }); return; }
+
+  if (dept.organizationId !== project.organizationId) {
+    res.status(403).json({ error: "Department does not belong to this document's organization" }); return;
+  }
+
   const [row] = await db
     .insert(documentDepartmentsTable)
     .values({ documentId: id, departmentId: parseInt(departmentId) })

@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { shadowEvaluate } from "../lib/access-resolver.js";
 
 const router = Router();
 
@@ -165,6 +166,11 @@ router.get("/:id", requireAuth, async (req, res) => {
   // Org boundary check (system_owner bypasses all below; org admins are still org-scoped)
   if (!isSystemOwner(user)) {
     if (result.project?.organizationId !== user.organizationId) {
+      // Shadow resolver — system denied (cross-org boundary)
+      void shadowEvaluate(
+        { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null },
+        false,
+      );
       res.status(403).json({ error: "Forbidden" }); return;
     }
 
@@ -182,10 +188,21 @@ router.get("/:id", requireAuth, async (req, res) => {
         .limit(1);
 
       if (!membership) {
+        // Shadow resolver — system denied (not a project member)
+        void shadowEvaluate(
+          { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId },
+          false,
+        );
         res.status(403).json({ error: "Forbidden: not a member of this project" }); return;
       }
     }
   }
+
+  // Shadow resolver — system allowed this access
+  void shadowEvaluate(
+    { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null },
+    true,
+  );
 
   // Fetch attached files
   const files = await db.select({ file: documentFilesTable, uploader: usersTable })
