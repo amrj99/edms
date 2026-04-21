@@ -74,7 +74,13 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
     -   **Cross-org resolver gap closed:** `ShadowInput` now carries `userOrgId` + `documentOrgId`. Rule 3 (`admin_bypass`) skips when org IDs differ — resolver now correctly agrees with the system's cross-org 403. Verified: `diverges=false` + `rulePath=project_member_gate` for cross-org admin requests.
     -   **Enforcement gate infrastructure added:** New `resolveAndEnforce()` function in `access-resolver.ts` combines shadow logging + optional enforcement in one synchronous call. Replaces fire-and-forget `shadowEvaluate` at single-doc "system-allowed" call sites.
     -   **Enforcement flag:** `PHASE_D_ENFORCE_DEPT=true` (env var, defaults to `false`) activates department-based enforcement for `implicit_deny` and `explicit_deny` rule paths only. Confidential enforcement is a separate flag, not yet wired.
-    -   **Activation instructions:** To enable department enforcement → set `PHASE_D_ENFORCE_DEPT=true` in environment. No code changes needed. List-endpoint filtering (batch enforcement) is Phase D step 2b and not yet wired.
+    -   **Activation instructions:** To enable department enforcement → set `PHASE_D_ENFORCE_DEPT=true` in environment. No code changes needed. Both single-doc and list enforcement are fully wired.
+    -   **List/batch enforcement wired:** New `resolveListAndEnforce()` function in `access-resolver.ts` handles both list routes. Runs on ALL filtered docs BEFORE pagination so `total` counts are correct after denied docs are removed. When flag is off: fires shadow logging async, returns empty `deniedDocIds` set immediately (zero latency). When flag is on: runs 7-batch-query evaluation synchronously, filters denied docs, corrects counts, logs.
+    -   **Routes with full enforcement coverage (both single-doc and list):**
+        -   `GET /api/projects/:projectId/documents` — list, batch filtering ✅
+        -   `GET /api/projects/:projectId/documents/:id` — single doc ✅
+        -   `GET /api/documents` — global list, batch filtering ✅
+        -   `GET /api/documents/:id` — global single doc ✅
     -   **Confidential allowlist audit:** 0 documents currently have `is_confidential=true` in production. The allowlist management UI must be built and all confidential documents must have their allowlists reviewed before confidential enforcement is enabled.
     -   **Confirmed policies:** `project_manager` does NOT bypass confidential; admin does NOT auto-bypass confidential; `system_owner` is the only global bypass. No auto-allowlist for any role.
 

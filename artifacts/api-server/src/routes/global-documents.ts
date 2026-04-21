@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { shadowEvaluate, shadowEvaluateList, resolveAndEnforce } from "../lib/access-resolver.js";
+import { shadowEvaluate, resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 
 const router = Router();
 
@@ -121,6 +121,24 @@ router.get("/", requireAuth, async (req, res) => {
     );
   }
 
+  // Department enforcement gate — must run on ALL filtered docs before pagination so that
+  // total counts are correct after denied documents are removed.
+  // When PHASE_D_ENFORCE_DEPT=false (default): fires shadow logging async, returns no denials.
+  // When PHASE_D_ENFORCE_DEPT=true: awaits batch evaluation, returns denied doc IDs to filter.
+  const { deniedDocIds } = await resolveListAndEnforce({
+    userId:    user.id,
+    userRole:  user.role,
+    documents: filtered.map(({ doc }) => ({
+      id:             doc.id,
+      projectId:      doc.projectId,
+      isConfidential: doc.isConfidential ?? false,
+    })),
+    endpoint: "GET /api/documents",
+  });
+  if (deniedDocIds.size > 0) {
+    filtered = filtered.filter(d => !deniedDocIds.has(d.doc.id));
+  }
+
   const total = filtered.length;
   const totalPages = Math.ceil(total / lim);
   const paginated = filtered.slice((pg - 1) * lim, pg * lim);
@@ -138,18 +156,6 @@ router.get("/", requireAuth, async (req, res) => {
     totalPages,
     limit: lim,
     hasMore: pg < totalPages,
-  });
-
-  // Shadow resolver — evaluate visibility of every returned document
-  void shadowEvaluateList({
-    userId:    user.id,
-    userRole:  user.role,
-    documents: paginated.map(({ doc }) => ({
-      id:             doc.id,
-      projectId:      doc.projectId,
-      isConfidential: doc.isConfidential ?? false,
-    })),
-    endpoint: "GET /api/documents",
   });
 });
 

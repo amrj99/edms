@@ -579,7 +579,7 @@ export async function resolveAndEnforce(
   }
 }
 
-// ─── Public API — list (batched, fire-and-forget) ────────────────────────────
+// ─── Private: shared batch evaluation core ───────────────────────────────────
 
 interface ListDoc {
   id:             number;
@@ -587,11 +587,202 @@ interface ListDoc {
   isConfidential: boolean | null;
 }
 
+interface BatchEvalResult {
+  userDeptIds:        number[];
+  decisions:          Map<number, AccessDecision>;
+  toInsert:           typeof accessShadowLogTable.$inferInsert[];
+  resolverAllowCount: number;
+  resolverDenyCount:  number;
+  divergeDocIds:      number[];
+}
+
 /**
- * Batch shadow evaluation for list endpoints.
+ * Core batch evaluation engine.
  *
  * Uses 7 batch queries regardless of list size (no N×7 problem).
- * Logs a per-request summary, persists individual divergences, samples agreements.
+ * Returns raw decisions and pre-built log rows for callers to persist and log.
+ * Does NOT write to the DB — callers are responsible for persistence.
+ */
+async function runBatchEval(opts: {
+  userId:    number;
+  userRole:  string;
+  documents: ListDoc[];
+}): Promise<BatchEvalResult> {
+  const { userId, userRole, documents } = opts;
+  const docIds = documents.map(d => d.id);
+  const projectIds = [...new Set(documents.map(d => d.projectId).filter((p): p is number => p !== null))];
+
+  // ── Batch DB fetches ─────────────────────────────────────────────────────
+
+  const [
+    userDepts,
+    projectMemberships,
+    allDocDepts,
+    allAccessRules,
+    allConfAllowlist,
+  ] = await Promise.all([
+    // User's department memberships (same for all docs)
+    db.select({ departmentId: userDepartmentsTable.departmentId })
+      .from(userDepartmentsTable)
+      .where(eq(userDepartmentsTable.userId, userId)),
+
+    // User's project-specific roles for all relevant projects
+    projectIds.length
+      ? db.select({
+            projectId: projectMembersTable.projectId,
+            role:      projectMembersTable.role,
+          })
+          .from(projectMembersTable)
+          .where(and(
+            eq(projectMembersTable.userId, userId),
+            inArray(projectMembersTable.projectId, projectIds),
+          ))
+      : Promise.resolve([] as { projectId: number; role: string }[]),
+
+    // Department assignments for all docs
+    db.select({
+          documentId:   documentDepartmentsTable.documentId,
+          departmentId: documentDepartmentsTable.departmentId,
+        })
+      .from(documentDepartmentsTable)
+      .where(inArray(documentDepartmentsTable.documentId, docIds)),
+
+    // Access rules for all docs
+    db.select({
+          documentId:   documentAccessRulesTable.documentId,
+          departmentId: documentAccessRulesTable.departmentId,
+          ruleType:     documentAccessRulesTable.ruleType,
+        })
+      .from(documentAccessRulesTable)
+      .where(inArray(documentAccessRulesTable.documentId, docIds)),
+
+    // Confidential allowlist for all docs
+    db.select({
+          documentId:   documentConfidentialAccessTable.documentId,
+          userId:       documentConfidentialAccessTable.userId,
+          departmentId: documentConfidentialAccessTable.departmentId,
+          expiresAt:    documentConfidentialAccessTable.expiresAt,
+        })
+      .from(documentConfidentialAccessTable)
+      .where(inArray(documentConfidentialAccessTable.documentId, docIds)),
+  ]);
+
+  // Batch workflow grants — two queries covering all docs
+  const [txGrants, wfGrants] = await Promise.all([
+    db.select({ documentId: transmittalItemsTable.documentId })
+      .from(transmittalItemsTable)
+      .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+      .where(and(
+        inArray(transmittalItemsTable.documentId, docIds),
+        eq(transmittalsTable.toUserId, userId),
+        inArray(transmittalsTable.status, [...TRANSMITTAL_ACTIVE]),
+      )),
+
+    db.select({ documentId: wfInstancesTable.documentId })
+      .from(wfInstancesTable)
+      .innerJoin(
+        wfTemplateStagesTable,
+        eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id),
+      )
+      .where(and(
+        inArray(wfInstancesTable.documentId, docIds),
+        eq(wfInstancesTable.status, "active"),
+        eq(wfTemplateStagesTable.responsibleUserId, userId),
+      )),
+  ]);
+
+  // ── Build lookup maps ────────────────────────────────────────────────────
+
+  const userDeptIds = userDepts.map(r => r.departmentId);
+  const memberRoleByProject = new Map(projectMemberships.map(r => [r.projectId, r.role]));
+
+  const docDeptsMap   = new Map<number, number[]>();
+  const accessRuleMap = new Map<number, Array<{ departmentId: number; ruleType: string }>>();
+  const confMap       = new Map<number, Array<{ userId: number | null; departmentId: number | null }>>();
+  const wfGrantSet    = new Set<number>();
+
+  for (const r of allDocDepts) {
+    if (!docDeptsMap.has(r.documentId)) docDeptsMap.set(r.documentId, []);
+    docDeptsMap.get(r.documentId)!.push(r.departmentId);
+  }
+  for (const r of allAccessRules) {
+    if (!accessRuleMap.has(r.documentId)) accessRuleMap.set(r.documentId, []);
+    accessRuleMap.get(r.documentId)!.push({ departmentId: r.departmentId, ruleType: r.ruleType });
+  }
+  const now = new Date();
+  for (const r of allConfAllowlist) {
+    if (r.expiresAt && new Date(r.expiresAt as any) <= now) continue;
+    if (!confMap.has(r.documentId)) confMap.set(r.documentId, []);
+    confMap.get(r.documentId)!.push({ userId: r.userId, departmentId: r.departmentId });
+  }
+  for (const r of txGrants)  wfGrantSet.add(r.documentId!);
+  for (const r of wfGrants)  wfGrantSet.add(r.documentId!);
+
+  // ── Evaluate each document ───────────────────────────────────────────────
+
+  const decisions = new Map<number, AccessDecision>();
+  let resolverAllowCount = 0;
+  let resolverDenyCount  = 0;
+  const divergeDocIds: number[] = [];
+  const toInsert: typeof accessShadowLogTable.$inferInsert[] = [];
+
+  for (const doc of documents) {
+    const ctx: ResolveContext = {
+      userId,
+      userRole,
+      projectMemberRole:     doc.projectId ? (memberRoleByProject.get(doc.projectId) ?? null) : null,
+      documentId:            doc.id,
+      projectId:             doc.projectId,
+      isConfidential:        doc.isConfidential ?? false,
+      userDepartmentIds:     userDeptIds,
+      documentDepartmentIds: docDeptsMap.get(doc.id) ?? [],
+      accessRules:           accessRuleMap.get(doc.id) ?? [],
+      confidentialAllowlist: confMap.get(doc.id) ?? [],
+      hasWorkflowGrant:      wfGrantSet.has(doc.id),
+      // Lists are already org-scoped by the route query; org check not needed here.
+      userOrganizationId:     null,
+      documentOrganizationId: null,
+    };
+
+    const decision = evaluateAccess(ctx);
+    decisions.set(doc.id, decision);
+    if (decision.allowed) resolverAllowCount++; else resolverDenyCount++;
+
+    // System always allowed everything in the list response
+    const diverges = !decision.allowed;  // resolver would deny something system shows
+    if (diverges) divergeDocIds.push(doc.id);
+
+    if (diverges || Math.random() <= SAMPLE_RATE) {
+      toInsert.push({
+        documentId:      doc.id,
+        userId,
+        userRole,
+        projectId:       doc.projectId,
+        systemAllowed:   true,
+        resolverAllowed: decision.allowed,
+        resolverReasons: decision.reasons,
+        rulePath:        decision.rulePath,
+        diverges,
+        userDeptIds:     userDeptIds,
+        docDeptIds:      ctx.documentDepartmentIds,
+        hasConfidential: ctx.isConfidential,
+        hasDenyRule:     ctx.accessRules.some(r => r.ruleType === "deny"),
+        hasWorkflowGrant: ctx.hasWorkflowGrant,
+      });
+    }
+  }
+
+  return { userDeptIds, decisions, toInsert, resolverAllowCount, resolverDenyCount, divergeDocIds };
+}
+
+// ─── Public API — list (shadow, fire-and-forget) ──────────────────────────────
+
+/**
+ * Batch shadow evaluation for list endpoints — shadow mode only, never blocks.
+ *
+ * Call fire-and-forget: void shadowEvaluateList(...)
+ * Kept for backward compatibility; resolveListAndEnforce() supersedes it for
+ * routes that need both shadow logging and enforcement.
  */
 export async function shadowEvaluateList(opts: {
   userId:    number;
@@ -602,188 +793,28 @@ export async function shadowEvaluateList(opts: {
   if (!opts.documents.length) return;
 
   try {
-    const { userId, userRole, documents } = opts;
-    const docIds = documents.map(d => d.id);
-    const projectIds = [...new Set(documents.map(d => d.projectId).filter((p): p is number => p !== null))];
+    const result = await runBatchEval({
+      userId:    opts.userId,
+      userRole:  opts.userRole,
+      documents: opts.documents,
+    });
 
-    // ── Batch DB fetches ───────────────────────────────────────────────────
-
-    const [
-      userDepts,
-      projectMemberships,
-      allDocDepts,
-      allAccessRules,
-      allConfAllowlist,
-    ] = await Promise.all([
-      // User's department memberships (same for all docs)
-      db.select({ departmentId: userDepartmentsTable.departmentId })
-        .from(userDepartmentsTable)
-        .where(eq(userDepartmentsTable.userId, userId)),
-
-      // User's project-specific roles for all relevant projects
-      projectIds.length
-        ? db.select({
-              projectId: projectMembersTable.projectId,
-              role:      projectMembersTable.role,
-            })
-            .from(projectMembersTable)
-            .where(and(
-              eq(projectMembersTable.userId, userId),
-              inArray(projectMembersTable.projectId, projectIds),
-            ))
-        : Promise.resolve([] as { projectId: number; role: string }[]),
-
-      // Department assignments for all docs
-      db.select({
-            documentId:   documentDepartmentsTable.documentId,
-            departmentId: documentDepartmentsTable.departmentId,
-          })
-        .from(documentDepartmentsTable)
-        .where(inArray(documentDepartmentsTable.documentId, docIds)),
-
-      // Access rules for all docs
-      db.select({
-            documentId:   documentAccessRulesTable.documentId,
-            departmentId: documentAccessRulesTable.departmentId,
-            ruleType:     documentAccessRulesTable.ruleType,
-          })
-        .from(documentAccessRulesTable)
-        .where(inArray(documentAccessRulesTable.documentId, docIds)),
-
-      // Confidential allowlist for all docs
-      db.select({
-            documentId:   documentConfidentialAccessTable.documentId,
-            userId:       documentConfidentialAccessTable.userId,
-            departmentId: documentConfidentialAccessTable.departmentId,
-            expiresAt:    documentConfidentialAccessTable.expiresAt,
-          })
-        .from(documentConfidentialAccessTable)
-        .where(inArray(documentConfidentialAccessTable.documentId, docIds)),
-    ]);
-
-    // Batch workflow grants — two queries covering all docs
-    const [txGrants, wfGrants] = await Promise.all([
-      db.select({ documentId: transmittalItemsTable.documentId })
-        .from(transmittalItemsTable)
-        .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
-        .where(and(
-          inArray(transmittalItemsTable.documentId, docIds),
-          eq(transmittalsTable.toUserId, userId),
-          inArray(transmittalsTable.status, [...TRANSMITTAL_ACTIVE]),
-        )),
-
-      db.select({ documentId: wfInstancesTable.documentId })
-        .from(wfInstancesTable)
-        .innerJoin(
-          wfTemplateStagesTable,
-          eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id),
-        )
-        .where(and(
-          inArray(wfInstancesTable.documentId, docIds),
-          eq(wfInstancesTable.status, "active"),
-          eq(wfTemplateStagesTable.responsibleUserId, userId),
-        )),
-    ]);
-
-    // ── Build lookup maps ─────────────────────────────────────────────────
-
-    const userDeptIds = userDepts.map(r => r.departmentId);
-    const memberRoleByProject = new Map(projectMemberships.map(r => [r.projectId, r.role]));
-
-    const docDeptsMap   = new Map<number, number[]>();
-    const accessRuleMap = new Map<number, Array<{ departmentId: number; ruleType: string }>>();
-    const confMap       = new Map<number, Array<{ userId: number | null; departmentId: number | null }>>();
-    const wfGrantSet    = new Set<number>();
-
-    for (const r of allDocDepts) {
-      if (!docDeptsMap.has(r.documentId)) docDeptsMap.set(r.documentId, []);
-      docDeptsMap.get(r.documentId)!.push(r.departmentId);
-    }
-    for (const r of allAccessRules) {
-      if (!accessRuleMap.has(r.documentId)) accessRuleMap.set(r.documentId, []);
-      accessRuleMap.get(r.documentId)!.push({ departmentId: r.departmentId, ruleType: r.ruleType });
-    }
-    const now = new Date();
-    for (const r of allConfAllowlist) {
-      if (r.expiresAt && new Date(r.expiresAt as any) <= now) continue;
-      if (!confMap.has(r.documentId)) confMap.set(r.documentId, []);
-      confMap.get(r.documentId)!.push({ userId: r.userId, departmentId: r.departmentId });
-    }
-    for (const r of txGrants)  wfGrantSet.add(r.documentId!);
-    for (const r of wfGrants)  wfGrantSet.add(r.documentId!);
-
-    // ── Evaluate each document ────────────────────────────────────────────
-
-    let resolverAllowCount = 0;
-    let resolverDenyCount  = 0;
-    const divergeDocIds: number[] = [];
-    const toInsert: typeof accessShadowLogTable.$inferInsert[] = [];
-
-    for (const doc of documents) {
-      const ctx: ResolveContext = {
-        userId,
-        userRole,
-        projectMemberRole:     doc.projectId ? (memberRoleByProject.get(doc.projectId) ?? null) : null,
-        documentId:            doc.id,
-        projectId:             doc.projectId,
-        isConfidential:        doc.isConfidential ?? false,
-        userDepartmentIds:     userDeptIds,
-        documentDepartmentIds: docDeptsMap.get(doc.id) ?? [],
-        accessRules:           accessRuleMap.get(doc.id) ?? [],
-        confidentialAllowlist: confMap.get(doc.id) ?? [],
-        hasWorkflowGrant:      wfGrantSet.has(doc.id),
-        // Lists are already org-scoped by the route query; org check not needed here.
-        userOrganizationId:     null,
-        documentOrganizationId: null,
-      };
-
-      const decision = evaluateAccess(ctx);
-      if (decision.allowed) resolverAllowCount++; else resolverDenyCount++;
-
-      // System always allowed everything in the list response
-      const systemAllowed = true;
-      const diverges = !decision.allowed;  // resolver would deny something system shows
-
-      if (diverges) divergeDocIds.push(doc.id);
-
-      if (diverges || Math.random() <= SAMPLE_RATE) {
-        toInsert.push({
-          documentId:      doc.id,
-          userId,
-          userRole,
-          projectId:       doc.projectId,
-          systemAllowed,
-          resolverAllowed: decision.allowed,
-          resolverReasons: decision.reasons,
-          rulePath:        decision.rulePath,
-          diverges,
-          userDeptIds:     userDeptIds,
-          docDeptIds:      ctx.documentDepartmentIds,
-          hasConfidential: ctx.isConfidential,
-          hasDenyRule:     ctx.accessRules.some(r => r.ruleType === "deny"),
-          hasWorkflowGrant: ctx.hasWorkflowGrant,
-        });
-      }
+    if (result.toInsert.length) {
+      await db.insert(accessShadowLogTable).values(result.toInsert);
     }
 
-    // ── Batch persist ─────────────────────────────────────────────────────
-    if (toInsert.length) {
-      await db.insert(accessShadowLogTable).values(toInsert);
-    }
-
-    // ── Summary log ───────────────────────────────────────────────────────
-    const logLevel = divergeDocIds.length > 0 ? "warn" : "info";
+    const logLevel = result.divergeDocIds.length > 0 ? "warn" : "info";
     logger[logLevel]({
       phase:              "shadow_access_resolver_v2_list",
       endpoint:           opts.endpoint,
-      userId,
-      userRole,
-      totalDocs:          documents.length,
-      resolverAllowCount,
-      resolverDenyCount,
-      divergeCount:       divergeDocIds.length,
-      divergeDocIds,
-    }, divergeDocIds.length > 0
+      userId:             opts.userId,
+      userRole:           opts.userRole,
+      totalDocs:          opts.documents.length,
+      resolverAllowCount: result.resolverAllowCount,
+      resolverDenyCount:  result.resolverDenyCount,
+      divergeCount:       result.divergeDocIds.length,
+      divergeDocIds:      result.divergeDocIds,
+    }, result.divergeDocIds.length > 0
       ? "[shadow-resolver] LIST — divergences found"
       : "[shadow-resolver] LIST — all in agreement",
     );
@@ -792,5 +823,114 @@ export async function shadowEvaluateList(opts: {
       { err, userId: opts.userId, endpoint: opts.endpoint },
       "[shadow-resolver] list evaluation error (suppressed)",
     );
+  }
+}
+
+// ─── Public API — list with enforcement gate ──────────────────────────────────
+
+/**
+ * Unified resolver for list endpoints that need both shadow logging and the
+ * ability to enforce department-based access decisions.
+ *
+ * Must be called on the FULL filtered list BEFORE pagination so that total counts
+ * are correct after denied documents are removed.
+ *
+ * Behaviour:
+ *   PHASE_D_ENFORCE_DEPT=false (default):
+ *     - Fires shadowEvaluateList asynchronously (fire-and-forget)
+ *     - Returns { deniedDocIds: empty Set } immediately — zero latency cost
+ *     - No change to any response
+ *
+ *   PHASE_D_ENFORCE_DEPT=true:
+ *     - Runs batch evaluation synchronously (7 batch queries regardless of list size)
+ *     - Persists shadow log entries
+ *     - Returns { deniedDocIds } — the Set of document IDs the resolver would deny
+ *       via implicit_deny or explicit_deny paths
+ *     - Caller filters these IDs from the response and recalculates counts
+ *
+ * Fail-open guarantee: any internal error returns { deniedDocIds: empty Set }.
+ * Enforcement never causes a 500.
+ *
+ * Route pattern:
+ *   const { deniedDocIds } = await resolveListAndEnforce({
+ *     userId, userRole, documents: filtered.map(d => ({...})), endpoint: "...",
+ *   });
+ *   if (deniedDocIds.size > 0) filtered = filtered.filter(d => !deniedDocIds.has(d.doc.id));
+ *   const totalCount = filtered.length;
+ *   const paginated  = filtered.slice(...);
+ *   res.json({ documents: paginated, total: totalCount, ... });
+ */
+export async function resolveListAndEnforce(opts: {
+  userId:    number;
+  userRole:  string;
+  documents: ListDoc[];
+  endpoint:  string;
+}): Promise<{ deniedDocIds: Set<number> }> {
+  if (!opts.documents.length) return { deniedDocIds: new Set() };
+
+  // Shadow-only mode: fire-and-forget, return immediately with no denials
+  if (!ENFORCE_DEPT) {
+    void shadowEvaluateList(opts);
+    return { deniedDocIds: new Set() };
+  }
+
+  // Enforcement mode: run batch evaluation synchronously
+  try {
+    const result = await runBatchEval({
+      userId:    opts.userId,
+      userRole:  opts.userRole,
+      documents: opts.documents,
+    });
+
+    if (result.toInsert.length) {
+      await db.insert(accessShadowLogTable).values(result.toInsert);
+    }
+
+    // Compute the enforced deny set — only DEPT_ENFORCED_DENY_RULES paths are blocked
+    const deniedDocIds = new Set<number>();
+    for (const doc of opts.documents) {
+      const decision = result.decisions.get(doc.id);
+      if (decision && !decision.allowed && DEPT_ENFORCED_DENY_RULES.has(decision.rulePath)) {
+        deniedDocIds.add(doc.id);
+      }
+    }
+
+    const logLevel = result.divergeDocIds.length > 0 ? "warn" : "info";
+    logger[logLevel]({
+      phase:              "shadow_access_resolver_v2_list",
+      endpoint:           opts.endpoint,
+      userId:             opts.userId,
+      userRole:           opts.userRole,
+      totalDocs:          opts.documents.length,
+      resolverAllowCount: result.resolverAllowCount,
+      resolverDenyCount:  result.resolverDenyCount,
+      divergeCount:       result.divergeDocIds.length,
+      divergeDocIds:      result.divergeDocIds,
+      enforcementEnabled: true,
+      enforcedDenyCount:  deniedDocIds.size,
+    }, result.divergeDocIds.length > 0
+      ? "[access-resolver] LIST — divergences found (enforcement active)"
+      : "[access-resolver] LIST — all in agreement (enforcement active)",
+    );
+
+    if (deniedDocIds.size > 0) {
+      logger.warn(
+        {
+          userId:       opts.userId,
+          endpoint:     opts.endpoint,
+          deniedCount:  deniedDocIds.size,
+          deniedDocIds: [...deniedDocIds],
+        },
+        "[access-resolver] LIST ENFORCEMENT — filtering denied documents from response",
+      );
+    }
+
+    return { deniedDocIds };
+  } catch (err) {
+    logger.warn(
+      { err, userId: opts.userId, endpoint: opts.endpoint },
+      "[access-resolver] list enforcement error (suppressed — returning no denials)",
+    );
+    return { deniedDocIds: new Set() };  // fail open
   }
 }
