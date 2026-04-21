@@ -18,27 +18,34 @@ import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
-import { shadowEvaluate, shadowEvaluateList } from "../lib/access-resolver.js";
+import { shadowEvaluate, shadowEvaluateList, resolveAndEnforce } from "../lib/access-resolver.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
 const router = Router({ mergeParams: true });
 
 // ─── Project access helper ─────────────────────────────────────────────────
-// Returns true if the user may access documents in the given project.
+// Returns { allowed, projectOrgId }.
 // SysAdmins bypass all checks. Otherwise: org-owner match OR explicit project membership.
-async function canAccessProject(userId: number, userOrgId: number | undefined, projectId: number, sysAdmin: boolean): Promise<boolean> {
-  if (sysAdmin) return true;
+// projectOrgId is returned so callers can pass it to the access resolver for org-boundary checks.
+async function canAccessProject(
+  userId: number,
+  userOrgId: number | undefined,
+  projectId: number,
+  sysAdmin: boolean,
+): Promise<{ allowed: boolean; projectOrgId: number | null }> {
+  if (sysAdmin) return { allowed: true, projectOrgId: null };
   const [project] = await db.select({ organizationId: projectsTable.organizationId })
     .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-  if (!project) return false;
-  if (project.organizationId === userOrgId) return true;
+  if (!project) return { allowed: false, projectOrgId: null };
+  const projectOrgId = project.organizationId ?? null;
+  if (project.organizationId === userOrgId) return { allowed: true, projectOrgId };
   // Cross-org: check explicit project membership
   const [member] = await db.select({ userId: projectMembersTable.userId })
     .from(projectMembersTable)
     .where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)))
     .limit(1);
-  return !!member;
+  return { allowed: !!member, projectOrgId };
 }
 
 // Folders
@@ -138,7 +145,8 @@ router.post("/folders/copy-from", requireAuth, async (req, res) => {
 router.get("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const caller = req.user!;
-  if (!await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller))) {
+  const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller));
+  if (!projectAccessAllowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
   const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy, direction } = req.query;
@@ -451,7 +459,10 @@ router.get("/:id", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const id = parseInt(req.params.id);
   const caller = req.user!;
-  if (!await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller))) {
+  const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
+    caller.id, caller.organizationId, projectId, isSysAdmin(caller),
+  );
+  if (!projectAccessAllowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
 
@@ -477,6 +488,21 @@ router.get("/:id", requireAuth, async (req, res) => {
     .limit(1);
 
   const { doc, createdBy, folder } = docs[0];
+
+  // Resolver + enforcement gate — system allowed this project-scoped access.
+  // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
+  // MUST be awaited before res.json() so enforcement can block if flag is enabled.
+  const { enforcedDeny } = await resolveAndEnforce(
+    {
+      userId: caller.id, userRole: caller.role, documentId: id, projectId,
+      isConfidential: doc.isConfidential ?? false,
+      userOrgId:     caller.organizationId,
+      documentOrgId: projectOrgId ?? undefined,
+    },
+    true,
+  );
+  if (enforcedDeny) { res.status(403).json({ error: "Forbidden" }); return; }
+
   res.json({
     ...doc,
     createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
@@ -484,13 +510,6 @@ router.get("/:id", requireAuth, async (req, res) => {
     workflowStatus: wfInstances[0]?.stage?.name ?? null,
     workflowInstanceId: wfInstances[0]?.wf?.id ?? null,
   });
-
-  // Shadow resolver — system allowed this project-scoped access
-  void shadowEvaluate(
-    { userId: caller.id, userRole: caller.role, documentId: id, projectId,
-      isConfidential: doc.isConfidential ?? false },
-    true,
-  );
 });
 
 router.put("/:id", requireAuth, async (req, res) => {

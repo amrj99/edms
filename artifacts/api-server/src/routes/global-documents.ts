@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { shadowEvaluate, shadowEvaluateList } from "../lib/access-resolver.js";
+import { shadowEvaluate, shadowEvaluateList, resolveAndEnforce } from "../lib/access-resolver.js";
 
 const router = Router();
 
@@ -178,10 +178,16 @@ router.get("/:id", requireAuth, async (req, res) => {
   // Org boundary check (system_owner bypasses all below; org admins are still org-scoped)
   if (!isSystemOwner(user)) {
     if (result.project?.organizationId !== user.organizationId) {
-      // Shadow resolver — system denied (cross-org boundary)
+      // Shadow resolver — system denied (cross-org boundary). Pass org IDs so resolver
+      // can now correctly agree: cross-org admin_bypass no longer fires.
       void shadowEvaluate(
-        { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null,
-          isConfidential: result.doc.isConfidential ?? false },
+        {
+          userId: user.id, userRole: user.role, documentId: id,
+          projectId: result.doc.projectId ?? null,
+          isConfidential: result.doc.isConfidential ?? false,
+          userOrgId:     user.organizationId,
+          documentOrgId: result.project?.organizationId,
+        },
         false,
       );
       res.status(403).json({ error: "Forbidden" }); return;
@@ -203,8 +209,13 @@ router.get("/:id", requireAuth, async (req, res) => {
       if (!membership) {
         // Shadow resolver — system denied (not a project member)
         void shadowEvaluate(
-          { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId,
-            isConfidential: result.doc.isConfidential ?? false },
+          {
+            userId: user.id, userRole: user.role, documentId: id,
+            projectId: result.doc.projectId,
+            isConfidential: result.doc.isConfidential ?? false,
+            userOrgId:     user.organizationId,
+            documentOrgId: result.project?.organizationId,
+          },
           false,
         );
         res.status(403).json({ error: "Forbidden: not a member of this project" }); return;
@@ -212,12 +223,19 @@ router.get("/:id", requireAuth, async (req, res) => {
     }
   }
 
-  // Shadow resolver — system allowed this access
-  void shadowEvaluate(
-    { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null,
-      isConfidential: result.doc.isConfidential ?? false },
+  // Resolver + enforcement gate — system allowed this access.
+  // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
+  const { enforcedDeny } = await resolveAndEnforce(
+    {
+      userId: user.id, userRole: user.role, documentId: id,
+      projectId: result.doc.projectId ?? null,
+      isConfidential: result.doc.isConfidential ?? false,
+      userOrgId:     user.organizationId,
+      documentOrgId: result.project?.organizationId,
+    },
     true,
   );
+  if (enforcedDeny) { res.status(403).json({ error: "Forbidden" }); return; }
 
   // Fetch attached files
   const files = await db.select({ file: documentFilesTable, uploader: usersTable })

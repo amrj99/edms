@@ -52,6 +52,21 @@ import { logger } from "./logger.js";
 // Non-diverging evaluations are sampled at this rate to keep the log table lean.
 const SAMPLE_RATE = parseFloat(process.env["ACCESS_SHADOW_SAMPLE_RATE"] ?? "0.05");
 
+// ─── Enforcement flags ────────────────────────────────────────────────────────
+// Phase D Step 2: department-based visibility enforcement.
+// When true, resolveAndEnforce() will return { enforcedDeny: true } for
+// implicit_deny and explicit_deny rule paths, causing the route to return 403.
+// Confidential enforcement is a separate flag (Phase D Step 3 — not yet wired).
+//
+// To enable department enforcement:  PHASE_D_ENFORCE_DEPT=true
+// Default: false — shadow-only mode, no access changes.
+const ENFORCE_DEPT = process.env["PHASE_D_ENFORCE_DEPT"] === "true";
+
+// Rules that are enforced under department enforcement (blocking direction only).
+// explicit_allow is intentionally excluded from initial enforcement:
+// adding grant logic (allow-side) is Phase D step 2b.
+const DEPT_ENFORCED_DENY_RULES = new Set(["implicit_deny", "explicit_deny"]);
+
 // ─── Role constants ───────────────────────────────────────────────────────────
 const SYSTEM_OWNER_ROLES  = new Set(["system_owner"]);
 const ADMIN_ROLES         = new Set(["admin"]);
@@ -97,6 +112,9 @@ export interface ResolveContext {
   // rows from document_confidential_access for this document (not expired)
   confidentialAllowlist: Array<{ userId: number | null; departmentId: number | null }>;
   hasWorkflowGrant:     boolean;           // active transmittal or wf reviewer
+  // Phase D: org boundary check fields (null = not provided; treated as same-org)
+  userOrganizationId:     number | null;
+  documentOrganizationId: number | null;  // org that owns the document's project
 }
 
 // ─── Pure evaluator ──────────────────────────────────────────────────────────
@@ -153,14 +171,26 @@ export function evaluateAccess(ctx: ResolveContext): AccessDecision {
   }
 
   // ── Rule 3: admin bypass ───────────────────────────────────────────────────
-  // Org admin after deny + confidential gates.
+  // Org admin after deny + confidential gates — but only within own organisation.
+  // Cross-org documents fall through to Rule 4 (project_member_gate) so the
+  // system's existing org-boundary enforcement is correctly mirrored here.
+  // When org IDs are not provided (null), we assume same-org (backward-compatible).
   if (ADMIN_ROLES.has(ctx.userRole)) {
-    return {
-      allowed:  true,
-      rulePath: "admin_bypass",
-      reasons:  ["admin_bypass"],
-      summary:  "Org admin — access granted (after deny and confidential checks)",
-    };
+    const crossOrg =
+      ctx.userOrganizationId !== null &&
+      ctx.documentOrganizationId !== null &&
+      ctx.userOrganizationId !== ctx.documentOrganizationId;
+
+    if (!crossOrg) {
+      return {
+        allowed:  true,
+        rulePath: "admin_bypass",
+        reasons:  ["admin_bypass"],
+        summary:  "Org admin — access granted (after deny and confidential checks)",
+      };
+    }
+    // Cross-org admin: fall through to project_member_gate.
+    // This now correctly mirrors the system's org-boundary denial.
   }
 
   // ── Rule 4: project membership gate ───────────────────────────────────────
@@ -279,6 +309,13 @@ interface ShadowInput {
   projectId:  number | null;
   /** is_confidential from the document row, if already fetched */
   isConfidential?: boolean;
+  /**
+   * Phase D — org boundary fields.
+   * Pass these to enable the resolver's org-aware admin_bypass check.
+   * When omitted the resolver assumes same-org (backward-compatible, no regression).
+   */
+  userOrgId?:     number;   // from req.user.organizationId
+  documentOrgId?: number;   // from project.organizationId for the document's project
 }
 
 async function buildContext(input: ShadowInput): Promise<ResolveContext> {
@@ -351,6 +388,8 @@ async function buildContext(input: ShadowInput): Promise<ResolveContext> {
     accessRules,
     confidentialAllowlist,
     hasWorkflowGrant:      workflowGrant,
+    userOrganizationId:     input.userOrgId     ?? null,
+    documentOrganizationId: input.documentOrgId ?? null,
   };
 }
 
@@ -445,6 +484,98 @@ export async function shadowEvaluate(
       { err, documentId: input.documentId, userId: input.userId },
       "[shadow-resolver] evaluation error (suppressed)",
     );
+  }
+}
+
+// ─── Public API — single document with enforcement gate ──────────────────────
+
+/**
+ * Unified resolver for single-document routes that need both shadow logging
+ * and the ability to enforce access decisions.
+ *
+ * Call this INSTEAD OF shadowEvaluate() on routes where enforcement may apply.
+ * It builds the context once, logs to the shadow table, and returns whether
+ * enforcement should block the response.
+ *
+ * Returns { enforcedDeny: true } when ALL of the following hold:
+ *   1. PHASE_D_ENFORCE_DEPT=true  (flag is on)
+ *   2. systemAllowed was true     (system would have let the user through)
+ *   3. resolver denies             (resolver computed implicit_deny or explicit_deny)
+ *
+ * In all other cases returns { enforcedDeny: false } — no change to behavior.
+ *
+ * Route pattern:
+ *   const { enforcedDeny } = await resolveAndEnforce({ ...input }, true);
+ *   if (enforcedDeny) { res.status(403).json({ error: "Forbidden" }); return; }
+ *   res.json(document);
+ *
+ * Guarantees:
+ *   - Never throws (errors caught internally)
+ *   - When PHASE_D_ENFORCE_DEPT=false (default) always returns { enforcedDeny: false }
+ */
+export async function resolveAndEnforce(
+  input: ShadowInput,
+  systemAllowed: boolean,
+): Promise<{ enforcedDeny: boolean }> {
+  try {
+    const ctx      = await buildContext(input);
+    const decision = evaluateAccess(ctx);
+    const diverges = decision.allowed !== systemAllowed;
+
+    const logPayload = {
+      phase:      "shadow_access_resolver_v2",
+      documentId: input.documentId,
+      userId:     input.userId,
+      userRole:   input.userRole,
+      projectId:  input.projectId,
+      system:   { allowed: systemAllowed },
+      resolver: {
+        allowed:  decision.allowed,
+        rulePath: decision.rulePath,
+        reasons:  decision.reasons,
+        summary:  decision.summary,
+      },
+      context: {
+        userDeptIds:      ctx.userDepartmentIds,
+        docDeptIds:       ctx.documentDepartmentIds,
+        isConfidential:   ctx.isConfidential,
+        hasDenyRule:      ctx.accessRules.some(r => r.ruleType === "deny"),
+        hasWorkflowGrant: ctx.hasWorkflowGrant,
+        isProjectMember:  ctx.projectMemberRole !== null,
+        projectMemberRole: ctx.projectMemberRole,
+        userOrgId:        ctx.userOrganizationId,
+        documentOrgId:    ctx.documentOrganizationId,
+      },
+      diverges,
+      enforcementEnabled: ENFORCE_DEPT,
+    };
+
+    if (diverges) {
+      logger.warn(logPayload, "[shadow-resolver] DIVERGENCE — system and resolver disagree");
+    } else {
+      logger.info(logPayload, "[shadow-resolver] access evaluation (agreement)");
+    }
+
+    await persistToLog(ctx, decision, systemAllowed);
+
+    // Enforcement gate — only active when flag is on
+    if (ENFORCE_DEPT && systemAllowed && !decision.allowed) {
+      if (DEPT_ENFORCED_DENY_RULES.has(decision.rulePath)) {
+        logger.warn(
+          { documentId: input.documentId, userId: input.userId, rulePath: decision.rulePath },
+          "[access-resolver] ENFORCED DENY — department rule blocked access",
+        );
+        return { enforcedDeny: true };
+      }
+    }
+
+    return { enforcedDeny: false };
+  } catch (err) {
+    logger.warn(
+      { err, documentId: input.documentId, userId: input.userId },
+      "[shadow-resolver] evaluation error (suppressed)",
+    );
+    return { enforcedDeny: false };
   }
 }
 
@@ -601,6 +732,9 @@ export async function shadowEvaluateList(opts: {
         accessRules:           accessRuleMap.get(doc.id) ?? [],
         confidentialAllowlist: confMap.get(doc.id) ?? [],
         hasWorkflowGrant:      wfGrantSet.has(doc.id),
+        // Lists are already org-scoped by the route query; org check not needed here.
+        userOrganizationId:     null,
+        documentOrganizationId: null,
       };
 
       const decision = evaluateAccess(ctx);
