@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { shadowEvaluate } from "../lib/access-resolver.js";
+import { shadowEvaluate, shadowEvaluateList } from "../lib/access-resolver.js";
 
 const router = Router();
 
@@ -139,6 +139,18 @@ router.get("/", requireAuth, async (req, res) => {
     limit: lim,
     hasMore: pg < totalPages,
   });
+
+  // Shadow resolver — evaluate visibility of every returned document
+  void shadowEvaluateList({
+    userId:    user.id,
+    userRole:  user.role,
+    documents: paginated.map(({ doc }) => ({
+      id:             doc.id,
+      projectId:      doc.projectId,
+      isConfidential: doc.isConfidential ?? false,
+    })),
+    endpoint: "GET /api/documents",
+  });
 });
 
 // GET /api/documents/:id — single document (org + project-membership scoped)
@@ -168,7 +180,8 @@ router.get("/:id", requireAuth, async (req, res) => {
     if (result.project?.organizationId !== user.organizationId) {
       // Shadow resolver — system denied (cross-org boundary)
       void shadowEvaluate(
-        { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null },
+        { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null,
+          isConfidential: result.doc.isConfidential ?? false },
         false,
       );
       res.status(403).json({ error: "Forbidden" }); return;
@@ -190,7 +203,8 @@ router.get("/:id", requireAuth, async (req, res) => {
       if (!membership) {
         // Shadow resolver — system denied (not a project member)
         void shadowEvaluate(
-          { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId },
+          { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId,
+            isConfidential: result.doc.isConfidential ?? false },
           false,
         );
         res.status(403).json({ error: "Forbidden: not a member of this project" }); return;
@@ -200,7 +214,8 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   // Shadow resolver — system allowed this access
   void shadowEvaluate(
-    { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null },
+    { userId: user.id, userRole: user.role, documentId: id, projectId: result.doc.projectId ?? null,
+      isConfidential: result.doc.isConfidential ?? false },
     true,
   );
 

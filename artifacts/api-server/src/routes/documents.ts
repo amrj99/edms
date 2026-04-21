@@ -18,6 +18,7 @@ import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
+import { shadowEvaluate, shadowEvaluateList } from "../lib/access-resolver.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
 
@@ -193,6 +194,18 @@ router.get("/", requireAuth, async (req, res) => {
     totalPages,
     limit: lim,
     hasMore: pg < totalPages,
+  });
+
+  // Shadow resolver — evaluate visibility of every returned document
+  void shadowEvaluateList({
+    userId:    caller.id,
+    userRole:  caller.role,
+    documents: paginated.map(({ doc }) => ({
+      id:             doc.id,
+      projectId:      doc.projectId,
+      isConfidential: doc.isConfidential ?? false,
+    })),
+    endpoint: "GET /api/projects/:projectId/documents",
   });
 });
 
@@ -471,6 +484,13 @@ router.get("/:id", requireAuth, async (req, res) => {
     workflowStatus: wfInstances[0]?.stage?.name ?? null,
     workflowInstanceId: wfInstances[0]?.wf?.id ?? null,
   });
+
+  // Shadow resolver — system allowed this project-scoped access
+  void shadowEvaluate(
+    { userId: caller.id, userRole: caller.role, documentId: id, projectId,
+      isConfidential: doc.isConfidential ?? false },
+    true,
+  );
 });
 
 router.put("/:id", requireAuth, async (req, res) => {

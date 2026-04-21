@@ -60,7 +60,16 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 -   **AI Service Modularization:** Abstracted AI services for different domains.
 -   **Document AI Analysis Tab:** Document detail pages include an AI analysis tab with history and re-run options.
 -   **Version Comparison:** Revision history with metadata diff and AI summary option.
--   **Departments (Phase A — Data Layer):** `departments` and `user_departments` tables (serial integer IDs) in `lib/db/src/schema/departments.ts`. Full CRUD + member-management API at `/api/departments`. Admin panel "Departments" tab with create/edit/delete/member dialogs. No access-control enforcement yet (data layer only).
+-   **Departments (Phase A — Data Layer):** `departments` and `user_departments` tables (serial integer IDs) in `lib/db/src/schema/departments.ts`. Full CRUD + member-management API at `/api/departments`. Admin panel "Departments" tab with create/edit/delete/member dialogs.
+-   **Document/Project Departments (Phase B):** `document_departments` and `project_departments` junction tables added. Assignment APIs (`POST /api/projects/:id/departments`, `POST /api/projects/:id/documents/:docId/departments`) with cross-org guard (403 if dept and resource belong to different orgs).
+-   **Access Rulebook Phase C (Shadow Mode):** Three new tables in `lib/db/src/schema/access-control.ts`:
+    -   `document_access_rules` — explicit per-doc per-dept allow/deny overrides (deny always wins, except system_owner)
+    -   `document_confidential_access` — allowlist for `documents.is_confidential=true` docs (by user_id OR dept_id); project_manager does NOT bypass this gate
+    -   `access_shadow_log` — persistent audit log of shadow evaluations (always persists divergences, 5%-samples agreements)
+    -   Full 9-rule `AccessResolver` in `artifacts/api-server/src/lib/access-resolver.ts`: system_owner_bypass → explicit_deny → confidential_gate → admin_bypass → project_member_gate → project_manager_scope → workflow_grant → explicit_allow → dept_match/no_dept_restriction → implicit_deny
+    -   Shadow evaluation hooked into: `GET /api/documents`, `GET /api/documents/:id`, `GET /api/projects/:id/documents`, `GET /api/projects/:id/documents/:docId`
+    -   Fire-and-forget: never blocks requests, never returns 403, never modifies responses
+    -   Divergence detection: logs `WARN` when resolver disagrees with system; persists to `access_shadow_log` for SQL analytics
 
 ## External Dependencies
 

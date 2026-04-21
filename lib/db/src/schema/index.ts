@@ -25,3 +25,4 @@ export * from "./governance";
 export * from "./submission-chains";
 export * from "./plan-catalog";
 export * from "./departments";
+export * from "./access-control";
