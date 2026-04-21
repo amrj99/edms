@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -109,6 +110,12 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
   );
 }
 
+function Redirect({ to }: { to: string }) {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate(to, { replace: true }); }, [to]);
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
@@ -204,6 +211,20 @@ function Router() {
       </Route>
       <Route path="/delegations">
         <ProtectedRoute component={DelegationsPage} />
+      </Route>
+
+      {/* Alias routes — redirect legacy/direct URLs to the correct pages */}
+      <Route path="/transmittals">
+        <Redirect to="/reports" />
+      </Route>
+      <Route path="/workflows">
+        <Redirect to="/workflow-engine" />
+      </Route>
+      <Route path="/registers">
+        <Redirect to="/reports" />
+      </Route>
+      <Route path="/projects/:id/documents/:docId">
+        {(params) => <Redirect to={`/documents/${params.docId}`} />}
       </Route>
 
       <Route component={NotFound} />

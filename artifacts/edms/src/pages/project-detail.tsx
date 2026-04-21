@@ -1685,6 +1685,12 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
               <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs" onClick={() => setRevHistoryDoc(docPreview)}>
                 <History className="h-3.5 w-3.5" /> Revision History
               </Button>
+              <Button
+                variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                onClick={() => { setDocPreview(null); navigate(`/documents/${docPreview?.id}`); }}
+              >
+                <ExternalLink className="h-3.5 w-3.5" /> Full Page
+              </Button>
               {docPreview?.fileUrl && (
                 <>
                   <Button
