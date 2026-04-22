@@ -93,6 +93,7 @@ router.use("/projects/:projectId/correspondence", correspondenceRouter);
 router.use("/correspondence", correspondenceRouter);
 router.use("/projects/:projectId/packages", packagesRouter);
 router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
+router.use("/projects/:projectId", projectDepartmentsRouter);
 router.use("/tasks", tasksRouter);
 router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);
@@ -126,7 +127,6 @@ router.use("/delegations", delegationsRouter);
 router.use("/projects/:projectId", projectRoleOverridesRouter);
 router.use("/projects/:projectId", projectGovernanceRouter);
 router.use("/projects/:projectId/submission-chains", submissionChainsRouter);
-router.use("/projects/:projectId", projectDepartmentsRouter);
 router.use("/departments", departmentsRouter);
 
 export default router;
