@@ -112,6 +112,7 @@ export default function Tasks() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getListTasksQueryKey() });
       qc.invalidateQueries({ queryKey: getListTasksQueryKey({ assignedToMe: true }) });
+      qc.invalidateQueries({ queryKey: ["nav-pending-task-count"] });
       toast({ title: t("taskCreated") });
       setCreateOpen(false);
       setNewTitle(""); setNewDesc(""); setNewPriority("medium");
@@ -125,6 +126,8 @@ export default function Tasks() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getListTasksQueryKey() });
       qc.invalidateQueries({ queryKey: getListTasksQueryKey({ assignedToMe: true }) });
+      // Immediately refresh the sidebar badge — same data source, different cache key
+      qc.invalidateQueries({ queryKey: ["nav-pending-task-count"] });
     },
   });
 

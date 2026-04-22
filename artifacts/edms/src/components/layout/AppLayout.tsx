@@ -353,17 +353,23 @@ export function AppSidebar() {
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
 
-  const { data: dashSummary } = useQuery({
-    queryKey: ["dashboard-summary-nav"],
+  // Badge count: fetch directly from the tasks API (same source as My Tasks page).
+  // staleTime:0 + refetchInterval:30s means stale data is never shown; the count
+  // updates within one polling cycle of a task being completed or cancelled.
+  const { data: navTaskData } = useQuery({
+    queryKey: ["nav-pending-task-count"],
     queryFn: async () => {
-      const r = await fetch("/api/dashboard");
-      return r.ok ? r.json() : null;
+      const r = await fetch("/api/tasks?assignedToMe=true", { credentials: "include" });
+      return r.ok ? r.json() : { tasks: [] };
     },
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    refetchInterval: 30_000,
+    staleTime: 0,
     enabled: !!user,
   });
-  const pendingTaskCount: number = dashSummary?.myTasks?.filter((t: any) => t.status === "pending" || t.status === "in_progress").length ?? 0;
+  const pendingTaskCount: number =
+    (navTaskData?.tasks ?? []).filter(
+      (t: any) => t.status === "pending" || t.status === "in_progress",
+    ).length;
 
   useEffect(() => {
     setRecentProjects(getRecentProjects());
@@ -382,9 +388,9 @@ export function AppSidebar() {
       title: t("navMeetings"), url: "/meetings", icon: CalendarDays,
       children: [{ title: t("navActionItems"), url: "/action-items", icon: ListTodo }],
     },
-    { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
+    { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare, badge: pendingTaskCount > 0 ? pendingTaskCount : undefined },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
-    { title: "Workflow Engine", url: "/workflow-engine", icon: Layers, badge: pendingTaskCount > 0 ? pendingTaskCount : undefined },
+    { title: "Workflow Engine", url: "/workflow-engine", icon: Layers },
     {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
