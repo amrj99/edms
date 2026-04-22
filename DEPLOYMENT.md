@@ -1,4 +1,124 @@
-# EDMS — Deployment Guide
+# ArcScale EDMS — Production Deployment Guide
+
+## Source of Truth
+
+| What | Where |
+|---|---|
+| All application code (API + frontend) | GitHub `main` branch |
+| Schema definition (authoritative) | `migrate_production.sql` in repo root |
+| Schema diagnostic tool | `diagnose.sql` in repo root |
+| Deploy automation | `deploy.sh` in repo root |
+
+**GitHub is the only source of truth. Nothing exists or is applied outside of what is committed there.**
+
+---
+
+## Schema Policy
+
+- `migrate_production.sql` is the **single migration file** that covers the entire database schema from scratch.
+- Every statement uses `IF NOT EXISTS` or `ADD COLUMN IF NOT EXISTS` — safe to run on a live database with existing data.
+- Running it again on an already-migrated database is completely harmless.
+- Schema changes in code (Drizzle schema files) **must always be accompanied by a matching update to `migrate_production.sql`** before the commit is pushed.
+- `deploy.sh` runs `migrate_production.sql` automatically on every deploy (Step 2).
+
+---
+
+## Standard Deployment Procedure
+
+For every production release, run one command on the VPS:
+
+```bash
+cd /var/www/edms && bash deploy.sh
+```
+
+This does all 7 steps automatically:
+
+1. `git pull` — pulls latest code from GitHub, prints commit hash
+2. SQL migration — runs `migrate_production.sql` against the live database
+3. Rebuild — rebuilds API and frontend Docker images from scratch (`--no-cache`)
+4. Restart — force-recreates API and frontend containers with the new images
+5. Health check — polls `/api/health` until the API reaches healthy status
+6. Env verification — confirms critical secrets are set and not left as defaults
+7. Cloudflare purge — clears CDN cache if `CF_API_TOKEN` and `CF_ZONE_ID` are set
+
+---
+
+## Pre-Deploy Checklist
+
+Run these before `bash deploy.sh`:
+
+```bash
+# 1. Confirm GitHub is up to date
+git log origin/main --oneline -3
+
+# 2. Run schema diagnostic — must return 0 rows in all sections
+docker exec -i edms_postgres psql -U edms -d edms < diagnose.sql
+
+# 3. Check disk space
+df -h /var/www
+
+# 4. Verify .env has required secrets (not default values)
+grep -E "JWT_SECRET|REFRESH_TOKEN_SECRET" /var/www/edms/.env
+```
+
+---
+
+## Deploy Command
+
+```bash
+cd /var/www/edms && bash deploy.sh
+```
+
+Expected output ends with:
+```
+✓ All critical env vars verified.
+Deploy complete.
+Commit : <hash>  |  Built : <timestamp>
+```
+
+---
+
+## Post-Deploy Verification
+
+```bash
+# 1. API health
+curl -s https://arcscale.org/api/health | python3 -m json.tool
+
+# 2. Check all required tables exist (must return 0 rows)
+docker exec -i edms_postgres psql -U edms -d edms < diagnose.sql
+
+# 3. Confirm running container image matches expected commit
+docker inspect edms_api | grep -A2 '"Image"'
+
+# 4. Tail API logs for errors
+docker compose -f /var/www/edms/docker-compose.yml logs --tail=50 api
+```
+
+---
+
+## Rollback
+
+If a deploy causes a problem, revert to the previous commit and redeploy:
+
+```bash
+cd /var/www/edms
+
+# Find the previous good commit hash
+git log --oneline -10
+
+# Roll back code
+git checkout <previous-commit-hash>
+
+# Rebuild and restart with the previous code
+docker compose -f docker-compose.yml build --no-cache api frontend
+docker compose -f docker-compose.yml up -d --force-recreate api frontend
+
+# Note: schema changes (new tables, new columns) cannot be automatically rolled back.
+# IF the rollback target predates a schema change, the old code will simply ignore
+# the new columns/tables — this is safe because all schema additions are backward-compatible.
+```
+
+---
 
 ## Default Credentials
 
@@ -7,152 +127,33 @@
 | Primary Admin | admin@admin.com | Admin123! | admin |
 | Backup Admin | owner@system.com | Owner123! | admin |
 
-> These accounts are auto-created on every startup if they don't exist.
+These accounts are auto-created on first startup if they do not exist.
 
 ---
 
-## Quick Start (Docker)
+## Environment Variables
 
-### 1. Clone and configure environment
-
-```bash
-git clone <your-repo>
-cd edms
-cp .env.example .env
-# Edit .env with your values — especially JWT_SECRET and POSTGRES_PASSWORD
-```
-
-### 2. Generate secure secrets
-
-```bash
-# JWT_SECRET
-openssl rand -base64 64
-
-# REFRESH_TOKEN_SECRET
-openssl rand -base64 64
-
-# POSTGRES_PASSWORD
-openssl rand -base64 32
-```
-
-### 3. Build and start all services
-
-```bash
-docker compose up -d --build
-```
-
-Services started:
-- PostgreSQL on port 5432
-- API server on port 8080 (`/api/*`)
-- Frontend (nginx) on port 80
-
-### 4. Run database migrations and seed
-
-```bash
-# Migrations are applied automatically on startup via Drizzle push
-# To run seed manually:
-docker compose exec api node ./artifacts/api-server/dist/seed.mjs
-```
-
-### 5. Check health
-
-```bash
-curl http://localhost:8080/api/health
-# Expected: {"status":"ok","database":"connected",...}
-```
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `JWT_SECRET` | Yes | JWT signing secret — must not be default |
+| `REFRESH_TOKEN_SECRET` | Yes | Refresh token secret — must not be default |
+| `NODE_ENV` | No | Set to `production` |
+| `RESEND_API_KEY` | No | Email notifications |
+| `OPENROUTER_API_KEY` | No | AI document analysis |
+| `FROM_EMAIL` | No | Sender address for notifications |
+| `APP_URL` | No | Public URL (used in email links) |
+| `CF_API_TOKEN` | No | Cloudflare cache purge (optional) |
+| `CF_ZONE_ID` | No | Cloudflare zone (optional) |
+| `PHASE_D_ENFORCE_DEPT` | No | Set `true` to activate Phase D department enforcement |
 
 ---
 
-## VPS Deployment
+## Health Check Endpoints
 
-### Prerequisites
-
-- Ubuntu 22.04 or later
-- Docker + Docker Compose v2
-- Domain name (optional, for SSL)
-
-### Steps
-
-```bash
-# 1. Install Docker
-curl -fsSL https://get.docker.com | sh
-
-# 2. Upload project to server
-scp -r . user@your-server:/opt/edms
-
-# 3. SSH in and configure
-ssh user@your-server
-cd /opt/edms
-cp .env.example .env
-nano .env  # Set secrets
-
-# 4. Start
-docker compose up -d --build
-
-# 5. (Optional) Set up nginx reverse proxy with SSL
-# Install certbot and nginx on the host, then proxy to localhost:80
-```
-
-### With SSL (Let's Encrypt)
-
-```bash
-# Install certbot
-apt install certbot python3-certbot-nginx
-
-# Get certificate
-certbot --nginx -d yourdomain.com
-
-# Update nginx.conf ALLOWED_ORIGINS in .env:
-ALLOWED_ORIGINS=https://yourdomain.com
-```
-
----
-
-## Environment Variables Reference
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NODE_ENV` | No | development | Set to `production` in prod |
-| `PORT` | No | 8080 | API server port |
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
-| `JWT_SECRET` | Yes | dev default | JWT signing secret (change!) |
-| `REFRESH_TOKEN_SECRET` | No | — | Refresh token secret |
-| `ALLOWED_ORIGINS` | No | * (all) | Comma-separated allowed origins |
-| `POSTGRES_PASSWORD` | Docker only | edms_dev_password | PostgreSQL password |
-| `API_PORT` | Docker only | 8080 | External API port |
-| `FRONTEND_PORT` | Docker only | 80 | External frontend port |
-
----
-
-## Available Scripts
-
-```bash
-# Development
-pnpm --filter @workspace/api-server run dev     # Start API server (dev mode)
-pnpm --filter @workspace/edms run dev           # Start frontend (dev mode)
-
-# Production build
-pnpm --filter @workspace/api-server run build   # Build API server
-pnpm --filter @workspace/edms run build         # Build frontend (dist/)
-
-# Database
-pnpm --filter @workspace/db run push            # Push schema changes
-pnpm --filter @workspace/api-server run seed    # Run seed script
-
-# Docker
-docker compose up -d --build    # Build and start all services
-docker compose down             # Stop all services
-docker compose logs -f api      # Follow API server logs
-docker compose logs -f frontend # Follow frontend logs
-```
-
----
-
-## Health Checks
-
-| Endpoint | Description |
+| Endpoint | Use |
 |---|---|
-| `GET /api/health` | Full health check (DB ping, uptime, latency) |
+| `GET /api/health` | Full health — DB ping, uptime, version |
 | `GET /api/healthz` | Lightweight readiness probe |
 
 ---
@@ -162,5 +163,13 @@ docker compose logs -f frontend # Follow frontend logs
 ```
 Internet → nginx (port 80/443)
               ├── /api/* → API Server (port 8080) → PostgreSQL
-              └── /* → React SPA (static files)
+              └── /*     → React SPA (static files, nginx-served)
 ```
+
+---
+
+## Feature Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `PHASE_D_ENFORCE_DEPT` | unset / `false` | Department-based access enforcement (Phase D). Set to `true` only after verifying shadow log data in `access_shadow_log`. |

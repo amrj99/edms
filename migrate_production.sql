@@ -1102,6 +1102,131 @@ CREATE TABLE IF NOT EXISTS noc_records (
   updated_at               timestamp NOT NULL DEFAULT now()
 );
 
--- ─── SECTION 9: DONE ──────────────────────────────────────────────────────────
+-- ─── SECTION 9: DEPARTMENT SYSTEM (Phase A/B) ────────────────────────────────
+
+-- departments
+CREATE TABLE IF NOT EXISTS departments (
+  id              SERIAL PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  code            TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  description     TEXT,
+  parent_id       INTEGER,
+  is_active       BOOLEAN NOT NULL DEFAULT true,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS departments_org_code_unique
+  ON departments(organization_id, code);
+CREATE INDEX IF NOT EXISTS idx_departments_org
+  ON departments(organization_id);
+
+-- user_departments
+CREATE TABLE IF NOT EXISTS user_departments (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  is_primary    BOOLEAN NOT NULL DEFAULT false,
+  joined_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, department_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_departments_user
+  ON user_departments(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_departments_dept
+  ON user_departments(department_id);
+
+-- document_departments
+CREATE TABLE IF NOT EXISTS document_departments (
+  id            SERIAL PRIMARY KEY,
+  document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  assigned_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS doc_dept_unique
+  ON document_departments(document_id, department_id);
+CREATE INDEX IF NOT EXISTS idx_doc_departments_doc
+  ON document_departments(document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_departments_dept
+  ON document_departments(department_id);
+
+-- project_departments
+CREATE TABLE IF NOT EXISTS project_departments (
+  id            SERIAL PRIMARY KEY,
+  project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  assigned_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS proj_dept_unique
+  ON project_departments(project_id, department_id);
+CREATE INDEX IF NOT EXISTS idx_proj_departments_proj
+  ON project_departments(project_id);
+CREATE INDEX IF NOT EXISTS idx_proj_departments_dept
+  ON project_departments(department_id);
+
+-- ─── SECTION 10: ACCESS CONTROL (Phase C) ─────────────────────────────────────
+
+-- document_access_rules  (explicit per-department allow/deny overrides)
+CREATE TABLE IF NOT EXISTS document_access_rules (
+  id            SERIAL PRIMARY KEY,
+  document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+  rule_type     TEXT NOT NULL,          -- 'allow' | 'deny'
+  granted_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reason        TEXT,
+  created_at    TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS doc_access_rule_uniq
+  ON document_access_rules(document_id, department_id, rule_type);
+CREATE INDEX IF NOT EXISTS idx_doc_access_rules_doc
+  ON document_access_rules(document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_access_rules_dept
+  ON document_access_rules(department_id);
+
+-- document_confidential_access  (allowlist for confidential documents)
+CREATE TABLE IF NOT EXISTS document_confidential_access (
+  id            SERIAL PRIMARY KEY,
+  document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  department_id INTEGER REFERENCES departments(id) ON DELETE CASCADE,
+  granted_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  granted_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at    TIMESTAMP,
+  reason        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doc_conf_doc
+  ON document_confidential_access(document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_conf_user
+  ON document_confidential_access(user_id);
+CREATE INDEX IF NOT EXISTS idx_doc_conf_dept
+  ON document_confidential_access(department_id);
+
+-- access_shadow_log  (audit log for shadow resolver — no FK on doc/project so records survive deletion)
+CREATE TABLE IF NOT EXISTS access_shadow_log (
+  id                 SERIAL PRIMARY KEY,
+  document_id        INTEGER,
+  user_id            INTEGER NOT NULL,
+  user_role          TEXT NOT NULL,
+  project_id         INTEGER,
+  system_allowed     BOOLEAN NOT NULL,
+  resolver_allowed   BOOLEAN NOT NULL,
+  resolver_reasons   TEXT[]  NOT NULL DEFAULT '{}',
+  rule_path          TEXT NOT NULL,
+  diverges           BOOLEAN NOT NULL,
+  user_dept_ids      INTEGER[] NOT NULL DEFAULT '{}',
+  doc_dept_ids       INTEGER[] NOT NULL DEFAULT '{}',
+  has_confidential   BOOLEAN NOT NULL DEFAULT false,
+  has_deny_rule      BOOLEAN NOT NULL DEFAULT false,
+  has_workflow_grant BOOLEAN NOT NULL DEFAULT false,
+  evaluated_at       TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_doc
+  ON access_shadow_log(document_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_user
+  ON access_shadow_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_diverges
+  ON access_shadow_log(diverges);
+CREATE INDEX IF NOT EXISTS idx_shadow_evaluated_at
+  ON access_shadow_log(evaluated_at);
+
+-- ─── DONE ─────────────────────────────────────────────────────────────────────
 
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;

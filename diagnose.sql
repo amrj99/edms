@@ -32,7 +32,11 @@ FROM (VALUES
   ('meetings'), ('meeting_attendees'), ('meeting_action_items'), ('meeting_attachments'),
   ('chat_groups'), ('chat_group_members'), ('chat_messages'), ('chat_message_reads'),
   ('migration_jobs'), ('migration_items'),
-  ('ai_settings'), ('ai_cache'), ('ai_logs'), ('ai_analysis')
+  ('ai_settings'), ('ai_cache'), ('ai_logs'), ('ai_analysis'),
+  -- Phase A/B: department system
+  ('departments'), ('user_departments'), ('document_departments'), ('project_departments'),
+  -- Phase C: access control
+  ('document_access_rules'), ('document_confidential_access'), ('access_shadow_log')
 ) AS t(table_name)
 WHERE NOT EXISTS (
   SELECT 1 FROM information_schema.tables
