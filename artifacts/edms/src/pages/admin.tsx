@@ -455,6 +455,7 @@ export default function Admin() {
             { value: "branding", label: "Branding", icon: Globe },
             { value: "modules", label: "Modules", icon: Layers },
             { value: "usage", label: "Usage", icon: BarChart3 },
+            { value: "shadow-log", label: "Access Log", icon: Filter },
           ].map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="gap-1.5 text-xs px-3">
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -986,6 +987,15 @@ export default function Admin() {
 
         {/* ─── Departments ─────────────────────────────────────────────────── */}
         <TabsContent value="departments" className="mt-4 space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/30 dark:text-amber-300">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div>
+              <span className="font-semibold">Classification only — no access control applied.</span>
+              {" "}Departments are currently used to organize and classify users, projects, and documents.
+              Assigning a department to a document does <span className="font-semibold">not</span> restrict who can see it.
+              Department-based access enforcement is not yet active.
+            </div>
+          </div>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
@@ -994,7 +1004,7 @@ export default function Admin() {
                   Departments
                 </CardTitle>
                 <CardDescription>
-                  Organize users into departments. Department membership controls document visibility in future phases.
+                  Organize users into departments for classification and future access control.
                 </CardDescription>
               </div>
               {isOwner && (
@@ -1619,8 +1629,153 @@ export default function Admin() {
 
         {/* Usage Monitoring Dashboard */}
         <UsageDashboard />
+
+        {/* Access Shadow Log */}
+        <ShadowLogTab />
       </Tabs>
     </div>
+  );
+}
+
+// ─── Access Shadow Log Tab ────────────────────────────────────────────────────
+function ShadowLogTab() {
+  const { user } = useAuth();
+  const [divergeOnly, setDivergeOnly] = useState(true);
+  const [limit, setLimit] = useState(200);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ["shadow-log", divergeOnly, limit],
+    queryFn: async () => {
+      const r = await fetch(`/api/admin/shadow-log?divergeOnly=${divergeOnly}&limit=${limit}`);
+      return r.ok ? r.json() : { rows: [], total: 0 };
+    },
+  });
+
+  const rows: any[] = data?.rows ?? [];
+  const total: number = data?.total ?? 0;
+
+  return (
+    <TabsContent value="shadow-log" className="mt-4 space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Filter className="h-4 w-4" />
+            Access Shadow Log
+          </CardTitle>
+          <CardDescription>
+            Records from the department access resolver running in shadow mode. Divergences are cases where the
+            new access rules would have given a different result than the current system.
+            Review these before activating <code className="text-xs bg-muted px-1 rounded">PHASE_D_ENFORCE_DEPT=true</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="diverge-only"
+                checked={divergeOnly}
+                onCheckedChange={setDivergeOnly}
+              />
+              <Label htmlFor="diverge-only" className="text-sm">Divergences only</Label>
+            </div>
+            <Select value={String(limit)} onValueChange={(v) => setLimit(Number(v))}>
+              <SelectTrigger className="w-32 h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="50">50 rows</SelectItem>
+                <SelectItem value="200">200 rows</SelectItem>
+                <SelectItem value="500">500 rows</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => refetch()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </Button>
+            <span className="text-xs text-muted-foreground ml-auto">
+              {total} total matching records
+            </span>
+          </div>
+
+          {total === 0 && !isLoading ? (
+            <div className="text-center py-12 border rounded-lg bg-muted/20">
+              <CheckCircle2 className="h-8 w-8 mx-auto text-green-500 mb-3" />
+              <p className="text-sm font-medium">No divergences found</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                The shadow access resolver agrees with the current system for all evaluated accesses.
+              </p>
+            </div>
+          ) : isLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="whitespace-nowrap">User</TableHead>
+                    <TableHead className="whitespace-nowrap">Role</TableHead>
+                    <TableHead className="whitespace-nowrap">Document</TableHead>
+                    <TableHead className="whitespace-nowrap text-center">System</TableHead>
+                    <TableHead className="whitespace-nowrap text-center">Resolver</TableHead>
+                    <TableHead className="whitespace-nowrap">Rule Path</TableHead>
+                    <TableHead className="whitespace-nowrap">Reasons</TableHead>
+                    <TableHead className="whitespace-nowrap">Evaluated</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row: any) => (
+                    <TableRow key={row.id} className={row.diverges ? "bg-amber-50/50 dark:bg-amber-950/20" : ""}>
+                      <TableCell>
+                        <div className="text-sm font-medium">{row.userName ?? `User #${row.userId}`}</div>
+                        <div className="text-xs text-muted-foreground">{row.userEmail}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs font-mono">{row.userRole}</Badge>
+                      </TableCell>
+                      <TableCell className="max-w-[180px]">
+                        {row.documentTitle ? (
+                          <div>
+                            <div className="text-xs font-medium truncate">{row.documentTitle}</div>
+                            <div className="text-xs text-muted-foreground font-mono">{row.documentNumber}</div>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">Doc #{row.documentId ?? "—"}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className={`text-xs font-semibold ${row.systemAllowed ? "text-green-600" : "text-red-600"}`}>
+                          {row.systemAllowed ? "Allow" : "Deny"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <span className={`text-xs font-semibold ${row.resolverAllowed ? "text-green-600" : "text-red-600"}`}>
+                          {row.resolverAllowed ? "Allow" : "Deny"}
+                        </span>
+                        {row.diverges && (
+                          <Badge variant="outline" className="ml-1 text-[10px] border-amber-400 text-amber-700 bg-amber-50">
+                            diverges
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <code className="text-xs bg-muted px-1 rounded">{row.rulePath}</code>
+                      </TableCell>
+                      <TableCell className="max-w-[200px]">
+                        <span className="text-xs text-muted-foreground">
+                          {(row.resolverReasons ?? []).join(", ") || "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(row.evaluatedAt).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </TabsContent>
   );
 }
 

@@ -353,6 +353,18 @@ export function AppSidebar() {
   const isAdmin = user?.role === "admin" || user?.role === "system_owner";
   const canSeeActivityLog = user && ["system_owner", "admin", "project_manager", "document_controller"].includes(user.role);
 
+  const { data: dashSummary } = useQuery({
+    queryKey: ["dashboard-summary-nav"],
+    queryFn: async () => {
+      const r = await fetch("/api/dashboard");
+      return r.ok ? r.json() : null;
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    enabled: !!user,
+  });
+  const pendingTaskCount: number = dashSummary?.myTasks?.filter((t: any) => t.status === "pending" || t.status === "in_progress").length ?? 0;
+
   useEffect(() => {
     setRecentProjects(getRecentProjects());
     const handler = () => setRecentProjects(getRecentProjects());
@@ -372,7 +384,7 @@ export function AppSidebar() {
     },
     { title: t("navMyTasks"), url: "/tasks", icon: CheckSquare },
     ...(modules.deliverables ? [{ title: t("navDeliverables"), url: "/deliverables", icon: ClipboardList }] : []),
-    { title: "Workflow Engine", url: "/workflow-engine", icon: Layers },
+    { title: "Workflow Engine", url: "/workflow-engine", icon: Layers, badge: pendingTaskCount > 0 ? pendingTaskCount : undefined },
     {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
@@ -414,7 +426,12 @@ export function AppSidebar() {
                   <SidebarMenuButton asChild isActive={location === item.url || (item.url !== "/" && location.startsWith(item.url))}>
                     <Link href={item.url} className="flex items-center gap-3 rounded-lg px-3 py-2 text-sidebar-foreground transition-all hover:bg-sidebar-accent hover:text-white">
                       <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
+                      <span className="flex-1">{item.title}</span>
+                      {(item as any).badge !== undefined && (
+                        <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground leading-none">
+                          {(item as any).badge}
+                        </span>
+                      )}
                     </Link>
                   </SidebarMenuButton>
                   {(item as any).children?.length > 0 && (

@@ -7,8 +7,9 @@ import {
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
   deliverablesTable, meetingsTable, systemSettingsTable,
   aiLogsTable, ruleExecutionLogsTable, rulesTable,
-  projectMembersTable, subscriptionsTable,
+  projectMembersTable, subscriptionsTable, accessShadowLogTable,
 } from "@workspace/db";
+import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
 import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
@@ -814,6 +815,56 @@ router.post("/organizations/:orgId/change-plan", async (req, res) => {
     });
   await syncOrgModules(orgId);
   res.json({ ok: true, orgId, planId });
+});
+
+// ─── Access Shadow Log ─────────────────────────────────────────────────────────
+// Returns recent divergence records from the access_shadow_log table.
+// Only accessible to system_owner or admin.
+router.get("/shadow-log", async (req, res) => {
+  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  try {
+    const divergeOnly = req.query.divergeOnly !== "false";
+    const limit = Math.min(parseInt(req.query.limit as string) || 200, 500);
+
+    const rows = await db
+      .select({
+        id: accessShadowLogTable.id,
+        documentId: accessShadowLogTable.documentId,
+        userId: accessShadowLogTable.userId,
+        userRole: accessShadowLogTable.userRole,
+        projectId: accessShadowLogTable.projectId,
+        systemAllowed: accessShadowLogTable.systemAllowed,
+        resolverAllowed: accessShadowLogTable.resolverAllowed,
+        resolverReasons: accessShadowLogTable.resolverReasons,
+        rulePath: accessShadowLogTable.rulePath,
+        diverges: accessShadowLogTable.diverges,
+        userDeptIds: accessShadowLogTable.userDeptIds,
+        docDeptIds: accessShadowLogTable.docDeptIds,
+        hasConfidential: accessShadowLogTable.hasConfidential,
+        hasDenyRule: accessShadowLogTable.hasDenyRule,
+        hasWorkflowGrant: accessShadowLogTable.hasWorkflowGrant,
+        evaluatedAt: accessShadowLogTable.evaluatedAt,
+        userName: usersTable.name,
+        userEmail: usersTable.email,
+        documentTitle: documentsTable.title,
+        documentNumber: documentsTable.documentNumber,
+      })
+      .from(accessShadowLogTable)
+      .leftJoin(usersTable, eq(accessShadowLogTable.userId, usersTable.id))
+      .leftJoin(documentsTable, eq(accessShadowLogTable.documentId, documentsTable.id))
+      .where(divergeOnly ? eq(accessShadowLogTable.diverges, true) : undefined)
+      .orderBy(desc(accessShadowLogTable.evaluatedAt))
+      .limit(limit);
+
+    const total = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(accessShadowLogTable)
+      .where(divergeOnly ? eq(accessShadowLogTable.diverges, true) : undefined);
+
+    res.json({ rows, total: total[0]?.count ?? 0, divergeOnly, limit });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch shadow log" });
+  }
 });
 
 export default router;

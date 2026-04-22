@@ -2222,18 +2222,35 @@ const TRS_PURPOSE_LABELS: Record<string, string> = {
   for_record:      "For Record / Filing",
 };
 
-const TRS_REVIEW_CODES: { value: string; label: string; cls: string }[] = [
-  { value: "A", label: "A — Approved",              cls: "bg-emerald-100 text-emerald-800" },
-  { value: "B", label: "B — Approved as Noted",     cls: "bg-teal-100 text-teal-800" },
-  { value: "C", label: "C — Revise & Resubmit",     cls: "bg-amber-100 text-amber-800" },
-  { value: "D", label: "D — Rejected",              cls: "bg-red-100 text-red-800" },
+/**
+ * ADR — ABCD Review Codes
+ * ABCD codes are document-level review outcomes assigned during transmittal review.
+ * They apply to individual transmittal items (documents), NOT to the transmittal itself.
+ * The transmittal's overall "Review Outcome" is the rolled-up worst-code result.
+ * A = Approved (no changes required)
+ * B = Approved as Noted (minor comments, no resubmission required)
+ * C = Revise & Resubmit (significant comments, new revision must be issued)
+ * D = Rejected (document rejected, full revision required)
+ */
+const TRS_REVIEW_CODES: { value: string; label: string; desc: string; cls: string }[] = [
+  { value: "A", label: "A — Approved",           desc: "Approved — no changes required. Document is accepted as submitted.", cls: "bg-emerald-100 text-emerald-800" },
+  { value: "B", label: "B — Approved as Noted",  desc: "Approved as Noted — minor comments only, no resubmission required.", cls: "bg-teal-100 text-teal-800" },
+  { value: "C", label: "C — Revise & Resubmit",  desc: "Revise & Resubmit — significant comments, a revised document must be issued.", cls: "bg-amber-100 text-amber-800" },
+  { value: "D", label: "D — Rejected",            desc: "Rejected — document does not meet requirements, full revision required.", cls: "bg-red-100 text-red-800" },
 ];
 
 function TrsReviewPill({ code }: { code?: string | null }) {
   if (!code) return <span className="text-muted-foreground text-xs">—</span>;
   const entry = TRS_REVIEW_CODES.find(r => r.value === code);
   if (!entry) return <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">{code}</span>;
-  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${entry.cls}`}>{entry.label}</span>;
+  return (
+    <span
+      title={entry.desc}
+      className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap cursor-help ${entry.cls}`}
+    >
+      {entry.label}
+    </span>
+  );
 }
 
 function TrsDirectionBadge({ direction }: { direction?: string | null }) {
@@ -2270,7 +2287,7 @@ const TRS_COLUMNS: ColumnDef[] = [
   { key: "purpose",   label: "Purpose" },
   { key: "to",        label: "To" },
   { key: "direction", label: "Direction" },
-  { key: "status",    label: "Status" },
+  { key: "status",    label: "Review Outcome" },
   { key: "due",       label: "Due" },
   { key: "actions",   label: "Actions" },
 ];
@@ -4723,7 +4740,7 @@ function ProjectDepartmentsTab({ projectId }: { projectId: number }) {
         <div>
           <h3 className="text-lg font-semibold">Project Departments</h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Classify this project by department. Used for future access control — no restrictions applied yet.
+            Classification only — no access restrictions applied.
           </p>
         </div>
         {available.length > 0 && (
@@ -4731,6 +4748,15 @@ function ProjectDepartmentsTab({ projectId }: { projectId: number }) {
             <Plus className="h-4 w-4 mr-1.5" /> Add Department
           </Button>
         )}
+      </div>
+
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/40 dark:bg-amber-950/30 dark:text-amber-300">
+        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+        <span>
+          <span className="font-semibold">Departments are for classification only.</span>
+          {" "}Assigning or removing a department from this project does not change who can see or edit it.
+          Department-based access control is not yet enforced.
+        </span>
       </div>
 
       {isLoading ? (

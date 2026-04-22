@@ -360,16 +360,19 @@ function ExportButtons({ data, filename, columns, title }: {
 // ─── Review Code Pill ─────────────────────────────────────────────────────────
 function ReviewCodePill({ code }: { code?: string | null }) {
   if (!code) return <span className="text-muted-foreground text-xs">—</span>;
-  const map: Record<string, { label: string; cls: string }> = {
-    A: { label: "A – Approved",              cls: "bg-green-100 text-green-800" },
-    B: { label: "B – Approved w/ Comments",  cls: "bg-teal-100 text-teal-800" },
-    C: { label: "C – Revise & Resubmit",     cls: "bg-amber-100 text-amber-800" },
-    D: { label: "D – Rejected",              cls: "bg-red-100 text-red-800" },
+  const map: Record<string, { label: string; desc: string; cls: string }> = {
+    A: { label: "A – Approved",              desc: "Approved — no changes required. Document is accepted as submitted.", cls: "bg-green-100 text-green-800" },
+    B: { label: "B – Approved as Noted",     desc: "Approved as Noted — minor comments only, no resubmission required.", cls: "bg-teal-100 text-teal-800" },
+    C: { label: "C – Revise & Resubmit",     desc: "Revise & Resubmit — significant comments, a revised document must be issued.", cls: "bg-amber-100 text-amber-800" },
+    D: { label: "D – Rejected",              desc: "Rejected — document does not meet requirements, full revision required.", cls: "bg-red-100 text-red-800" },
   };
   const entry = map[code];
   if (!entry) return <span className="inline-block text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">{code}</span>;
   return (
-    <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${entry.cls}`}>
+    <span
+      title={entry.desc}
+      className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap cursor-help ${entry.cls}`}
+    >
       {entry.label}
     </span>
   );
@@ -1328,7 +1331,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
     { key: "toExternal", label: t("to") },
     { key: "partyType", label: "Party Type" },
     { key: "purpose", label: t("purpose") },
-    { key: "reviewCode", label: "Review Code" },
+    { key: "reviewCode", label: "Review Result" },
     { key: "itemCount", label: "Docs" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
@@ -1425,7 +1428,7 @@ function TransmittalRegister({ filters }: { filters: Filters }) {
           { key: "subject", label: "Subject" },
           { key: "toExternal", label: "To" },
           { key: "purpose", label: "Purpose" },
-          { key: "reviewCode", label: "Review Code" },
+          { key: "reviewCode", label: "Review Result" },
           { key: "status", label: "Status" },
           { key: "sentAt", label: "Sent Date", format: fmt },
           { key: "acknowledgedAt", label: "Acknowledged", format: fmt },
@@ -1579,7 +1582,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     { key: "description", label: t("description") },
     { key: "location", label: t("location") },
     { key: "date", label: t("date") },
-    { key: "reviewCode", label: "Review Code" },
+    { key: "reviewCode", label: "Review Result" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "contractor", label: t("contractor") },
@@ -1731,7 +1734,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
           { key: "partyType", label: "Party Type" },
           { key: "description", label: "Description" },
           { key: "location", label: "Location" },
-          { key: "reviewCode", label: "Review Code" },
+          { key: "reviewCode", label: "Review Result" },
           { key: "status", label: "Status" },
           { key: "contractor", label: "Contractor" },
           { key: "date", label: "Date", format: fmt },
@@ -1873,7 +1876,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     { key: "description", label: t("description") },
     { key: "location", label: t("location") },
     { key: "raisedBy", label: t("raisedBy") },
-    { key: "reviewCode", label: "Review Code" },
+    { key: "reviewCode", label: "Review Result" },
     { key: "status", label: t("status") },
     { key: "approvalStatus", label: t("approvalStatus") },
     { key: "correctiveAction", label: t("correctiveAction") },
@@ -2025,7 +2028,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
           { key: "description", label: "Description" },
           { key: "location", label: "Location" },
           { key: "raisedBy", label: "Raised By" },
-          { key: "reviewCode", label: "Review Code" },
+          { key: "reviewCode", label: "Review Result" },
           { key: "status", label: "Status" },
           { key: "correctiveAction", label: "Corrective Action" },
           { key: "closeDate", label: "Close Date", format: fmt },
@@ -2230,7 +2233,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
     { key: "partyType", label: "Party Type" },
     { key: "authority", label: t("authority") },
     { key: "date", label: t("date") },
-    { key: "reviewCode", label: "Review Code" },
+    { key: "reviewCode", label: "Review Result" },
     { key: "status", label: t("status") },
     { key: "remarks", label: t("remarks") },
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
@@ -2310,7 +2313,7 @@ function NocRegister({ filters, projects = [] }: { filters: Filters; projects?: 
           { key: "partyType", label: "Party Type" },
           { key: "authority", label: "Authority" },
           { key: "date", label: "Date", format: fmt },
-          { key: "reviewCode", label: "Review Code" },
+          { key: "reviewCode", label: "Review Result" },
           { key: "status", label: "Status" },
           { key: "remarks", label: "Remarks" },
           { key: "_orgName", label: t("orgName_label") },

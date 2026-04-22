@@ -1227,6 +1227,25 @@ CREATE INDEX IF NOT EXISTS idx_shadow_diverges
 CREATE INDEX IF NOT EXISTS idx_shadow_evaluated_at
   ON access_shadow_log(evaluated_at);
 
+-- ─── EXTERNAL CONTACTS ────────────────────────────────────────────────────────
+-- Lightweight contact book for external parties (clients, contractors, consultants).
+-- No login; used for display in transmittals, correspondence, and future share links.
+CREATE TABLE IF NOT EXISTS external_contacts (
+  id              SERIAL PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  email           TEXT NOT NULL,
+  company         TEXT,
+  job_title       TEXT,
+  phone           TEXT,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ext_contacts_org
+  ON external_contacts(organization_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ext_contacts_org_email
+  ON external_contacts(organization_id, email);
+
 -- ─── DONE ─────────────────────────────────────────────────────────────────────
 
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;
