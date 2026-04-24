@@ -5,7 +5,7 @@ import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTabl
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin, hashToken } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -145,7 +145,7 @@ router.post("/folders/copy-from", requireAuth, async (req, res) => {
 router.get("/", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSysAdmin(caller));
+  const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
   if (!projectAccessAllowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
@@ -466,7 +466,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const caller = req.user!;
   const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
-    caller.id, caller.organizationId, projectId, isSysAdmin(caller),
+    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
   );
   if (!projectAccessAllowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
