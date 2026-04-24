@@ -248,11 +248,27 @@ router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
 // ─── POST /general/correspondence/:id/share ───────────────────────────────────
 router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+
+  // Fetch first to validate ownership before creating a share link.
+  const [existing] = await db.select({ id: correspondenceTable.id, organizationId: correspondenceTable.organizationId })
+    .from(correspondenceTable)
+    .where(eq(correspondenceTable.id, id))
+    .limit(1);
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Enforce org isolation when organizationId is set. NULL organizationId records
+  // are legacy data without org context — access is permitted for authenticated users.
+  if (existing.organizationId !== null && existing.organizationId !== req.user!.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "Cross-organization access denied." });
+    return;
+  }
+
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const [corr] = await db.update(correspondenceTable)
     .set({ shareToken: hashToken(token), shareExpiresAt: expiresAt })
-    .where(eq(correspondenceTable.id, id)).returning({ id: correspondenceTable.id });
+    .where(eq(correspondenceTable.id, id))
+    .returning({ id: correspondenceTable.id });
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
   const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
   res.json({ shareUrl: `${baseUrl}/shared/correspondence/${token}`, expiresAt });

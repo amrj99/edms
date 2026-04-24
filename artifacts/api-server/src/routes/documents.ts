@@ -1042,6 +1042,14 @@ router.post("/:id/share", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const { expiresInDays, password } = req.body;
 
+  // Verify the project belongs to the caller's org — prevents cross-tenant share
+  // creation when the document's own organizationId is NULL (legacy unseeded data).
+  const [project] = await db.select({ id: projectsTable.id })
+    .from(projectsTable)
+    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
+    .limit(1);
+  if (!project) { res.status(404).json({ error: "Not found" }); return; }
+
   const token = crypto.randomBytes(32).toString("hex");
   const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
   const expiresAt = new Date(Date.now() + days * 86400000);

@@ -975,7 +975,16 @@ router.delete("/:id", requireAuth, async (req, res) => {
 
 router.post("/:id/share", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
+  const projectId = parseInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
+
+  // Verify the project belongs to the caller's org — prevents cross-tenant share
+  // creation when the correspondence's own organizationId is NULL (legacy data).
+  const [project] = await db.select({ id: projectsTable.id })
+    .from(projectsTable)
+    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
+    .limit(1);
+  if (!project) { res.status(404).json({ error: "Not found" }); return; }
 
   const token = crypto.randomBytes(32).toString("hex");
   const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
@@ -989,7 +998,7 @@ router.post("/:id/share", requireAuth, async (req, res) => {
       sharePasswordHash: passwordHash ?? undefined,
       updatedAt: new Date(),
     })
-    .where(eq(correspondenceTable.id, id))
+    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
     .returning({ id: correspondenceTable.id, shareExpiresAt: correspondenceTable.shareExpiresAt });
 
   if (!corr) { res.status(404).json({ error: "Not found" }); return; }

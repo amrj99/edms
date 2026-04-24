@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { db } from "@workspace/db";
 import {
   transmittalsTable, transmittalItemsTable, documentsTable, usersTable,
@@ -10,8 +11,26 @@ import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
+// ─── Per-token rate limiter ───────────────────────────────────────────────────
+// Limits password-guessing attempts on share links to 10 per 15 minutes per
+// token. Keyed by token param (not IP) so VPN-hopping doesn't bypass the limit.
+const shareTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `share:${req.params.token ?? "unknown"}`,
+  validate: { keyGeneratorIpFallback: false },
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too Many Attempts",
+      message: "Too many access attempts for this link. Please try again later.",
+    });
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ─── Transmittal ──────────────────────────────────────────────────────────────
-router.get("/transmittal/:token", async (req, res) => {
+router.get("/transmittal/:token", shareTokenLimiter, async (req, res) => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 
@@ -21,8 +40,14 @@ router.get("/transmittal/:token", async (req, res) => {
     .where(eq(transmittalsTable.shareToken, hashToken(token)))
     .limit(1);
 
+  // Return a uniform 401/403 for non-existent tokens so an attacker cannot
+  // distinguish "token not found" from "token exists but is password-protected".
   if (!transmittal) {
-    res.status(404).json({ error: "Link not found or has been revoked" });
+    if (password) {
+      res.status(403).json({ error: "Incorrect password" });
+    } else {
+      res.status(401).json({ error: "Access required", passwordRequired: true });
+    }
     return;
   }
 
@@ -90,7 +115,7 @@ router.get("/transmittal/:token", async (req, res) => {
 });
 
 // ─── Document ─────────────────────────────────────────────────────────────────
-router.get("/document/:token", async (req, res) => {
+router.get("/document/:token", shareTokenLimiter, async (req, res) => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 
@@ -101,7 +126,11 @@ router.get("/document/:token", async (req, res) => {
     .limit(1);
 
   if (!doc) {
-    res.status(404).json({ error: "Link not found or has been revoked" });
+    if (password) {
+      res.status(403).json({ error: "Incorrect password" });
+    } else {
+      res.status(401).json({ error: "Access required", passwordRequired: true });
+    }
     return;
   }
 
@@ -151,7 +180,7 @@ router.get("/document/:token", async (req, res) => {
 });
 
 // ─── Correspondence ───────────────────────────────────────────────────────────
-router.get("/correspondence/:token", async (req, res) => {
+router.get("/correspondence/:token", shareTokenLimiter, async (req, res) => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 
@@ -162,7 +191,11 @@ router.get("/correspondence/:token", async (req, res) => {
     .limit(1);
 
   if (!corr) {
-    res.status(404).json({ error: "Link not found or has been revoked" });
+    if (password) {
+      res.status(403).json({ error: "Incorrect password" });
+    } else {
+      res.status(401).json({ error: "Access required", passwordRequired: true });
+    }
     return;
   }
 

@@ -3,7 +3,7 @@ import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, isNull } from "drizzle-orm";
 import {
   signToken,
   hashPassword,
@@ -115,7 +115,7 @@ router.post("/login", loginRateLimiter, async (req, res) => {
 });
 
 router.post("/register", async (req, res) => {
-  const { email, password, firstName, lastName, organizationId } = req.body ?? {};
+  const { email, password, firstName, lastName } = req.body ?? {};
 
   const [regSetting] = await db.select().from(systemSettingsTable)
     .where(eq(systemSettingsTable.key, "registrationEnabled"));
@@ -153,7 +153,7 @@ router.post("/register", async (req, res) => {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
     role: isFirstEver ? "admin" : "viewer",
-    organizationId: organizationId || null,
+    organizationId: null,
     isActive: true,
   }).returning();
 
@@ -332,26 +332,30 @@ router.post("/reset-password", async (req, res) => {
     return;
   }
 
-  const tokens = await db.select().from(passwordResetTokensTable)
+  // Atomic claim: mark the token used in a single UPDATE so concurrent requests
+  // cannot both pass the "not yet used" check. Only the first request wins;
+  // subsequent ones find used_at already set and receive 0 rows back.
+  const [claimedToken] = await db.update(passwordResetTokensTable)
+    .set({ usedAt: new Date() })
     .where(and(
       eq(passwordResetTokensTable.token, token),
-      gt(passwordResetTokensTable.expiresAt, new Date())
+      gt(passwordResetTokensTable.expiresAt, new Date()),
+      isNull(passwordResetTokensTable.usedAt),
     ))
-    .limit(1);
+    .returning();
 
-  const tokenRecord = tokens[0];
-  if (!tokenRecord || tokenRecord.usedAt) {
+  if (!claimedToken) {
     res.status(400).json({ error: "Bad Request", message: "Invalid or expired reset token. Please request a new one." });
     return;
   }
 
-  // Verify token belongs to the same org as the user it targets
-  const [tokenOwner] = await db.select().from(usersTable).where(eq(usersTable.id, tokenRecord.userId)).limit(1);
+  // Secondary integrity check: token must belong to the user's org.
+  const [tokenOwner] = await db.select().from(usersTable).where(eq(usersTable.id, claimedToken.userId)).limit(1);
   if (!tokenOwner) {
     res.status(400).json({ error: "Bad Request", message: "Invalid reset token." });
     return;
   }
-  if (tokenRecord.organizationId !== null && tokenRecord.organizationId !== tokenOwner.organizationId) {
+  if (claimedToken.organizationId !== null && claimedToken.organizationId !== tokenOwner.organizationId) {
     res.status(400).json({ error: "Bad Request", message: "Invalid reset token." });
     return;
   }
@@ -360,16 +364,14 @@ router.post("/reset-password", async (req, res) => {
 
   await db.update(usersTable)
     .set({ passwordHash, updatedAt: new Date() })
-    .where(eq(usersTable.id, tokenRecord.userId));
+    .where(eq(usersTable.id, claimedToken.userId));
 
-  await db.update(passwordResetTokensTable)
-    .set({ usedAt: new Date() })
-    .where(eq(passwordResetTokensTable.id, tokenRecord.id));
+  // Token already marked used atomically above — no second UPDATE needed.
 
-  // Revoke all refresh tokens for this user
+  // Revoke all refresh tokens for this user.
   await db.update(refreshTokensTable)
     .set({ revokedAt: new Date() })
-    .where(eq(refreshTokensTable.userId, tokenRecord.userId));
+    .where(eq(refreshTokensTable.userId, claimedToken.userId));
 
   res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
 });
