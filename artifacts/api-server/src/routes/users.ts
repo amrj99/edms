@@ -268,8 +268,9 @@ router.post("/:id/reset-password", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Password must be at least 6 characters" });
     return;
   }
+  const now = new Date();
   const [user] = await db.update(usersTable)
-    .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
+    .set({ passwordHash: await hashPassword(newPassword), passwordChangedAt: now, updatedAt: now })
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }

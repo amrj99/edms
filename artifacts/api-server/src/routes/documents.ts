@@ -6,6 +6,7 @@ import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
+import { checkStatusTransition } from "../lib/doc-status-machine.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -541,10 +542,17 @@ router.put("/:id", requireAuth, async (req, res) => {
   const canEdit = DocumentPermissions.canEdit(effectiveRole) || existing[0].createdById === caller.id;
   if (!canEdit) { res.status(403).json({ error: "Forbidden", message: "You do not have permission to edit this document" }); return; }
 
-  // Status changes require DC+ (document_controller, project_manager, admin, system_owner)
-  if (status !== undefined && status !== existing[0].status) {
+  const currentStatus = existing[0].status;
+  const statusChanging = status !== undefined && status !== currentStatus;
+
+  // Status changes: enforce role minimum and valid state-machine transition
+  if (statusChanging) {
     if (!DocumentPermissions.canEdit(effectiveRole)) {
       res.status(403).json({ error: "Forbidden", message: "Only document controllers and above can change document status" }); return;
+    }
+    const transitionError = checkStatusTransition(currentStatus, status, effectiveRole);
+    if (transitionError) {
+      res.status(403).json({ error: "Forbidden", message: transitionError.message }); return;
     }
   }
 
@@ -559,13 +567,24 @@ router.put("/:id", requireAuth, async (req, res) => {
     await db.insert(documentRevisionsTable).values({
       documentId: id,
       revision: revision,
-      status: status || existing[0].status,
+      status: status || currentStatus,
       fileUrl: fileUrl || existing[0].fileUrl,
       fileName: fileName || existing[0].fileName,
-      // comment: use caller-supplied notes if present, otherwise generate a default
       comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
       createdById: req.user!.id,
       fileCarriedForward: !isNewFile,
+    });
+  }
+
+  if (statusChanging) {
+    await createAuditLog({
+      userId: req.user!.id,
+      action: "status_change",
+      entityType: "document",
+      entityId: id,
+      entityTitle: doc.title,
+      projectId,
+      details: { fromStatus: currentStatus, toStatus: status, via: "manual_edit", actorRole: effectiveRole },
     });
   }
 

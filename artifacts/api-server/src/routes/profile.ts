@@ -121,9 +121,10 @@ router.put("/password", async (req: Request, res: Response) => {
   }
 
   const newHash = await hashPassword(newPassword);
+  const now = new Date();
   await db
     .update(usersTable)
-    .set({ passwordHash: newHash, updatedAt: new Date() })
+    .set({ passwordHash: newHash, passwordChangedAt: now, updatedAt: now })
     .where(eq(usersTable.id, userId));
 
   res.json({ message: "Password updated successfully" });

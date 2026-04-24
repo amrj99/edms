@@ -9,6 +9,7 @@ import {
   hashPassword,
   verifyPassword,
   generateSecureToken,
+  hashToken,
   getRefreshTokenExpiryDate,
   getRememberMeExpiry,
   verifyToken,
@@ -31,6 +32,34 @@ const loginRateLimiter = rateLimit({
     res.status(429).json({
       error: "Too Many Requests",
       message: "Too many login attempts. Please wait 15 minutes before trying again.",
+    });
+  },
+});
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too Many Requests",
+      message: "Too many password reset requests. Please wait 15 minutes before trying again.",
+    });
+  },
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too Many Requests",
+      message: "Too many password reset attempts. Please wait 15 minutes before trying again.",
     });
   },
 });
@@ -96,12 +125,12 @@ router.post("/login", loginRateLimiter, async (req, res) => {
   const tokenExpiry = rememberMe ? getRememberMeExpiry() : undefined;
   const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId }, tokenExpiry);
 
-  // Generate refresh token
+  // Generate refresh token — store SHA-256 hash in DB, return plaintext to client
   const refreshToken = generateSecureToken();
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
-    token: refreshToken,
+    token: hashToken(refreshToken),
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
@@ -163,7 +192,7 @@ router.post("/register", async (req, res) => {
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
-    token: refreshToken,
+    token: hashToken(refreshToken),
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
@@ -241,7 +270,7 @@ router.post("/refresh-token", async (req, res) => {
 
   const tokens = await db.select().from(refreshTokensTable)
     .where(and(
-      eq(refreshTokensTable.token, refreshToken),
+      eq(refreshTokensTable.token, hashToken(refreshToken)),
       gt(refreshTokensTable.expiresAt, new Date())
     ))
     .limit(1);
@@ -276,14 +305,14 @@ router.post("/refresh-token", async (req, res) => {
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
-    token: newRefreshToken,
+    token: hashToken(newRefreshToken),
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
   res.json({ token: newAccessToken, refreshToken: newRefreshToken });
 });
 
-router.post("/forgot-password", async (req, res) => {
+router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   const { email } = req.body ?? {};
   if (!email) {
     res.status(400).json({ error: "Bad Request", message: "Email is required" });
@@ -298,10 +327,11 @@ router.post("/forgot-password", async (req, res) => {
     const resetToken = generateSecureToken();
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
+    // Store SHA-256 hash in DB; send plaintext token in the email URL
     await db.insert(passwordResetTokensTable).values({
       userId: user.id,
       organizationId: user.organizationId ?? null,
-      token: resetToken,
+      token: hashToken(resetToken),
       expiresAt,
     });
 
@@ -320,7 +350,7 @@ router.post("/forgot-password", async (req, res) => {
   });
 });
 
-router.post("/reset-password", async (req, res) => {
+router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
   const { token, password } = req.body ?? {};
   if (!token || !password) {
     res.status(400).json({ error: "Bad Request", message: "Token and new password are required" });
@@ -335,10 +365,11 @@ router.post("/reset-password", async (req, res) => {
   // Atomic claim: mark the token used in a single UPDATE so concurrent requests
   // cannot both pass the "not yet used" check. Only the first request wins;
   // subsequent ones find used_at already set and receive 0 rows back.
+  // Hash the provided token before lookup — DB stores SHA-256 hashes only
   const [claimedToken] = await db.update(passwordResetTokensTable)
     .set({ usedAt: new Date() })
     .where(and(
-      eq(passwordResetTokensTable.token, token),
+      eq(passwordResetTokensTable.token, hashToken(token)),
       gt(passwordResetTokensTable.expiresAt, new Date()),
       isNull(passwordResetTokensTable.usedAt),
     ))
@@ -361,9 +392,10 @@ router.post("/reset-password", async (req, res) => {
   }
 
   const passwordHash = await hashPassword(password);
+  const now = new Date();
 
   await db.update(usersTable)
-    .set({ passwordHash, updatedAt: new Date() })
+    .set({ passwordHash, passwordChangedAt: now, updatedAt: now })
     .where(eq(usersTable.id, claimedToken.userId));
 
   // Token already marked used atomically above — no second UPDATE needed.

@@ -103,6 +103,7 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS updated_at                 ti
 ALTER TABLE users ADD COLUMN IF NOT EXISTS department             text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms_at      timestamp;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms_version  text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at    timestamp;
 
 -- refresh_tokens
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);

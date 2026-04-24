@@ -532,6 +532,14 @@ router.post("/instances", async (req, res) => {
 
   // Sync document status → under_review
   syncDocumentStatus(documentId, "under_review");
+  await createAuditLog({
+    userId: req.user!.id,
+    action: "status_change",
+    entityType: "document",
+    entityId: documentId,
+    entityTitle: doc.title,
+    details: { toStatus: "under_review", via: "workflow_start", workflowInstanceId: inst.id },
+  });
 
   // Notify stage responsible
   if (firstStage) notifyStageReached(inst, firstStage, req.user!.id);
@@ -598,6 +606,13 @@ router.post("/instances/:id/advance", async (req, res) => {
     const terminalName = currentStage?.name?.toLowerCase() ?? "";
     const docStatus = terminalName.includes("issued") ? "issued" : "approved";
     syncDocumentStatus(inst.documentId, docStatus);
+    await createAuditLog({
+      userId: req.user!.id,
+      action: "status_change",
+      entityType: "document",
+      entityId: inst.documentId,
+      details: { toStatus: docStatus, via: "workflow_completion", workflowInstanceId: id },
+    });
   }
 
   // Notify next stage responsible
@@ -660,6 +675,13 @@ router.post("/instances/:id/reject", async (req, res) => {
   // Sync document status on hard reject or cancel; returned stays under_review
   if (finalAction === "rejected" || finalAction === "cancelled") {
     syncDocumentStatus(inst.documentId, "draft");
+    await createAuditLog({
+      userId: req.user!.id,
+      action: "status_change",
+      entityType: "document",
+      entityId: inst.documentId,
+      details: { toStatus: "draft", via: `workflow_${finalAction}`, workflowInstanceId: id },
+    });
   }
 
   res.json(await enrichInstance(updated));

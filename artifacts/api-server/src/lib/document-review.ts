@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import { documentsTable, documentRevisionsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { createAuditLog } from "./audit.js";
 
 export type ReviewDecision =
   | "approved"
@@ -58,6 +59,7 @@ export function consolidateDecisions(decisions: ReviewDecision[]): ReviewDecisio
 export async function applyDocumentReviewDecision({
   documentId,
   projectId,
+  organizationId,
   decision,
   reviewerId,
   reviewerName,
@@ -65,6 +67,7 @@ export async function applyDocumentReviewDecision({
 }: {
   documentId: number;
   projectId?: number;
+  organizationId?: number;
   decision: ReviewDecision;
   reviewerId: number;
   reviewerName: string;
@@ -72,14 +75,17 @@ export async function applyDocumentReviewDecision({
 }): Promise<(typeof documentsTable.$inferSelect) | null> {
   const newStatus = decisionToDocumentStatus(decision);
 
-  const whereClause = projectId
-    ? eq(documentsTable.id, documentId)
-    : eq(documentsTable.id, documentId);
+  // Capture fromStatus before the update for audit trail
+  const [before] = await db
+    .select({ status: documentsTable.status, projectId: documentsTable.projectId, organizationId: documentsTable.organizationId })
+    .from(documentsTable)
+    .where(eq(documentsTable.id, documentId))
+    .limit(1);
 
   const [doc] = await db
     .update(documentsTable)
     .set({ status: newStatus as any, updatedAt: new Date() })
-    .where(whereClause)
+    .where(eq(documentsTable.id, documentId))
     .returning();
 
   if (!doc) return null;
@@ -98,6 +104,23 @@ export async function applyDocumentReviewDecision({
     createdById: reviewerId,
     reviewDecision: decision,
     reviewerName,
+  });
+
+  // Audit: record the status change with before/after for traceability
+  await createAuditLog({
+    userId: reviewerId,
+    organizationId: (organizationId ?? before?.organizationId) ?? undefined,
+    action: "status_change",
+    entityType: "document",
+    entityId: documentId,
+    projectId: projectId ?? before?.projectId ?? undefined,
+    details: {
+      fromStatus: before?.status ?? "unknown",
+      toStatus: newStatus,
+      via: "review_decision",
+      decision,
+      reviewerName,
+    },
   });
 
   return doc;
