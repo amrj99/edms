@@ -5,7 +5,7 @@ import {
   correspondenceTable, correspondenceAttachmentsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { hashPassword } from "../lib/auth.js";
+import { verifyPassword, hashToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
@@ -18,7 +18,7 @@ router.get("/transmittal/:token", async (req, res) => {
   const [transmittal] = await db
     .select()
     .from(transmittalsTable)
-    .where(eq(transmittalsTable.shareToken, token))
+    .where(eq(transmittalsTable.shareToken, hashToken(token)))
     .limit(1);
 
   if (!transmittal) {
@@ -36,8 +36,8 @@ router.get("/transmittal/:token", async (req, res) => {
       res.status(401).json({ error: "Password required", passwordRequired: true });
       return;
     }
-    const hash = await hashPassword(password);
-    if (hash !== transmittal.sharePasswordHash) {
+    const valid = await verifyPassword(password, transmittal.sharePasswordHash);
+    if (!valid) {
       res.status(403).json({ error: "Incorrect password" });
       return;
     }
@@ -97,7 +97,7 @@ router.get("/document/:token", async (req, res) => {
   const [doc] = await db
     .select()
     .from(documentsTable)
-    .where(eq(documentsTable.shareToken, token))
+    .where(eq(documentsTable.shareToken, hashToken(token)))
     .limit(1);
 
   if (!doc) {
@@ -115,8 +115,8 @@ router.get("/document/:token", async (req, res) => {
       res.status(401).json({ error: "Password required", passwordRequired: true });
       return;
     }
-    const hash = await hashPassword(password);
-    if (hash !== doc.sharePasswordHash) {
+    const valid = await verifyPassword(password, doc.sharePasswordHash);
+    if (!valid) {
       res.status(403).json({ error: "Incorrect password" });
       return;
     }
@@ -158,7 +158,7 @@ router.get("/correspondence/:token", async (req, res) => {
   const [corr] = await db
     .select()
     .from(correspondenceTable)
-    .where(eq(correspondenceTable.shareToken, token))
+    .where(eq(correspondenceTable.shareToken, hashToken(token)))
     .limit(1);
 
   if (!corr) {
@@ -176,8 +176,8 @@ router.get("/correspondence/:token", async (req, res) => {
       res.status(401).json({ error: "Password required", passwordRequired: true });
       return;
     }
-    const hash = await hashPassword(password);
-    if (hash !== corr.sharePasswordHash) {
+    const valid = await verifyPassword(password, corr.sharePasswordHash);
+    if (!valid) {
       res.status(403).json({ error: "Incorrect password" });
       return;
     }

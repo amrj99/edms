@@ -11,7 +11,7 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { CorrespondencePermissions } from "../lib/permissions.js";
@@ -238,7 +238,7 @@ async function createCorrespondence(
   // 3. Derive from the project if the user is system_owner with no org assigned
   let orgId: number | undefined =
     caller.organizationId ??
-    (req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
+    (isSystemOwner(caller) && req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
 
   if (!orgId && isSystemOwner(caller) && effectiveProjectIdForOrg) {
     const [proj] = await db
@@ -978,24 +978,25 @@ router.post("/:id/share", requireAuth, async (req, res) => {
   const { expiresInDays, password } = req.body;
 
   const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000) : null;
+  const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
+  const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
   const [corr] = await db.update(correspondenceTable)
     .set({
-      shareToken: token,
-      shareExpiresAt: expiresAt ?? undefined,
+      shareToken: hashToken(token),
+      shareExpiresAt: expiresAt,
       sharePasswordHash: passwordHash ?? undefined,
       updatedAt: new Date(),
     })
     .where(eq(correspondenceTable.id, id))
-    .returning({ id: correspondenceTable.id, shareToken: correspondenceTable.shareToken, shareExpiresAt: correspondenceTable.shareExpiresAt });
+    .returning({ id: correspondenceTable.id, shareExpiresAt: correspondenceTable.shareExpiresAt });
 
   if (!corr) { res.status(404).json({ error: "Not found" }); return; }
 
   await createAuditLog({
     userId: req.user!.id, action: "share", entityType: "correspondence",
-    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
   });
 
   const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;

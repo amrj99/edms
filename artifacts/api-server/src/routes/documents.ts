@@ -5,7 +5,7 @@ import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTabl
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, hashToken } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -1043,24 +1043,25 @@ router.post("/:id/share", requireAuth, async (req, res) => {
   const { expiresInDays, password } = req.body;
 
   const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400000) : null;
+  const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
+  const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
   const [doc] = await db.update(documentsTable)
     .set({
-      shareToken: token,
-      shareExpiresAt: expiresAt ?? undefined,
+      shareToken: hashToken(token),
+      shareExpiresAt: expiresAt,
       sharePasswordHash: passwordHash ?? undefined,
       updatedAt: new Date(),
     })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning({ id: documentsTable.id, shareToken: documentsTable.shareToken, shareExpiresAt: documentsTable.shareExpiresAt });
+    .returning({ id: documentsTable.id, shareExpiresAt: documentsTable.shareExpiresAt });
 
   if (!doc) { res.status(404).json({ error: "Not found" }); return; }
 
   await createAuditLog({
     userId: req.user!.id, action: "share", entityType: "document",
-    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
   });
 
   const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;

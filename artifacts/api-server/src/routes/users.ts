@@ -111,13 +111,19 @@ router.post("/", requireAuth, async (req, res) => {
     }
   }
 
+  // Only system_owner may create users in a different organization.
+  // Admins and all other callers are restricted to their own org.
+  const resolvedOrgId = isSystemOwner(req.user!)
+    ? (organizationId ? parseInt(String(organizationId)) : null)
+    : (req.user!.organizationId ?? null);
+
   const [user] = await db.insert(usersTable).values({
     email: email.toLowerCase(),
     passwordHash: await hashPassword(password),
     firstName,
     lastName,
     role,
-    organizationId: organizationId || null,
+    organizationId: resolvedOrgId,
     isActive: true,
   }).returning();
   await createAuditLog({ userId: req.user!.id, action: "create", entityType: "user", entityId: user.id, entityTitle: `${user.firstName} ${user.lastName}` });
@@ -225,7 +231,14 @@ router.put("/:id", requireAuth, async (req, res) => {
   if (lastName !== undefined) updateSet.lastName = lastName;
   if (role !== undefined) updateSet.role = role;
   if (isActive !== undefined) updateSet.isActive = isActive;
-  if ("organizationId" in req.body) updateSet.organizationId = organizationId ?? null;
+  if ("organizationId" in req.body) {
+    // Only system_owner may move a user to a different organization.
+    if (!isSystemOwner(caller)) {
+      res.status(403).json({ error: "Forbidden", message: "Only a system owner may change a user's organization" });
+      return;
+    }
+    updateSet.organizationId = organizationId ?? null;
+  }
   if (department !== undefined) updateSet.department = department || null;
   const [user] = await db.update(usersTable)
     .set(updateSet)

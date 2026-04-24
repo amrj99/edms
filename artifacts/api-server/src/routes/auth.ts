@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "crypto";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -26,7 +26,7 @@ const loginRateLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => (req as any).realIp ?? req.ip ?? "unknown",
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
   handler: (_req, res) => {
     res.status(429).json({
       error: "Too Many Requests",

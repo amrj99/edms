@@ -13,7 +13,8 @@ import {
   projectMembersTable,
 } from "@workspace/db";
 import { eq, isNull, desc, or, inArray, and } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, hashToken } from "../lib/auth.js";
+import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 
@@ -235,22 +236,26 @@ router.put("/correspondence/:id/read", async (req, res) => {
 });
 
 // ─── GET /general/correspondence/:id/share ────────────────────────────────────
-router.get("/correspondence/:id/share", async (req, res) => {
+router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
-  const [corr] = await db.select().from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  const [corr] = await db
+    .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt })
+    .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ shareUrl: corr.shareToken ? `/share/correspondence/${corr.shareToken}` : null, expiresAt: corr.shareExpiresAt });
+  res.json({ hasShareLink: !!corr.hasShareLink, expiresAt: corr.expiresAt });
 });
 
 // ─── POST /general/correspondence/:id/share ───────────────────────────────────
-router.post("/correspondence/:id/share", async (req, res) => {
+router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
-  const token = Math.random().toString(36).substring(2, 12);
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const [corr] = await db.update(correspondenceTable)
-    .set({ shareToken: token, shareExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) })
-    .where(eq(correspondenceTable.id, id)).returning();
+    .set({ shareToken: hashToken(token), shareExpiresAt: expiresAt })
+    .where(eq(correspondenceTable.id, id)).returning({ id: correspondenceTable.id });
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ shareUrl: `/share/correspondence/${token}`, expiresAt: corr.shareExpiresAt });
+  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+  res.json({ shareUrl: `${baseUrl}/shared/correspondence/${token}`, expiresAt });
 });
 
 // ─── DELETE /general/correspondence/:id ──────────────────────────────────────

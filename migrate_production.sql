@@ -1246,6 +1246,15 @@ CREATE INDEX IF NOT EXISTS idx_ext_contacts_org
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ext_contacts_org_email
   ON external_contacts(organization_id, email);
 
+-- ─── SHARE TOKEN SECURITY MIGRATION ──────────────────────────────────────────
+-- Share tokens are now stored as SHA-256 hashes instead of plain text.
+-- Old plain-text tokens cannot be distinguished from new hashes by length alone,
+-- so all existing share tokens are revoked here. Users must regenerate share links
+-- after this migration. This is a one-time security-required revocation.
+UPDATE documents         SET share_token = NULL, share_expires_at = NULL, share_password_hash = NULL WHERE share_token IS NOT NULL;
+UPDATE transmittals      SET share_token = NULL, share_expires_at = NULL, share_password_hash = NULL WHERE share_token IS NOT NULL;
+UPDATE correspondence    SET share_token = NULL, share_expires_at = NULL, share_password_hash = NULL WHERE share_token IS NOT NULL;
+
 -- ─── DONE ─────────────────────────────────────────────────────────────────────
 
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;

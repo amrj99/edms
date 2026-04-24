@@ -7,7 +7,7 @@ import {
   correspondenceTable,
 } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
-import { requireAuth, requireRole, hashPassword, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, requireRole, hashPassword, isSysAdmin, hashToken } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { TransmittalPermissions, checkAssignmentBasedPermission } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -615,33 +615,32 @@ router.post("/:id/share", requireRole("admin", "project_manager", "document_cont
   const { expiresInDays, password } = req.body;
 
   const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = expiresInDays
-    ? new Date(Date.now() + expiresInDays * 86400000)
-    : null;
+  const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
+  const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
   const [transmittal] = await db.update(transmittalsTable)
     .set({
-      shareToken: token,
-      shareExpiresAt: expiresAt ?? undefined,
+      shareToken: hashToken(token),
+      shareExpiresAt: expiresAt,
       sharePasswordHash: passwordHash ?? undefined,
       updatedAt: new Date(),
     })
     .where(eq(transmittalsTable.id, id))
-    .returning({ id: transmittalsTable.id, shareToken: transmittalsTable.shareToken, shareExpiresAt: transmittalsTable.shareExpiresAt });
+    .returning({ id: transmittalsTable.id, shareExpiresAt: transmittalsTable.shareExpiresAt });
 
   if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
 
   await createAuditLog({
     userId: req.user!.id, action: "share", entityType: "transmittal",
-    entityId: id, details: { token, expiresInDays, passwordProtected: !!password },
+    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
   });
 
   const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
   res.json({
     shareUrl: `${baseUrl}/shared/transmittal/${token}`,
     shareToken: token,
-    expiresAt: expiresAt,
+    expiresAt,
   });
 });
 

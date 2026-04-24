@@ -64,6 +64,15 @@ export function generateSecureToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
+/**
+ * Deterministic SHA-256 hash for storing share tokens.
+ * Use this before writing a token to the DB and before looking one up.
+ * bcrypt is not appropriate here because lookups require a deterministic hash.
+ */
+export function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 export function getRefreshTokenExpiryDate(): Date {
   return new Date(Date.now() + REFRESH_TOKEN_EXPIRY * 1000);
 }
