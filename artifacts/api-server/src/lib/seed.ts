@@ -64,8 +64,6 @@ export async function seedDefaultAdmin(): Promise<void> {
     }
 
     logger.info("Admin users ready");
-    logger.info("  admin@admin.com  / Admin123!");
-    logger.info("  owner@system.com / Owner123!");
   } catch (err) {
     logger.error({ err }, "Failed to seed admin users");
   }
