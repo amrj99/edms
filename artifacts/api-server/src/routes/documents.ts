@@ -51,6 +51,12 @@ async function canAccessProject(
 // Folders
 router.get("/folders", requireAuth, async (req, res) => {
   const projectId = parseInt(req.params.projectId);
+  const caller = req.user!;
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
   const folders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, projectId));
   const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
     .from(documentsTable)
