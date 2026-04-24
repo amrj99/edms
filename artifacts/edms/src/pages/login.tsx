@@ -32,6 +32,7 @@ export default function Login() {
   const loginMutation = useLogin();
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [rateLimited, setRateLimited] = useState(false);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -43,12 +44,12 @@ export default function Login() {
   });
 
   const onSubmit = async (data: LoginFormValues) => {
+    if (rateLimited) return;
     setServerError(null);
     try {
       const response = await loginMutation.mutateAsync({
         data: { email: data.email, password: data.password },
       });
-      // Store refresh token
       if ((response as any).refreshToken) {
         localStorage.setItem("edms_refresh_token", (response as any).refreshToken);
       }
@@ -57,6 +58,12 @@ export default function Login() {
       }
       setAuthToken(response.token);
     } catch (error: any) {
+      const status = error?.status ?? error?.response?.status;
+      if (status === 429) {
+        setRateLimited(true);
+        setServerError("Too many login attempts. Please wait 15 minutes before trying again.");
+        return;
+      }
       const msg = error?.body?.message || error?.message || "Invalid email or password. Please try again.";
       setServerError(msg);
     }
@@ -102,7 +109,7 @@ export default function Login() {
                           placeholder="you@company.com"
                           type="email"
                           autoComplete="email"
-                          disabled={loginMutation.isPending}
+                          disabled={loginMutation.isPending || rateLimited}
                           className="h-11"
                           {...field}
                         />
@@ -129,7 +136,7 @@ export default function Login() {
                             placeholder="••••••••"
                             type={showPassword ? "text" : "password"}
                             autoComplete="current-password"
-                            disabled={loginMutation.isPending}
+                            disabled={loginMutation.isPending || rateLimited}
                             className="h-11 pr-10"
                             {...field}
                           />
@@ -157,7 +164,7 @@ export default function Login() {
                         <Checkbox
                           checked={field.value}
                           onCheckedChange={field.onChange}
-                          disabled={loginMutation.isPending}
+                          disabled={loginMutation.isPending || rateLimited}
                         />
                       </FormControl>
                       <FormLabel className="text-sm font-normal cursor-pointer">
@@ -170,13 +177,15 @@ export default function Login() {
                 <Button
                   type="submit"
                   className="w-full h-11 text-base font-semibold"
-                  disabled={loginMutation.isPending}
+                  disabled={loginMutation.isPending || rateLimited}
                 >
                   {loginMutation.isPending ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Signing in...
                     </>
+                  ) : rateLimited ? (
+                    "Too many attempts — please wait"
                   ) : (
                     "Sign in"
                   )}
@@ -195,10 +204,7 @@ export default function Login() {
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            Default admin:{" "}
-            <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">admin@admin.com</span>
-            {" / "}
-            <span className="font-mono bg-muted px-1.5 py-0.5 rounded text-xs">Admin123!</span>
+            No account? Contact your system administrator for access.
           </p>
           {(import.meta.env.VITE_GIT_HASH && import.meta.env.VITE_GIT_HASH !== "unknown") && (
             <p className="text-center text-[10px] text-muted-foreground/40 font-mono mt-1" title={`Built: ${import.meta.env.VITE_BUILD_TIME ?? "unknown"}`}>

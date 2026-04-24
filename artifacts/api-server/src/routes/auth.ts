@@ -1,5 +1,6 @@
 import { Router } from "express";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -18,6 +19,22 @@ import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
+// ─── Login rate limiter ───────────────────────────────────────────────────────
+// 5 attempts per 15 minutes per IP. Resets automatically after the window.
+const loginRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as any).realIp ?? req.ip ?? "unknown",
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too Many Requests",
+      message: "Too many login attempts. Please wait 15 minutes before trying again.",
+    });
+  },
+});
+
 function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: string) {
   return {
     id: user.id,
@@ -34,7 +51,7 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
   };
 }
 
-router.post("/login", async (req, res) => {
+router.post("/login", loginRateLimiter, async (req, res) => {
   const body = req.body ?? {};
   const { email, password, rememberMe } = body;
   if (!email || !password) {
