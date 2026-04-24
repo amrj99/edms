@@ -14,6 +14,11 @@ const router = Router();
 // ─── Per-token rate limiter ───────────────────────────────────────────────────
 // Limits password-guessing attempts on share links to 10 per 15 minutes per
 // token. Keyed by token param (not IP) so VPN-hopping doesn't bypass the limit.
+//
+// Storage: MemoryStore (express-rate-limit default) — in-process, not shared.
+// Single-instance VPS deployment: this is correct and sufficient.
+// Multi-instance / horizontal scale: replace with a Redis-backed store
+//   (e.g. rate-limit-redis) so counters are consistent across all processes.
 const shareTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
