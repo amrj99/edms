@@ -1255,6 +1255,46 @@ UPDATE documents         SET share_token = NULL, share_expires_at = NULL, share_
 UPDATE transmittals      SET share_token = NULL, share_expires_at = NULL, share_password_hash = NULL WHERE share_token IS NOT NULL;
 UPDATE correspondence    SET share_token = NULL, share_expires_at = NULL, share_password_hash = NULL WHERE share_token IS NOT NULL;
 
+-- ─── CORRESPONDENCE ORGANIZATION_ID COLUMN GUARD ─────────────────────────────
+-- Ensures organization_id exists on the correspondence table. It may already be
+-- present on databases that went through pre-v4 migrations; IF NOT EXISTS is safe.
+ALTER TABLE correspondence ADD COLUMN IF NOT EXISTS organization_id integer REFERENCES organizations(id);
+
+-- ─── CORRESPONDENCE ORPHAN BACKFILL (security fix 2025-04) ───────────────────
+-- Rows with organization_id IS NULL AND project_id IS NULL are "general"
+-- correspondence with no tenant context. Without an organization_id the
+-- general-correspondence share-link handler cannot enforce org isolation.
+--
+-- Strategy: inherit the organization of the sender (from_user_id).
+-- If the sender has no org (edge case), the row remains NULL and is harmless
+-- (the general.ts handler still requires authentication to create a share link).
+--
+-- This UPDATE is idempotent — rows that already have organization_id set are
+-- untouched by the WHERE clause.
+UPDATE correspondence c
+SET    organization_id = u.organization_id
+FROM   users u
+WHERE  c.from_user_id     = u.id
+  AND  c.organization_id  IS NULL
+  AND  c.project_id       IS NULL
+  AND  u.organization_id  IS NOT NULL;
+
+-- Verification: after the backfill no orphan rows should remain (unless the
+-- sender had no org, which is an edge-case handled at the application level).
+DO $$
+DECLARE orphan_count integer;
+BEGIN
+  SELECT COUNT(*) INTO orphan_count
+  FROM correspondence
+  WHERE organization_id IS NULL AND project_id IS NULL;
+
+  IF orphan_count > 0 THEN
+    RAISE WARNING 'correspondence: % row(s) still have organization_id IS NULL AND project_id IS NULL — sender likely has no org assigned. Review manually.', orphan_count;
+  ELSE
+    RAISE NOTICE 'correspondence backfill: OK — zero orphan rows remain.';
+  END IF;
+END $$;
+
 -- ─── DONE ─────────────────────────────────────────────────────────────────────
 
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;
