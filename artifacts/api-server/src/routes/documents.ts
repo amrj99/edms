@@ -20,8 +20,9 @@ import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
+import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
 
 const router = Router({ mergeParams: true });
 
@@ -1155,6 +1156,12 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;
   if (!uploadedFiles || uploadedFiles.length === 0) {
     return res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." });
+  }
+
+  // Content-based safety check — catches HTML/SVG regardless of declared MIME or extension
+  const contentError = validateUploadedFiles(uploadedFiles);
+  if (contentError) {
+    return res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError });
   }
 
   const orgId = req.user!.organizationId ?? null;

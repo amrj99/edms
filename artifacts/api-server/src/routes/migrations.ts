@@ -1,5 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
+import { fileFilter, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 import { db } from "@workspace/db";
 import {
   migrationJobsTable, migrationItemsTable, documentsTable, foldersTable,
@@ -9,7 +10,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
 const router = Router({ mergeParams: true });
 
 // ── Plan gates ───────────────────────────────────────────────────────────────

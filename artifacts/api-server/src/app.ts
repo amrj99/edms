@@ -51,7 +51,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   return helmet({
     frameguard: { action: "deny" },
     crossOriginEmbedderPolicy: false,
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
     strictTransportSecurity: isProd
       ? { maxAge: 31_536_000, includeSubDomains: true }
       : false,

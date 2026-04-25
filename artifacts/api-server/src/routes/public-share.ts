@@ -11,6 +11,13 @@ import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
+// All share-link responses must never be cached — they contain sensitive data
+// and the password gate / expiry check must run on every request.
+router.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 // ─── Per-token rate limiter ───────────────────────────────────────────────────
 // Limits password-guessing attempts on share links to 10 per 15 minutes per
 // token. Keyed by token param (not IP) so VPN-hopping doesn't bypass the limit.
