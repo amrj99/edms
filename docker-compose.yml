@@ -51,6 +51,10 @@ services:
       # Change DEFAULT_STORAGE_TYPE to "s3" and set S3_* vars to use MinIO / S3.
       DEFAULT_STORAGE_TYPE: ${DEFAULT_STORAGE_TYPE:-onpremise}
       DEFAULT_STORAGE_PATH: ${DEFAULT_STORAGE_PATH:-/app/uploads}
+      # ── Upload size limit ────────────────────────────────────────────────────
+      # Maximum file upload size in MB. Default: 1024 (1 GB).
+      # Must match (or be lower than) client_max_body_size in nginx.conf.
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-1024}
     volumes:
       - uploads_data:/app/uploads
     depends_on:
