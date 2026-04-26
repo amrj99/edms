@@ -40,8 +40,10 @@ export const plansTable = pgTable("plans", {
   priceAed:           integer("price_aed").notNull().default(0), // price per month in AED (integer)
   currency:           text("currency").notNull().default("aed"),
   interval:           text("interval").notNull().default("month"),
+  minUsers:           integer("min_users"),                      // null = no minimum
   maxUsers:           integer("max_users"),                      // null = unlimited
   storageMb:          integer("storage_mb").notNull().default(0),
+  maxFileSizeMb:      integer("max_file_size_mb").notNull().default(1024),
   migrationMaxFiles:  integer("migration_max_files").notNull().default(0), // 0 = wizard disabled
   rateLimitRpm:       integer("rate_limit_rpm"),                 // null = unlimited
   features:           jsonb("features").notNull().default([]),   // string[] — marketing copy

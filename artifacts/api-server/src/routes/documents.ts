@@ -1179,13 +1179,27 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
 
     const planId = await getOrgPlan(orgId);
     const plan = PLANS.find(p => p.id === planId);
-    if (plan && orgStorage) {
-      const usedMb = orgStorage.storageUsedMb ?? 0;
-      if (usedMb + totalNewMb > plan.storageMb) {
-        return res.status(403).json({
-          error: "STORAGE_LIMIT_REACHED",
-          message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
+    if (plan) {
+      // Per-plan file size enforcement
+      const maxFileSizeMb = plan.maxFileSizeMb ?? 1024;
+      const oversized = uploadedFiles.filter(f => f.size / (1024 * 1024) > maxFileSizeMb);
+      if (oversized.length > 0) {
+        const names = oversized.map(f => f.originalname).join(", ");
+        return res.status(413).json({
+          error: "FILE_TOO_LARGE",
+          message: `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
         });
+      }
+
+      // Storage quota enforcement
+      if (orgStorage) {
+        const usedMb = orgStorage.storageUsedMb ?? 0;
+        if (usedMb + totalNewMb > plan.storageMb) {
+          return res.status(403).json({
+            error: "STORAGE_LIMIT_REACHED",
+            message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
+          });
+        }
       }
     }
   }

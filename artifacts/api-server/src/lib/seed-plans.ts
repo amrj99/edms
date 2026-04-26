@@ -35,8 +35,10 @@ const PLAN_SEED_DATA = [
     priceAed:           0,
     currency:           "aed",
     interval:           "month",
+    minUsers:           null as number | null,
     maxUsers:           null as number | null,
     storageMb:          0,
+    maxFileSizeMb:      250,
     migrationMaxFiles:  0,
     rateLimitRpm:       300 as number | null,
     features:           [] as string[],
@@ -50,8 +52,10 @@ const PLAN_SEED_DATA = [
     priceAed:           45,
     currency:           "aed",
     interval:           "month",
+    minUsers:           null as number | null,
     maxUsers:           10 as number | null,
     storageMb:          51200,
+    maxFileSizeMb:      250,
     migrationMaxFiles:  0,
     rateLimitRpm:       400 as number | null,
     features:           [
@@ -71,8 +75,10 @@ const PLAN_SEED_DATA = [
     priceAed:           65,
     currency:           "aed",
     interval:           "month",
+    minUsers:           null as number | null,
     maxUsers:           25 as number | null,
     storageMb:          256000,
+    maxFileSizeMb:      500,
     migrationMaxFiles:  200,
     rateLimitRpm:       600 as number | null,
     features:           [
@@ -93,8 +99,10 @@ const PLAN_SEED_DATA = [
     priceAed:           80,
     currency:           "aed",
     interval:           "month",
+    minUsers:           15 as number | null,
     maxUsers:           100 as number | null,
     storageMb:          1048576,
+    maxFileSizeMb:      1024,
     migrationMaxFiles:  1000,
     rateLimitRpm:       1500 as number | null,
     features:           [
@@ -116,8 +124,10 @@ const PLAN_SEED_DATA = [
     priceAed:           95,
     currency:           "aed",
     interval:           "month",
+    minUsers:           null as number | null,
     maxUsers:           null as number | null,
     storageMb:          1048576,
+    maxFileSizeMb:      1024,
     migrationMaxFiles:  -1,
     rateLimitRpm:       null as number | null,
     features:           [
@@ -150,8 +160,10 @@ async function ensureTablesExist(): Promise<void> {
       price_aed            INTEGER NOT NULL DEFAULT 0,
       currency             TEXT    NOT NULL DEFAULT 'aed',
       interval             TEXT    NOT NULL DEFAULT 'month',
+      min_users            INTEGER,
       max_users            INTEGER,
       storage_mb           INTEGER NOT NULL DEFAULT 0,
+      max_file_size_mb     INTEGER NOT NULL DEFAULT 1024,
       migration_max_files  INTEGER NOT NULL DEFAULT 0,
       rate_limit_rpm       INTEGER,
       features             JSONB   NOT NULL DEFAULT '[]',
@@ -161,6 +173,8 @@ async function ensureTablesExist(): Promise<void> {
       updated_at           TIMESTAMP NOT NULL DEFAULT now()
     )
   `);
+  await db.execute(sql`ALTER TABLE plans ADD COLUMN IF NOT EXISTS min_users INTEGER`);
+  await db.execute(sql`ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_file_size_mb INTEGER NOT NULL DEFAULT 1024`);
 
   // org_feature_overrides — references organizations + users (both exist in prod)
   await db.execute(sql`
@@ -215,14 +229,16 @@ export async function seedPlans(): Promise<void> {
         INSERT INTO plans (
           plan_id, name, description,
           price_aed, currency, interval,
-          max_users, storage_mb, migration_max_files, rate_limit_rpm,
+          min_users, max_users, storage_mb, max_file_size_mb,
+          migration_max_files, rate_limit_rpm,
           features, stripe_price_env, is_active,
           created_at, updated_at
         ) VALUES (
           ${plan.planId}, ${plan.name}, ${plan.description},
           ${plan.priceAed}, ${plan.currency}, ${plan.interval},
-          ${plan.maxUsers ?? null}, ${plan.storageMb}, ${plan.migrationMaxFiles},
-          ${plan.rateLimitRpm ?? null},
+          ${plan.minUsers ?? null}, ${plan.maxUsers ?? null},
+          ${plan.storageMb}, ${plan.maxFileSizeMb},
+          ${plan.migrationMaxFiles}, ${plan.rateLimitRpm ?? null},
           ${JSON.stringify(plan.features)}::jsonb,
           ${plan.stripePriceEnv ?? null}, ${plan.isActive},
           now(), now()
@@ -233,8 +249,10 @@ export async function seedPlans(): Promise<void> {
           price_aed           = EXCLUDED.price_aed,
           currency            = EXCLUDED.currency,
           interval            = EXCLUDED.interval,
+          min_users           = EXCLUDED.min_users,
           max_users           = EXCLUDED.max_users,
           storage_mb          = EXCLUDED.storage_mb,
+          max_file_size_mb    = EXCLUDED.max_file_size_mb,
           migration_max_files = EXCLUDED.migration_max_files,
           rate_limit_rpm      = EXCLUDED.rate_limit_rpm,
           features            = EXCLUDED.features,

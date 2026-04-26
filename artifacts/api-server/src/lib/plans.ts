@@ -6,8 +6,10 @@ export interface PlanConfig {
   currency: string;
   interval: string;
   features: string[];
+  minUsers?: number;
   maxUsers: number | null;
   storageMb: number;
+  maxFileSizeMb: number;
   stripePriceEnv: string;
   popular?: boolean;
 }
@@ -29,6 +31,7 @@ export const PLANS: PlanConfig[] = [
     ],
     maxUsers: 10,
     storageMb: 51200,
+    maxFileSizeMb: 250,
     stripePriceEnv: "STRIPE_PRICE_STARTER",
   },
   {
@@ -48,6 +51,7 @@ export const PLANS: PlanConfig[] = [
     ],
     maxUsers: 25,
     storageMb: 256000,
+    maxFileSizeMb: 500,
     stripePriceEnv: "STRIPE_PRICE_BASIC",
     popular: true,
   },
@@ -67,8 +71,10 @@ export const PLANS: PlanConfig[] = [
       "Custom workflows",
       "API access",
     ],
+    minUsers: 15,
     maxUsers: 100,
     storageMb: 1048576,
+    maxFileSizeMb: 1024,
     stripePriceEnv: "STRIPE_PRICE_PROFESSIONAL",
   },
   {
@@ -90,6 +96,7 @@ export const PLANS: PlanConfig[] = [
     ],
     maxUsers: null,
     storageMb: 1048576,
+    maxFileSizeMb: 1024,
     stripePriceEnv: "STRIPE_PRICE_ENTERPRISE",
   },
 ];

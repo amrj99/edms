@@ -58,7 +58,7 @@ function formatSize(bytes: number) {
 }
 
 const ACCEPT = "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,image/*,.dwg,.dxf";
-const MAX_MB = 100;
+const MAX_MB = 1024;
 
 function defaultMeta(file: File): DocMeta {
   return {

@@ -22,8 +22,10 @@ interface Plan {
   description: string;
   priceAed: number;
   features: string[];
+  minUsers?: number | null;
   maxUsers: number | null;
   storageMb: number;
+  maxFileSizeMb?: number | null;
   popular?: boolean;
 }
 
@@ -211,7 +213,14 @@ function PlanCard({
           ))}
         </ul>
         <div className="mt-4 text-xs text-muted-foreground">
-          {plan.maxUsers ? `Up to ${plan.maxUsers} users` : "Unlimited users"} · {formatStorage(plan.storageMb)} storage
+          {[
+            plan.minUsers ? `Min. ${plan.minUsers} seats` : null,
+            plan.maxUsers ? `Up to ${plan.maxUsers} users` : "Unlimited users",
+            `${formatStorage(plan.storageMb)} storage`,
+            plan.maxFileSizeMb
+              ? `${plan.maxFileSizeMb >= 1024 ? `${plan.maxFileSizeMb / 1024} GB` : `${plan.maxFileSizeMb} MB`} max file`
+              : null,
+          ].filter(Boolean).join(" · ")}
         </div>
       </CardContent>
       <CardFooter className="flex flex-col gap-3">
