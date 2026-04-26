@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { PLANS, getDefaultModulesForPlan } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { grantCredits, AI_CREDIT_PACKS } from "../lib/ai-credits.js";
 
 export { PLANS };
 
@@ -285,6 +286,25 @@ router.post(
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
           const orgId = parseInt(session.metadata?.orgId ?? "0");
+
+          // ── AI credit pack purchase (one-time payment) ─────────────────────
+          if (session.metadata?.type === "ai_credit_pack" && orgId) {
+            const packId = session.metadata.packId;
+            const credits = parseInt(session.metadata.credits ?? "0");
+            const pack = AI_CREDIT_PACKS.find(p => p.id === packId);
+            if (pack && credits > 0) {
+              await grantCredits(orgId, credits, "purchase", {
+                packId,
+                stripeSessionId: session.id,
+                amountTotal: session.amount_total,
+              });
+              logger.info({ orgId, packId, credits }, "AI credits granted via pack purchase");
+            } else {
+              logger.warn({ orgId, packId, credits }, "AI credit pack purchase: unknown pack or zero credits");
+            }
+            break;
+          }
+
           const planId = session.metadata?.planId ?? "free";
           const subscriptionId = session.subscription as string;
           const customerId = session.customer as string;

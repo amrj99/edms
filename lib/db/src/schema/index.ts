@@ -10,6 +10,7 @@ export * from "./metadata";
 export * from "./audit-logs";
 export * from "./password-reset-tokens";
 export * from "./ai";
+export * from "./ai-credit-transactions";
 export * from "./transmittals";
 export * from "./notifications";
 export * from "./config";

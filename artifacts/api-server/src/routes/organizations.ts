@@ -5,6 +5,7 @@ import { eq, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
+import { grantCredits, INITIAL_FREE_CREDITS } from "../lib/ai-credits.js";
 
 const router = Router();
 
@@ -116,6 +117,13 @@ router.post("/", requireAuth, async (req, res) => {
     }).onConflictDoNothing();
   } catch (cfgErr) {
     logger.error({ err: cfgErr, orgId: org.id }, "[org-create] Failed to create default org_config — org created but will need manual config setup");
+  }
+
+  // Grant initial free AI credits to every new organisation.
+  try {
+    await grantCredits(org.id, INITIAL_FREE_CREDITS, "grant", { reason: "initial_free_grant" });
+  } catch (credErr) {
+    logger.error({ err: credErr, orgId: org.id }, "[org-create] Failed to grant initial AI credits — org created, credits can be granted manually");
   }
 
   res.status(201).json({ ...org, userCount: 0, projectCount: 0 });

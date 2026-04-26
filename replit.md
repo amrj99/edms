@@ -40,6 +40,7 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 -   **Usage Monitoring Dashboard:** Provides per-organization metrics for various system activities.
 -   **Onboarding:** Invite-only user creation via admin panel.
 -   **Stripe Billing:** Integrated for subscription management and webhooks.
+-   **AI Credits System:** Organization-level credit wallet (separate from subscription plans). New orgs receive 1,000 free credits. Atomic credit deduction prevents race conditions. One-time Stripe Checkout for three pack sizes (Small 1k, Medium 5k, Large 20k). Feature costs: ai_summary=10, ai_classify=5, ai_extract=15, ai_search=2. Key files: `artifacts/api-server/src/lib/ai-credits.ts`, `artifacts/api-server/src/routes/ai-credits.ts`, `artifacts/api-server/src/middlewares/require-ai-credits.ts`.
 -   **Elasticsearch Search:** Provides full-text search, with SQL fallback.
 
 **Key Features:**

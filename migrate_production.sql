@@ -1296,6 +1296,35 @@ BEGIN
   END IF;
 END $$;
 
+-- ─── SECTION: AI CREDITS SYSTEM ──────────────────────────────────────────────
+-- Phase: AI add-on credits (separate from subscription plans)
+-- Safe to run multiple times — all statements use IF NOT EXISTS / DO EXCEPTION.
+
+DO $$ BEGIN
+  CREATE TYPE ai_transaction_type AS ENUM ('purchase','consumption','grant');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ai_feature AS ENUM ('ai_summary','ai_classify','ai_extract','ai_search');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS ai_credits_balance         INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS ai_credits_total_purchased INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS ai_credit_transactions (
+  id               SERIAL PRIMARY KEY,
+  organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  amount           INTEGER NOT NULL,
+  transaction_type ai_transaction_type NOT NULL,
+  feature          ai_feature,
+  metadata         JSONB,
+  created_at       TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ai_credit_transactions_org_idx
+  ON ai_credit_transactions(organization_id, created_at DESC);
+
 -- ─── DONE ─────────────────────────────────────────────────────────────────────
 
 SELECT 'Migration complete — all tables and columns are up to date.' AS result;

@@ -22,6 +22,9 @@ export const organizationsTable = pgTable("organizations", {
   corrUnreadReminderHours: integer("corr_unread_reminder_hours").notNull().default(48),
   corrNoResponseHours:     integer("corr_no_response_hours").notNull().default(72),
   corrSlaDueSoonHours:     integer("corr_sla_due_soon_hours").notNull().default(24),
+  // ── AI Credits ──────────────────────────────────────────────────────────────
+  aiCreditsBalance:        integer("ai_credits_balance").notNull().default(0),
+  aiCreditsTotalPurchased: integer("ai_credits_total_purchased").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
