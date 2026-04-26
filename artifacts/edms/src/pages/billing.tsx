@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import {
   CheckCircle2, Loader2, AlertCircle, CreditCard,
   Zap, Building2, Rocket, Crown, ArrowRight, ExternalLink, RefreshCw,
+  Sparkles, ShoppingCart, TrendingDown, TrendingUp, Clock,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -34,6 +35,29 @@ interface BillingStatus {
   seats: number;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+}
+
+interface AiCreditTransaction {
+  id: number;
+  amount: number;
+  transactionType: "purchase" | "consumption" | "grant";
+  feature: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+interface AiCreditPack {
+  id: string;
+  name: string;
+  credits: number;
+  description: string;
+}
+
+interface AiCreditsBalance {
+  balance: number;
+  totalPurchased: number;
+  featureCosts: Record<string, number>;
+  recentTransactions: AiCreditTransaction[];
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
@@ -77,6 +101,37 @@ async function openPortal(token: string): Promise<{ url: string }> {
   });
   const json = await r.json();
   if (!r.ok) throw new Error(json.message ?? "Portal failed");
+  return json;
+}
+
+async function fetchAiBalance(token: string): Promise<AiCreditsBalance> {
+  const r = await fetch(`${BASE}api/ai-credits/balance`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw new Error("Failed to load AI credits balance");
+  return r.json();
+}
+
+async function fetchAiPacks(token: string): Promise<{ packs: AiCreditPack[] }> {
+  const r = await fetch(`${BASE}api/ai-credits/packs`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) throw new Error("Failed to load AI credit packs");
+  return r.json();
+}
+
+async function purchaseAiPack(token: string, packId: string): Promise<{ url: string }> {
+  const r = await fetch(`${BASE}api/ai-credits/purchase`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      packId,
+      successUrl: `${window.location.origin}/billing?ai_success=true`,
+      cancelUrl: `${window.location.origin}/billing?ai_canceled=true`,
+    }),
+  });
+  const json = await r.json();
+  if (!r.ok) throw new Error(json.message ?? "Purchase failed");
   return json;
 }
 
@@ -184,6 +239,230 @@ function PlanCard({
   );
 }
 
+// ─── AI Credits Section ────────────────────────────────────────────────────────
+const LOW_BALANCE_THRESHOLD = 100;
+
+const PACK_ACCENT: Record<string, { border: string; badge: string; icon: string }> = {
+  ai_pack_small:  { border: "border-blue-200",   badge: "bg-blue-50 text-blue-700",   icon: "bg-blue-50 text-blue-600 border-blue-200" },
+  ai_pack_medium: { border: "border-violet-200",  badge: "bg-violet-50 text-violet-700", icon: "bg-violet-50 text-violet-600 border-violet-200" },
+  ai_pack_large:  { border: "border-amber-200",   badge: "bg-amber-50 text-amber-700",  icon: "bg-amber-50 text-amber-600 border-amber-200" },
+};
+
+function txLabel(tx: AiCreditTransaction): string {
+  if (tx.transactionType === "grant") return "Free credits granted";
+  if (tx.transactionType === "purchase") {
+    const meta = tx.metadata as any;
+    return meta?.packId ? `Pack purchased (${meta.packId.replace("ai_pack_", "")})` : "Credits purchased";
+  }
+  if (tx.feature) return tx.feature.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  return "AI usage";
+}
+
+function AiCreditsSection({ token }: { token: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: balanceData, isLoading: balanceLoading, refetch: refetchBalance } = useQuery({
+    queryKey: ["ai-credits-balance"],
+    queryFn: () => fetchAiBalance(token),
+    enabled: !!token,
+    staleTime: 15_000,
+  });
+
+  const { data: packsData, isLoading: packsLoading } = useQuery({
+    queryKey: ["ai-credits-packs"],
+    queryFn: () => fetchAiPacks(token),
+    enabled: !!token,
+    staleTime: 300_000,
+  });
+
+  const purchaseMutation = useMutation({
+    mutationFn: (packId: string) => purchaseAiPack(token, packId),
+    onSuccess: (data) => {
+      if (data.url) window.location.href = data.url;
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Purchase failed",
+        description: err.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const balance = balanceData?.balance ?? 0;
+  const totalPurchased = balanceData?.totalPurchased ?? 0;
+  const transactions = balanceData?.recentTransactions ?? [];
+  const packs = packsData?.packs ?? [];
+  const isLow = balance <= LOW_BALANCE_THRESHOLD;
+  const isZero = balance === 0;
+
+  return (
+    <div className="space-y-6">
+      {/* Section header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-violet-500" />
+            AI Credits
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            One-time credit packs for AI features. No subscription — buy when you need.
+          </p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={() => refetchBalance()} disabled={balanceLoading}>
+          <RefreshCw className="h-3.5 w-3.5 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {/* Low / zero balance warning */}
+      {!balanceLoading && isZero && (
+        <Alert className="border-red-200 bg-red-50">
+          <AlertCircle className="h-4 w-4 text-red-600" />
+          <AlertDescription className="text-red-800">
+            <strong>No AI credits remaining.</strong> AI features are currently disabled for your organisation.
+            Purchase a pack below to re-enable them.
+          </AlertDescription>
+        </Alert>
+      )}
+      {!balanceLoading && !isZero && isLow && (
+        <Alert className="border-amber-200 bg-amber-50">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800">
+            <strong>Credits running low</strong> — {balance} remaining. Consider topping up to avoid interruptions.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Balance summary */}
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            {balanceLoading ? (
+              <div className="h-10 flex items-center">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground mb-1">Current Balance</p>
+                <p className={`text-3xl font-bold ${isZero ? "text-red-600" : isLow ? "text-amber-600" : "text-foreground"}`}>
+                  {balance.toLocaleString()}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">credits available</p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 pb-4">
+            {balanceLoading ? (
+              <div className="h-10 flex items-center">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground mb-1">Total Purchased</p>
+                <p className="text-3xl font-bold">{totalPurchased.toLocaleString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">credits all time</p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Credit packs */}
+      <div>
+        <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+          <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+          Buy Credits
+        </h3>
+        {packsLoading ? (
+          <div className="flex justify-center py-6">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {packs.map((pack) => {
+              const accent = PACK_ACCENT[pack.id] ?? PACK_ACCENT.ai_pack_small;
+              const isBuying = purchaseMutation.isPending && purchaseMutation.variables === pack.id;
+              return (
+                <Card key={pack.id} className={`border-2 ${accent.border} flex flex-col`}>
+                  <CardHeader className="pb-2">
+                    <div className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border mb-2 ${accent.icon}`}>
+                      <Sparkles className="h-4 w-4" />
+                    </div>
+                    <CardTitle className="text-base">{pack.name}</CardTitle>
+                    <CardDescription className="text-xs">{pack.description}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex-1 pb-2">
+                    <p className="text-2xl font-bold">{pack.credits.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">credits</p>
+                  </CardContent>
+                  <CardFooter>
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      disabled={purchaseMutation.isPending}
+                      onClick={() => purchaseMutation.mutate(pack.id)}
+                    >
+                      {isBuying
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                        : <ShoppingCart className="h-3.5 w-3.5 mr-1.5" />
+                      }
+                      Buy
+                    </Button>
+                  </CardFooter>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Recent transactions */}
+      {!balanceLoading && transactions.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            Recent Activity
+          </h3>
+          <Card>
+            <CardContent className="p-0">
+              <ul className="divide-y">
+                {transactions.map((tx) => (
+                  <li key={tx.id} className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {tx.amount > 0
+                        ? <TrendingUp className="h-4 w-4 text-green-500 shrink-0" />
+                        : <TrendingDown className="h-4 w-4 text-red-400 shrink-0" />
+                      }
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{txLabel(tx)}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(tx.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          {" "}
+                          {new Date(tx.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`text-sm font-semibold shrink-0 ml-4 ${tx.amount > 0 ? "text-green-600" : "text-foreground"}`}>
+                      {tx.amount > 0 ? "+" : ""}{tx.amount.toLocaleString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {!balanceLoading && transactions.length === 0 && (
+        <p className="text-sm text-muted-foreground text-center py-4">No transactions yet.</p>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function BillingPage() {
   const { token } = useAuth();
@@ -193,6 +472,8 @@ export default function BillingPage() {
   const urlParams = new URLSearchParams(window.location.search);
   const justSucceeded = urlParams.get("success") === "true";
   const justCanceled = urlParams.get("canceled") === "true";
+  const aiJustSucceeded = urlParams.get("ai_success") === "true";
+  const aiJustCanceled = urlParams.get("ai_canceled") === "true";
 
   const { data: plansData, isLoading: plansLoading } = useQuery({
     queryKey: ["billing-plans"],
@@ -266,7 +547,7 @@ export default function BillingPage() {
         </p>
       </div>
 
-      {/* Success / cancel banners */}
+      {/* Success / cancel banners — subscription */}
       {justSucceeded && (
         <Alert className="border-green-200 bg-green-50">
           <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -279,6 +560,22 @@ export default function BillingPage() {
         <Alert>
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>Checkout was canceled. No charges were made.</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Success / cancel banners — AI credits */}
+      {aiJustSucceeded && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800">
+            AI credits purchased successfully! Your balance has been updated.
+          </AlertDescription>
+        </Alert>
+      )}
+      {aiJustCanceled && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>AI credit purchase was canceled. No charges were made.</AlertDescription>
         </Alert>
       )}
 
@@ -383,6 +680,11 @@ export default function BillingPage() {
           </AlertDescription>
         </Alert>
       )}
+
+      <Separator />
+
+      {/* AI Credits section */}
+      {token && <AiCreditsSection token={token} />}
     </div>
   );
 }
