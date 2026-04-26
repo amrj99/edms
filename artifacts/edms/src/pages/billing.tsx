@@ -172,7 +172,9 @@ function PlanCard({
   onSelect: (planId: string, seats: number) => void;
   loading: boolean;
 }) {
-  const [localSeats, setLocalSeats] = useState(seats || 1);
+  const minSeats = plan.minUsers ?? 1;
+  const [localSeats, setLocalSeats] = useState(Math.max(seats || 0, minSeats));
+  const belowMin = localSeats < minSeats;
 
   return (
     <Card className={`relative flex flex-col transition-all border-2 ${isCurrent ? "border-primary shadow-lg shadow-primary/10" : plan.popular ? "border-violet-300" : "border-border"}`}>
@@ -216,8 +218,10 @@ function PlanCard({
           {[
             plan.minUsers ? `Min. ${plan.minUsers} users` : null,
             plan.maxUsers ? `Up to ${plan.maxUsers} users` : "Unlimited users",
-            `${formatStorage(plan.storageMb)} storage`,
-            plan.maxFileSizeMb
+            plan.id === "enterprise" ? "From 3 TB (custom)" : `${formatStorage(plan.storageMb)} storage`,
+            plan.id === "enterprise"
+              ? "Custom (up to 5 GB)"
+              : plan.maxFileSizeMb
               ? `${plan.maxFileSizeMb >= 1024 ? `${plan.maxFileSizeMb / 1024} GB` : `${plan.maxFileSizeMb} MB`} max file`
               : null,
           ].filter(Boolean).join(" · ")}
@@ -234,25 +238,33 @@ function PlanCard({
           </Button>
         ) : (
           <>
-            <div className="w-full flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Seats:</Label>
-              <Input
-                type="number"
-                min={1}
-                max={plan.maxUsers ?? 9999}
-                value={localSeats}
-                onChange={e => setLocalSeats(Math.max(1, parseInt(e.target.value) || 1))}
-                className="h-8 w-20 text-sm"
-                disabled={loading || isCurrent}
-              />
-              <span className="text-xs text-muted-foreground ml-1">
-                = <strong>{(plan.priceAed * localSeats).toLocaleString()}</strong> AED/mo
-              </span>
+            <div className="w-full space-y-1">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground whitespace-nowrap">Seats:</Label>
+                <Input
+                  type="number"
+                  min={minSeats}
+                  max={plan.maxUsers ?? 9999}
+                  value={localSeats}
+                  onChange={e => setLocalSeats(Math.max(1, parseInt(e.target.value) || 1))}
+                  className={`h-8 w-20 text-sm ${belowMin ? "border-red-400 focus-visible:ring-red-400" : ""}`}
+                  disabled={loading || isCurrent}
+                />
+                <span className="text-xs text-muted-foreground ml-1">
+                  = <strong>{(plan.priceAed * localSeats).toLocaleString()}</strong> AED/mo
+                </span>
+              </div>
+              {belowMin && (
+                <p className="text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  Minimum {minSeats} seat{minSeats !== 1 ? "s" : ""} required for this plan
+                </p>
+              )}
             </div>
             <Button
               className="w-full"
               variant={isCurrent ? "outline" : "default"}
-              disabled={loading}
+              disabled={loading || belowMin}
               onClick={() => onSelect(plan.id, localSeats)}
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}

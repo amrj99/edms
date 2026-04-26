@@ -183,6 +183,12 @@ router.post("/checkout", requireAuth, async (req, res) => {
     const plan = PLANS.find(p => p.id === planId);
     if (!plan) return res.status(400).json({ message: "Invalid plan" });
 
+    if (plan.minUsers && seats < plan.minUsers) {
+      return res.status(400).json({
+        message: `The ${plan.name} plan requires a minimum of ${plan.minUsers} seat${plan.minUsers !== 1 ? "s" : ""}.`,
+      });
+    }
+
     const priceId = process.env[plan.stripePriceEnv];
     if (!priceId) return res.status(503).json({ message: `Stripe price for ${plan.name} not configured` });
 
