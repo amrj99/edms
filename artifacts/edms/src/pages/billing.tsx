@@ -214,7 +214,8 @@ function PlanCard({
         </ul>
         <div className="mt-4 text-xs text-muted-foreground">
           {[
-            plan.minUsers && plan.maxUsers ? `${plan.minUsers}–${plan.maxUsers} users` : plan.maxUsers ? `Up to ${plan.maxUsers} users` : "Unlimited users",
+            plan.minUsers ? `Min. ${plan.minUsers} users` : null,
+            plan.maxUsers ? `Up to ${plan.maxUsers} users` : "Unlimited users",
             `${formatStorage(plan.storageMb)} storage`,
             plan.maxFileSizeMb
               ? `${plan.maxFileSizeMb >= 1024 ? `${plan.maxFileSizeMb / 1024} GB` : `${plan.maxFileSizeMb} MB`} max file`
