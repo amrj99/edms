@@ -191,8 +191,14 @@ function PlanCard({
         <CardTitle className="text-xl">{plan.name}</CardTitle>
         <CardDescription className="text-sm">{plan.description}</CardDescription>
         <div className="mt-2">
-          <span className="text-3xl font-bold">{plan.priceAed}</span>
-          <span className="text-muted-foreground text-sm ml-1">AED / user / month</span>
+          {plan.id === "enterprise" ? (
+            <span className="text-xl font-semibold text-muted-foreground">Custom Pricing</span>
+          ) : (
+            <>
+              <span className="text-3xl font-bold">{plan.priceAed}</span>
+              <span className="text-muted-foreground text-sm ml-1">AED / user / month</span>
+            </>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex-1">
@@ -209,31 +215,43 @@ function PlanCard({
         </div>
       </CardContent>
       <CardFooter className="flex flex-col gap-3">
-        <div className="w-full flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground whitespace-nowrap">Seats:</Label>
-          <Input
-            type="number"
-            min={1}
-            max={plan.maxUsers ?? 9999}
-            value={localSeats}
-            onChange={e => setLocalSeats(Math.max(1, parseInt(e.target.value) || 1))}
-            className="h-8 w-20 text-sm"
-            disabled={loading || isCurrent}
-          />
-          <span className="text-xs text-muted-foreground ml-1">
-            = <strong>{(plan.priceAed * localSeats).toLocaleString()}</strong> AED/mo
-          </span>
-        </div>
-        <Button
-          className="w-full"
-          variant={isCurrent ? "outline" : "default"}
-          disabled={loading}
-          onClick={() => onSelect(plan.id, localSeats)}
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-          {isCurrent ? "Manage subscription" : `Subscribe to ${plan.name}`}
-          {!loading && !isCurrent && <ArrowRight className="ml-2 h-4 w-4" />}
-        </Button>
+        {plan.id === "enterprise" ? (
+          <Button
+            className="w-full"
+            variant="outline"
+            asChild
+          >
+            <a href="mailto:sales@arcscale.com">Contact Us</a>
+          </Button>
+        ) : (
+          <>
+            <div className="w-full flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground whitespace-nowrap">Seats:</Label>
+              <Input
+                type="number"
+                min={1}
+                max={plan.maxUsers ?? 9999}
+                value={localSeats}
+                onChange={e => setLocalSeats(Math.max(1, parseInt(e.target.value) || 1))}
+                className="h-8 w-20 text-sm"
+                disabled={loading || isCurrent}
+              />
+              <span className="text-xs text-muted-foreground ml-1">
+                = <strong>{(plan.priceAed * localSeats).toLocaleString()}</strong> AED/mo
+              </span>
+            </div>
+            <Button
+              className="w-full"
+              variant={isCurrent ? "outline" : "default"}
+              disabled={loading}
+              onClick={() => onSelect(plan.id, localSeats)}
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {isCurrent ? "Manage subscription" : `Subscribe to ${plan.name}`}
+              {!loading && !isCurrent && <ArrowRight className="ml-2 h-4 w-4" />}
+            </Button>
+          </>
+        )}
       </CardFooter>
     </Card>
   );
