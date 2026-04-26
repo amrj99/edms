@@ -112,7 +112,7 @@ async function fetchAiBalance(token: string): Promise<AiCreditsBalance> {
   return r.json();
 }
 
-async function fetchAiPacks(token: string): Promise<{ packs: AiCreditPack[] }> {
+async function fetchAiPacks(token: string): Promise<{ packs: AiCreditPack[]; stripeConfigured: boolean }> {
   const r = await fetch(`${BASE}api/ai-credits/packs`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -312,6 +312,7 @@ function AiCreditsSection({ token }: { token: string }) {
   const totalPurchased = balanceData?.totalPurchased ?? 0;
   const transactions = balanceData?.recentTransactions ?? [];
   const packs = packsData?.packs ?? [];
+  const stripeConfigured = packsData?.stripeConfigured ?? true;
   const isLow = balance <= LOW_BALANCE_THRESHOLD;
   const isZero = balance === 0;
 
@@ -394,6 +395,14 @@ function AiCreditsSection({ token }: { token: string }) {
           <ShoppingCart className="h-4 w-4 text-muted-foreground" />
           Buy Credits
         </h3>
+        {!packsLoading && !stripeConfigured && (
+          <Alert className="mb-4 border-yellow-300 bg-yellow-50">
+            <AlertCircle className="h-4 w-4 text-yellow-600" />
+            <AlertDescription className="text-yellow-800">
+              Credit purchases are currently unavailable — Stripe has not been configured by your system administrator. Contact your admin to enable payments.
+            </AlertDescription>
+          </Alert>
+        )}
         {packsLoading ? (
           <div className="flex justify-center py-6">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

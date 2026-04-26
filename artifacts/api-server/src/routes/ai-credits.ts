@@ -1,8 +1,9 @@
 import { Router } from "express";
 import Stripe from "stripe";
 import { requireAuth } from "../lib/auth.js";
+import { isSysAdmin } from "../lib/auth.js";
 import { db } from "@workspace/db";
-import { aiCreditTransactionsTable } from "@workspace/db/schema";
+import { organizationsTable, aiCreditTransactionsTable } from "@workspace/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import {
@@ -18,6 +19,10 @@ function getStripe(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return null;
   return new Stripe(key, { apiVersion: "2025-03-31.basil" });
+}
+
+function isStripeConfigured(): boolean {
+  return !!process.env.STRIPE_SECRET_KEY;
 }
 
 // ─── GET /api/ai-credits/balance ──────────────────────────────────────────────
@@ -49,7 +54,11 @@ router.get("/balance", requireAuth, async (req, res) => {
 
 // ─── GET /api/ai-credits/packs ────────────────────────────────────────────────
 router.get("/packs", requireAuth, (_req, res) => {
-  res.json({ packs: AI_CREDIT_PACKS.map(p => ({ ...p, stripePriceEnv: undefined })) });
+  const stripeConfigured = isStripeConfigured();
+  res.json({
+    packs: AI_CREDIT_PACKS.map(p => ({ ...p, stripePriceEnv: undefined })),
+    stripeConfigured,
+  });
 });
 
 // ─── POST /api/ai-credits/purchase ────────────────────────────────────────────
@@ -95,6 +104,83 @@ router.post("/purchase", requireAuth, async (req, res) => {
   } catch (err: any) {
     logger.error(err, "ai-credits purchase error");
     res.status(500).json({ message: err.message ?? "Purchase failed" });
+  }
+});
+
+// ─── GET /api/ai-credits/admin/balances ───────────────────────────────────────
+// Returns credit balances for all organisations. Admin / system_owner only.
+router.get("/admin/balances", requireAuth, async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  try {
+    const orgs = await db
+      .select({
+        id: organizationsTable.id,
+        name: organizationsTable.name,
+        balance: organizationsTable.aiCreditsBalance,
+        totalPurchased: organizationsTable.aiCreditsTotalPurchased,
+      })
+      .from(organizationsTable)
+      .orderBy(organizationsTable.name);
+
+    res.json({ organizations: orgs });
+  } catch (err) {
+    logger.error(err, "ai-credits admin/balances error");
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// ─── POST /api/ai-credits/admin/grant ─────────────────────────────────────────
+// Manually grants AI credits to an organisation. Admin / system_owner only.
+// Records grantedBy (admin user ID + email) in the transaction metadata.
+router.post("/admin/grant", requireAuth, async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { organizationId, amount, note } = req.body as {
+    organizationId: number;
+    amount: number;
+    note?: string;
+  };
+
+  if (!organizationId || !amount || amount <= 0) {
+    return res.status(400).json({
+      message: "organizationId and a positive amount are required",
+    });
+  }
+
+  if (!Number.isInteger(amount) || amount > 1_000_000) {
+    return res.status(400).json({
+      message: "Amount must be a whole number no greater than 1,000,000",
+    });
+  }
+
+  try {
+    const [org] = await db
+      .select({ id: organizationsTable.id, name: organizationsTable.name })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId));
+
+    if (!org) return res.status(404).json({ message: "Organisation not found" });
+
+    const newBalance = await grantCredits(organizationId, amount, "grant", {
+      grantedBy: req.user!.id,
+      grantedByEmail: req.user!.email,
+      note: note?.trim() ?? null,
+      manual: true,
+    });
+
+    logger.info(
+      { adminId: req.user!.id, adminEmail: req.user!.email, orgId: organizationId, orgName: org.name, amount, note },
+      "AI credits manually granted by admin",
+    );
+
+    res.json({ newBalance, organizationId, organizationName: org.name, amount });
+  } catch (err) {
+    logger.error(err, "ai-credits admin/grant error");
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 

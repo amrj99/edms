@@ -28,8 +28,9 @@ import {
   Download, Upload, Filter, Search, ChevronLeft, ChevronRight,
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
   LayoutDashboard, ClipboardList, Bell, Link2, Zap, BarChart3,
-  FileText, Send, TrendingUp, AlertTriangle, CreditCard,
+  FileText, Send, TrendingUp, AlertTriangle, CreditCard, Sparkles,
 } from "lucide-react";
+import { AiCreditsAdmin } from "@/components/admin/AiCreditsAdmin";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
 
@@ -456,6 +457,7 @@ export default function Admin() {
             { value: "modules", label: "Modules", icon: Layers },
             { value: "usage", label: "Usage", icon: BarChart3 },
             { value: "shadow-log", label: "Access Log", icon: Filter },
+            { value: "ai-credits", label: "AI Credits", icon: Sparkles },
           ].map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="gap-1.5 text-xs px-3">
               <Icon className="h-3.5 w-3.5" /> {label}
@@ -1632,6 +1634,11 @@ export default function Admin() {
 
         {/* Access Shadow Log */}
         <ShadowLogTab />
+
+        {/* AI Credits Administration */}
+        <TabsContent value="ai-credits" className="mt-4">
+          <AiCreditsAdmin />
+        </TabsContent>
       </Tabs>
     </div>
   );
