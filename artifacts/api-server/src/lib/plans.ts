@@ -16,6 +16,26 @@ export interface PlanConfig {
 
 export const PLANS: PlanConfig[] = [
   {
+    id: "trial",
+    name: "Free Trial",
+    description: "14-day full-feature trial. No credit card required.",
+    priceAed: 0,
+    currency: "aed",
+    interval: "month",
+    features: [
+      "Up to 3 users",
+      "2 GB storage",
+      "1 active project",
+      "50 MB max file size",
+      "All core EDMS features",
+      "1,000 AI credits included",
+    ],
+    maxUsers: 3,
+    storageMb: 2048,
+    maxFileSizeMb: 50,
+    stripePriceEnv: "",
+  },
+  {
     id: "starter",
     name: "Starter",
     description: "Essential document management for small teams",
@@ -125,6 +145,7 @@ export type OrgModuleFlags = {
 export function getDefaultModulesForPlan(planId: string): OrgModuleFlags {
   const map: Record<string, OrgModuleFlags> = {
     free:         { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
+    trial:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     starter:      { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: false },
     basic:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     professional: { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },

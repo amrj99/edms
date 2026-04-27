@@ -703,6 +703,33 @@ export async function sendWorkflowStageEmail(opts: {
   return sendEmail(opts.to, `[Workflow] Action required — ${opts.documentNumber} at ${opts.stageName}`, html);
 }
 
+// ─── Email Verification ───────────────────────────────────────────────────────
+export async function sendEmailVerificationEmail(opts: {
+  to: string;
+  firstName: string;
+  token: string;
+}): Promise<ReturnType<typeof sendEmail>> {
+  const verifyUrl = `${APP_URL}/verify-email?token=${opts.token}`;
+  const html = buildTemplate(`
+    <h2 style="color:#0f172a;margin:0 0 8px;">Verify your email address</h2>
+    <p style="color:#374151;font-size:15px;margin:0 0 20px;">
+      Hi ${opts.firstName}, thanks for signing up for ArcScale EDMS. Please verify your email address to enable full access to your account.
+    </p>
+    <p style="text-align:center;margin:24px 0;">
+      <a href="${verifyUrl}" style="background:#4f46e5;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+        Verify Email Address
+      </a>
+    </p>
+    <p style="color:#6b7280;font-size:13px;">
+      This link expires in 72 hours. If you did not create an ArcScale account, you can safely ignore this email.
+    </p>
+    <p style="color:#6b7280;font-size:12px;margin-top:12px;word-break:break-all;">
+      Or copy this link into your browser:<br/>${verifyUrl}
+    </p>
+  `, "Verify your ArcScale EDMS email");
+  return sendEmail(opts.to, "Verify your ArcScale EDMS account", html);
+}
+
 // ─── Email / Resend Connection Test ──────────────────────────────────────────
 export async function testSmtpConnection(): Promise<{ success: boolean; message: string }> {
   const client = getResend();

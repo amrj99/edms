@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import {
   CheckCircle2, Loader2, AlertCircle, CreditCard,
   Zap, Building2, Rocket, Crown, ArrowRight, ExternalLink, RefreshCw,
-  Sparkles, ShoppingCart, TrendingDown, TrendingUp, Clock,
+  Sparkles, ShoppingCart, TrendingDown, TrendingUp, Clock, Timer,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -37,6 +37,7 @@ interface BillingStatus {
   seats: number;
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
+  trialEndsAt: string | null;
 }
 
 interface AiCreditTransaction {
@@ -575,7 +576,7 @@ export default function BillingPage() {
 
   const isLoading = plansLoading || statusLoading;
   const mutating = checkoutMutation.isPending || portalMutation.isPending;
-  const plans = plansData?.plans ?? [];
+  const plans = (plansData?.plans ?? []).filter(p => p.id !== "trial");
 
   const statusColor: Record<string, string> = {
     active: "bg-green-100 text-green-700",
@@ -594,6 +595,42 @@ export default function BillingPage() {
           Manage your ArcScale subscription. Seat-based pricing — pay only for active users.
         </p>
       </div>
+
+      {/* Trial status banner */}
+      {!statusLoading && status?.tier === "trial" && (() => {
+        if (!status.trialEndsAt) return null;
+        const endsAt = new Date(status.trialEndsAt);
+        const now = new Date();
+        const expired = now > endsAt;
+        const daysLeft = Math.max(0, Math.ceil((endsAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+        if (expired) {
+          return (
+            <Alert className="border-red-300 bg-red-50">
+              <AlertCircle className="h-4 w-4 text-red-600" />
+              <AlertDescription className="text-red-800">
+                <strong>Your free trial has ended.</strong> Your organisation is now in read-only mode — uploads and new projects are disabled.
+                Select a plan below to restore full access.
+              </AlertDescription>
+            </Alert>
+          );
+        }
+        const urgency = daysLeft <= 3 ? "border-amber-300 bg-amber-50" : "border-blue-200 bg-blue-50";
+        const textColor = daysLeft <= 3 ? "text-amber-800" : "text-blue-800";
+        const iconColor = daysLeft <= 3 ? "text-amber-600" : "text-blue-600";
+        return (
+          <Alert className={urgency}>
+            <Timer className={`h-4 w-4 ${iconColor}`} />
+            <AlertDescription className={textColor}>
+              <strong>{daysLeft} day{daysLeft !== 1 ? "s" : ""} left on your free trial.</strong>{" "}
+              {daysLeft <= 3
+                ? "Your trial is almost over — upgrade now to avoid losing access."
+                : `Trial ends on ${endsAt.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}.`
+              }{" "}
+              Select a plan below to upgrade.
+            </AlertDescription>
+          </Alert>
+        );
+      })()}
 
       {/* Success / cancel banners — subscription */}
       {justSucceeded && (

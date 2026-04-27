@@ -101,7 +101,7 @@ router.post("/", requireAuth, async (req, res) => {
   // ── Pre-insert business checks ─────────────────────────────────────────────
   // 1. Verify the organization exists
   const [org] = await db
-    .select({ id: organizationsTable.id })
+    .select({ id: organizationsTable.id, subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
     .from(organizationsTable)
     .where(eq(organizationsTable.id, organizationId!))
     .limit(1);
@@ -113,6 +113,32 @@ router.post("/", requireAuth, async (req, res) => {
       fields: { organizationId: "Organization not found" },
     });
     return;
+  }
+
+  // ── Trial plan enforcement ──────────────────────────────────────────────
+  if (org.subscriptionTier === "trial") {
+    // Block new projects if trial has expired
+    if (org.trialEndsAt && new Date() > new Date(org.trialEndsAt)) {
+      res.status(403).json({
+        error: "TRIAL_EXPIRED",
+        message: "Your 14-day trial has ended. Upgrade to a paid plan to create new projects.",
+      });
+      return;
+    }
+
+    // Enforce the 1-project limit for trial orgs
+    const [{ projectCount }] = await db
+      .select({ projectCount: count() })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, organizationId!));
+
+    if (projectCount >= 1) {
+      res.status(403).json({
+        error: "TRIAL_PROJECT_LIMIT",
+        message: "Trial accounts are limited to 1 active project. Upgrade to a paid plan to create more.",
+      });
+      return;
+    }
   }
 
   // 2. Enforce per-organization code uniqueness (more granular than the DB unique index)

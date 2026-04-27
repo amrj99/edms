@@ -15,8 +15,13 @@ import {
   verifyToken,
   requireAuth,
 } from "../lib/auth.js";
-import { sendWelcomeEmail, sendPasswordResetEmail, APP_URL } from "../lib/email.js";
+import { sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerificationEmail, APP_URL } from "../lib/email.js";
 import { createAuditLog } from "../lib/audit.js";
+import { grantCredits } from "../lib/ai-credits.js";
+import { getDefaultModulesForPlan } from "../lib/plans.js";
+import { getTrialEndDate, TRIAL_PLAN_ID, TRIAL_AI_CREDITS } from "../lib/trial.js";
+import { isDisposableEmail } from "../lib/disposable-emails.js";
+import { orgConfigTable } from "@workspace/db/schema";
 
 const router = Router();
 
@@ -476,9 +481,23 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
   res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
 });
 
+// ─── Register-org rate limiter ────────────────────────────────────────────────
+// 3 new organisations per IP per hour — blocks rapid abuse / bots.
+const registerOrgLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKeyGenerator,
+  handler: (_req, res) => {
+    res.status(429).json({ error: "Too Many Requests", message: "Too many sign-up attempts from this IP. Please try again in an hour." });
+  },
+});
+
 // ─── Self-service org registration ────────────────────────────────────────────
-// Public endpoint — no auth required. Creates a new org + initial admin user.
-router.post("/register-org", async (req, res) => {
+// Public endpoint — no auth required.
+// Creates a trial org (14 days) + initial admin user. Grants 1 000 AI credits.
+router.post("/register-org", registerOrgLimiter, async (req, res) => {
   const { orgName, adminFirstName, adminLastName, adminEmail, adminPassword } = req.body ?? {};
 
   if (!orgName || !adminEmail || !adminPassword || !adminFirstName || !adminLastName) {
@@ -488,6 +507,12 @@ router.post("/register-org", async (req, res) => {
 
   if (adminPassword.length < 8) {
     res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+    return;
+  }
+
+  // Block disposable / throwaway email domains
+  if (isDisposableEmail(adminEmail)) {
+    res.status(400).json({ error: "Bad Request", message: "Please use a valid work or personal email address. Disposable email addresses are not accepted." });
     return;
   }
 
@@ -505,15 +530,22 @@ router.post("/register-org", async (req, res) => {
     return;
   }
 
-  // Create organisation
+  // Create trial organisation
+  const trialEndsAt = getTrialEndDate();
   const [org] = await db.insert(organizationsTable).values({
     name: orgName.trim(),
     type: "client",
+    subscriptionTier: TRIAL_PLAN_ID,
+    trialEndsAt,
   }).returning();
 
-  // Create admin user
+  // Set up default module flags for the trial plan
+  const modules = getDefaultModulesForPlan(TRIAL_PLAN_ID);
+  await db.insert(orgConfigTable).values({ organizationId: org.id, modules }).catch(() => {});
+
+  // Create admin user (email unverified until token is clicked)
   const passwordHash = await hashPassword(adminPassword);
-  const verificationToken = crypto.randomBytes(32).toString("hex");
+  const emailVerificationToken = crypto.randomBytes(32).toString("hex");
 
   const [user] = await db.insert(usersTable).values({
     email: adminEmail.toLowerCase().trim(),
@@ -523,18 +555,75 @@ router.post("/register-org", async (req, res) => {
     role: "admin",
     organizationId: org.id,
     isActive: true,
+    emailVerificationToken,
   }).returning();
 
-  // Return verification token in response (dev mode — no SMTP required)
+  // Auto-grant trial AI credits (fire-and-forget — non-fatal if it fails)
+  grantCredits(org.id, TRIAL_AI_CREDITS, "grant", { reason: "trial_signup" }).catch(() => {});
+
+  // Send verification email — non-fatal, log only
+  sendEmailVerificationEmail({
+    to: user.email,
+    firstName: user.firstName,
+    token: emailVerificationToken,
+  }).catch(() => {});
+
+  createAuditLog({
+    userId: user.id,
+    organizationId: org.id,
+    action: "trial_org_created",
+    entityType: "organization",
+    entityId: org.id,
+    entityTitle: org.name,
+  });
+
   res.status(201).json({
     success: true,
-    message: "Organisation and admin account created successfully.",
+    message: `Organisation "${org.name}" created on a 14-day free trial. Please check your email to verify your address.`,
     orgId: org.id,
     orgName: org.name,
     userId: user.id,
-    verificationToken,
-    note: "In production, the verification token would be emailed. For now it is returned in this response.",
+    trialEndsAt: trialEndsAt.toISOString(),
+    // Dev convenience — token also emailed when RESEND_API_KEY is set
+    emailVerificationToken,
+    note: "Check your email to verify your address. In dev mode the token is also included in this response.",
   });
+});
+
+// ─── Email verification ────────────────────────────────────────────────────────
+// GET /api/auth/verify-email?token=<hex>
+router.get("/verify-email", async (req, res) => {
+  const { token } = req.query;
+  if (!token || typeof token !== "string") {
+    res.status(400).json({ error: "Bad Request", message: "token is required" });
+    return;
+  }
+
+  const [user] = await db.select().from(usersTable)
+    .where(eq(usersTable.emailVerificationToken, token))
+    .limit(1);
+
+  if (!user) {
+    res.status(400).json({ error: "Invalid Token", message: "Verification link is invalid or has already been used." });
+    return;
+  }
+
+  await db.update(usersTable).set({
+    emailVerifiedAt: new Date(),
+    emailVerificationToken: null,
+    updatedAt: new Date(),
+  }).where(eq(usersTable.id, user.id));
+
+  createAuditLog({
+    userId: user.id,
+    organizationId: user.organizationId ?? undefined,
+    action: "email_verified",
+    entityType: "user",
+    entityId: user.id,
+    entityTitle: user.email,
+  });
+
+  res.json({ success: true, message: "Email verified successfully. You can now upload files." });
 });
 
 export default router;

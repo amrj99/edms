@@ -1166,6 +1166,22 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
 
   const orgId = req.user!.organizationId ?? null;
 
+  // ── Email verification gate ──────────────────────────────────────────────
+  // Users must verify their email before uploading files.
+  {
+    const [uploader] = await db
+      .select({ emailVerifiedAt: usersTable.emailVerifiedAt })
+      .from(usersTable)
+      .where(eq(usersTable.id, req.user!.id))
+      .limit(1);
+    if (uploader && !uploader.emailVerifiedAt) {
+      return res.status(403).json({
+        error: "EMAIL_NOT_VERIFIED",
+        message: "Please verify your email address before uploading files. Check your inbox for a verification link.",
+      });
+    }
+  }
+
   // ── Storage quota check ──────────────────────────────────────────────────
   if (orgId) {
     const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
@@ -1173,9 +1189,17 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
 
     // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
     const [orgStorage] = await db
-      .select({ storageUsedMb: organizationsTable.storageUsedMb })
+      .select({ storageUsedMb: organizationsTable.storageUsedMb, subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
       .from(organizationsTable)
       .where(eq(organizationsTable.id, orgId));
+
+    // ── Trial expiry gate ────────────────────────────────────────────────
+    if (orgStorage?.subscriptionTier === "trial" && orgStorage.trialEndsAt && new Date() > new Date(orgStorage.trialEndsAt)) {
+      return res.status(403).json({
+        error: "TRIAL_EXPIRED",
+        message: "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
+      });
+    }
 
     const planId = await getOrgPlan(orgId);
     const plan = PLANS.find(p => p.id === planId);

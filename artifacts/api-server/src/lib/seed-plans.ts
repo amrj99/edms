@@ -29,6 +29,30 @@ import { logger } from "./logger.js";
 
 const PLAN_SEED_DATA = [
   {
+    planId:             "trial",
+    name:               "Free Trial",
+    description:        "14-day full-feature trial. No credit card required.",
+    priceAed:           0,
+    currency:           "aed",
+    interval:           "month",
+    minUsers:           null as number | null,
+    maxUsers:           3 as number | null,
+    storageMb:          2048,
+    maxFileSizeMb:      50,
+    migrationMaxFiles:  0,
+    rateLimitRpm:       200 as number | null,
+    features:           [
+      "Up to 3 users",
+      "2 GB storage",
+      "1 active project",
+      "50 MB max file size",
+      "All core EDMS features",
+      "1,000 AI credits included",
+    ] as string[],
+    stripePriceEnv:     null as string | null,
+    isActive:           true,
+  },
+  {
     planId:             "free",
     name:               "Free",
     description:        "Basic access with no subscription",
@@ -179,6 +203,11 @@ async function ensureTablesExist(): Promise<void> {
   `);
   await db.execute(sql`ALTER TABLE plans ADD COLUMN IF NOT EXISTS min_users INTEGER`);
   await db.execute(sql`ALTER TABLE plans ADD COLUMN IF NOT EXISTS max_file_size_mb INTEGER NOT NULL DEFAULT 1024`);
+
+  // ── Trial / email-verification columns ───────────────────────────────────
+  await db.execute(sql`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMP`);
+  await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`);
+  await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token TEXT`);
 
   // org_feature_overrides — references organizations + users (both exist in prod)
   await db.execute(sql`

@@ -160,6 +160,7 @@ router.get("/status", requireAuth, async (req, res) => {
       storageUsedMb: org.storageUsedMb ?? 0,
       storageLimitMb: currentPlan?.storageMb ?? null,
       maxUsers: currentPlan?.maxUsers ?? null,
+      trialEndsAt: org.trialEndsAt?.toISOString() ?? null,
     });
   } catch (err) {
     logger.error(err, "billing status error");
