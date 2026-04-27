@@ -20,21 +20,64 @@ import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
-// ─── Login rate limiter ───────────────────────────────────────────────────────
-// 5 attempts per 15 minutes per IP. Resets automatically after the window.
-const loginRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
-  handler: (_req, res) => {
-    res.status(429).json({
-      error: "Too Many Requests",
-      message: "Too many login attempts. Please wait 15 minutes before trying again.",
-    });
-  },
-});
+// ─── Progressive login lockout tracker ───────────────────────────────────────
+// 7 attempts per 15-minute window. Progressive lockout: 5 → 15 → 30 minutes.
+// Resets fully after the observation window expires (and no active lockout).
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 7;
+const LOGIN_LOCKOUT_DURATIONS_MS = [5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000];
+
+interface LoginAttemptRecord {
+  attempts: number;
+  lockedUntil: number;
+  lockoutCount: number;
+  windowStart: number;
+}
+
+const loginAttempts = new Map<string, LoginAttemptRecord>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, rec] of loginAttempts.entries()) {
+    if (now > rec.lockedUntil && now - rec.windowStart > LOGIN_WINDOW_MS) {
+      loginAttempts.delete(key);
+    }
+  }
+}, 30 * 60 * 1000).unref();
+
+function getAttemptRecord(ip: string, now: number): LoginAttemptRecord {
+  const rec = loginAttempts.get(ip);
+  if (!rec) {
+    const fresh = { attempts: 0, lockedUntil: 0, lockoutCount: 0, windowStart: now };
+    loginAttempts.set(ip, fresh);
+    return fresh;
+  }
+  if (rec.lockedUntil && now < rec.lockedUntil) return rec;
+  if (now - rec.windowStart > LOGIN_WINDOW_MS) {
+    const fresh = { attempts: 0, lockedUntil: 0, lockoutCount: 0, windowStart: now };
+    loginAttempts.set(ip, fresh);
+    return fresh;
+  }
+  return rec;
+}
+
+function recordLoginFailure(ip: string): { attemptsRemaining: number; locked: boolean; lockoutMinutes?: number } {
+  const now = Date.now();
+  const rec = getAttemptRecord(ip, now);
+  rec.attempts++;
+  if (rec.attempts >= LOGIN_MAX_ATTEMPTS) {
+    const ms = LOGIN_LOCKOUT_DURATIONS_MS[Math.min(rec.lockoutCount, LOGIN_LOCKOUT_DURATIONS_MS.length - 1)];
+    rec.lockedUntil = now + ms;
+    rec.lockoutCount++;
+    rec.attempts = 0;
+    return { attemptsRemaining: 0, locked: true, lockoutMinutes: Math.round(ms / 60000) };
+  }
+  return { attemptsRemaining: LOGIN_MAX_ATTEMPTS - rec.attempts, locked: false };
+}
+
+function clearLoginAttempts(ip: string): void {
+  loginAttempts.delete(ip);
+}
 
 const forgotPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -80,11 +123,26 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
   };
 }
 
-router.post("/login", loginRateLimiter, async (req, res) => {
+router.post("/login", async (req, res) => {
   const body = req.body ?? {};
   const { email, password, rememberMe } = body;
   if (!email || !password) {
     res.status(400).json({ error: "Bad Request", message: "Email and password are required" });
+    return;
+  }
+
+  const ip = (req as any).realIp ?? req.ip ?? "unknown";
+
+  // Check active lockout before doing any DB work
+  const now = Date.now();
+  const rec = getAttemptRecord(ip, now);
+  if (rec.lockedUntil && now < rec.lockedUntil) {
+    const minutes = Math.ceil((rec.lockedUntil - now) / 60000);
+    res.status(429).json({
+      error: "Too Many Requests",
+      message: `Too many login attempts. Please wait ${minutes} minute${minutes !== 1 ? "s" : ""} before trying again.`,
+      retryAfterSeconds: Math.ceil((rec.lockedUntil - now) / 1000),
+    });
     return;
   }
 
@@ -95,18 +153,27 @@ router.post("/login", loginRateLimiter, async (req, res) => {
     .limit(1);
 
   const user = users[0];
-  const ip = (req as any).realIp ?? req.ip ?? "unknown";
 
   if (!user) {
     createAuditLog({ action: "login_failure", entityType: "auth", entityId: 0, entityTitle: email, details: { reason: "user_not_found" }, ipAddress: ip });
-    res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+    const { attemptsRemaining, locked, lockoutMinutes } = recordLoginFailure(ip);
+    if (locked) {
+      res.status(429).json({ error: "Too Many Requests", message: `Too many login attempts. Please wait ${lockoutMinutes} minute${lockoutMinutes !== 1 ? "s" : ""} before trying again.`, retryAfterSeconds: lockoutMinutes! * 60 });
+    } else {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid email or password", attemptsRemaining });
+    }
     return;
   }
 
   const passwordValid = await verifyPassword(password, user.passwordHash);
   if (!passwordValid) {
     createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_failure", entityType: "auth", entityId: user.id, entityTitle: email, details: { reason: "invalid_password" }, ipAddress: ip });
-    res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
+    const { attemptsRemaining, locked, lockoutMinutes } = recordLoginFailure(ip);
+    if (locked) {
+      res.status(429).json({ error: "Too Many Requests", message: `Too many login attempts. Please wait ${lockoutMinutes} minute${lockoutMinutes !== 1 ? "s" : ""} before trying again.`, retryAfterSeconds: lockoutMinutes! * 60 });
+    } else {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid email or password", attemptsRemaining });
+    }
     return;
   }
 
@@ -134,6 +201,7 @@ router.post("/login", loginRateLimiter, async (req, res) => {
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
+  clearLoginAttempts(ip);
   createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_success", entityType: "auth", entityId: user.id, entityTitle: email, ipAddress: ip });
 
   res.json({

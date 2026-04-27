@@ -33,6 +33,7 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
+  const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -46,6 +47,7 @@ export default function Login() {
   const onSubmit = async (data: LoginFormValues) => {
     if (rateLimited) return;
     setServerError(null);
+    setAttemptsRemaining(null);
     try {
       const response = await loginMutation.mutateAsync({
         data: { email: data.email, password: data.password },
@@ -59,12 +61,17 @@ export default function Login() {
       setAuthToken(response.token);
     } catch (error: any) {
       const status = error?.status ?? error?.response?.status;
+      const body = error?.body ?? {};
       if (status === 429) {
         setRateLimited(true);
-        setServerError("Too many login attempts. Please wait 15 minutes before trying again.");
+        setAttemptsRemaining(null);
+        const msg = body.message || "Too many login attempts. Please wait before trying again.";
+        setServerError(msg);
         return;
       }
-      const msg = error?.body?.message || error?.message || "Invalid email or password. Please try again.";
+      const remaining = typeof body.attemptsRemaining === "number" ? body.attemptsRemaining : null;
+      setAttemptsRemaining(remaining);
+      const msg = body.message || error?.message || "Invalid email or password. Please try again.";
       setServerError(msg);
     }
   };
@@ -92,7 +99,14 @@ export default function Login() {
             {serverError && (
               <Alert variant="destructive" className="mb-6">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{serverError}</AlertDescription>
+                <AlertDescription>
+                  {serverError}
+                  {attemptsRemaining !== null && attemptsRemaining > 0 && (
+                    <span className="block mt-1 text-xs opacity-90">
+                      {attemptsRemaining} attempt{attemptsRemaining !== 1 ? "s" : ""} remaining before temporary lockout
+                    </span>
+                  )}
+                </AlertDescription>
               </Alert>
             )}
 
