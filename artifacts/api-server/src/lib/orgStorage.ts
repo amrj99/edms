@@ -1,7 +1,13 @@
 /**
  * OrgStorageService
- * Routes file storage to cloud (Replit/GCS), S3-compatible, or on-premise
+ * Routes file storage to R2 (global env-based), cloud (Replit/GCS), S3-compatible, or on-premise
  * (local filesystem) based on the organisation's configured storageType.
+ *
+ * Priority (highest → lowest):
+ *  1. Per-org DB config (storageType = "s3" with explicit bucket/keys)
+ *  2. R2 global env vars (R2_ENDPOINT + R2_BUCKET + R2_ACCESS_KEY + R2_SECRET_KEY)
+ *  3. DEFAULT_STORAGE_TYPE env var
+ *  4. Auto-detect: Replit/GCS if PRIVATE_OBJECT_DIR present, else on-premise
  */
 import fs from "fs";
 import path from "path";
@@ -37,11 +43,11 @@ function buildOnPremPath(
   return path.join(...segments);
 }
 
-export type StorageMode = "cloud" | "onpremise" | "s3";
+export type StorageMode = "cloud" | "onpremise" | "s3" | "r2";
 
 export interface UploadResult {
   mode: StorageMode;
-  /** Presigned PUT URL for cloud/S3 modes */
+  /** Presigned PUT URL for cloud/S3/R2 modes */
   uploadURL?: string;
   /** Logical storage path / object key */
   objectPath?: string;
@@ -51,7 +57,74 @@ export interface UploadResult {
   serveUrl?: string;
 }
 
-/** Build an S3Client lazily (avoids startup crash if AWS SDK not installed). */
+// ─── R2 helpers ───────────────────────────────────────────────────────────────
+
+/** Returns true when all four R2 environment variables are present. */
+export function isR2Configured(): boolean {
+  return !!(
+    process.env.R2_ENDPOINT &&
+    process.env.R2_BUCKET &&
+    process.env.R2_ACCESS_KEY &&
+    process.env.R2_SECRET_KEY
+  );
+}
+
+/** Build an S3Client pointed at Cloudflare R2 using environment variables. */
+async function buildR2Client() {
+  const { S3Client } = await import("@aws-sdk/client-s3");
+  return new S3Client({
+    region: "auto",
+    endpoint: process.env.R2_ENDPOINT!,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY!,
+      secretAccessKey: process.env.R2_SECRET_KEY!,
+    },
+    forcePathStyle: false,
+  });
+}
+
+/**
+ * Generate a presigned GET URL for an R2 object.
+ * @param objectKey  The key stored in R2 (e.g. org_1/projects/2/file.pdf)
+ * @param expiresIn  Seconds until the URL expires (default 3600)
+ */
+export async function getR2PresignedGetUrl(
+  objectKey: string,
+  expiresIn = 3600,
+): Promise<string | null> {
+  if (!isR2Configured()) return null;
+  try {
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+    const s3 = await buildR2Client();
+    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: objectKey });
+    return await getSignedUrl(s3, command, { expiresIn });
+  } catch (err: any) {
+    console.error("[storage] R2 presigned GET URL failed:", err.message);
+    return null;
+  }
+}
+
+/**
+ * Build the canonical R2 object key for a document upload.
+ * Format: org_{orgId}/projects/{projectId}/{safeFilename}
+ */
+function buildR2Key(orgId: number, projectId: number | null, filename: string): string {
+  const safeFile = `${Date.now()}_${path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  if (projectId) {
+    return `org_${orgId}/projects/${projectId}/${safeFile}`;
+  }
+  return `org_${orgId}/projects/0/${safeFile}`;
+}
+
+/** Build the API serve URL for an R2 object. */
+function r2ServeUrl(orgId: number, objectKey: string): string {
+  return `/api/storage/r2-object/${encodeURIComponent(objectKey)}?orgId=${orgId}`;
+}
+
+// ─── Per-org S3 helpers (existing behaviour) ──────────────────────────────────
+
+/** Build an S3Client lazily from per-org DB config credentials. */
 async function buildS3Client(cfg: {
   s3Region?: string | null;
   s3Endpoint?: string | null;
@@ -59,8 +132,6 @@ async function buildS3Client(cfg: {
   s3SecretKey?: string | null;
 }) {
   const { S3Client } = await import("@aws-sdk/client-s3");
-  // Decrypt credentials — values stored as plaintext before ENCRYPTION_KEY was set
-  // are returned as-is by decrypt(), so this is fully backward compatible.
   const accessKeyId = cfg.s3AccessKey ? decrypt(cfg.s3AccessKey) : undefined;
   const secretAccessKey = cfg.s3SecretKey ? decrypt(cfg.s3SecretKey) : undefined;
   return new S3Client({
@@ -69,17 +140,17 @@ async function buildS3Client(cfg: {
     ...(accessKeyId && secretAccessKey
       ? {
           credentials: { accessKeyId, secretAccessKey },
-          forcePathStyle: !!cfg.s3Endpoint, // MinIO / custom endpoint requires path-style
+          forcePathStyle: !!cfg.s3Endpoint,
         }
       : {}),
   });
 }
 
+// ─── requestUpload ─────────────────────────────────────────────────────────────
+
 /**
  * Request an upload slot for a file.
- * – cloud:     Replit/GCS presigned PUT URL
- * – s3:        AWS S3 / MinIO presigned PUT URL
- * – onpremise: local filesystem path + serve URL
+ * Priority: per-org DB config → R2 env vars → DEFAULT_STORAGE_TYPE → auto-detect
  */
 export async function requestUpload(params: {
   organizationId: number;
@@ -92,40 +163,11 @@ export async function requestUpload(params: {
   const { organizationId, projectId, fileType = "general", name, contentType } = params;
   const cfg = await getOrgConfig(organizationId);
 
-  // env-var defaults (set in docker-compose for self-hosted VPS deployments)
   const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
   const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
 
-  // Smart default: if Replit cloud storage is not available (VPS without PRIVATE_OBJECT_DIR),
-  // automatically use on-premise mode instead of crashing.
-  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
-
-  // ── On-Premise ─────────────────────────────────────────────────────────────
-  if (storageType === "onpremise") {
-    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
-    const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-    const absPath = buildOnPremPath(
-      basePath,
-      organizationId,
-      projectId ?? null,
-      fileType,
-      safeFile,
-    );
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    // The client cannot PUT directly to a filesystem path.
-    // We expose an API endpoint that receives the binary body and writes it to disk.
-    return {
-      mode: "onpremise",
-      uploadURL: `/api/storage/uploads/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-      filePath: absPath,
-      objectPath: absPath,
-      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-    };
-  }
-
-  // ── Amazon S3 / S3-Compatible (MinIO, DigitalOcean Spaces, Backblaze …) ────
-  if (storageType === "s3" && cfg?.s3Bucket) {
+  // ── 1. Per-org explicit S3 config (highest priority) ──────────────────────
+  if (cfg?.storageType === "s3" && cfg?.s3Bucket) {
     try {
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
@@ -141,21 +183,63 @@ export async function requestUpload(params: {
       });
 
       const uploadURL = await getSignedUrl(s3, putCommand, { expiresIn: 3600 });
-
       return {
         mode: "s3",
         uploadURL,
         objectPath: objectKey,
-        // The serve URL proxies through our API which generates a presigned GET URL
         serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
       };
     } catch (err: any) {
-      console.error("[storage] S3 presigned URL generation failed:", err.message);
-      // fall through to cloud storage
+      console.error("[storage] Per-org S3 presigned URL generation failed:", err.message);
     }
   }
 
-  // ── Cloud (Replit / GCS) ───────────────────────────────────────────────────
+  // ── 2. Global R2 via env vars ──────────────────────────────────────────────
+  if (isR2Configured() && cfg?.storageType !== "onpremise") {
+    try {
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+
+      const r2 = await buildR2Client();
+      const objectKey = buildR2Key(organizationId, projectId ?? null, name);
+
+      const putCommand = new PutObjectCommand({
+        Bucket: process.env.R2_BUCKET!,
+        Key: objectKey,
+        ContentType: contentType,
+      });
+
+      const uploadURL = await getSignedUrl(r2, putCommand, { expiresIn: 3600 });
+      return {
+        mode: "r2",
+        uploadURL,
+        objectPath: objectKey,
+        serveUrl: r2ServeUrl(organizationId, objectKey),
+      };
+    } catch (err: any) {
+      console.error("[storage] R2 presigned PUT URL generation failed:", err.message);
+    }
+  }
+
+  // ── 3. On-Premise (explicit or env default) ────────────────────────────────
+  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
+
+  if (storageType === "onpremise") {
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
+    const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true });
+    return {
+      mode: "onpremise",
+      uploadURL: `/api/storage/uploads/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+      filePath: absPath,
+      objectPath: absPath,
+      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+    };
+  }
+
+  // ── 4. Cloud (Replit / GCS) ────────────────────────────────────────────────
   const uploadURL = await cloudStorage.getObjectEntityUploadURL();
   const objectPath = cloudStorage.normalizeObjectEntityPath(uploadURL);
   return {
@@ -166,8 +250,10 @@ export async function requestUpload(params: {
   };
 }
 
+// ─── getS3PresignedGetUrl ─────────────────────────────────────────────────────
+
 /**
- * Generate a presigned GET URL for an S3 object (used by the s3-object serve route).
+ * Generate a presigned GET URL for a per-org S3 object.
  */
 export async function getS3PresignedGetUrl(
   organizationId: number,
@@ -185,7 +271,7 @@ export async function getS3PresignedGetUrl(
     const command = new GetObjectCommand({ Bucket: cfg.s3Bucket, Key: objectKey });
     return await getSignedUrl(s3, command, { expiresIn });
   } catch (err: any) {
-    console.error("[storage] S3 presigned GET URL failed:", err.message);
+    console.error("[storage] Per-org S3 presigned GET URL failed:", err.message);
     return null;
   }
 }
@@ -204,7 +290,7 @@ export interface UploadBufferResult {
 
 /**
  * Upload a file buffer directly from the server (no signed URL round-trip).
- * Supports cloud (GCS), S3-compatible, and on-premise storage.
+ * Priority: per-org DB config → R2 env vars → DEFAULT_STORAGE_TYPE → auto-detect
  */
 export async function uploadBuffer(params: {
   organizationId: number | null;
@@ -219,36 +305,16 @@ export async function uploadBuffer(params: {
   const safeFile = `${Date.now()}_${path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
 
   if (!organizationId) {
-    // System-level — cloud storage only
+    // System-level — cloud storage only (no org context for R2 key)
     return uploadToCloud(buffer, safeFile, contentType);
   }
 
   const cfg = await getOrgConfig(organizationId);
-
-  // env-var defaults (set in docker-compose for self-hosted VPS deployments)
   const envStorageType = process.env.DEFAULT_STORAGE_TYPE as StorageMode | undefined;
   const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
 
-  // Smart default: if Replit cloud storage is not available (VPS without PRIVATE_OBJECT_DIR),
-  // automatically use on-premise mode instead of crashing.
-  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
-
-  // ── On-Premise ─────────────────────────────────────────────────────────────
-  if (storageType === "onpremise") {
-    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
-    const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
-    fs.mkdirSync(path.dirname(absPath), { recursive: true, mode: 0o750 });
-    fs.writeFileSync(absPath, buffer);
-    return {
-      mode: "onpremise",
-      objectPath: absPath,
-      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
-    };
-  }
-
-  // ── Amazon S3 / S3-Compatible ───────────────────────────────────────────────
-  if (storageType === "s3" && cfg?.s3Bucket) {
+  // ── 1. Per-org explicit S3 config ─────────────────────────────────────────
+  if (cfg?.storageType === "s3" && cfg?.s3Bucket) {
     try {
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const s3 = await buildS3Client(cfg);
@@ -265,18 +331,53 @@ export async function uploadBuffer(params: {
         serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
       };
     } catch (err: any) {
-      console.error("[storage] S3 upload failed:", err.message);
-      // fall through to cloud
+      console.error("[storage] Per-org S3 upload failed:", err.message);
     }
   }
 
-  // ── Cloud (Replit / GCS) ───────────────────────────────────────────────────
+  // ── 2. Global R2 via env vars ──────────────────────────────────────────────
+  if (isR2Configured() && cfg?.storageType !== "onpremise") {
+    try {
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const r2 = await buildR2Client();
+      const objectKey = buildR2Key(organizationId, projectId ?? null, name);
+      await r2.send(new PutObjectCommand({
+        Bucket: process.env.R2_BUCKET!,
+        Key: objectKey,
+        Body: buffer,
+        ContentType: contentType,
+      }));
+      return {
+        mode: "r2",
+        objectPath: objectKey,
+        serveUrl: r2ServeUrl(organizationId, objectKey),
+      };
+    } catch (err: any) {
+      console.error("[storage] R2 upload failed:", err.message);
+    }
+  }
+
+  // ── 3. On-Premise ──────────────────────────────────────────────────────────
+  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
+  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
+
+  if (storageType === "onpremise") {
+    const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
+    const absPath = buildOnPremPath(basePath, organizationId, projectId ?? null, fileType, safeFile);
+    fs.mkdirSync(path.dirname(absPath), { recursive: true, mode: 0o750 });
+    fs.writeFileSync(absPath, buffer);
+    return {
+      mode: "onpremise",
+      objectPath: absPath,
+      serveUrl: `/api/storage/onpremise/${organizationId}/${projectId ?? 0}/${fileType}/${safeFile}`,
+    };
+  }
+
+  // ── 4. Cloud (Replit / GCS) ────────────────────────────────────────────────
   return uploadToCloud(buffer, safeFile, contentType);
 }
 
 async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: string): Promise<UploadBufferResult> {
-  // If Replit/GCS cloud storage is not available (no PRIVATE_OBJECT_DIR),
-  // fall back to on-premise filesystem storage instead of crashing.
   if (!isCloudStorageAvailable()) {
     const basePath = getEffectiveOnPremPath(null);
     const uploadsDir = path.join(basePath, "uploads");
@@ -290,8 +391,6 @@ async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: str
     return {
       mode: "onpremise",
       objectPath: absPath,
-      // The /onpremise route uses orgId/projectId/fileType/filename segments.
-      // For system-level uploads (no org), we use org=0/project=0/type=uploads.
       serveUrl: `/api/storage/onpremise/0/0/uploads/${safeFile}`,
     };
   }

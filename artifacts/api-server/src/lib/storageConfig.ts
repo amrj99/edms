@@ -120,10 +120,25 @@ export function validateStorageAtStartup(): void {
   console.info(`[storage]  Cloud available        = ${cloudOk}`);
   console.info("[storage] ─────────────────────────────────────────────────");
 
+  // R2 status
+  const r2Configured = !!(process.env.R2_ENDPOINT && process.env.R2_BUCKET && process.env.R2_ACCESS_KEY && process.env.R2_SECRET_KEY);
+  if (r2Configured) {
+    console.info("[storage]  Cloudflare R2            = ✓ configured (global default)");
+    console.info(`[storage]  R2_ENDPOINT              = ${(process.env.R2_ENDPOINT ?? "").substring(0, 60)}`);
+    console.info(`[storage]  R2_BUCKET                = ${process.env.R2_BUCKET}`);
+  } else {
+    console.info("[storage]  Cloudflare R2            = (not configured — set R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY, R2_SECRET_KEY)");
+  }
+  console.info("[storage] ─────────────────────────────────────────────────");
+
   // Required env reference (for operators)
   const required = [
-    { key: "DEFAULT_STORAGE_TYPE", val: process.env.DEFAULT_STORAGE_TYPE, note: "onpremise | cloud | s3" },
+    { key: "DEFAULT_STORAGE_TYPE", val: process.env.DEFAULT_STORAGE_TYPE, note: "onpremise | cloud | s3 | (r2 auto if R2_* vars set)" },
     { key: "DEFAULT_STORAGE_PATH", val: process.env.DEFAULT_STORAGE_PATH, note: "abs path for on-premise mode" },
+    { key: "R2_ENDPOINT",          val: process.env.R2_ENDPOINT           ? "✓ set" : "(not set)", note: "Cloudflare R2" },
+    { key: "R2_BUCKET",            val: process.env.R2_BUCKET             ? "✓ set" : "(not set)", note: "Cloudflare R2" },
+    { key: "R2_ACCESS_KEY",        val: process.env.R2_ACCESS_KEY         ? "✓ set" : "(not set)", note: "Cloudflare R2" },
+    { key: "R2_SECRET_KEY",        val: process.env.R2_SECRET_KEY         ? "✓ set" : "(not set)", note: "Cloudflare R2" },
     { key: "JWT_SECRET",           val: process.env.JWT_SECRET            ? "✓ set" : "✗ MISSING", note: "required" },
     { key: "REFRESH_TOKEN_SECRET", val: process.env.REFRESH_TOKEN_SECRET  ? "✓ set" : "✗ MISSING", note: "required" },
     { key: "DATABASE_URL",         val: process.env.DATABASE_URL          ? "✓ set" : "✗ MISSING", note: "required" },

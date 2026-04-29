@@ -5,7 +5,7 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
-import { requestUpload, getS3PresignedGetUrl } from "../lib/orgStorage.js";
+import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { getEffectiveOnPremPath } from "../lib/storageConfig.js";
@@ -130,11 +130,12 @@ async function assertOrgAccess(
 
 /**
  * Validate that an S3 object key belongs to the requesting org.
- * Key format: {orgId}/{projectId}/{fileType}/{filename}
+ * Supports two formats:
+ *  - Legacy per-org S3:  {orgId}/{projectId}/{fileType}/{filename}
+ *  - R2 global:          org_{orgId}/projects/{projectId}/{filename}
  */
 function s3KeyBelongsToOrg(objectKey: string, orgId: number): boolean {
-  const prefix = `${orgId}/`;
-  return objectKey.startsWith(prefix);
+  return objectKey.startsWith(`${orgId}/`) || objectKey.startsWith(`org_${orgId}/`);
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ router.get("/view-token", requireAuth, (req: Request, res: Response) => {
   const decodedUrl = decodeURIComponent(rawUrl);
 
   // Security: only allow URLs pointing to our own storage endpoints
-  const allowedPrefixes = ["/api/storage/onpremise/", "/api/storage/objects/", "/api/storage/s3-object/", "/objects/"];
+  const allowedPrefixes = ["/api/storage/onpremise/", "/api/storage/objects/", "/api/storage/s3-object/", "/api/storage/r2-object/", "/objects/"];
   if (!allowedPrefixes.some(p => decodedUrl.startsWith(p))) {
     res.status(400).json({ error: "URL is not a valid internal storage path" });
     return;
@@ -572,6 +573,78 @@ router.get(
     res.status(500).json({ error: "Failed to serve S3 object" });
   }
 });
+
+/**
+ * GET /r2-object/:objectKey?orgId=N
+ * Serve Cloudflare R2 objects via presigned GET URL.
+ * Key format: org_{orgId}/projects/{projectId}/{filename}
+ * Enforces strict org ownership — redirects (302) to a 1-hour presigned R2 URL.
+ */
+router.get(
+  "/r2-object/:objectKey",
+  requireAuthOrViewToken(req => `/api/storage/r2-object/${req.params.objectKey}`),
+  async (req: Request, res: Response) => {
+    const rawKey = req.params.objectKey;
+    const orgIdStr = req.query.orgId as string;
+
+    const objectKeyDecoded = decodeURIComponent(rawKey);
+
+    // Derive orgId: query param > key prefix (org_N/...)  > session user
+    const r2PrefixMatch = objectKeyDecoded.match(/^org_(\d+)\//);
+    const keyOrgId = r2PrefixMatch ? parseInt(r2PrefixMatch[1]) : null;
+    const orgId = orgIdStr
+      ? parseInt(orgIdStr)
+      : (req.user?.organizationId ?? keyOrgId ?? 0);
+
+    if (!orgId || !rawKey) {
+      res.status(400).json({ error: "Missing orgId or objectKey" });
+      return;
+    }
+
+    if (!isR2Configured()) {
+      res.status(503).json({ error: "R2 storage is not configured" });
+      return;
+    }
+
+    // ── Ownership check ────────────────────────────────────────────────────
+    if (!s3KeyBelongsToOrg(objectKeyDecoded, orgId)) {
+      if (req.user) {
+        await createAuditLog({
+          userId: req.user.id,
+          organizationId: req.user.organizationId ?? undefined,
+          action: "UNAUTHORIZED_STORAGE_ACCESS",
+          entityType: "file",
+          entityId: 0,
+          entityTitle: objectKeyDecoded,
+          details: { route: "r2-object", claimedOrgId: orgId, objectKey: objectKeyDecoded, ip: req.ip },
+          ipAddress: req.ip,
+        });
+      }
+      res.status(403).json({ error: "Access denied: object key does not belong to the specified organization" });
+      return;
+    }
+
+    if (req.user) {
+      const allowed = await assertOrgAccess(req, res, orgId, {
+        route: "r2-object",
+        key: objectKeyDecoded,
+      });
+      if (!allowed) return;
+    }
+
+    try {
+      const presignedUrl = await getR2PresignedGetUrl(objectKeyDecoded, 3600);
+      if (!presignedUrl) {
+        res.status(404).json({ error: "R2 not configured or object not found" });
+        return;
+      }
+      res.redirect(302, presignedUrl);
+    } catch (err: any) {
+      console.error("[storage] R2 serve error:", err.message);
+      res.status(500).json({ error: "Failed to serve R2 object" });
+    }
+  },
+);
 
 /**
  * GET /storage-types
