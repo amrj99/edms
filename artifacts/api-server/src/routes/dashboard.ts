@@ -3,11 +3,81 @@ import { db } from "@workspace/db";
 import {
   documentsTable, wfInstancesTable, wfTemplateStagesTable, tasksTable,
   correspondenceTable, correspondenceRecipientsTable, usersTable,
-  foldersTable, projectsTable, meetingsTable, meetingActionItemsTable,
+  foldersTable, projectsTable, projectMembersTable, meetingsTable, meetingActionItemsTable,
   ncrRecordsTable, deliverablesTable,
 } from "@workspace/db";
 import { eq, and, count, desc, gte, lt, lte, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+
+// ─── Roles that can see all org projects in reports (no membership check) ──────
+const ELEVATED_ROLES = ["system_owner", "admin"] as const;
+function isElevatedRole(role: string): boolean {
+  return (ELEVATED_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Resolve the list of project IDs a user is allowed to query in reports/dashboard.
+ *  - Elevated (admin, system_owner): all projects in the org.
+ *  - Everyone else: only projects they are a member of, intersected with the org.
+ * Always returns an array (empty = no accessible projects).
+ */
+async function resolveAccessibleProjectIds(
+  userId: number,
+  orgId: number | undefined,
+  role: string,
+  specificProjectId?: number,
+): Promise<number[]> {
+  if (!orgId) return [];
+
+  if (specificProjectId) {
+    // Validate the user can see this specific project before returning it.
+    if (isElevatedRole(role)) {
+      const [proj] = await db
+        .select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(and(eq(projectsTable.id, specificProjectId), eq(projectsTable.organizationId, orgId)));
+      return proj ? [specificProjectId] : [];
+    }
+    // Regular user: must have a membership entry for this project within the org.
+    const [row] = await db
+      .select({ id: projectsTable.id })
+      .from(projectMembersTable)
+      .innerJoin(projectsTable, and(
+        eq(projectsTable.id, projectMembersTable.projectId),
+        eq(projectsTable.organizationId, orgId),
+      ))
+      .where(and(
+        eq(projectMembersTable.userId, userId),
+        eq(projectMembersTable.projectId, specificProjectId),
+      ));
+    return row ? [specificProjectId] : [];
+  }
+
+  if (isElevatedRole(role)) {
+    const rows = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, orgId));
+    return rows.map(r => r.id);
+  }
+
+  // Regular user: projects they are a member of, scoped to this org.
+  const memberships = await db
+    .select({ projectId: projectMembersTable.projectId })
+    .from(projectMembersTable)
+    .where(eq(projectMembersTable.userId, userId));
+  const memberProjectIds = memberships.map(m => m.projectId);
+  if (memberProjectIds.length === 0) return [];
+
+  const rows = await db
+    .select({ id: projectsTable.id })
+    .from(projectsTable)
+    .where(and(
+      eq(projectsTable.organizationId, orgId),
+      inArray(projectsTable.id, memberProjectIds),
+    ));
+  return rows.map(r => r.id);
+}
 
 const router = Router();
 
@@ -162,16 +232,25 @@ router.get("/", requireAuth, async (req, res) => {
 // ─── Reports Summary endpoint ──────────────────────────────────────────────────
 router.get("/reports", requireAuth, async (req, res) => {
   try {
-    const orgId     = req.user!.organizationId;
-    const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+    const user      = req.user!;
+    const orgId     = user.organizationId;
+    const requestedProjectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
 
-    let projectIds: number[] | undefined;
-    if (projectId) {
-      projectIds = [projectId];
-    } else if (orgId) {
-      const projs = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.organizationId, orgId));
-      projectIds = projs.map(p => p.id);
-    }
+    // Resolve project IDs the user is actually allowed to see.
+    // For admins/system_owners this is all org projects; for others it is their
+    // project memberships, optionally narrowed to a specific requested project.
+    const projectIds = await resolveAccessibleProjectIds(
+      user.id,
+      orgId,
+      user.role,
+      requestedProjectId,
+    );
+
+    // The effective single-project shortcut (for filter builder) is only valid
+    // when the caller explicitly requested it AND the user has access.
+    const projectId = requestedProjectId && projectIds.length === 1 && projectIds[0] === requestedProjectId
+      ? requestedProjectId
+      : undefined;
 
     const now = new Date();
     const weekStart = new Date(now);
@@ -182,8 +261,9 @@ router.get("/reports", requireAuth, async (req, res) => {
 
     const buildFilter = (col: any) => {
       if (projectId) return eq(col, projectId);
-      if (projectIds && projectIds.length > 0) return inArray(col, projectIds);
-      return undefined;
+      if (projectIds.length > 0) return inArray(col, projectIds);
+      // No accessible projects — return nothing.
+      return sql`false`;
     };
 
     const docsByStatus = await db
@@ -207,8 +287,8 @@ router.get("/reports", requireAuth, async (req, res) => {
       .orderBy(meetingActionItemsTable.dueDate);
 
     const filteredItems = allActionItems.filter(r => {
-      if (!projectIds || !orgId) return true;
-      return r.meeting.projectId ? projectIds.includes(r.meeting.projectId) : true;
+      if (projectIds.length === 0) return false;
+      return r.meeting.projectId ? projectIds.includes(r.meeting.projectId) : false;
     });
 
     const overdueActionItems = filteredItems.filter(r =>

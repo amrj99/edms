@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { projectsTable, projectMembersTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
-import { eq, count, and } from "drizzle-orm";
+import { eq, count, and, inArray } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -21,6 +21,12 @@ function pgErrCode(err: unknown): string | undefined {
   return (err as any)?.code ?? (err as any)?.cause?.code;
 }
 
+// ─── Roles that can see all org projects without membership check ──────────────
+const ELEVATED_ROLES = ["system_owner", "admin"] as const;
+function isElevatedRole(role: string): boolean {
+  return (ELEVATED_ROLES as readonly string[]).includes(role);
+}
+
 // ─── GET / ────────────────────────────────────────────────────────────────────
 router.get("/", requireAuth, async (req, res) => {
   const user = req.user!;
@@ -33,9 +39,20 @@ router.get("/", requireAuth, async (req, res) => {
     orgName: organizationsTable.name,
   }).from(projectsTable).leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id));
 
-  const projects = effectiveOrgId
+  let projects = effectiveOrgId
     ? (await query).filter(p => p.project.organizationId === effectiveOrgId)
     : await query;
+
+  // Non-elevated users only see projects they are explicitly assigned to.
+  // Admins and system owners see all projects in the organization.
+  if (!isElevatedRole(user.role)) {
+    const memberships = await db
+      .select({ projectId: projectMembersTable.projectId })
+      .from(projectMembersTable)
+      .where(eq(projectMembersTable.userId, user.id));
+    const accessibleIds = new Set(memberships.map(m => m.projectId));
+    projects = projects.filter(p => accessibleIds.has(p.project.id));
+  }
 
   const memberCounts = await db.select({ projectId: projectMembersTable.projectId, cnt: count() }).from(projectMembersTable).groupBy(projectMembersTable.projectId);
   const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
