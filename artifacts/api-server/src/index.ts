@@ -46,7 +46,7 @@ const rawPort = process.env["PORT"];
     { key: "ALLOWED_ORIGINS",    label: "CORS may be misconfigured for production" },
   ];
 
-  if (isProd) {
+  if (process.env.NODE_ENV === "production") {
     const missing = softChecks.filter(c => !process.env[c.key]);
     if (missing.length > 0) {
       console.warn("[Config] The following optional env vars are not set:");
