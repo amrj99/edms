@@ -651,7 +651,6 @@ router.put("/provider", async (req, res) => {
     "cloudflare", "groq",
     "openrouter", "huggingface", "together", "ollama",
     "openai", "anthropic",
-    "openai_replit",
     "none",
   ];
   if (provider !== undefined && !validProviders.includes(provider)) {

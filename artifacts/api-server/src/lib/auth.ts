@@ -2,7 +2,15 @@ import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 
-const JWT_SECRET = process.env.JWT_SECRET || "edms-secret-key-change-in-production";
+const _jwtSecret = process.env.JWT_SECRET;
+if (!_jwtSecret) {
+  throw new Error(
+    "JWT_SECRET environment variable is not set. " +
+    "Generate one with: node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\" " +
+    "and set it as an environment secret before starting the server.",
+  );
+}
+const JWT_SECRET: string = _jwtSecret;
 const ACCESS_TOKEN_EXPIRY = 60 * 60; // 1 hour in seconds
 const REMEMBER_ME_EXPIRY = 60 * 60 * 24 * 7; // 7 days in seconds
 const REFRESH_TOKEN_EXPIRY = 60 * 60 * 24 * 30; // 30 days
@@ -53,8 +61,7 @@ export async function hashPassword(password: string): Promise<string> {
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   // Support legacy SHA256 hashes for backward compat during migration
   if (hash.length === 64 && !hash.startsWith("$2")) {
-    const legacySecret = process.env.JWT_SECRET || "edms-secret-key-change-in-production";
-    const legacyHash = crypto.createHash("sha256").update(password + legacySecret).digest("hex");
+    const legacyHash = crypto.createHash("sha256").update(password + JWT_SECRET).digest("hex");
     return legacyHash === hash;
   }
   return bcrypt.compare(password, hash);

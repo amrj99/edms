@@ -160,17 +160,6 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
-// Warn loudly if using the hardcoded default JWT secret so operators know
-// tokens will be invalidated every time the docker-compose default changes.
-const _jwtSecret = process.env.JWT_SECRET;
-if (!_jwtSecret || _jwtSecret === "edms-secret-key-change-in-production") {
-  logger.warn(
-    "JWT_SECRET is not set or is using the default insecure value. " +
-    "Set a strong, unique JWT_SECRET in your .env file. " +
-    "Changing the default between deploys will invalidate all user sessions.",
-  );
-}
-
 seedDefaultAdmin().catch((err) => {
   logger.error({ err }, "Seed failed — continuing anyway");
 });

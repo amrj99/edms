@@ -8,41 +8,30 @@ import { validateStorageAtStartup } from "./lib/storageConfig.js";
 const rawPort = process.env["PORT"];
 
 // ── Runtime environment validation ────────────────────────────────────────────
-// Critical secrets — fail-fast in production if missing or using defaults.
+// Critical secrets — always fail-fast if missing (no dev/prod distinction).
 // Optional vars — warn only, never crash.
 (function validateEnv() {
-  const isProd = process.env.NODE_ENV === "production";
-
-  // ── FAIL-FAST secrets (missing/default in production = hard exit) ──────────
-  const DEFAULT_JWT     = "edms-secret-key-change-in-production";
-  const DEFAULT_REFRESH = "edms-refresh-key-change-in-production";
-
+  // ── FAIL-FAST secrets — always exit immediately if missing ─────────────────
   const criticalErrors: string[] = [];
 
-  if (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEFAULT_JWT) {
-    if (isProd) {
-      criticalErrors.push("JWT_SECRET is missing or using the insecure default value");
-    } else {
-      console.warn("[Security] WARNING: JWT_SECRET not set — using insecure default (dev only).");
-    }
+  if (!process.env.JWT_SECRET) {
+    criticalErrors.push("JWT_SECRET is not set");
   }
 
-  if (!process.env.REFRESH_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET === DEFAULT_REFRESH) {
-    if (isProd) {
-      criticalErrors.push("REFRESH_TOKEN_SECRET is missing or using the insecure default value");
-    } else {
-      console.warn("[Security] WARNING: REFRESH_TOKEN_SECRET not set — using insecure default (dev only).");
-    }
+  if (!process.env.REFRESH_TOKEN_SECRET) {
+    criticalErrors.push("REFRESH_TOKEN_SECRET is not set");
   }
 
   if (criticalErrors.length > 0) {
     console.error("");
     console.error("╔══════════════════════════════════════════════════════════════╗");
-    console.error("║  FATAL: Critical environment variables are not set properly  ║");
+    console.error("║  FATAL: Critical environment variables are not set           ║");
     console.error("╠══════════════════════════════════════════════════════════════╣");
     criticalErrors.forEach(e => console.error(`║  ✗ ${e.padEnd(58)}║`));
     console.error("╠══════════════════════════════════════════════════════════════╣");
-    console.error("║  Set these in /var/www/edms/.env and redeploy.               ║");
+    console.error("║  Generate secrets:                                           ║");
+    console.error("║  node -e \"console.log(require('crypto')                       ║");
+    console.error("║           .randomBytes(64).toString('hex'))\"                  ║");
     console.error("╚══════════════════════════════════════════════════════════════╝");
     console.error("");
     process.exit(1);

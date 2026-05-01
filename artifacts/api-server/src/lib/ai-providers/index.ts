@@ -17,7 +17,7 @@ import { OpenRouterProvider }   from "./openrouter.js";
 import { HuggingFaceProvider }  from "./huggingface.js";
 import { TogetherAIProvider }   from "./together.js";
 import { OllamaProvider }       from "./ollama.js";
-import { OpenAIProvider, OpenAIReplitProvider } from "./openai.js";
+import { OpenAIProvider } from "./openai.js";
 import { AnthropicProvider }    from "./anthropic.js";
 import type { AIProviderClient, ProviderKey } from "./types.js";
 import { db } from "@workspace/db";
@@ -36,7 +36,6 @@ const PROVIDERS: Record<string, AIProviderClient> = {
   together:      new TogetherAIProvider(),
   ollama:        new OllamaProvider(),
   openai:        new OpenAIProvider(),
-  openai_replit: new OpenAIReplitProvider(),
   anthropic:     new AnthropicProvider(),
 };
 

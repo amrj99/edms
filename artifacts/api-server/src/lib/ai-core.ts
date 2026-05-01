@@ -28,7 +28,6 @@ export type AIProvider =
   | "ollama"        // self-hosted local Ollama
   | "openai"        // paid optional: OpenAI direct
   | "anthropic"     // paid optional: Anthropic Claude
-  | "openai_replit" // legacy: Replit OpenAI proxy (keep until CF+Groq confirmed)
   | "none";
 
 export interface AIProviderConfig {
@@ -43,7 +42,6 @@ export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartMod
   openrouter:    { fastModel: "meta-llama/llama-3.2-3b-instruct:free", smartModel: "mistralai/mistral-7b-instruct:free" },
   huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",    smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
   together:      { fastModel: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smartModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
-  openai_replit: { fastModel: "gpt-4o-mini",                           smartModel: "gpt-4o" },
   ollama:        { fastModel: "llama3.2",                              smartModel: "llama3.1" },
   openai:        { fastModel: "gpt-4o-mini",                           smartModel: "gpt-4o" },
   anthropic:     { fastModel: "claude-3-haiku-20240307",               smartModel: "claude-3-5-sonnet-20241022" },
@@ -116,16 +114,11 @@ export async function getAIClient(): Promise<OpenAI> {
     if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
     _cachedClient = new OpenAI({ apiKey });
   } else {
-    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-    if (!baseURL || !apiKey) {
-      throw new Error(
-        "OpenAI Replit proxy not configured. " +
-        "For production VPS use: set OPENROUTER_API_KEY, TOGETHER_API_KEY, or OPENAI_API_KEY " +
-        "and switch the provider in Admin → AI Settings.",
-      );
-    }
-    _cachedClient = new OpenAI({ apiKey, baseURL });
+    throw new Error(
+      `Unknown AI provider: "${provider}". ` +
+      "Valid providers: cloudflare, groq, openrouter, together, huggingface, ollama, openai, anthropic, none. " +
+      "Update the provider in Admin → AI Settings.",
+    );
   }
 
   return _cachedClient;
@@ -220,14 +213,6 @@ export function getProviderStatus() {
       description: "Claude models for high-quality reasoning. Requires paid Anthropic account.",
       envVarsRequired: ["ANTHROPIC_API_KEY"],
       docsUrl: "https://console.anthropic.com",
-    },
-    openai_replit: {
-      configured: !!(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
-      isFree: true,
-      label: "OpenAI via Replit Proxy (Development Only)",
-      description: "Replit-managed OpenAI proxy. Only works inside the Replit environment, not on VPS.",
-      envVarsRequired: ["AI_INTEGRATIONS_OPENAI_BASE_URL", "AI_INTEGRATIONS_OPENAI_API_KEY"],
-      docsUrl: null,
     },
     none: {
       configured: true,
@@ -351,12 +336,6 @@ export async function buildProviderClient(provider: string): Promise<OpenAI | nu
   if (provider === "ollama") {
     const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
     return new OpenAI({ apiKey: "ollama", baseURL });
-  }
-  if (provider === "openai_replit") {
-    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const apiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-    if (!baseURL || !apiKey) { logger.warn("Org uses openai_replit but Replit proxy is not configured"); return null; }
-    return new OpenAI({ apiKey, baseURL });
   }
   return null;
 }

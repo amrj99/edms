@@ -44,7 +44,6 @@ export type ProviderKey =
   | "ollama"        // Local Ollama instance
   | "openai"        // OpenAI paid (optional)
   | "anthropic"     // Anthropic paid (optional)
-  | "openai_replit" // Legacy Replit OpenAI proxy (keep until CF+Groq confirmed)
   | "none";
 
 export interface ProviderRegistry {
