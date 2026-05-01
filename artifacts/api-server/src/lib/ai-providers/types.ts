@@ -36,14 +36,15 @@ export interface AIProviderClient {
 }
 
 export type ProviderKey =
-  | "openrouter"    // free models via OpenRouter (default)
+  | "cloudflare"    // Cloudflare Workers AI (free, OpenAI-compatible endpoint)
+  | "groq"          // Groq Cloud (fast, free tier)
+  | "openrouter"    // free models via OpenRouter
   | "huggingface"   // HuggingFace Inference API (free tier)
   | "together"      // Together AI (free tier)
   | "ollama"        // Local Ollama instance
   | "openai"        // OpenAI paid (optional)
   | "anthropic"     // Anthropic paid (optional)
-  | "openai_replit" // Legacy Replit OpenAI proxy
-  | "groq"          // Groq (legacy)
+  | "openai_replit" // Legacy Replit OpenAI proxy (keep until CF+Groq confirmed)
   | "none";
 
 export interface ProviderRegistry {

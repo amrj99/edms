@@ -21,6 +21,7 @@ import {
   getAIClient,
   callAI,
 } from "../lib/ai-service.js";
+import { deductCredits, getCreditsBalance } from "../lib/ai-credits.js";
 
 const router = Router();
 
@@ -63,7 +64,22 @@ router.post("/documents/:id/analyze", async (req, res) => {
     return;
   }
 
-  const analysis = await analyzeDocument(doc, caller.id, force);
+  // Credit check — only required when not using cache
+  if (!force && caller.organizationId) {
+    const { balance } = await getCreditsBalance(caller.organizationId);
+    if (balance < 10) {
+      res.status(402).json({ error: "Insufficient AI credits. Purchase credits in Admin → AI Credits to continue.", creditsRequired: 10, creditsBalance: balance });
+      return;
+    }
+  }
+
+  const analysis = await analyzeDocument(doc, caller.id, force, caller.organizationId);
+
+  // Deduct credits after a successful (non-cached) analysis
+  if (caller.organizationId) {
+    await deductCredits(caller.organizationId, "ai_summary", { docId: doc.id }).catch(() => {});
+  }
+
   res.json(analysis);
 });
 
@@ -94,7 +110,20 @@ router.post("/correspondence/:id/analyze", async (req, res) => {
     return;
   }
 
-  const analysis = await analyzeCorrespondence(corr, caller.id, force);
+  if (!force && caller.organizationId) {
+    const { balance } = await getCreditsBalance(caller.organizationId);
+    if (balance < 10) {
+      res.status(402).json({ error: "Insufficient AI credits. Purchase credits in Admin → AI Credits to continue.", creditsRequired: 10, creditsBalance: balance });
+      return;
+    }
+  }
+
+  const analysis = await analyzeCorrespondence(corr, caller.id, force, caller.organizationId);
+
+  if (caller.organizationId) {
+    await deductCredits(caller.organizationId, "ai_summary", { corrId: corr.id }).catch(() => {});
+  }
+
   res.json(analysis);
 });
 
@@ -127,7 +156,20 @@ router.post("/tasks/prioritize", async (req, res) => {
     ? await db.select().from(tasksTable).where(and(...conditions)).limit(50)
     : await db.select().from(tasksTable).limit(50);
 
-  const insights = await prioritizeTasks(tasks, caller.id);
+  if (caller.organizationId) {
+    const { balance } = await getCreditsBalance(caller.organizationId);
+    if (balance < 5) {
+      res.status(402).json({ error: "Insufficient AI credits. Purchase credits in Admin → AI Credits to continue.", creditsRequired: 5, creditsBalance: balance });
+      return;
+    }
+  }
+
+  const insights = await prioritizeTasks(tasks, caller.id, caller.organizationId);
+
+  if (caller.organizationId) {
+    await deductCredits(caller.organizationId, "ai_classify", { taskCount: tasks.length }).catch(() => {});
+  }
+
   res.json(insights);
 });
 
@@ -219,7 +261,21 @@ router.post("/search/natural", async (req, res) => {
     return;
   }
 
+  const orgId = req.user!.organizationId;
+  if (orgId) {
+    const { balance } = await getCreditsBalance(orgId);
+    if (balance < 2) {
+      res.status(402).json({ error: "Insufficient AI credits.", creditsRequired: 2, creditsBalance: balance });
+      return;
+    }
+  }
+
   const parsed = await parseNaturalLanguageSearch(query);
+
+  if (orgId) {
+    await deductCredits(orgId, "ai_search").catch(() => {});
+  }
+
   res.json(parsed);
 });
 
@@ -323,6 +379,15 @@ router.post("/compare-revisions", async (req, res) => {
   }
 
   // Optional AI narrative — only called when withAI=true
+  const revOrgId = req.user!.organizationId;
+  if (revOrgId) {
+    const { balance } = await getCreditsBalance(revOrgId);
+    if (balance < 5) {
+      res.json({ diff, summary: plainSummary, aiSummary: null, aiError: "Insufficient AI credits (requires 5)" });
+      return;
+    }
+  }
+
   try {
     const changesText = diff.length === 0
       ? "No metadata changes detected."
@@ -338,7 +403,13 @@ ${changesText}
 Write a concise 2-3 sentence professional summary of what changed between these two revisions and any implications for document control. Be specific about the changes.`,
       "Respond in plain professional English. Do not use markdown or bullet points.",
       "fast",
+      true,
+      revOrgId,
     );
+
+    if (revOrgId) {
+      await deductCredits(revOrgId, "ai_classify").catch(() => {});
+    }
 
     res.json({ diff, summary: plainSummary, aiSummary: String(data), provider, model });
   } catch (err: any) {
@@ -494,6 +565,15 @@ router.post("/command", async (req, res) => {
     return;
   }
 
+  const cmdOrgId = req.user!.organizationId;
+  if (cmdOrgId) {
+    const { balance } = await getCreditsBalance(cmdOrgId);
+    if (balance < 5) {
+      res.status(402).json({ error: "Insufficient AI credits.", creditsRequired: 5, creditsBalance: balance });
+      return;
+    }
+  }
+
   try {
     const systemPrompt = `You are an EDMS (Engineering Document Management System) AI assistant.
 The user will give you a natural-language command to create a record in the system.
@@ -542,6 +622,10 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       parsed = { action: "unknown", summary: "Could not parse the AI response. Please rephrase your command." };
     }
 
+    if (cmdOrgId) {
+      await deductCredits(cmdOrgId, "ai_classify").catch(() => {});
+    }
+
     res.json(parsed);
   } catch (err: any) {
     console.error("AI command error:", err);
@@ -564,9 +648,10 @@ router.put("/provider", async (req, res) => {
   }
   const { provider, fastModel, smartModel } = req.body ?? {};
   const validProviders = [
+    "cloudflare", "groq",
     "openrouter", "huggingface", "together", "ollama",
     "openai", "anthropic",
-    "openai_replit", "groq",
+    "openai_replit",
     "none",
   ];
   if (provider !== undefined && !validProviders.includes(provider)) {

@@ -72,6 +72,9 @@ Respond ONLY with valid JSON in this exact schema:
   "sentiment": "one of: positive, neutral, negative, urgent",
   "relatedTopics": ["topic1", "topic2"]
 }`,
+      "fast",
+      true,
+      organizationId,
     );
 
     const latencyMs = Date.now() - start;

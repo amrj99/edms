@@ -141,6 +141,7 @@ export default function MigrationWizard() {
   const [jobId, setJobId] = useState<number | null>(null);
   const [storageMode, setStorageMode] = useState<"system" | "reference">("system");
   const [baseUrl, setBaseUrl] = useState("");
+  const [analysisMode, setAnalysisMode] = useState<"standard" | "ai">("standard");
   const [editItem, setEditItem] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [confirmNewDocItem, setConfirmNewDocItem] = useState<MigrationItem | null>(null);
@@ -224,8 +225,17 @@ export default function MigrationWizard() {
     onSuccess: (data) => {
       setJobId(data.job.id);
       setStep(2);
-      // Kick off analysis
-      fetch(`/api/migrations/${data.job.id}/analyze`, { method: "POST" });
+      // Kick off analysis with selected mode
+      fetch(`/api/migrations/${data.job.id}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: analysisMode }),
+      }).then(async (r) => {
+        if (r.status === 402) {
+          const err = await r.json().catch(() => ({}));
+          toast({ title: err.error ?? "Insufficient AI credits for AI mode", variant: "destructive" });
+        }
+      }).catch(() => {});
     },
     onError: (err: Error) => toast({ title: err.message, variant: "destructive" }),
   });
@@ -323,6 +333,53 @@ export default function MigrationWizard() {
         </Select>
       </div>
 
+      {/* Analysis mode selector */}
+      <div>
+        <Label className="mb-2 block">Analysis Mode</Label>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setAnalysisMode("standard")}
+            className={cn(
+              "flex flex-col gap-1.5 p-4 rounded-xl border-2 text-left transition-colors",
+              analysisMode === "standard"
+                ? "border-primary bg-primary/5"
+                : "border-muted hover:border-muted-foreground/40",
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-amber-500" />
+              <span className="font-semibold text-sm">Standard</span>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 ml-auto">Free</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Parses filenames and folder paths using smart heuristics. Fast, free, and works on all file types.
+              Typical confidence: 40–55%.
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAnalysisMode("ai")}
+            className={cn(
+              "flex flex-col gap-1.5 p-4 rounded-xl border-2 text-left transition-colors",
+              analysisMode === "ai"
+                ? "border-primary bg-primary/5"
+                : "border-muted hover:border-muted-foreground/40",
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span className="font-semibold text-sm">AI-Powered</span>
+              <Badge className="text-[10px] px-1.5 py-0 ml-auto bg-primary/10 text-primary border-primary/20">15 credits/file</Badge>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              AI reads file content (PDF, DOCX) to extract metadata with high accuracy. Requires AI credits.
+              Typical confidence: 85%+.
+            </p>
+          </button>
+        </div>
+      </div>
+
       {/* File pickers */}
       <div className="grid grid-cols-2 gap-4">
         <button
@@ -408,8 +465,12 @@ export default function MigrationWizard() {
           onClick={() => createJobMut.mutate()}
           className="gap-2"
         >
-          {createJobMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          Start AI Analysis
+          {createJobMut.isPending
+            ? <Loader2 className="h-4 w-4 animate-spin" />
+            : analysisMode === "ai"
+            ? <Sparkles className="h-4 w-4" />
+            : <Zap className="h-4 w-4" />}
+          {analysisMode === "ai" ? "Start AI Analysis" : "Start Standard Analysis"}
           <ChevronRight className="h-4 w-4 ml-1" />
         </Button>
       </div>

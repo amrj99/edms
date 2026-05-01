@@ -9,6 +9,7 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
 
 const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
 const router = Router({ mergeParams: true });
@@ -146,33 +147,54 @@ router.post("/", requireAuth, async (req, res) => {
 });
 
 // ── POST /api/migrations/:id/analyze — AI-extract metadata per item ──────────
-// Uses filename + folder path to infer document metadata, then runs conflict detection.
+// Body: { mode?: "standard" | "ai" }
+// - standard (default): filename/path heuristics only — free, confidence 40-55
+// - ai: reads file content via AI — costs 15 credits per file, confidence 85+
 router.post("/:id/analyze", requireAuth, async (req, res) => {
   const id = parseInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
+  const mode: "standard" | "ai" = req.body?.mode === "ai" ? "ai" : "standard";
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
   if (!job) return res.status(404).json({ error: "Job not found" });
   if (job.status !== "pending") return res.status(409).json({ error: `Job is already in '${job.status}' state` });
 
+  // AI mode: pre-flight credit check (15 credits per file)
+  if (mode === "ai" && orgId) {
+    const items = await db.select({ id: migrationItemsTable.id }).from(migrationItemsTable)
+      .where(eq(migrationItemsTable.jobId, id));
+    const costPerFile = AI_FEATURE_COSTS.ai_extract;
+    const totalCost = items.length * costPerFile;
+    const { balance } = await getCreditsBalance(orgId);
+    if (balance < totalCost) {
+      return res.status(402).json({
+        error: `Insufficient AI credits for AI-powered analysis. Need ${totalCost} credits (${items.length} files × ${costPerFile}) but balance is ${balance}.`,
+        creditsRequired: totalCost,
+        creditsBalance: balance,
+      });
+    }
+  }
+
   // Mark analyzing
   await db.update(migrationJobsTable).set({ status: "analyzing", updatedAt: new Date() })
     .where(eq(migrationJobsTable.id, id));
-  res.json({ message: "Analysis started", jobId: id });
+  res.json({ message: "Analysis started", jobId: id, mode });
 
   // Fire-and-forget: analyze all items in background, then run conflict detection
   setImmediate(async () => {
     try {
       const items = await db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id));
 
-      // Try to use AI for extraction; fall back to heuristics
+      // Determine whether to use AI based on mode
       let useAI = false;
-      try {
-        const { getOrgProvider } = await import("../lib/ai-service.js");
-        const provider = await getOrgProvider(orgId!);
-        useAI = !!provider && provider !== "none";
-      } catch {}
+      if (mode === "ai") {
+        try {
+          const { getOrgProvider } = await import("../lib/ai-service.js");
+          const provider = await getOrgProvider(orgId!);
+          useAI = !!provider && provider !== "none";
+        } catch {}
+      }
 
       for (const item of items) {
         try {
@@ -198,14 +220,18 @@ router.post("/:id/analyze", requireAuth, async (req, res) => {
               const { extractDocumentMetadataFromPath } = await import("../lib/ai-service.js");
               const result = await extractDocumentMetadataFromPath(item.filePath, item.fileName);
               extracted = result.metadata ?? {};
-              confidence = result.confidence ?? 40;
+              confidence = result.confidence ?? 85;
+              // Deduct per-file credit after successful AI extraction
+              if (orgId) {
+                await deductCredits(orgId, "ai_extract", { jobId: id, itemId: item.id }).catch(() => {});
+              }
             } catch {
               extracted = heuristicExtract(item.filePath, item.fileName);
               confidence = 45;
             }
           } else {
             extracted = heuristicExtract(item.filePath, item.fileName);
-            confidence = extracted.title ? 55 : 30;
+            confidence = extracted.title ? 55 : 40;
           }
 
           const label = confidence >= 85 ? "high" : confidence >= 50 ? "medium" : "low";

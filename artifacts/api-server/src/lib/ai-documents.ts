@@ -119,6 +119,9 @@ Respond ONLY with valid JSON in this exact schema:
   "recommendations": ["action1", "action2"],
   "confidence": 0.0-1.0
 }`,
+      "fast",
+      true,
+      organizationId,
     );
 
     const latencyMs = Date.now() - start;

@@ -32,7 +32,7 @@ export async function prioritizeTasks(tasks: Array<{
   priority: string;
   dueDate?: Date | null;
   sourceType?: string | null;
-}>, userId?: number): Promise<TaskListInsights> {
+}>, userId?: number, organizationId?: number | null): Promise<TaskListInsights> {
   if (tasks.length === 0) {
     return { tasks: [], overallRisk: "low", bottlenecks: [], topRecommendations: [] };
   }
@@ -71,6 +71,8 @@ Respond ONLY with valid JSON in this exact schema:
   "topRecommendations": ["action1", "action2", "action3"]
 }`,
       "smart",
+      true,
+      organizationId,
     );
 
     await logAiAction({

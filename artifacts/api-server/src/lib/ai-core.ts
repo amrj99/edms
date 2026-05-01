@@ -20,14 +20,15 @@ export const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 // ─── Provider types ───────────────────────────────────────────────────────────
 
 export type AIProvider =
-  | "openrouter"    // free default: OpenRouter free models
+  | "cloudflare"    // free primary: Cloudflare Workers AI (OpenAI-compatible)
+  | "groq"          // free: Groq Cloud (fast inference)
+  | "openrouter"    // free: OpenRouter free models
   | "huggingface"   // free: HuggingFace Inference API
   | "together"      // free: Together AI free tier
   | "ollama"        // self-hosted local Ollama
   | "openai"        // paid optional: OpenAI direct
   | "anthropic"     // paid optional: Anthropic Claude
-  | "openai_replit" // legacy: Replit OpenAI proxy
-  | "groq"          // legacy: Groq Cloud
+  | "openai_replit" // legacy: Replit OpenAI proxy (keep until CF+Groq confirmed)
   | "none";
 
 export interface AIProviderConfig {
@@ -37,15 +38,16 @@ export interface AIProviderConfig {
 }
 
 export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: string }> = {
+  cloudflare:    { fastModel: "@cf/meta/llama-3.2-3b-instruct",        smartModel: "@cf/mistral/mistral-7b-instruct-v0.1" },
+  groq:          { fastModel: "llama-3.3-70b-versatile",               smartModel: "llama-3.3-70b-versatile" },
   openrouter:    { fastModel: "meta-llama/llama-3.2-3b-instruct:free", smartModel: "mistralai/mistral-7b-instruct:free" },
-  huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",   smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
+  huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",    smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
   together:      { fastModel: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smartModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
-  openai_replit: { fastModel: "gpt-4o-mini",              smartModel: "gpt-4o" },
-  groq:          { fastModel: "llama-3.1-8b-instant",      smartModel: "llama-3.3-70b-versatile" },
-  ollama:        { fastModel: "llama3.2",                  smartModel: "llama3.1" },
-  openai:        { fastModel: "gpt-4o-mini",               smartModel: "gpt-4o" },
-  anthropic:     { fastModel: "claude-3-haiku-20240307",   smartModel: "claude-3-5-sonnet-20241022" },
-  none:          { fastModel: "",                          smartModel: "" },
+  openai_replit: { fastModel: "gpt-4o-mini",                           smartModel: "gpt-4o" },
+  ollama:        { fastModel: "llama3.2",                              smartModel: "llama3.1" },
+  openai:        { fastModel: "gpt-4o-mini",                           smartModel: "gpt-4o" },
+  anthropic:     { fastModel: "claude-3-haiku-20240307",               smartModel: "claude-3-5-sonnet-20241022" },
+  none:          { fastModel: "",                                       smartModel: "" },
 };
 
 // ─── System settings helper ───────────────────────────────────────────────────
@@ -58,7 +60,7 @@ export async function getSystemSettingValue(key: string): Promise<string | null>
 // ─── Provider config ──────────────────────────────────────────────────────────
 
 export async function getAIProviderConfig(): Promise<AIProviderConfig> {
-  const provider = (await getSystemSettingValue("ai_provider") ?? "openrouter") as AIProvider;
+  const provider = (await getSystemSettingValue("ai_provider") ?? "cloudflare") as AIProvider;
   const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openrouter;
   const fastModel  = await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
   const smartModel = await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
@@ -79,6 +81,14 @@ export async function getAIClient(): Promise<OpenAI> {
 
   if (provider === "none") {
     throw new Error("AI provider is set to 'none'. Enable an AI provider in Admin → AI Settings.");
+  } else if (provider === "cloudflare") {
+    const accountId = process.env.CF_ACCOUNT_ID;
+    const apiKey    = process.env.CF_AI_TOKEN;
+    if (!accountId || !apiKey) throw new Error("CF_ACCOUNT_ID and CF_AI_TOKEN are required for Cloudflare Workers AI.");
+    _cachedClient = new OpenAI({
+      apiKey,
+      baseURL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`,
+    });
   } else if (provider === "openrouter") {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set. Get a free key at https://openrouter.ai/keys");
@@ -147,6 +157,22 @@ export async function updateAIProviderConfig(config: Partial<AIProviderConfig>) 
 
 export function getProviderStatus() {
   return {
+    cloudflare: {
+      configured: !!(process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN),
+      isFree: true,
+      label: "Cloudflare Workers AI (Free — Recommended)",
+      description: "Run Llama 3, Mistral, and Gemma models via Cloudflare's global network. Uses your existing Cloudflare account.",
+      envVarsRequired: ["CF_ACCOUNT_ID", "CF_AI_TOKEN"],
+      docsUrl: "https://developers.cloudflare.com/workers-ai/",
+    },
+    groq: {
+      configured: !!process.env.GROQ_API_KEY,
+      isFree: true,
+      label: "Groq Cloud (Free Tier — Fast)",
+      description: "Ultra-fast inference for Llama 3.3 70B. Free tier available at console.groq.com.",
+      envVarsRequired: ["GROQ_API_KEY"],
+      docsUrl: "https://console.groq.com",
+    },
     openrouter: {
       configured: !!process.env.OPENROUTER_API_KEY,
       isFree: true,
@@ -203,14 +229,6 @@ export function getProviderStatus() {
       envVarsRequired: ["AI_INTEGRATIONS_OPENAI_BASE_URL", "AI_INTEGRATIONS_OPENAI_API_KEY"],
       docsUrl: null,
     },
-    groq: {
-      configured: !!process.env.GROQ_API_KEY,
-      isFree: false,
-      label: "Groq Cloud",
-      description: "Ultra-fast inference for open-source models. Free tier available at console.groq.com.",
-      envVarsRequired: ["GROQ_API_KEY"],
-      docsUrl: "https://console.groq.com",
-    },
     none: {
       configured: true,
       isFree: true,
@@ -226,9 +244,10 @@ export function getProviderStatus() {
 
 export const SUBSCRIPTION_TIERS = {
   free:         { aiProvider: "none",        aiModel: null,                                        aiDailyLimit: 0 },
-  basic:        { aiProvider: "openrouter",  aiModel: "meta-llama/llama-3.2-3b-instruct:free",    aiDailyLimit: 30 },
-  professional: { aiProvider: "openrouter",  aiModel: "mistralai/mistral-7b-instruct:free",        aiDailyLimit: 500 },
-  enterprise:   { aiProvider: "openrouter",  aiModel: null,                                        aiDailyLimit: 0 },
+  starter:      { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",           aiDailyLimit: 10 },
+  basic:        { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",           aiDailyLimit: 30 },
+  professional: { aiProvider: "cloudflare",  aiModel: "@cf/mistral/mistral-7b-instruct-v0.1",     aiDailyLimit: 500 },
+  enterprise:   { aiProvider: "cloudflare",  aiModel: null,                                        aiDailyLimit: 0 },
 } as const;
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
@@ -298,6 +317,12 @@ export async function getOrgAiQuota(organizationId: number): Promise<OrgAiQuota>
 // ─── One-shot client builder (for per-org or fallback use) ────────────────────
 
 export async function buildProviderClient(provider: string): Promise<OpenAI | null> {
+  if (provider === "cloudflare") {
+    const accountId = process.env.CF_ACCOUNT_ID;
+    const apiKey    = process.env.CF_AI_TOKEN;
+    if (!accountId || !apiKey) { logger.warn("Org uses cloudflare but CF_ACCOUNT_ID or CF_AI_TOKEN is not set"); return null; }
+    return new OpenAI({ apiKey, baseURL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1` });
+  }
   if (provider === "openrouter") {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) { logger.warn("Org uses openrouter but OPENROUTER_API_KEY is not set"); return null; }
@@ -338,7 +363,7 @@ export async function buildProviderClient(provider: string): Promise<OpenAI | nu
 
 // ─── Fallback chain ───────────────────────────────────────────────────────────
 
-const FALLBACK_CHAIN: string[] = ["openrouter", "together", "huggingface", "ollama"];
+const FALLBACK_CHAIN: string[] = ["cloudflare", "groq", "openrouter", "together", "huggingface", "ollama"];
 
 // ─── Core result type ─────────────────────────────────────────────────────────
 
@@ -495,20 +520,42 @@ export async function logAiAction(opts: {
  * Execute an AI call with automatic transparent fallback.
  *
  * Resolution order:
- *   1. Configured provider (system-level)
- *   2. OpenRouter (free)
- *   3. Together AI (free)
- *   4. HuggingFace (free)
- *   5. Ollama (local, if available)
+ *   1. Org-level ai_provider override (from org_config) — if organizationId is provided
+ *   2. System-level configured provider (from system_settings, defaults to "cloudflare")
+ *   3. Cloudflare → Groq → OpenRouter → Together → HuggingFace → Ollama
  */
 export async function callAI(
   prompt: string,
   systemPrompt: string,
   modelKey: "fast" | "smart" = "fast",
   jsonMode = true,
+  organizationId?: number | null,
 ): Promise<AICallResult> {
-  const { provider: primaryProvider, fastModel, smartModel } = await getAIProviderConfig();
-  const primaryModel = modelKey === "smart" ? smartModel : fastModel;
+  // Resolve effective primary provider: org override → system default
+  let primaryProvider: string;
+  let primaryModel: string;
+
+  if (organizationId) {
+    const [orgCfg] = await db
+      .select({ aiProvider: orgConfigTable.aiProvider, aiModel: orgConfigTable.aiModel })
+      .from(orgConfigTable)
+      .where(eq(orgConfigTable.organizationId, organizationId));
+    const orgProvider = orgCfg?.aiProvider;
+    if (orgProvider && orgProvider !== "none") {
+      primaryProvider = orgProvider;
+      const orgModel = orgCfg?.aiModel;
+      const defaults = PROVIDER_DEFAULTS[orgProvider as AIProvider];
+      primaryModel = orgModel ?? (modelKey === "smart" ? defaults?.smartModel : defaults?.fastModel) ?? "";
+    } else {
+      const sysConfig = await getAIProviderConfig();
+      primaryProvider = sysConfig.provider;
+      primaryModel = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
+    }
+  } else {
+    const sysConfig = await getAIProviderConfig();
+    primaryProvider = sysConfig.provider;
+    primaryModel = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
+  }
 
   const chain: string[] = primaryProvider && primaryProvider !== "none"
     ? [primaryProvider, ...FALLBACK_CHAIN.filter(p => p !== primaryProvider)]

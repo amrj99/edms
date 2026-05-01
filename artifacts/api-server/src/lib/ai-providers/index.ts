@@ -11,13 +11,14 @@
  *   3. Add its key to the ProviderKey union type in types.ts
  */
 
+import { CloudflareAIProvider } from "./cloudflare.js";
+import { GroqProvider }         from "./groq.js";
 import { OpenRouterProvider }   from "./openrouter.js";
 import { HuggingFaceProvider }  from "./huggingface.js";
 import { TogetherAIProvider }   from "./together.js";
 import { OllamaProvider }       from "./ollama.js";
 import { OpenAIProvider, OpenAIReplitProvider } from "./openai.js";
 import { AnthropicProvider }    from "./anthropic.js";
-import { GroqProvider }         from "./groq.js";
 import type { AIProviderClient, ProviderKey } from "./types.js";
 import { db } from "@workspace/db";
 import { orgConfigTable, systemSettingsTable } from "@workspace/db";
@@ -28,6 +29,8 @@ export type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderKe
 // ─── Provider registry (singleton instances) ─────────────────────────────────
 
 const PROVIDERS: Record<string, AIProviderClient> = {
+  cloudflare:    new CloudflareAIProvider(),
+  groq:          new GroqProvider(),
   openrouter:    new OpenRouterProvider(),
   huggingface:   new HuggingFaceProvider(),
   together:      new TogetherAIProvider(),
@@ -35,7 +38,6 @@ const PROVIDERS: Record<string, AIProviderClient> = {
   openai:        new OpenAIProvider(),
   openai_replit: new OpenAIReplitProvider(),
   anthropic:     new AnthropicProvider(),
-  groq:          new GroqProvider(),
 };
 
 /**
@@ -43,6 +45,8 @@ const PROVIDERS: Record<string, AIProviderClient> = {
  * Free providers come first; paid providers only if explicitly configured.
  */
 const FREE_PROVIDER_PRIORITY: ProviderKey[] = [
+  "cloudflare",
+  "groq",
   "openrouter",
   "together",
   "huggingface",
@@ -119,6 +123,8 @@ export async function getAIProviderForOrg(organizationId?: number | null): Promi
  * This is exported so ai-service.ts can reference the canonical order.
  */
 export const FALLBACK_PROVIDER_CHAIN: ProviderKey[] = [
+  "cloudflare",
+  "groq",
   "openrouter",
   "together",
   "huggingface",
