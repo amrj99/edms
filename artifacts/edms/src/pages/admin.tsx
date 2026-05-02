@@ -2329,13 +2329,23 @@ function StorageTab() {
 
   const { data: storageData, isLoading, refetch } = useQuery({
     queryKey: ["admin-storage-usage"],
-    queryFn: async () => { const r = await fetch("/api/admin/storage-usage"); return r.json(); },
+    queryFn: async () => {
+      const r = await fetch("/api/admin/storage-usage");
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
+    enabled: !!user,
   });
   const usage = storageData?.usage ?? [];
 
   const { data: storageTypesData } = useQuery({
     queryKey: ["storage-types"],
-    queryFn: async () => { const r = await fetch("/api/storage/storage-types"); return r.json(); },
+    queryFn: async () => {
+      const r = await fetch("/api/storage/storage-types");
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    },
+    enabled: !!user,
   });
   const availableStorageTypes: Array<{ value: string; label: string; description: string; recommended: boolean }> =
     storageTypesData?.types ?? [
