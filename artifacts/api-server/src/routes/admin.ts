@@ -60,52 +60,74 @@ router.post("/smtp/test", async (req, res) => {
 
 // ─── Storage Usage ─────────────────────────────────────────────────────────────
 router.get("/storage-usage", async (req, res) => {
-  const user = req.user!;
+  try {
+    const user = req.user!;
 
-  const usageRows = await db
-    .select({
-      orgId: projectsTable.organizationId,
-      totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
-      docCount: sql<number>`count(${documentsTable.id})::int`,
-    })
-    .from(documentsTable)
-    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-    .groupBy(projectsTable.organizationId);
+    // Determine which orgs this user may see:
+    //   system_owner (no org required) → all orgs
+    //   admin                          → their org only
+    let orgs: any[] = [];
+    if (isSystemOwner(user)) {
+      orgs = await db.select().from(organizationsTable);
+    } else if (user.organizationId) {
+      orgs = await db
+        .select()
+        .from(organizationsTable)
+        .where(eq(organizationsTable.id, user.organizationId));
+    }
 
-  const configs = await db.select().from(orgConfigTable);
-  const configMap = new Map(configs.map(c => [c.organizationId, c]));
+    if (orgs.length === 0) {
+      res.json({ usage: [] });
+      return;
+    }
 
-  let orgs: any[] = [];
-  if (isSystemOwner(user)) {
-    orgs = await db.select().from(organizationsTable);
-  } else if (user.organizationId) {
-    orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
+    const orgIds = orgs.map(o => o.id);
+
+    const usageRows = await db
+      .select({
+        orgId: projectsTable.organizationId,
+        totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
+        docCount: sql<number>`count(${documentsTable.id})::int`,
+      })
+      .from(documentsTable)
+      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+      .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
+      .groupBy(projectsTable.organizationId);
+
+    const configs = await db
+      .select()
+      .from(orgConfigTable)
+      .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
+    const configMap = new Map(configs.map(c => [c.organizationId, c]));
+
+    const result = orgs.map(org => {
+      const usage = usageRows.find(r => r.orgId === org.id);
+      const config = configMap.get(org.id);
+      const usedBytes = Number(usage?.totalBytes ?? 0);
+      const quotaMb = config?.storageQuotaMb ?? 10240;
+      const usedMb = Math.round(usedBytes / 1024 / 1024 * 100) / 100;
+      return {
+        orgId: org.id,
+        orgName: org.name,
+        usedMb,
+        usedBytes,
+        quotaMb,
+        docCount: usage?.docCount ?? 0,
+        percentUsed: quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0,
+        storagePath: config?.storagePath ?? null,
+        storageType: config?.storageType ?? (process.env.DEFAULT_STORAGE_TYPE ?? "s3"),
+        s3Endpoint: config?.s3Endpoint ?? null,
+        s3Bucket: config?.s3Bucket ?? null,
+        s3Region: config?.s3Region ?? null,
+        s3AccessKey: config?.s3AccessKey ? "***configured***" : null,
+      };
+    });
+
+    res.json({ usage: result });
+  } catch (err) {
+    console.error("[storage-usage]", err);
+    res.status(500).json({ error: "Failed to fetch storage usage" });
   }
-
-  const result = orgs.map(org => {
-    const usage = usageRows.find(r => r.orgId === org.id);
-    const config = configMap.get(org.id);
-    const usedBytes = Number(usage?.totalBytes ?? 0);
-    const quotaMb = config?.storageQuotaMb ?? 10240;
-    const usedMb = Math.round(usedBytes / 1024 / 1024 * 100) / 100;
-    return {
-      orgId: org.id,
-      orgName: org.name,
-      usedMb,
-      usedBytes,
-      quotaMb,
-      docCount: usage?.docCount ?? 0,
-      percentUsed: quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0,
-      storagePath: config?.storagePath ?? null,
-      storageType: config?.storageType ?? (process.env.DEFAULT_STORAGE_TYPE ?? "s3"),
-      s3Endpoint: config?.s3Endpoint ?? null,
-      s3Bucket: config?.s3Bucket ?? null,
-      s3Region: config?.s3Region ?? null,
-      s3AccessKey: config?.s3AccessKey ? "***configured***" : null, // never expose actual key
-    };
-  });
-
-  res.json({ usage: result });
 });
 
 // ─── Usage Monitoring Dashboard ────────────────────────────────────────────────
@@ -820,49 +842,83 @@ router.post("/organizations/:orgId/change-plan", async (req, res) => {
 // ─── Access Shadow Log ─────────────────────────────────────────────────────────
 // Returns recent divergence records from the access_shadow_log table.
 // Only accessible to system_owner or admin.
+//   system_owner (no org required) → all rows
+//   admin                          → only rows where the acting user belongs to their org
+//
+// Uses raw SQL via db.execute() to avoid Drizzle's orderSelectedFields bug
+// that occurs when pgTable uses array-style index definitions with this version.
 router.get("/shadow-log", async (req, res) => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   try {
+    const user = req.user!;
     const divergeOnly = req.query.divergeOnly !== "false";
     const limit = Math.min(parseInt(req.query.limit as string) || 200, 500);
+    const needsOrgFilter = !isSystemOwner(user) && !!user.organizationId;
 
-    const rows = await db
-      .select({
-        id: accessShadowLogTable.id,
-        documentId: accessShadowLogTable.documentId,
-        userId: accessShadowLogTable.userId,
-        userRole: accessShadowLogTable.userRole,
-        projectId: accessShadowLogTable.projectId,
-        systemAllowed: accessShadowLogTable.systemAllowed,
-        resolverAllowed: accessShadowLogTable.resolverAllowed,
-        resolverReasons: accessShadowLogTable.resolverReasons,
-        rulePath: accessShadowLogTable.rulePath,
-        diverges: accessShadowLogTable.diverges,
-        userDeptIds: accessShadowLogTable.userDeptIds,
-        docDeptIds: accessShadowLogTable.docDeptIds,
-        hasConfidential: accessShadowLogTable.hasConfidential,
-        hasDenyRule: accessShadowLogTable.hasDenyRule,
-        hasWorkflowGrant: accessShadowLogTable.hasWorkflowGrant,
-        evaluatedAt: accessShadowLogTable.evaluatedAt,
-        userName: usersTable.name,
-        userEmail: usersTable.email,
-        documentTitle: documentsTable.title,
-        documentNumber: documentsTable.documentNumber,
-      })
-      .from(accessShadowLogTable)
-      .leftJoin(usersTable, eq(accessShadowLogTable.userId, usersTable.id))
-      .leftJoin(documentsTable, eq(accessShadowLogTable.documentId, documentsTable.id))
-      .where(divergeOnly ? eq(accessShadowLogTable.diverges, true) : undefined)
-      .orderBy(desc(accessShadowLogTable.evaluatedAt))
-      .limit(limit);
+    // Build Drizzle sql`` template queries — safe parameterisation, no type-safe
+    // column builder used (avoids orderSelectedFields Drizzle bug with array indexes).
+    const baseSelect = sql`
+      SELECT
+        asl.id, asl.document_id, asl.user_id, asl.user_role, asl.project_id,
+        asl.system_allowed, asl.resolver_allowed, asl.resolver_reasons,
+        asl.rule_path, asl.diverges,
+        asl.user_dept_ids, asl.doc_dept_ids,
+        asl.has_confidential, asl.has_deny_rule, asl.has_workflow_grant,
+        asl.evaluated_at,
+        (u.first_name || ' ' || u.last_name) AS user_name,
+        u.email         AS user_email,
+        d.title         AS document_title,
+        d.document_number AS document_number
+      FROM access_shadow_log asl
+      LEFT JOIN users     u ON u.id = asl.user_id
+      LEFT JOIN documents d ON d.id = asl.document_id
+    `;
 
-    const total = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(accessShadowLogTable)
-      .where(divergeOnly ? eq(accessShadowLogTable.diverges, true) : undefined);
+    const baseCount = sql`
+      SELECT count(*)::int AS total
+      FROM access_shadow_log asl
+      LEFT JOIN users u ON u.id = asl.user_id
+    `;
 
-    res.json({ rows, total: total[0]?.count ?? 0, divergeOnly, limit });
+    // Append WHERE conditions using sql`` (safe interpolation)
+    const divergeFilter     = divergeOnly    ? sql` AND asl.diverges = true`                          : sql``;
+    const orgFilter         = needsOrgFilter ? sql` AND u.organization_id = ${user.organizationId}`   : sql``;
+    const wherePrefix       = (divergeOnly || needsOrgFilter) ? sql` WHERE 1=1` : sql``;
+
+    const rowsResult  = await db.execute<Record<string, unknown>>(
+      sql`${baseSelect}${wherePrefix}${divergeFilter}${orgFilter} ORDER BY asl.evaluated_at DESC LIMIT ${limit}`
+    );
+    const countResult = await db.execute<Record<string, unknown>>(
+      sql`${baseCount}${wherePrefix}${divergeFilter}${orgFilter}`
+    );
+
+    // Normalise snake_case → camelCase for API response consistency
+    const rows = rowsResult.rows.map(r => ({
+      id:               r.id,
+      documentId:       r.document_id,
+      userId:           r.user_id,
+      userRole:         r.user_role,
+      projectId:        r.project_id,
+      systemAllowed:    r.system_allowed,
+      resolverAllowed:  r.resolver_allowed,
+      resolverReasons:  r.resolver_reasons,
+      rulePath:         r.rule_path,
+      diverges:         r.diverges,
+      userDeptIds:      r.user_dept_ids,
+      docDeptIds:       r.doc_dept_ids,
+      hasConfidential:  r.has_confidential,
+      hasDenyRule:      r.has_deny_rule,
+      hasWorkflowGrant: r.has_workflow_grant,
+      evaluatedAt:      r.evaluated_at,
+      userName:         r.user_name,
+      userEmail:        r.user_email,
+      documentTitle:    r.document_title,
+      documentNumber:   r.document_number,
+    }));
+
+    res.json({ rows, total: countResult.rows[0]?.total ?? 0, divergeOnly, limit });
   } catch (err) {
+    console.error("[shadow-log]", err);
     res.status(500).json({ error: "Failed to fetch shadow log" });
   }
 });
