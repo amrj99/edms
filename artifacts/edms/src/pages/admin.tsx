@@ -2322,30 +2322,45 @@ function AuditLogTab() {
 }
 
 // ─── Storage Tab ──────────────────────────────────────────────────────────────
+const getAuthToken = () => localStorage.getItem("edms_token");
+
 function StorageTab() {
   const { toast } = useToast();
   const { user } = useAuth();
   const isOwner = user?.role === "system_owner" || user?.role === "admin";
 
   const { data: storageData, isLoading, refetch } = useQuery({
-    queryKey: ["admin-storage-usage"],
+    queryKey: ["admin-storage-usage", user?.id],
     queryFn: async () => {
-      const r = await fetch("/api/admin/storage-usage");
-      if (!r.ok) throw new Error(`${r.status}`);
+      const token = getAuthToken();
+      if (!token) throw new Error("No token");
+      const r = await fetch("/api/admin/storage-usage", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     },
-    enabled: !!user,
+    enabled: !!user && !!getAuthToken(),
+    staleTime: 30_000,
+    retry: 3,
+    retryDelay: 1000,
   });
   const usage = storageData?.usage ?? [];
 
   const { data: storageTypesData } = useQuery({
-    queryKey: ["storage-types"],
+    queryKey: ["storage-types", user?.id],
     queryFn: async () => {
-      const r = await fetch("/api/storage/storage-types");
-      if (!r.ok) throw new Error(`${r.status}`);
+      const token = getAuthToken();
+      if (!token) throw new Error("No token");
+      const r = await fetch("/api/storage/storage-types", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     },
-    enabled: !!user,
+    enabled: !!user && !!getAuthToken(),
+    staleTime: 60_000,
+    retry: 2,
   });
   const availableStorageTypes: Array<{ value: string; label: string; description: string; recommended: boolean }> =
     storageTypesData?.types ?? [
