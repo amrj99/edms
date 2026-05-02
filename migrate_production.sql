@@ -202,6 +202,7 @@ ALTER TABLE org_config ADD COLUMN IF NOT EXISTS ai_provider             text;
 ALTER TABLE org_config ADD COLUMN IF NOT EXISTS ai_model                text;
 ALTER TABLE org_config ADD COLUMN IF NOT EXISTS ai_daily_limit          integer DEFAULT 0;
 ALTER TABLE org_config ADD COLUMN IF NOT EXISTS ai_monthly_token_limit  integer DEFAULT 0;
+ALTER TABLE org_config ADD COLUMN IF NOT EXISTS ai_privacy_mode         boolean NOT NULL DEFAULT false;
 
 -- rules
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS consecutive_failures integer        NOT NULL DEFAULT 0;

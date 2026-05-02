@@ -49,14 +49,20 @@ echo "  → Commit : $GIT_FULL"
 echo "  → Short  : $GIT_HASH"
 echo "  → Built  : $BUILD_TIME"
 
-# ── Step 2: Apply SQL migration ───────────────────────────────────────────────
-echo "► [2/7] Applying full schema migration..."
-if [ -f "$MIGRATION_FILE" ]; then
-  docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" < "$MIGRATION_FILE"
-  echo "  ✓ Migration applied."
-else
-  echo "  ⚠ migrate_production.sql not found — skipping SQL migration."
-fi
+# ── Step 2: Migrations (automatic via Docker entrypoint) ──────────────────────
+# Migrations are now applied automatically when the API container starts.
+# The entrypoint runs `node dist/migrate.mjs` which uses drizzle-orm's runtime
+# migrator to apply any SQL files in lib/db/drizzle/ that haven't run yet.
+#
+# To add a new migration after a schema change:
+#   pnpm db:generate          # generates a new SQL file in lib/db/drizzle/
+#   git add lib/db/drizzle/   # commit the new migration file
+#   bash deploy.sh            # the new migration runs automatically on startup
+#
+# Emergency manual migration (if needed):
+#   docker exec -i edms_postgres psql -U edms -d edms < migrate_production.sql
+echo "► [2/7] Migrations — applied automatically when API container starts."
+echo "  ✓ No manual SQL step required."
 
 # ── Step 3: Rebuild ALL images (API + Frontend) ───────────────────────────────
 # --no-cache: always rebuild from source, never reuse layer cache.

@@ -77,6 +77,14 @@ async function buildAll() {
     outdir: distDir,
     plugins: [],
   });
+
+  // Build migration runner (runs during container startup before the API)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/migrate.ts")],
+    outdir: distDir,
+    plugins: [],
+  });
 }
 
 buildAll().catch((err) => {

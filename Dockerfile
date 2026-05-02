@@ -73,9 +73,7 @@ COPY artifacts/api-server/package.json ./artifacts/api-server/
 RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=api-builder /app/artifacts/api-server/dist ./artifacts/api-server/dist
-COPY --from=api-builder /app/lib/db/src ./lib/db/src
-COPY lib/db/drizzle.config.ts ./lib/db/
-COPY lib/db/src ./lib/db/src
+COPY lib/db/drizzle ./lib/db/drizzle
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
@@ -87,6 +85,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/health || exit 1
 
-# The entrypoint runs drizzle-kit push (schema sync) then starts the API.
-# This ensures any newly added columns are applied on every deploy.
+# The entrypoint runs dist/migrate.mjs (drizzle-orm runtime migrator) then
+# seeds workflow defaults, then starts the API server.
 CMD ["./docker-entrypoint.sh"]

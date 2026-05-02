@@ -62,6 +62,41 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
     -   **Access Rulebook:** Implements a comprehensive access control system with explicit allow/deny rules, confidential document access, and shadow mode evaluation for logging divergences before full enforcement.
     -   **AI Provider Architecture Overhaul:** Dynamic registry for AI providers with categories (`cloud_free`, `fast`, `aggregator`, `cloud_paid`, `local`), tier-aware fallback chains, and a privacy mode that restricts data sent to external providers.
 
+## Database Migration System
+
+Schema changes are managed via **Drizzle migration files** (`lib/db/drizzle/`).
+
+### Developer workflow
+When you add or modify a column/table in any `lib/db/src/schema/*.ts` file:
+
+```bash
+pnpm db:generate        # generates a new SQL file in lib/db/drizzle/
+git add lib/db/drizzle/ # commit the migration alongside the schema change
+```
+
+The new migration is applied automatically when the API container next starts
+(via `dist/migrate.mjs` in `docker-entrypoint.sh`).
+
+> **Rule:** A schema change is not complete until `pnpm db:generate` has been
+> run and the resulting file in `lib/db/drizzle/` is committed.
+
+### How it works
+- `lib/db/drizzle/0000_init.sql` — baseline snapshot of the full schema.
+- Each subsequent `pnpm db:generate` call appends a new incremental file.
+- `artifacts/api-server/src/migrate.ts` is compiled to `dist/migrate.mjs` and
+  runs via `docker-entrypoint.sh` before the API starts on every deploy.
+- **Baseline detection:** if the `organizations` table exists but
+  `__drizzle_migrations` doesn't (first deploy after this change), the runner
+  marks all existing migrations as already applied and only runs new ones.
+- `migrate_production.sql` is kept as an emergency manual reference but is
+  no longer part of the automated deploy process.
+
+### Emergency manual migration
+```bash
+# Only needed if the container can't start and you must patch the DB manually:
+docker exec -i edms_postgres psql -U edms -d edms < migrate_production.sql
+```
+
 ## External Dependencies
 
 -   **Database:** PostgreSQL
