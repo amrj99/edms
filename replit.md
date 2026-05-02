@@ -80,6 +80,17 @@ The new migration is applied automatically when the API container next starts
 > **Rule:** A schema change is not complete until `pnpm db:generate` has been
 > run and the resulting file in `lib/db/drizzle/` is committed.
 
+### Safeguard: detecting drift
+Run `pnpm db:check` at any time to verify schema and migrations are in sync:
+
+```bash
+pnpm db:check   # exits 0 if in sync, exits 1 + instructions if drift detected
+```
+
+This runs `drizzle-kit check` (migration file integrity) then `drizzle-kit generate`
+(schema drift detection). If a new migration file is generated, it means a schema
+change was made without a corresponding `pnpm db:generate` — commit the file.
+
 ### How it works
 - `lib/db/drizzle/0000_init.sql` — baseline snapshot of the full schema.
 - Each subsequent `pnpm db:generate` call appends a new incremental file.
