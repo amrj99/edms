@@ -28,6 +28,11 @@ services:
     restart: unless-stopped
     ports:
       - "${API_PORT:-8080}:8080"
+    # Inject all variables from .env into the container.
+    # Keys explicitly listed in `environment:` below always take precedence
+    # over anything in .env, so there is no conflict.
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 8080
