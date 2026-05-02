@@ -50,19 +50,35 @@ echo "  → Short  : $GIT_HASH"
 echo "  → Built  : $BUILD_TIME"
 
 # ── Step 2: Migrations (automatic via Docker entrypoint) ──────────────────────
-# Migrations are now applied automatically when the API container starts.
-# The entrypoint runs `node dist/migrate.mjs` which uses drizzle-orm's runtime
-# migrator to apply any SQL files in lib/db/drizzle/ that haven't run yet.
+# HOW THE MIGRATION SYSTEM WORKS:
+#   • Migration SQL files live in  lib/db/drizzle/  (e.g. 0000_init.sql, 0001_incremental.sql)
+#   • The journal at  lib/db/drizzle/meta/_journal.json  lists every migration in order.
+#   • On every container start the entrypoint runs  node dist/migrate.mjs  which uses
+#     drizzle-orm's runtime migrator to apply any migration file not yet recorded in
+#     the  drizzle.__drizzle_migrations  tracking table.
+#   • Each migration file is applied exactly once and never re-run.
+#   • All migration SQL uses  IF NOT EXISTS / DO EXCEPTION  guards — safe to run on
+#     any DB state; never drops data.
 #
-# To add a new migration after a schema change:
-#   pnpm db:generate          # generates a new SQL file in lib/db/drizzle/
-#   git add lib/db/drizzle/   # commit the new migration file
-#   bash deploy.sh            # the new migration runs automatically on startup
+# ─── MANDATORY WORKFLOW when changing the TypeScript schema ───────────────────
+#   1. Edit the schema files in  lib/db/src/schema/
+#   2. Run:  pnpm --filter @workspace/db generate
+#            (or the shortcut:  pnpm db:generate  if configured at the root)
+#      → drizzle-kit compares the schema against the latest snapshot and generates
+#        a new numbered SQL file (e.g. 0002_add_xyz.sql) plus an updated snapshot.
+#   3. git add lib/db/drizzle/  &&  git commit  &&  git push
+#   4. bash deploy.sh
+#      → the new migration runs automatically when the API container starts.
 #
-# Emergency manual migration (if needed):
+# ─── WHAT HAPPENS IF YOU SKIP STEP 2 ─────────────────────────────────────────
+#   The production database will be missing the new columns/tables, causing 500
+#   errors on every endpoint that touches the new schema.  Always run  db:generate.
+#
+# ─── Emergency manual fallback (if migrator itself is broken) ─────────────────
 #   docker exec -i edms_postgres psql -U edms -d edms < migrate_production.sql
+#   (migrate_production.sql is a cumulative safe-migration kept in sync manually)
 echo "► [2/7] Migrations — applied automatically when API container starts."
-echo "  ✓ No manual SQL step required."
+echo "  ✓ No manual SQL step required (entrypoint runs dist/migrate.mjs)."
 
 # ── Step 3: Rebuild ALL images (API + Frontend) ───────────────────────────────
 # --no-cache: always rebuild from source, never reuse layer cache.

@@ -92,8 +92,16 @@ This runs `drizzle-kit check` (migration file integrity) then `drizzle-kit gener
 change was made without a corresponding `pnpm db:generate` — commit the file.
 
 ### How it works
-- `lib/db/drizzle/0000_init.sql` — baseline snapshot of the full schema.
-- Each subsequent `pnpm db:generate` call appends a new incremental file.
+- `lib/db/drizzle/0000_init.sql` — initial schema SQL (applied once on fresh DB).
+- `lib/db/drizzle/0001_incremental.sql` — cumulative safe migration (IF NOT EXISTS
+  guards) that covers all columns and tables added after the initial production deploy.
+  Applied automatically on the next deploy to any DB that was initialized before
+  these features existed.
+- Each subsequent `pnpm db:generate` call appends a new numbered incremental file.
+- `lib/db/drizzle/meta/_journal.json` — lists migrations in order with timestamps.
+  **IMPORTANT:** timestamps must be monotonically increasing. Never set a future
+  timestamp on an entry; `drizzle-kit generate` will assign the current time to new
+  entries, and if a journal entry has a larger timestamp they will be silently skipped.
 - `artifacts/api-server/src/migrate.ts` is compiled to `dist/migrate.mjs` and
   runs via `docker-entrypoint.sh` before the API starts on every deploy.
 - **Baseline detection:** if the `organizations` table exists but
