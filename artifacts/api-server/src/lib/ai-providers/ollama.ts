@@ -1,9 +1,19 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "llama3.2",
+  "llama3.1",
+  "mistral",
+  "codellama",
+  "phi3",
+  "gemma2",
+];
 
 export class OllamaProvider implements AIProviderClient {
   readonly name = "ollama";
   readonly isFree = true;
+  readonly category: ProviderCategory = "local";
   readonly defaultModel = "llama3.2";
   readonly smartModel = "llama3.1";
 
@@ -16,6 +26,10 @@ export class OllamaProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return true;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

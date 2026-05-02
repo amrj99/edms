@@ -1,7 +1,7 @@
 /**
  * Correspondence AI — analysis and insights for correspondence items.
  */
-import { callAI, logAiAction, getCache, setCache, lookupAnalysis, saveAnalysis } from "./ai-core.js";
+import { callAI, logAiAction, getCache, setCache, lookupAnalysis, saveAnalysis, getOrgPrivacyMode } from "./ai-core.js";
 import { logger } from "./logger.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -48,10 +48,20 @@ export async function analyzeCorrespondence(corr: {
     }
   }
 
+  const privacyMode = await getOrgPrivacyMode(organizationId);
   const start = Date.now();
   try {
     const { data: result, provider, model, tokensUsed } = await callAI(
-      `Analyze this engineering project correspondence:
+      privacyMode
+        ? `Analyze this engineering project correspondence (privacy mode — metadata only):
+Subject: ${corr.subject}
+Type: ${corr.type}
+Status: ${corr.status}
+
+Note: Full correspondence content unavailable in privacy mode. Provide analysis from metadata only.
+
+Respond with JSON only.`
+        : `Analyze this engineering project correspondence:
 Subject: ${corr.subject}
 Type: ${corr.type}
 Status: ${corr.status}
@@ -79,14 +89,19 @@ Respond ONLY with valid JSON in this exact schema:
 
     const latencyMs = Date.now() - start;
 
+    const analysis = result as CorrespondenceAnalysis;
+    if (privacyMode) {
+      analysis.urgencyReason = `[Privacy mode — analysis based on metadata only] ${analysis.urgencyReason ?? ""}`.trim();
+    }
+
     await saveAnalysis({
       entityType: "correspondence", entityId: corr.id, analysisType: "analyze",
       entityRevision: null, organizationId,
-      result, provider, model, tokensUsed, latencyMs,
+      result: analysis, provider, model, tokensUsed, latencyMs,
       triggeredBy: userId,
     }).catch(err => logger.warn({ err }, "saveAnalysis failed (non-fatal)"));
 
-    await setCache("correspondence", corr.id, "analyze", result, model, organizationId);
+    await setCache("correspondence", corr.id, "analyze", analysis, model, organizationId);
 
     await logAiAction({
       organizationId, userId, module: "correspondence", action: "analyze",
@@ -94,7 +109,7 @@ Respond ONLY with valid JSON in this exact schema:
       provider, model, tokensUsed, latencyMs, success: true,
     });
 
-    return result as CorrespondenceAnalysis;
+    return analysis;
   } catch (err) {
     await logAiAction({
       organizationId, userId, module: "correspondence", action: "analyze",

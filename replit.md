@@ -86,11 +86,20 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
     -   **Confidential allowlist audit:** 0 documents currently have `is_confidential=true` in production. The allowlist management UI must be built and all confidential documents must have their allowlists reviewed before confidential enforcement is enabled.
     -   **Confirmed policies:** `project_manager` does NOT bypass confidential; admin does NOT auto-bypass confidential; `system_owner` is the only global bypass. No auto-allowlist for any role.
 
+-   **AI Provider Architecture Overhaul (Dynamic Registry + Privacy Mode):**
+    -   **`ProviderCategory` type** added to `types.ts`: `cloud_free | fast | aggregator | cloud_paid | local`. All 8 provider classes updated with `category` and `getModels()` method.
+    -   **`listProviders()`** in `ai-providers/index.ts` now returns `category` per provider. New `getModelsForProvider(key)` helper queries the `ai_models` DB table first, falls back to hardcoded defaults. New `callWithFallback()` exported for tier-aware chaining.
+    -   **`SUBSCRIPTION_TIERS`** in `ai-core.ts` updated with daily limits (free/starter=20, basic=50, professional=200, enterprise=unlimited). **`TIER_FALLBACK_CHAINS`** map added (free/starter→[cloudflare]; basic→[cloudflare,openrouter]; professional→[cloudflare,openrouter,together]; enterprise→all 8; trial→[cloudflare,openrouter]). `callAI()` now reads `subscriptionTier` from org_config and uses the tier-specific chain.
+    -   **Privacy mode** (`ai_privacy_mode` column in `org_config`): when enabled, document and correspondence AI analysis uses only metadata (filename, type, status) — no body content is sent to external providers. Results note privacy mode in `summary`/`urgencyReason`. Routes: `GET/PUT /api/ai/privacy-mode` (PUT sysadmin-only).
+    -   **`ai_models` DB table** (`lib/db/src/schema/ai.ts`): stores provider, modelId, displayName, tierMinimum, isActive. Unique index on (provider, modelId). Admin CRUD at `GET/POST /api/ai/models`, `PUT/DELETE /api/ai/models/:id` (write routes sysadmin-only).
+    -   **`ai-settings.tsx` refreshed**: `openai_replit` removed, `cloudflare` added. Providers grouped by category (Cloud Free / Cloud Fast / Cloud Paid / Local). Privacy Mode card with toggle added between provider and classification sections. Disable-AI option moved to collapsible section.
+    -   **Cloudflare Workers AI** added as first provider in `cloud_free` category (no API key required for Replit-deployed Workers AI). Default models: `@cf/meta/llama-3.2-3b-instruct` (fast) and `@cf/mistral/mistral-7b-instruct-v0.1` (smart).
+
 ## External Dependencies
 
 -   **Database:** PostgreSQL
 -   **ORM:** Drizzle ORM
--   **AI Providers (Pluggable):** OpenRouter, Together AI, HuggingFace, Ollama, OpenAI, Anthropic.
+-   **AI Providers (Pluggable, dynamic registry):** Cloudflare Workers AI, OpenRouter, HuggingFace, Groq, Together AI, Ollama, OpenAI, Anthropic — tiered fallback chains per subscription plan.
 -   **Frontend Framework:** React
 -   **Build Tool (Frontend):** Vite
 -   **Backend Framework:** Express 5

@@ -1,16 +1,19 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
 
-const FREE_MODELS = [
+const DEFAULT_MODELS = [
   "meta-llama/llama-3.2-3b-instruct:free",
   "mistralai/mistral-7b-instruct:free",
   "google/gemma-2-9b-it:free",
   "microsoft/phi-3-mini-128k-instruct:free",
+  "meta-llama/llama-3.1-8b-instruct:free",
+  "qwen/qwen-2-7b-instruct:free",
 ];
 
 export class OpenRouterProvider implements AIProviderClient {
   readonly name = "openrouter";
   readonly isFree = true;
+  readonly category: ProviderCategory = "aggregator";
   readonly defaultModel = "meta-llama/llama-3.2-3b-instruct:free";
   readonly smartModel = "mistralai/mistral-7b-instruct:free";
 
@@ -30,6 +33,10 @@ export class OpenRouterProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return !!process.env.OPENROUTER_API_KEY;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

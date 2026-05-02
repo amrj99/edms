@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import {
   documentsTable, correspondenceTable, tasksTable, aiLogsTable, aiAnalysisTable,
   projectsTable, projectMembersTable, organizationsTable, orgConfigTable, documentSequencesTable,
+  aiModelsTable,
 } from "@workspace/db";
 import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
@@ -701,6 +702,106 @@ router.get("/logs", async (req, res) => {
     .orderBy(aiLogsTable.createdAt)
     .limit(limit);
   res.json(logs);
+});
+
+// ─── AI Models (admin catalogue) ──────────────────────────────────────────────
+
+router.get("/models", async (req, res) => {
+  const { listProviders, getModelsForProvider } = await import("../lib/ai-providers/index.js");
+  const providers = listProviders();
+
+  const result = await Promise.all(
+    providers.map(async (p) => ({
+      provider:     p.key,
+      providerName: p.name,
+      category:     p.category,
+      available:    p.available,
+      isFree:       p.isFree,
+      models:       await getModelsForProvider(p.key),
+    })),
+  );
+
+  // Also return raw DB rows for the admin panel
+  const dbRows = await db.select().from(aiModelsTable).orderBy(aiModelsTable.provider, aiModelsTable.tierMinimum, aiModelsTable.modelId);
+  res.json({ providers: result, dbModels: dbRows });
+});
+
+router.post("/models", async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    res.status(403).json({ error: "System admins only" }); return;
+  }
+  const { provider, modelId, displayName, tierMinimum } = req.body ?? {};
+  if (!provider || !modelId || !displayName) {
+    res.status(400).json({ error: "provider, modelId, and displayName are required" }); return;
+  }
+  const [row] = await db.insert(aiModelsTable).values({
+    provider,
+    modelId,
+    displayName,
+    tierMinimum: tierMinimum ?? "free",
+    isActive: true,
+  }).onConflictDoUpdate({
+    target: [aiModelsTable.provider, aiModelsTable.modelId],
+    set: { displayName, tierMinimum: tierMinimum ?? "free", isActive: true, updatedAt: new Date() },
+  }).returning();
+  res.status(201).json(row);
+});
+
+router.put("/models/:id", async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    res.status(403).json({ error: "System admins only" }); return;
+  }
+  const id = parseInt(req.params.id);
+  const { displayName, tierMinimum, isActive } = req.body ?? {};
+  const [row] = await db.update(aiModelsTable)
+    .set({ displayName, tierMinimum, isActive, updatedAt: new Date() })
+    .where(eq(aiModelsTable.id, id))
+    .returning();
+  if (!row) { res.status(404).json({ error: "Model not found" }); return; }
+  res.json(row);
+});
+
+router.delete("/models/:id", async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    res.status(403).json({ error: "System admins only" }); return;
+  }
+  const id = parseInt(req.params.id);
+  const [row] = await db.update(aiModelsTable)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(eq(aiModelsTable.id, id))
+    .returning();
+  if (!row) { res.status(404).json({ error: "Model not found" }); return; }
+  res.json({ message: "Model deactivated", model: row });
+});
+
+// ─── Privacy Mode ─────────────────────────────────────────────────────────────
+
+router.get("/privacy-mode", async (req, res) => {
+  const orgId = req.user!.organizationId;
+  if (!orgId) {
+    res.json({ aiPrivacyMode: false }); return;
+  }
+  const [cfg] = await db.select({ aiPrivacyMode: orgConfigTable.aiPrivacyMode })
+    .from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
+  res.json({ aiPrivacyMode: cfg?.aiPrivacyMode ?? false });
+});
+
+router.put("/privacy-mode", async (req, res) => {
+  if (!isSysAdmin(req.user!)) {
+    res.status(403).json({ error: "System admins only" }); return;
+  }
+  const orgId = req.user!.organizationId;
+  if (!orgId) {
+    res.status(400).json({ error: "No organization associated with this account" }); return;
+  }
+  const { aiPrivacyMode } = req.body ?? {};
+  if (typeof aiPrivacyMode !== "boolean") {
+    res.status(400).json({ error: "aiPrivacyMode must be a boolean" }); return;
+  }
+  await db.update(orgConfigTable)
+    .set({ aiPrivacyMode, updatedAt: new Date() })
+    .where(eq(orgConfigTable.organizationId, orgId));
+  res.json({ aiPrivacyMode });
 });
 
 export default router;

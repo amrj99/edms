@@ -58,18 +58,19 @@ export const orgConfigTable = pgTable("org_config", {
     notifications: true,
   }),
   // ─── Subscription / AI tier ──────────────────────────────────────────────
-  // tier: "free" | "basic" | "professional" | "enterprise"
-  // Applying a tier via PUT /api/admin/ai-tier/:orgId populates the three fields below.
   subscriptionTier: text("subscription_tier").default("free"),
   // Per-org AI provider override. null = inherit global system setting.
-  // Values: "none" | "groq" | "openai"
   aiProvider: text("ai_provider"),
-  // Model override, e.g. "gpt-4o-mini", "gpt-4o". null = use provider default.
+  // Model override, e.g. "@cf/meta/llama-3.2-3b-instruct". null = use tier/provider default.
   aiModel: text("ai_model"),
   // Max AI calls per calendar day (UTC). 0 = unlimited.
   aiDailyLimit: integer("ai_daily_limit").default(0),
   // Max AI tokens consumed per calendar month (UTC). 0 = unlimited.
   aiMonthlyTokenLimit: integer("ai_monthly_token_limit").default(0),
+  // ─── Privacy mode ────────────────────────────────────────────────────────
+  // When true: send only metadata (filename, type, size, path) to external AI.
+  // Never send document content. Future: auto-route to Ollama when available.
+  aiPrivacyMode: boolean("ai_privacy_mode").notNull().default(false),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

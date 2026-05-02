@@ -1,9 +1,17 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "gpt-4o-mini",
+  "gpt-4o",
+  "gpt-4-turbo",
+  "gpt-3.5-turbo",
+];
 
 export class OpenAIProvider implements AIProviderClient {
   readonly name = "openai";
   readonly isFree = false;
+  readonly category: ProviderCategory = "cloud_paid";
   readonly defaultModel = "gpt-4o-mini";
   readonly smartModel = "gpt-4o";
 
@@ -16,6 +24,10 @@ export class OpenAIProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return !!process.env.OPENAI_API_KEY;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {
@@ -44,4 +56,3 @@ export class OpenAIProvider implements AIProviderClient {
     };
   }
 }
-

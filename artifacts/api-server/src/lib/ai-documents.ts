@@ -5,7 +5,7 @@
 import {
   callAI, logAiAction, getCache, setCache,
   getAIProviderConfig, getOrgAiQuota, buildProviderClient,
-  getSystemSettingValue, lookupAnalysis, saveAnalysis,
+  getSystemSettingValue, lookupAnalysis, saveAnalysis, getOrgPrivacyMode,
 } from "./ai-core.js";
 import { isModuleEnabled } from "./ai-settings.js";
 import { logger } from "./logger.js";
@@ -94,9 +94,20 @@ export async function analyzeDocument(doc: {
   }
 
   const start = Date.now();
+  const privacyMode = await getOrgPrivacyMode(organizationId);
   try {
     const { data: result, provider, model, tokensUsed } = await callAI(
-      `Analyze this engineering document:
+      privacyMode
+        ? `Analyze this engineering document (privacy mode — metadata only):
+Filename: ${doc.fileName ?? "unknown"}
+Document Type: ${doc.documentType}
+Status: ${doc.status}
+Revision: ${doc.revision ?? "A"}
+
+Note: Full document content unavailable in privacy mode. Provide analysis from metadata only.
+
+Respond with JSON only.`
+        : `Analyze this engineering document:
 Title: ${doc.title}
 Document Number: ${doc.documentNumber}
 Type: ${doc.documentType}
@@ -126,16 +137,21 @@ Respond ONLY with valid JSON in this exact schema:
 
     const latencyMs = Date.now() - start;
 
+    const analysis = result as DocumentAnalysis;
+    if (privacyMode) {
+      analysis.summary = `[Privacy mode — analysis based on metadata only] ${analysis.summary}`;
+    }
+
     // Write to permanent store (append-only history)
     await saveAnalysis({
       entityType: "document", entityId: doc.id, analysisType: "analyze",
       entityRevision: revision, organizationId,
-      result, provider, model, tokensUsed, latencyMs,
+      result: analysis, provider, model, tokensUsed, latencyMs,
       triggeredBy: userId,
     }).catch(err => logger.warn({ err }, "saveAnalysis failed (non-fatal)"));
 
     // Write to short-term cache (dedup layer)
-    await setCache("document", doc.id, "analyze", result, model, organizationId);
+    await setCache("document", doc.id, "analyze", analysis, model, organizationId);
 
     await logAiAction({
       organizationId, userId, module: "documents", action: "analyze",
@@ -143,7 +159,7 @@ Respond ONLY with valid JSON in this exact schema:
       provider, model, tokensUsed, latencyMs, success: true,
     });
 
-    return result as DocumentAnalysis;
+    return analysis;
   } catch (err) {
     await logAiAction({
       organizationId, userId, module: "documents", action: "analyze",

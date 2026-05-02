@@ -1,9 +1,18 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "llama-3.1-8b-instant",
+  "llama-3.3-70b-versatile",
+  "llama-3.2-3b-preview",
+  "mixtral-8x7b-32768",
+  "gemma2-9b-it",
+];
 
 export class GroqProvider implements AIProviderClient {
   readonly name = "groq";
-  readonly isFree = false;
+  readonly isFree = true;
+  readonly category: ProviderCategory = "fast";
   readonly defaultModel = "llama-3.1-8b-instant";
   readonly smartModel = "llama-3.3-70b-versatile";
 
@@ -16,6 +25,10 @@ export class GroqProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return !!process.env.GROQ_API_KEY;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

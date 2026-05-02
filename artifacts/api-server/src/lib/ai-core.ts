@@ -228,14 +228,30 @@ export function getProviderStatus() {
 // ─── Subscription tiers ───────────────────────────────────────────────────────
 
 export const SUBSCRIPTION_TIERS = {
-  free:         { aiProvider: "none",        aiModel: null,                                        aiDailyLimit: 0 },
-  starter:      { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",           aiDailyLimit: 10 },
-  basic:        { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",           aiDailyLimit: 30 },
-  professional: { aiProvider: "cloudflare",  aiModel: "@cf/mistral/mistral-7b-instruct-v0.1",     aiDailyLimit: 500 },
-  enterprise:   { aiProvider: "cloudflare",  aiModel: null,                                        aiDailyLimit: 0 },
+  free:         { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",        aiDailyLimit: 20 },
+  starter:      { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",        aiDailyLimit: 20 },
+  basic:        { aiProvider: "cloudflare",  aiModel: "@cf/mistral/mistral-7b-instruct-v0.1",  aiDailyLimit: 50 },
+  professional: { aiProvider: "cloudflare",  aiModel: "@cf/mistral/mistral-7b-instruct-v0.1",  aiDailyLimit: 200 },
+  enterprise:   { aiProvider: "cloudflare",  aiModel: null,                                     aiDailyLimit: 0 },
+  trial:        { aiProvider: "cloudflare",  aiModel: "@cf/meta/llama-3.2-3b-instruct",        aiDailyLimit: 30 },
 } as const;
 
 export type SubscriptionTier = keyof typeof SUBSCRIPTION_TIERS;
+
+// ─── Privacy mode helper ──────────────────────────────────────────────────────
+
+export async function getOrgPrivacyMode(organizationId?: number | null): Promise<boolean> {
+  if (!organizationId) return false;
+  try {
+    const [cfg] = await db
+      .select({ aiPrivacyMode: orgConfigTable.aiPrivacyMode })
+      .from(orgConfigTable)
+      .where(eq(orgConfigTable.organizationId, organizationId));
+    return cfg?.aiPrivacyMode ?? false;
+  } catch {
+    return false;
+  }
+}
 
 // ─── Per-org AI quota ─────────────────────────────────────────────────────────
 
@@ -344,6 +360,18 @@ export async function buildProviderClient(provider: string): Promise<OpenAI | nu
 
 const FALLBACK_CHAIN: string[] = ["cloudflare", "groq", "openrouter", "together", "huggingface", "ollama"];
 
+// ─── Tier-specific fallback chains ────────────────────────────────────────────
+// Controls which providers each subscription tier is allowed to fall back to.
+// Adding a new tier = one line here. No changes needed in callAI() or any route.
+export const TIER_FALLBACK_CHAINS: Record<string, string[]> = {
+  free:         ["cloudflare"],
+  starter:      ["cloudflare"],
+  basic:        ["cloudflare", "openrouter"],
+  professional: ["cloudflare", "openrouter", "together"],
+  enterprise:   ["cloudflare", "groq", "openrouter", "together", "huggingface", "ollama", "openai", "anthropic"],
+  trial:        ["cloudflare", "openrouter"],
+};
+
 // ─── Core result type ─────────────────────────────────────────────────────────
 
 export interface AICallResult {
@@ -365,11 +393,11 @@ async function executeOnProvider(
 ): Promise<{ content: string; tokensUsed?: number; latencyMs: number }> {
   const start = Date.now();
 
-  if (providerKey === "huggingface") {
+  if (providerKey === "huggingface" || providerKey === "anthropic") {
     const { getProviderByKey } = await import("./ai-providers/index.js");
-    const hf = getProviderByKey("huggingface");
-    if (!hf?.isAvailable()) throw new Error("HuggingFace provider not available (missing HUGGINGFACE_API_KEY)");
-    const res = await hf.chat(
+    const p = getProviderByKey(providerKey);
+    if (!p?.isAvailable()) throw new Error(`${providerKey} provider not available (missing API key)`);
+    const res = await p.chat(
       [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
       { model },
     );
@@ -513,10 +541,15 @@ export async function callAI(
   // Resolve effective primary provider: org override → system default
   let primaryProvider: string;
   let primaryModel: string;
+  let tierChain: string[] = [...FALLBACK_CHAIN];
 
   if (organizationId) {
     const [orgCfg] = await db
-      .select({ aiProvider: orgConfigTable.aiProvider, aiModel: orgConfigTable.aiModel })
+      .select({
+        aiProvider:       orgConfigTable.aiProvider,
+        aiModel:          orgConfigTable.aiModel,
+        subscriptionTier: orgConfigTable.subscriptionTier,
+      })
       .from(orgConfigTable)
       .where(eq(orgConfigTable.organizationId, organizationId));
     const orgProvider = orgCfg?.aiProvider;
@@ -530,6 +563,8 @@ export async function callAI(
       primaryProvider = sysConfig.provider;
       primaryModel = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
     }
+    const tier = orgCfg?.subscriptionTier ?? "free";
+    tierChain = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
   } else {
     const sysConfig = await getAIProviderConfig();
     primaryProvider = sysConfig.provider;
@@ -537,8 +572,8 @@ export async function callAI(
   }
 
   const chain: string[] = primaryProvider && primaryProvider !== "none"
-    ? [primaryProvider, ...FALLBACK_CHAIN.filter(p => p !== primaryProvider)]
-    : [...FALLBACK_CHAIN];
+    ? [primaryProvider, ...tierChain.filter(p => p !== primaryProvider)]
+    : [...tierChain];
 
   let lastError: Error | null = null;
 

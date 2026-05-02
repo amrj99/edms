@@ -1,13 +1,25 @@
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "claude-3-haiku-20240307",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-opus-20240229",
+  "claude-3-5-haiku-20241022",
+];
 
 export class AnthropicProvider implements AIProviderClient {
   readonly name = "anthropic";
   readonly isFree = false;
+  readonly category: ProviderCategory = "cloud_paid";
   readonly defaultModel = "claude-3-haiku-20240307";
   readonly smartModel = "claude-3-5-sonnet-20241022";
 
   isAvailable(): boolean {
     return !!process.env.ANTHROPIC_API_KEY;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

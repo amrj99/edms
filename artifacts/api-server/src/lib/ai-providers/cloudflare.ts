@@ -1,9 +1,19 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "@cf/meta/llama-3.2-3b-instruct",
+  "@cf/mistral/mistral-7b-instruct-v0.1",
+  "@cf/meta/llama-3.1-8b-instruct-fast",
+  "@cf/google/gemma-7b-it",
+  "@cf/meta/llama-3.2-11b-vision-instruct",
+  "@cf/qwen/qwen1.5-14b-chat-awq",
+];
 
 export class CloudflareAIProvider implements AIProviderClient {
   readonly name = "cloudflare";
   readonly isFree = true;
+  readonly category: ProviderCategory = "cloud_free";
   readonly defaultModel = "@cf/meta/llama-3.2-3b-instruct";
   readonly smartModel = "@cf/mistral/mistral-7b-instruct-v0.1";
 
@@ -22,6 +32,10 @@ export class CloudflareAIProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return !!(process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN);
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

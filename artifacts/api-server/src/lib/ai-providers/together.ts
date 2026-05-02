@@ -1,9 +1,18 @@
 import OpenAI from "openai";
-import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult } from "./types.js";
+import type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderCategory } from "./types.js";
+
+const DEFAULT_MODELS = [
+  "meta-llama/Llama-3.2-3B-Instruct-Turbo",
+  "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+  "mistralai/Mixtral-8x7B-Instruct-v0.1",
+  "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+  "Qwen/Qwen2-72B-Instruct",
+];
 
 export class TogetherAIProvider implements AIProviderClient {
   readonly name = "together";
-  readonly isFree = true;
+  readonly isFree = false;
+  readonly category: ProviderCategory = "cloud_paid";
   readonly defaultModel = "meta-llama/Llama-3.2-3B-Instruct-Turbo";
   readonly smartModel = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo";
 
@@ -18,6 +27,10 @@ export class TogetherAIProvider implements AIProviderClient {
 
   isAvailable(): boolean {
     return !!process.env.TOGETHER_API_KEY;
+  }
+
+  getModels(): string[] {
+    return DEFAULT_MODELS;
   }
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<ChatResult> {

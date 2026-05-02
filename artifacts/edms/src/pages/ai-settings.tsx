@@ -3,6 +3,7 @@ import {
   Brain, FileText, Mail, CheckSquare, Search, Bell, Users, Clipboard,
   Loader2, Save, Sparkles, Info, Check, AlertTriangle, Server, Zap,
   ChevronDown, ChevronUp, Settings2, Ban, Globe, Cloud, DollarSign, ExternalLink,
+  Shield, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -74,9 +75,8 @@ const AI_MODULES: AiModuleConfig[] = [
 ];
 
 type AIProvider =
-  | "openrouter" | "huggingface" | "together" | "ollama"
-  | "openai" | "anthropic"
-  | "openai_replit" | "groq" | "none";
+  | "cloudflare" | "openrouter" | "huggingface" | "together" | "ollama"
+  | "openai" | "anthropic" | "groq" | "none";
 
 interface ProviderInfo {
   configured: boolean;
@@ -95,44 +95,67 @@ interface ProviderData {
 }
 
 const PROVIDER_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  openrouter:    Globe,
-  huggingface:   Sparkles,
-  together:      Zap,
-  ollama:        Server,
-  openai:        Sparkles,
-  anthropic:     Brain,
-  openai_replit: Cloud,
-  groq:          Zap,
-  none:          Ban,
+  cloudflare:  Cloud,
+  openrouter:  Globe,
+  huggingface: Sparkles,
+  together:    Zap,
+  ollama:      Server,
+  openai:      Sparkles,
+  anthropic:   Brain,
+  groq:        Zap,
+  none:        Ban,
 };
 
 const PROVIDER_COLORS: Record<string, string> = {
-  openrouter:    "text-blue-500",
-  huggingface:   "text-yellow-500",
-  together:      "text-purple-500",
-  ollama:        "text-green-600",
-  openai:        "text-violet-600",
-  anthropic:     "text-orange-500",
-  openai_replit: "text-violet-600",
-  groq:          "text-orange-500",
-  none:          "text-muted-foreground",
+  cloudflare:  "text-orange-500",
+  openrouter:  "text-blue-500",
+  huggingface: "text-yellow-500",
+  together:    "text-purple-500",
+  ollama:      "text-green-600",
+  openai:      "text-violet-600",
+  anthropic:   "text-orange-400",
+  groq:        "text-teal-500",
+  none:        "text-muted-foreground",
 };
 
 const PROVIDER_DEFAULTS: Record<string, { fast: string; smart: string }> = {
-  openrouter:    { fast: "meta-llama/llama-3.2-3b-instruct:free", smart: "mistralai/mistral-7b-instruct:free" },
-  huggingface:   { fast: "mistralai/Mistral-7B-Instruct-v0.3",   smart: "meta-llama/Meta-Llama-3-8B-Instruct" },
-  together:      { fast: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smart: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
-  openai_replit: { fast: "gpt-4o-mini", smart: "gpt-4o" },
-  groq:          { fast: "llama-3.1-8b-instant", smart: "llama-3.3-70b-versatile" },
-  ollama:        { fast: "llama3.2", smart: "llama3.1" },
-  openai:        { fast: "gpt-4o-mini", smart: "gpt-4o" },
-  anthropic:     { fast: "claude-3-haiku-20240307", smart: "claude-3-5-sonnet-20241022" },
-  none:          { fast: "", smart: "" },
+  cloudflare:  { fast: "@cf/meta/llama-3.2-3b-instruct",        smart: "@cf/mistral/mistral-7b-instruct-v0.1" },
+  openrouter:  { fast: "meta-llama/llama-3.2-3b-instruct:free", smart: "mistralai/mistral-7b-instruct:free" },
+  huggingface: { fast: "mistralai/Mistral-7B-Instruct-v0.3",    smart: "meta-llama/Meta-Llama-3-8B-Instruct" },
+  together:    { fast: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smart: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
+  groq:        { fast: "llama-3.1-8b-instant",                   smart: "llama-3.3-70b-versatile" },
+  ollama:      { fast: "llama3.2",                               smart: "llama3.1" },
+  openai:      { fast: "gpt-4o-mini",                            smart: "gpt-4o" },
+  anthropic:   { fast: "claude-3-haiku-20240307",                smart: "claude-3-5-sonnet-20241022" },
+  none:        { fast: "", smart: "" },
 };
 
-const FREE_PROVIDERS  = ["openrouter", "huggingface", "together", "ollama"];
-const PAID_PROVIDERS  = ["openai", "anthropic"];
-const LEGACY_PROVIDERS = ["openai_replit", "groq"];
+const PROVIDER_GROUPS: Array<{
+  label: string;
+  description: string;
+  keys: string[];
+}> = [
+  {
+    label: "Cloud — Free",
+    description: "Recommended for production — zero cost, no API key required for Cloudflare",
+    keys: ["cloudflare", "openrouter", "huggingface"],
+  },
+  {
+    label: "Cloud — Fast",
+    description: "Ultra-low latency inference, generous free tier",
+    keys: ["groq"],
+  },
+  {
+    label: "Cloud — Paid",
+    description: "Higher accuracy for complex reasoning tasks, usage-based billing",
+    keys: ["together", "openai", "anthropic"],
+  },
+  {
+    label: "Local — Self-Hosted",
+    description: "Runs on your infrastructure — no data leaves your network",
+    keys: ["ollama"],
+  },
+];
 
 export default function AISettings() {
   const { user } = useAuth();
@@ -143,14 +166,17 @@ export default function AISettings() {
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [providerLoading, setProviderLoading] = useState(true);
   const [providerSaving, setProviderSaving] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<AIProvider>("openrouter");
+  const [selectedProvider, setSelectedProvider] = useState<AIProvider>("cloudflare");
   const [fastModel, setFastModel] = useState("");
   const [smartModel, setSmartModel] = useState("");
   const [showModels, setShowModels] = useState(false);
-  const [showLegacy, setShowLegacy] = useState(false);
+  const [showDisable, setShowDisable] = useState(false);
   const [classificationEnabled, setClassificationEnabled] = useState(true);
   const [classificationLoading, setClassificationLoading] = useState(true);
   const [classificationSaving, setClassificationSaving] = useState(false);
+  const [privacyMode, setPrivacyMode] = useState(false);
+  const [privacyLoading, setPrivacyLoading] = useState(true);
+  const [privacySaving, setPrivacySaving] = useState(false);
 
   const isSysAdmin = (user as any)?.isSysAdmin === true || (user as any)?.role === "sysadmin" || (user as any)?.role === "system_owner";
 
@@ -164,7 +190,7 @@ export default function AISettings() {
       .then((r) => r.json())
       .then((data: ProviderData) => {
         setProviderData(data);
-        setSelectedProvider(data.provider);
+        setSelectedProvider(data.provider as AIProvider);
         setFastModel(data.fastModel);
         setSmartModel(data.smartModel);
         setProviderLoading(false);
@@ -175,6 +201,11 @@ export default function AISettings() {
       .then((r) => r.ok ? r.json() : { enabled: true })
       .then((d) => { setClassificationEnabled(d.enabled ?? true); setClassificationLoading(false); })
       .catch(() => setClassificationLoading(false));
+
+    fetch("/api/ai/privacy-mode", { credentials: "include" })
+      .then((r) => r.ok ? r.json() : { aiPrivacyMode: false })
+      .then((d) => { setPrivacyMode(d.aiPrivacyMode ?? false); setPrivacyLoading(false); })
+      .catch(() => setPrivacyLoading(false));
   }, []);
 
   const handleSaveClassification = async (val: boolean) => {
@@ -193,6 +224,30 @@ export default function AISettings() {
       toast({ variant: "destructive", title: "Failed to save classification setting" });
     } finally {
       setClassificationSaving(false);
+    }
+  };
+
+  const handleSavePrivacyMode = async (val: boolean) => {
+    setPrivacySaving(true);
+    try {
+      const res = await fetch("/api/ai/privacy-mode", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ aiPrivacyMode: val }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      setPrivacyMode(val);
+      toast({
+        title: val ? "Privacy mode enabled" : "Privacy mode disabled",
+        description: val
+          ? "AI analysis will use only document metadata — no content sent to external providers."
+          : "AI analysis will use full document content for higher accuracy.",
+      });
+    } catch {
+      toast({ variant: "destructive", title: "Failed to save privacy mode setting" });
+    } finally {
+      setPrivacySaving(false);
     }
   };
 
@@ -286,10 +341,9 @@ export default function AISettings() {
               {isActive && (
                 <Badge className="text-[10px] py-0 px-1.5 h-4 bg-primary/10 text-primary border-0">Active</Badge>
               )}
-              {info.isFree && (
+              {info.isFree ? (
                 <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4 border-green-500/40 text-green-600">Free</Badge>
-              )}
-              {!info.isFree && (
+              ) : (
                 <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4 border-amber-500/40 text-amber-600 gap-0.5">
                   <DollarSign className="h-2.5 w-2.5" />Paid
                 </Badge>
@@ -352,7 +406,7 @@ export default function AISettings() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Free providers are recommended for self-hosted production deployments. Paid providers offer higher accuracy.
+            Free providers are recommended for production. Paid providers offer higher reasoning accuracy.
           </p>
         </div>
 
@@ -368,48 +422,35 @@ export default function AISettings() {
             </Alert>
           </div>
         ) : (
-          <div className="p-5 space-y-4">
-            {/* Free providers */}
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                Free Providers — Recommended for Production
-              </p>
-              <div className="grid gap-2">
-                {FREE_PROVIDERS.map(k => {
-                  const info = providerData.providerStatus[k];
-                  return info ? renderProviderCard(k, info) : null;
-                })}
-              </div>
-            </div>
+          <div className="p-5 space-y-5">
+            {PROVIDER_GROUPS.map((group) => {
+              const groupProviders = group.keys.filter(k => providerData.providerStatus[k]);
+              if (groupProviders.length === 0) return null;
+              return (
+                <div key={group.label}>
+                  <div className="mb-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{group.label}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{group.description}</p>
+                  </div>
+                  <div className="grid gap-2">
+                    {groupProviders.map(k => renderProviderCard(k, providerData.providerStatus[k]))}
+                  </div>
+                </div>
+              );
+            })}
 
-            {/* Paid providers */}
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                Paid Providers — Higher Accuracy (Optional)
-              </p>
-              <div className="grid gap-2">
-                {PAID_PROVIDERS.map(k => {
-                  const info = providerData.providerStatus[k];
-                  return info ? renderProviderCard(k, info) : null;
-                })}
-              </div>
-            </div>
-
-            {/* Legacy / Disable */}
+            {/* Disable option (collapsible) */}
             <div>
               <button
-                onClick={() => setShowLegacy(v => !v)}
+                onClick={() => setShowDisable(v => !v)}
                 className="text-xs text-muted-foreground flex items-center gap-1 hover:text-foreground mb-2"
               >
-                {showLegacy ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                Legacy & Disable options
+                {showDisable ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                Disable AI option
               </button>
-              {showLegacy && (
+              {showDisable && providerData.providerStatus["none"] && (
                 <div className="grid gap-2">
-                  {[...LEGACY_PROVIDERS, "none"].map(k => {
-                    const info = providerData.providerStatus[k];
-                    return info ? renderProviderCard(k, info) : null;
-                  })}
+                  {renderProviderCard("none", providerData.providerStatus["none"])}
                 </div>
               )}
             </div>
@@ -469,6 +510,76 @@ export default function AISettings() {
             )}
           </div>
         )}
+      </div>
+
+      {/* ── Privacy Mode ─────────────────────────────────────────────── */}
+      <div className="rounded-xl border bg-card overflow-hidden">
+        <div className="px-5 py-4 border-b bg-muted/30">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-primary" />
+            <h2 className="font-semibold text-sm">Privacy Mode</h2>
+            {!privacyLoading && (
+              <Badge
+                variant="outline"
+                className={`ml-auto text-xs ${privacyMode ? "border-blue-500/40 text-blue-600" : "border-muted text-muted-foreground"}`}
+              >
+                {privacyMode ? "Enabled" : "Disabled"}
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            When enabled, AI analysis uses only document metadata — no content is sent to external providers.
+          </p>
+        </div>
+        <div className="p-5">
+          {privacyLoading ? (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-start gap-4">
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={privacyMode}
+                      onCheckedChange={isSysAdmin ? handleSavePrivacyMode : undefined}
+                      disabled={!isSysAdmin || privacySaving}
+                    />
+                    <Label className="text-sm">
+                      {privacyMode ? "Privacy mode active — metadata only" : "Privacy mode off — full content analysis"}
+                    </Label>
+                    {privacySaving && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-3">
+                    <div className={`rounded-lg border p-3 text-xs transition-opacity ${privacyMode ? "" : "opacity-40"}`}>
+                      <p className="font-semibold flex items-center gap-1.5"><Lock className="h-3 w-3 text-blue-500" />Metadata Only</p>
+                      <p className="text-muted-foreground mt-0.5">Filename, type, status, and revision — no body text</p>
+                    </div>
+                    <div className={`rounded-lg border p-3 text-xs transition-opacity ${!privacyMode ? "" : "opacity-40"}`}>
+                      <p className="font-semibold flex items-center gap-1.5"><Brain className="h-3 w-3 text-primary" />Full Analysis</p>
+                      <p className="text-muted-foreground mt-0.5">Title, description, and full content for higher accuracy</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {privacyMode && (
+                <Alert className="py-2.5 border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-900">
+                  <Shield className="h-4 w-4 text-blue-500" />
+                  <AlertDescription className="text-xs text-blue-700 dark:text-blue-300">
+                    Privacy mode is active. Document and correspondence content will not leave your infrastructure. Analysis accuracy may be reduced.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {!isSysAdmin && (
+                <Alert className="py-2.5">
+                  <Info className="h-4 w-4" />
+                  <AlertDescription className="text-xs">Only system administrators can change the privacy mode setting.</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── AI Classification Section ─────────────────────────────── */}

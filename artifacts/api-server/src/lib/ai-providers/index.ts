@@ -2,13 +2,14 @@
  * AI Provider Factory
  * ────────────────────────────────────────────────────────────────────────────
  * Usage:
- *   const provider = getAIProvider({ orgProvider: "openrouter", orgModel: "..." });
+ *   const provider = getAIProvider({ orgProvider: "cloudflare", orgModel: "..." });
  *   const result   = await provider.chat([{ role: "user", content: "..." }]);
  *
  * To add a new provider:
- *   1. Create a file in this directory that implements AIProviderClient
- *   2. Register it in PROVIDERS below
+ *   1. Create a file in this directory implementing AIProviderClient
+ *   2. Register it in PROVIDERS below (one line)
  *   3. Add its key to the ProviderKey union type in types.ts
+ *   — No changes needed in callAI() or any route —
  */
 
 import { CloudflareAIProvider } from "./cloudflare.js";
@@ -17,31 +18,32 @@ import { OpenRouterProvider }   from "./openrouter.js";
 import { HuggingFaceProvider }  from "./huggingface.js";
 import { TogetherAIProvider }   from "./together.js";
 import { OllamaProvider }       from "./ollama.js";
-import { OpenAIProvider } from "./openai.js";
+import { OpenAIProvider }       from "./openai.js";
 import { AnthropicProvider }    from "./anthropic.js";
-import type { AIProviderClient, ProviderKey } from "./types.js";
+import type { AIProviderClient, ProviderCategory, ProviderKey } from "./types.js";
 import { db } from "@workspace/db";
-import { orgConfigTable, systemSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { orgConfigTable, systemSettingsTable, aiModelsTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
 
-export type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderKey } from "./types.js";
+export type { AIProviderClient, ChatMessage, ChatOptions, ChatResult, ProviderKey, ProviderCategory } from "./types.js";
 
 // ─── Provider registry (singleton instances) ─────────────────────────────────
+// To add a provider: add one line here + one entry in types.ts ProviderKey union.
 
 const PROVIDERS: Record<string, AIProviderClient> = {
-  cloudflare:    new CloudflareAIProvider(),
-  groq:          new GroqProvider(),
-  openrouter:    new OpenRouterProvider(),
-  huggingface:   new HuggingFaceProvider(),
-  together:      new TogetherAIProvider(),
-  ollama:        new OllamaProvider(),
-  openai:        new OpenAIProvider(),
-  anthropic:     new AnthropicProvider(),
+  cloudflare:  new CloudflareAIProvider(),
+  groq:        new GroqProvider(),
+  openrouter:  new OpenRouterProvider(),
+  huggingface: new HuggingFaceProvider(),
+  together:    new TogetherAIProvider(),
+  ollama:      new OllamaProvider(),
+  openai:      new OpenAIProvider(),
+  anthropic:   new AnthropicProvider(),
 };
 
 /**
  * Priority order for automatic provider selection when none is configured.
- * Free providers come first; paid providers only if explicitly configured.
+ * Free/zero-cost providers come first.
  */
 const FREE_PROVIDER_PRIORITY: ProviderKey[] = [
   "cloudflare",
@@ -51,6 +53,16 @@ const FREE_PROVIDER_PRIORITY: ProviderKey[] = [
   "huggingface",
   "ollama",
 ];
+
+// ─── Category metadata ────────────────────────────────────────────────────────
+
+export const PROVIDER_CATEGORY_LABELS: Record<ProviderCategory, string> = {
+  cloud_free: "Cloud — Free",
+  fast:       "Cloud — Fast",
+  aggregator: "Aggregator",
+  cloud_paid: "Cloud — Paid",
+  local:      "Local / Self-Hosted",
+};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -62,18 +74,52 @@ export function listProviders(): Array<{
   key: string;
   name: string;
   isFree: boolean;
+  category: ProviderCategory;
   available: boolean;
   defaultModel: string;
   smartModel: string;
+  models: string[];
 }> {
   return Object.entries(PROVIDERS).map(([key, p]) => ({
     key,
-    name: p.name,
-    isFree: p.isFree,
-    available: p.isAvailable(),
+    name:         p.name,
+    isFree:       p.isFree,
+    category:     p.category,
+    available:    p.isAvailable(),
     defaultModel: p.defaultModel,
-    smartModel: p.smartModel,
+    smartModel:   p.smartModel,
+    models:       p.getModels(),
   }));
+}
+
+/**
+ * Get models for a provider.
+ * Resolution order:
+ *   1. Active rows in ai_models table for this provider (admin-managed)
+ *   2. Hardcoded defaults from the provider class
+ */
+export async function getModelsForProvider(providerKey: string): Promise<string[]> {
+  try {
+    const rows = await db
+      .select({ modelId: aiModelsTable.modelId })
+      .from(aiModelsTable)
+      .where(
+        and(
+          eq(aiModelsTable.provider, providerKey),
+          eq(aiModelsTable.isActive, true),
+        ),
+      )
+      .orderBy(aiModelsTable.tierMinimum, aiModelsTable.modelId);
+
+    if (rows.length > 0) {
+      return rows.map(r => r.modelId);
+    }
+  } catch {
+    // Silently fall through to hardcoded defaults (table may not exist yet)
+  }
+
+  const provider = PROVIDERS[providerKey];
+  return provider ? provider.getModels() : [];
 }
 
 /**
@@ -112,14 +158,14 @@ export async function getAIProviderForOrg(organizationId?: number | null): Promi
 
   throw new Error(
     "No AI provider is configured or available. " +
-    "Set OPENROUTER_API_KEY, TOGETHER_API_KEY, or HUGGINGFACE_API_KEY in your environment, " +
+    "Set CF_ACCOUNT_ID + CF_AI_TOKEN (Cloudflare) or OPENROUTER_API_KEY in your environment, " +
     "or configure a provider in Admin → AI Settings.",
   );
 }
 
 /**
  * Ordered list of free providers to try during automatic fallback.
- * This is exported so ai-service.ts can reference the canonical order.
+ * Exported so ai-service.ts and ai-core.ts can reference the canonical order.
  */
 export const FALLBACK_PROVIDER_CHAIN: ProviderKey[] = [
   "cloudflare",
@@ -132,12 +178,7 @@ export const FALLBACK_PROVIDER_CHAIN: ProviderKey[] = [
 
 /**
  * Call an AI provider with automatic fallback.
- *
  * Tries each provider in `chain` order until one succeeds.
- * If `chain` is not provided, uses FALLBACK_PROVIDER_CHAIN.
- * Returns the first successful result along with the provider key used.
- *
- * Transparent fallback — never throws if at least one provider succeeds.
  */
 export async function callWithFallback(
   messages: import("./types.js").ChatMessage[],
