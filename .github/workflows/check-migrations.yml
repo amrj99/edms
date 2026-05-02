@@ -1,0 +1,42 @@
+name: Schema Migration Check
+
+# Runs on every PR and every push to main.
+# Fails if a schema change in lib/db/src/schema/ has no corresponding
+# migration file in lib/db/drizzle/ — enforcing the rule that every
+# schema change must be accompanied by a `pnpm db:generate` commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check-migrations:
+    name: Detect schema drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for schema drift
+        # DATABASE_URL is not required for `drizzle-kit generate` or
+        # `drizzle-kit check` — they only read TypeScript schema files.
+        # The placeholder satisfies the config guard without a real DB.
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+        run: pnpm db:check
