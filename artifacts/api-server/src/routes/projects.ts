@@ -5,6 +5,7 @@ import { eq, count, and, inArray } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
+import { PLANS } from "../lib/plans.js";
 
 const router = Router();
 
@@ -132,27 +133,28 @@ router.post("/", requireAuth, async (req, res) => {
     return;
   }
 
-  // ── Trial plan enforcement ──────────────────────────────────────────────
-  if (org.subscriptionTier === "trial") {
-    // Block new projects if trial has expired
-    if (org.trialEndsAt && new Date() > new Date(org.trialEndsAt)) {
-      res.status(403).json({
-        error: "TRIAL_EXPIRED",
-        message: "Your 14-day trial has ended. Upgrade to a paid plan to create new projects.",
-      });
-      return;
-    }
+  // ── Trial expiry gate (trial-specific) ────────────────────────────────────
+  if (org.subscriptionTier === "trial" && org.trialEndsAt && new Date() > new Date(org.trialEndsAt)) {
+    res.status(403).json({
+      error: "TRIAL_EXPIRED",
+      message: "Your 14-day trial has ended. Upgrade to a paid plan to create new projects.",
+    });
+    return;
+  }
 
-    // Enforce the 1-project limit for trial orgs
+  // ── Per-plan project limit (applies to any plan that defines maxProjects) ──
+  // Currently: trial = 1, free = 1. Higher tiers have no cap (maxProjects = null).
+  const planForLimitCheck = PLANS.find(p => p.id === (org.subscriptionTier ?? "free"));
+  if (planForLimitCheck?.maxProjects != null) {
     const [{ projectCount }] = await db
       .select({ projectCount: count() })
       .from(projectsTable)
       .where(eq(projectsTable.organizationId, organizationId!));
 
-    if (projectCount >= 1) {
+    if (projectCount >= planForLimitCheck.maxProjects) {
       res.status(403).json({
-        error: "TRIAL_PROJECT_LIMIT",
-        message: "Trial accounts are limited to 1 active project. Upgrade to a paid plan to create more.",
+        error: "PROJECT_LIMIT_REACHED",
+        message: `Your ${planForLimitCheck.name} plan allows up to ${planForLimitCheck.maxProjects} project${planForLimitCheck.maxProjects !== 1 ? "s" : ""}. Upgrade to add more.`,
       });
       return;
     }

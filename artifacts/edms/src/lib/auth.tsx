@@ -54,12 +54,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [error, setLocation]);
 
   // Redirect to login if no token and not already on a public page
-  const publicPaths = ["/login", "/register", "/forgot-password", "/reset-password"];
+  const publicPaths = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-org"];
   useEffect(() => {
     if (!token && !publicPaths.some(p => location === p || location.startsWith(p + "?"))) {
       setLocation("/login");
     }
   }, [token, location, setLocation]);
+
+  // Redirect to pending-org if user is authenticated but has no organisation.
+  // system_owner is exempt — they intentionally operate without an org.
+  // This guard runs after user data loads to avoid false redirects during init.
+  useEffect(() => {
+    if (
+      user &&
+      !user.organizationId &&
+      (user as any).role !== "system_owner" &&
+      location !== "/pending-org"
+    ) {
+      setLocation("/pending-org");
+    }
+  }, [user, location, setLocation]);
 
   const login = (newToken: string) => {
     localStorage.setItem("edms_token", newToken);

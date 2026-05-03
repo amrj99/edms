@@ -46,6 +46,7 @@ import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
 import BillingPage from "@/pages/billing";
 import WorkflowEnginePage from "@/pages/workflow-engine";
+import PendingOrg from "@/pages/pending-org";
 import AIInsightsPage from "@/pages/ai-insights";
 import DelegationsPage from "@/pages/delegations";
 
@@ -125,6 +126,7 @@ function Router() {
       <Route path="/verify-email" component={VerifyEmail} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/pending-org" component={PendingOrg} />
 
       {/* Protected Routes wrapped in AppLayout */}
       <Route path="/">

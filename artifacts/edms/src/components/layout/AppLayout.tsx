@@ -37,6 +37,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/lib/i18n";
 import { useModules } from "@/hooks/use-modules";
+import { StorageBanner } from "@/components/StorageBanner";
 
 // ─── Recent Projects helpers ──────────────────────────────────────────────────
 const RECENT_KEY = "edms_recent_projects";
@@ -982,6 +983,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               {modules.notifications && <NotificationBell />}
             </div>
           </header>
+          <StorageBanner />
           <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">
               <TermsGate>

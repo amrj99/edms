@@ -8,6 +8,8 @@ export interface PlanConfig {
   features: string[];
   minUsers?: number;
   maxUsers: number | null;
+  /** Maximum number of projects allowed. null = unlimited. */
+  maxProjects?: number | null;
   storageMb: number;
   maxFileSizeMb: number;
   stripePriceEnv: string;
@@ -15,6 +17,26 @@ export interface PlanConfig {
 }
 
 export const PLANS: PlanConfig[] = [
+  {
+    id: "free",
+    name: "Free",
+    description: "Retained access after trial expiry. Upgrade to unlock all features.",
+    priceAed: 0,
+    currency: "aed",
+    interval: "month",
+    features: [
+      "1 user",
+      "500 MB storage",
+      "1 active project",
+      "Documents & Dashboard only",
+      "No AI credits",
+    ],
+    maxUsers: 1,
+    maxProjects: 1,
+    storageMb: 512,
+    maxFileSizeMb: 100,
+    stripePriceEnv: "",
+  },
   {
     id: "trial",
     name: "Free Trial",
@@ -31,6 +53,7 @@ export const PLANS: PlanConfig[] = [
       "1,000 AI credits included",
     ],
     maxUsers: 3,
+    maxProjects: 1,
     storageMb: 2048,
     maxFileSizeMb: 50,
     stripePriceEnv: "",

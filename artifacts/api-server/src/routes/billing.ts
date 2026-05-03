@@ -148,6 +148,19 @@ router.get("/status", requireAuth, async (req, res) => {
       }
     }
 
+    // ── Storage warning level ────────────────────────────────────────────────
+    // Computed server-side so the frontend never needs to replicate this logic.
+    // Thresholds: 80 % → warning, 95 % → critical, 100 % → full.
+    const storageUsedMb  = org.storageUsedMb ?? 0;
+    const storageLimitMb = currentPlan?.storageMb ?? null;
+    let storageWarningLevel: "warning" | "critical" | "full" | null = null;
+    if (storageLimitMb && storageLimitMb > 0) {
+      const pct = (storageUsedMb / storageLimitMb) * 100;
+      if (pct >= 100)      storageWarningLevel = "full";
+      else if (pct >= 95)  storageWarningLevel = "critical";
+      else if (pct >= 80)  storageWarningLevel = "warning";
+    }
+
     res.json({
       tier,
       plan: currentPlan,
@@ -157,10 +170,11 @@ router.get("/status", requireAuth, async (req, res) => {
       paymentFailedAt: sub?.paymentFailedAt?.toISOString() ?? null,
       stripeCustomerId: sub?.stripeCustomerId ?? null,
       stripeSubscriptionId: sub?.stripeSubscriptionId ?? null,
-      storageUsedMb: org.storageUsedMb ?? 0,
-      storageLimitMb: currentPlan?.storageMb ?? null,
+      storageUsedMb,
+      storageLimitMb,
       maxUsers: currentPlan?.maxUsers ?? null,
       trialEndsAt: org.trialEndsAt?.toISOString() ?? null,
+      storageWarningLevel,
     });
   } catch (err) {
     logger.error(err, "billing status error");
