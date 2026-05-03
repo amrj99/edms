@@ -58,9 +58,38 @@ router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/public/share", publicShareRouter);
 
+// ── JWT pre-parse: lightweight, non-authoritative context population ───────────
+// Purpose: populate req.user early so every subsequent global middleware
+// (org scope, RLS, rate-limit, read-only check) can inspect the caller's
+// identity without duplicating token logic.
+//
+// Auth responsibility split:
+//   • THIS middleware — convenience only. Silently skips invalid/missing tokens.
+//     It must never grant access or bypass any check on its own.
+//   • requireAuth()   — the single authoritative gate. Called inside each route
+//     handler. Returns 401 if the token is absent, expired, or tampered.
+//
+// Security properties:
+//   • If req.user is already set (e.g. by a future auth sub-middleware), this
+//     step is skipped — it never overwrites a more-authoritative identity.
+//   • verifyToken() returns null for invalid/expired tokens (never throws),
+//     so a bad token simply leaves req.user undefined; requireAuth then rejects.
+//   • No route can rely solely on req.user being set here — requireAuth is
+//     still mandatory for any authenticated endpoint.
+router.use((req, res, next) => {
+  if (!req.user) {
+    const auth = req.headers.authorization;
+    if (auth?.startsWith("Bearer ")) {
+      const payload = verifyToken(auth.slice(7));
+      if (payload) req.user = payload as unknown as AuthUser;
+    }
+  }
+  next();
+});
+
 // ── Tenant isolation: inject req.orgId for all authenticated protected routes ──
-// Routes below this middleware are guaranteed to have req.user set (via requireAuth
-// in each route) and req.orgId populated. system_owner users without an assigned
+// req.user is now populated by the pre-parse above, so requireOrgScope runs
+// for every authenticated request. system_owner users without an assigned
 // org may still proceed — they span all tenants by design.
 router.use((req, res, next) => {
   if (req.user) requireOrgScope(req, res, next);
@@ -88,30 +117,21 @@ router.use(requireOrg);
 // Always non-blocking (next() called before any async work). No enforcement.
 router.use(shadowPlanMiddleware);
 
-// ── JWT pre-parse: populate req.user from Bearer token (non-blocking) ─────────
-// Individual routes call requireAuth() to enforce authentication. This step
-// runs earlier so global middlewares (read-only check, org scope, RLS, etc.)
-// can see req.user without duplicating auth logic in every route.
-// Invalid / missing tokens are silently ignored — requireAuth handles rejection.
-router.use((req, res, next) => {
-  if (!req.user) {
-    const auth = req.headers.authorization;
-    if (auth?.startsWith("Bearer ")) {
-      const payload = verifyToken(auth.slice(7));
-      if (payload) req.user = payload as unknown as AuthUser;
-    }
-  }
-  next();
-});
-
 // ── Read-only override enforcement ────────────────────────────────────────────
 // Users with is_read_only_override = true (set by trial downgrade scheduler)
 // are blocked from all state-mutating requests. Read + download remain permitted.
 // The flag is embedded in the JWT at login time; takes effect within 1 hour for
 // already-logged-in sessions.
+//
+// Bypass rules:
+//   • GET / HEAD / OPTIONS are always allowed (read-only access).
+//   • system_owner bypasses all per-org restrictions — they are a platform-level
+//     actor and must never be locked out by tenant downgrade logic.
+//   • Any user without isReadOnlyOverride = true passes through normally.
 router.use((req, res, next) => {
   const method = req.method.toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
+  if (req.user?.role === "system_owner") return next();
   if (!req.user?.isReadOnlyOverride) return next();
   res.status(403).json({
     error: "READ_ONLY_ACCOUNT",

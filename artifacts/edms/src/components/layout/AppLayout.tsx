@@ -39,6 +39,7 @@ import { useI18n } from "@/lib/i18n";
 import { useModules } from "@/hooks/use-modules";
 import { StorageBanner } from "@/components/StorageBanner";
 import { TrialExpiredBanner } from "@/components/TrialExpiredBanner";
+import { PlanRestrictionModal } from "@/components/PlanRestrictionModal";
 
 // ─── Recent Projects helpers ──────────────────────────────────────────────────
 const RECENT_KEY = "edms_recent_projects";
@@ -986,6 +987,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </header>
           <TrialExpiredBanner />
           <StorageBanner />
+          <PlanRestrictionModal />
           <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">
               <TermsGate>
