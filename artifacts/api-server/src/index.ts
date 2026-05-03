@@ -3,6 +3,7 @@ import app from "./app.js";
 import { initSocket } from "./lib/socket.js";
 import { logger } from "./lib/logger.js";
 import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
+import { startTrialDowngradeScheduler } from "./lib/trial-downgrade-scheduler.js";
 import { validateStorageAtStartup } from "./lib/storageConfig.js";
 
 const rawPort = process.env["PORT"];
@@ -82,4 +83,5 @@ server.listen(port, (err?: Error) => {
   }
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
   startNotificationScheduler();
+  startTrialDowngradeScheduler();
 });

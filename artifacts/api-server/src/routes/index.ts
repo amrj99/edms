@@ -50,6 +50,7 @@ import externalContactsRouter from "./external-contacts.js";
 import { requireModule } from "../middlewares/require-module.js";
 import { requireOrg } from "../middlewares/require-org.js";
 import { shadowPlanMiddleware } from "../middlewares/shadow-plan-middleware.js";
+import { verifyToken, type AuthUser } from "../lib/auth.js";
 
 const router: IRouter = Router();
 
@@ -86,6 +87,37 @@ router.use(requireOrg);
 // plan.config.features, plan.config.quotas, and any module/quota mismatches.
 // Always non-blocking (next() called before any async work). No enforcement.
 router.use(shadowPlanMiddleware);
+
+// ── JWT pre-parse: populate req.user from Bearer token (non-blocking) ─────────
+// Individual routes call requireAuth() to enforce authentication. This step
+// runs earlier so global middlewares (read-only check, org scope, RLS, etc.)
+// can see req.user without duplicating auth logic in every route.
+// Invalid / missing tokens are silently ignored — requireAuth handles rejection.
+router.use((req, res, next) => {
+  if (!req.user) {
+    const auth = req.headers.authorization;
+    if (auth?.startsWith("Bearer ")) {
+      const payload = verifyToken(auth.slice(7));
+      if (payload) req.user = payload as unknown as AuthUser;
+    }
+  }
+  next();
+});
+
+// ── Read-only override enforcement ────────────────────────────────────────────
+// Users with is_read_only_override = true (set by trial downgrade scheduler)
+// are blocked from all state-mutating requests. Read + download remain permitted.
+// The flag is embedded in the JWT at login time; takes effect within 1 hour for
+// already-logged-in sessions.
+router.use((req, res, next) => {
+  const method = req.method.toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
+  if (!req.user?.isReadOnlyOverride) return next();
+  res.status(403).json({
+    error: "READ_ONLY_ACCOUNT",
+    message: "Your account is in read-only mode. Upgrade your plan to restore full access.",
+  });
+});
 
 router.use("/organizations", organizationsRouter);
 router.use("/users", usersRouter);

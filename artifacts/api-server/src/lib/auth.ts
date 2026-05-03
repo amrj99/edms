@@ -93,6 +93,7 @@ export interface AuthUser {
   email: string;
   role: string;
   organizationId?: number;
+  isReadOnlyOverride?: boolean;
 }
 
 declare global {

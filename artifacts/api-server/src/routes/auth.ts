@@ -195,7 +195,7 @@ router.post("/login", async (req, res) => {
   }
 
   const tokenExpiry = rememberMe ? getRememberMeExpiry() : undefined;
-  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId }, tokenExpiry);
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, tokenExpiry);
 
   // Generate refresh token — store SHA-256 hash in DB, return plaintext to client
   const refreshToken = generateSecureToken();
@@ -259,7 +259,7 @@ router.post("/register", async (req, res) => {
     isActive: true,
   }).returning();
 
-  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: false });
 
   const refreshToken = generateSecureToken();
   await db.insert(refreshTokensTable).values({
@@ -372,7 +372,7 @@ router.post("/refresh-token", async (req, res) => {
     .set({ revokedAt: new Date() })
     .where(eq(refreshTokensTable.id, tokenRecord.id));
 
-  const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId });
+  const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false });
   const newRefreshToken = generateSecureToken();
 
   await db.insert(refreshTokensTable).values({

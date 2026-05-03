@@ -15,6 +15,13 @@
       "when": 1777698100000,
       "tag": "0001_incremental",
       "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777812000000,
+      "tag": "0002_trial_downgrade",
+      "breakpoints": false
     }
   ]
 }

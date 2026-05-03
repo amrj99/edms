@@ -1182,6 +1182,24 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
     }
   }
 
+  // ── Trial-expired upload block ────────────────────────────────────────────
+  // Orgs that were on trial and have been downgraded to free (trialEndsAt IS
+  // NOT NULL) may not upload new files. Brand-new free orgs (trialEndsAt IS
+  // NULL) are not affected — they can still upload up to their storage quota.
+  if (orgId) {
+    const [uploadOrgCheck] = await db
+      .select({ subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, orgId))
+      .limit(1);
+    if (uploadOrgCheck?.subscriptionTier === "free" && uploadOrgCheck.trialEndsAt !== null) {
+      return res.status(403).json({
+        error: "UPLOAD_BLOCKED",
+        message: "File uploads are not available on the free plan. Upgrade your plan to continue.",
+      });
+    }
+  }
+
   // ── Storage quota check ──────────────────────────────────────────────────
   if (orgId) {
     const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);

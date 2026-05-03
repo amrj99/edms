@@ -7,6 +7,8 @@ import {
   systemSettingsTable,
   subscriptionsTable,
   orgConfigTable,
+  usersTable,
+  projectsTable,
 } from "@workspace/db/schema";
 import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
@@ -67,6 +69,26 @@ async function upsertSubscription(orgId: number, data: Partial<typeof subscripti
       .returning();
     return inserted;
   }
+}
+
+// ─── Restore users + projects after an upgrade out of the free/trial tier ─────
+// Called from webhook handlers whenever an org moves to a paid plan.
+// Sets is_read_only_override = false for all users and visible_on_free = true
+// for all projects so the org immediately regains full access.
+async function restoreOrgAfterUpgrade(orgId: number, newPlanId: string): Promise<void> {
+  if (newPlanId === "free") return; // downgrade path — no restore needed
+
+  await db
+    .update(usersTable)
+    .set({ isReadOnlyOverride: false, updatedAt: new Date() })
+    .where(eq(usersTable.organizationId, orgId));
+
+  await db
+    .update(projectsTable)
+    .set({ visibleOnFree: true, updatedAt: new Date() })
+    .where(eq(projectsTable.organizationId, orgId));
+
+  logger.info({ orgId, newPlanId }, "[billing] Users and projects restored after upgrade");
 }
 
 async function applyModulesForPlan(orgId: number, planId: string) {
@@ -365,6 +387,9 @@ router.post(
             // Auto-apply module flags for this plan
             await applyModulesForPlan(orgId, planId);
 
+            // Restore users + projects visibility if upgrading from free/trial
+            await restoreOrgAfterUpgrade(orgId, planId);
+
             logger.info({ orgId, planId, subscriptionId }, "Subscription activated via checkout");
           }
           break;
@@ -395,6 +420,8 @@ router.post(
                 .set({ subscriptionTier: planId, updatedAt: new Date() })
                 .where(eq(organizationsTable.id, orgId));
               await applyModulesForPlan(orgId, planId);
+              // Restore users + projects visibility if upgrading from free/trial
+              await restoreOrgAfterUpgrade(orgId, planId);
             }
 
             logger.info({ orgId, status: sub.status, planId: resolvedPlanId }, "Subscription updated");

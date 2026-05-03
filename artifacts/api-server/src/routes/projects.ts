@@ -55,6 +55,12 @@ router.get("/", requireAuth, async (req, res) => {
     projects = projects.filter(p => accessibleIds.has(p.project.id));
   }
 
+  // Hide trial-downgraded projects for all non-system-owner users.
+  // visible_on_free defaults to true so non-downgraded orgs are unaffected.
+  if (!isSystemOwner(user)) {
+    projects = projects.filter(p => p.project.visibleOnFree);
+  }
+
   const memberCounts = await db.select({ projectId: projectMembersTable.projectId, cnt: count() }).from(projectMembersTable).groupBy(projectMembersTable.projectId);
   const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
 

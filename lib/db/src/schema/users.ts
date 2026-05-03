@@ -23,6 +23,7 @@ export const usersTable = pgTable("users", {
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   department: text("department"),
   isActive: boolean("is_active").notNull().default(true),
+  isReadOnlyOverride: boolean("is_read_only_override").notNull().default(false),
   acceptedTermsAt: timestamp("accepted_terms_at"),
   acceptedTermsVersion: text("accepted_terms_version"),
   passwordChangedAt: timestamp("password_changed_at"),
