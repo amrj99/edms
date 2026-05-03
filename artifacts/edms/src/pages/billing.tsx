@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
@@ -565,6 +565,40 @@ export default function BillingPage() {
       });
     },
   });
+
+  // ── Post-payment status sync ───────────────────────────────────────────────
+  // After Stripe redirects back with ?success=true, the webhook that upgrades
+  // the plan may not have fired yet. Force-refetch billing status at 1.5 s,
+  // 4 s, and 9 s after mount to catch the webhook lag without a manual refresh.
+  // Also invalidates billing-status-storage so the StorageBanner updates.
+  useEffect(() => {
+    if (!justSucceeded) return;
+    refetchStatus();
+    queryClient.invalidateQueries({ queryKey: ["billing-status-storage"] });
+    const t1 = window.setTimeout(() => {
+      refetchStatus();
+      queryClient.invalidateQueries({ queryKey: ["billing-status-storage"] });
+    }, 1500);
+    const t2 = window.setTimeout(() => {
+      refetchStatus();
+      queryClient.invalidateQueries({ queryKey: ["billing-status-storage"] });
+    }, 4000);
+    const t3 = window.setTimeout(() => {
+      refetchStatus();
+      queryClient.invalidateQueries({ queryKey: ["billing-status-storage"] });
+    }, 9000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Post-AI-purchase credits sync ─────────────────────────────────────────
+  useEffect(() => {
+    if (!aiJustSucceeded) return;
+    queryClient.invalidateQueries({ queryKey: ["ai-credits-balance"] });
+    const t = window.setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ["ai-credits-balance"] });
+    }, 3000);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelect = (planId: string, seats: number) => {
     if (status?.tier === planId && status?.stripeSubscriptionId) {

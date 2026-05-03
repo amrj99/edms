@@ -1182,11 +1182,17 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
     }
   }
 
+  // ── system_owner full bypass ─────────────────────────────────────────────
+  // system_owner is a platform-level actor and must never be blocked by
+  // per-org quota or restriction logic (trial expiry, upload block, storage
+  // quota). This mirrors the global read-only override bypass in routes/index.ts.
+  const skipQuotaChecks = req.user?.role === "system_owner";
+
   // ── Trial-expired upload block ────────────────────────────────────────────
   // Orgs that were on trial and have been downgraded to free (trialEndsAt IS
   // NOT NULL) may not upload new files. Brand-new free orgs (trialEndsAt IS
   // NULL) are not affected — they can still upload up to their storage quota.
-  if (orgId) {
+  if (!skipQuotaChecks && orgId) {
     const [uploadOrgCheck] = await db
       .select({ subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
       .from(organizationsTable)
@@ -1201,7 +1207,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
   }
 
   // ── Storage quota check ──────────────────────────────────────────────────
-  if (orgId) {
+  if (!skipQuotaChecks && orgId) {
     const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
     const totalNewMb = totalNewBytes / (1024 * 1024);
 

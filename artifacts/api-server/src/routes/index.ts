@@ -51,6 +51,7 @@ import { requireModule } from "../middlewares/require-module.js";
 import { requireOrg } from "../middlewares/require-org.js";
 import { shadowPlanMiddleware } from "../middlewares/shadow-plan-middleware.js";
 import { verifyToken, type AuthUser } from "../lib/auth.js";
+import { createAuditLog } from "../lib/audit.js";
 
 const router: IRouter = Router();
 
@@ -133,6 +134,18 @@ router.use((req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
   if (req.user?.role === "system_owner") return next();
   if (!req.user?.isReadOnlyOverride) return next();
+
+  // Fire-and-forget audit log — never awaited so it cannot delay the response
+  createAuditLog({
+    userId: req.user.id,
+    organizationId: req.user.organizationId,
+    action: "read_only_block_triggered",
+    entityType: "api_request",
+    entityId: req.user.id,
+    details: { method: req.method, path: req.path },
+    ipAddress: (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+  });
+
   res.status(403).json({
     error: "READ_ONLY_ACCOUNT",
     message: "Your account is in read-only mode. Upgrade your plan to restore full access.",

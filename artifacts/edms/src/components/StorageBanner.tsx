@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { AlertTriangle, HardDrive, X } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
+import { apiFetch } from "@/lib/api";
 
 const BASE = import.meta.env.BASE_URL;
 
@@ -34,7 +35,7 @@ export function StorageBanner() {
   const { data } = useQuery<BillingStatusMinimal>({
     queryKey: ["billing-status-storage"],
     queryFn: async () => {
-      const r = await fetch(`${BASE}api/billing/status`);
+      const r = await apiFetch(`${BASE}api/billing/status`);
       if (!r.ok) return null;
       return r.json();
     },
@@ -73,8 +74,10 @@ export function StorageBanner() {
       bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",
       icon: "text-red-600 dark:text-red-400",
       text: "text-red-800 dark:text-red-200",
-      title: "Storage limit reached",
-      message: "No new files can be uploaded. Upgrade your plan to restore upload access.",
+      title: "Storage limit exceeded",
+      message: data?.storageUsedMb != null && data?.storageLimitMb != null && data.storageUsedMb > data.storageLimitMb
+        ? `Your current storage (${data.storageUsedMb.toFixed(0)} MB used) exceeds your plan limit of ${data.storageLimitMb} MB. Upgrade your plan to continue uploading.`
+        : "Storage limit reached. No new files can be uploaded. Upgrade your plan to restore upload access.",
       dismissible: false,
     },
   } as const;

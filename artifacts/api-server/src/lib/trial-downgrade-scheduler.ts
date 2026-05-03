@@ -28,6 +28,7 @@ import {
 } from "@workspace/db/schema";
 import { and, eq, lt, isNotNull, inArray } from "drizzle-orm";
 import { logger } from "./logger.js";
+import { createAuditLog } from "./audit.js";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -141,6 +142,23 @@ async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
     },
     "[trial-downgrade] Org downgraded trial → free",
   );
+
+  // ── 5. Audit log — fire-and-forget, never blocks or throws ────────────────
+  await createAuditLog({
+    organizationId: orgId,
+    userId: keepUser.id,
+    action: "trial_downgraded",
+    entityType: "organization",
+    entityId: orgId,
+    entityTitle: orgName,
+    details: {
+      keptUserId: keepUser.id,
+      readOnlyUserCount: readOnlyIds.length,
+      keptProjectId: keepProjectId ?? null,
+      hiddenProjectCount: hideProjectIds.length,
+      downgradedAt: new Date().toISOString(),
+    },
+  });
 }
 
 export function startTrialDowngradeScheduler(): NodeJS.Timeout {

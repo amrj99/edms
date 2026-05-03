@@ -15,6 +15,7 @@ import { logger } from "../lib/logger.js";
 import { PLANS, getDefaultModulesForPlan } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { grantCredits, AI_CREDIT_PACKS } from "../lib/ai-credits.js";
+import { createAuditLog } from "../lib/audit.js";
 
 export { PLANS };
 
@@ -91,6 +92,15 @@ export async function upgradeOrgFromFree(orgId: number): Promise<void> {
     .where(eq(projectsTable.organizationId, orgId));
 
   logger.info({ orgId }, "[billing] upgradeOrgFromFree: users and projects restored");
+
+  // Audit log — fire-and-forget, never blocks or throws
+  await createAuditLog({
+    organizationId: orgId,
+    action: "upgraded_from_free",
+    entityType: "organization",
+    entityId: orgId,
+    details: { upgradedAt: new Date().toISOString() },
+  });
 }
 
 async function applyModulesForPlan(orgId: number, planId: string) {
