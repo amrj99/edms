@@ -43,7 +43,7 @@ export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartMod
   huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",    smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
   together:      { fastModel: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smartModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
   ollama:        { fastModel: "llama3.2",                              smartModel: "llama3.1" },
-  openai:        { fastModel: "gpt-4o-mini",                           smartModel: "gpt-4o" },
+  openai:        { fastModel: process.env.AI_MODEL ?? "anthropic/claude-3.5-sonnet", smartModel: process.env.AI_MODEL ?? "anthropic/claude-3.5-sonnet" },
   anthropic:     { fastModel: "claude-3-haiku-20240307",               smartModel: "claude-3-5-sonnet-20241022" },
   none:          { fastModel: "",                                       smartModel: "" },
 };
@@ -58,10 +58,16 @@ export async function getSystemSettingValue(key: string): Promise<string | null>
 // ─── Provider config ──────────────────────────────────────────────────────────
 
 export async function getAIProviderConfig(): Promise<AIProviderConfig> {
-  const provider = (await getSystemSettingValue("ai_provider") ?? "cloudflare") as AIProvider;
+  // AI_PROVIDER env var takes priority over the DB setting.
+  // This lets VPS operators configure the provider without touching system_settings.
+  const envProvider = (process.env.AI_PROVIDER || null) as AIProvider | null;
+  const provider = (envProvider ?? await getSystemSettingValue("ai_provider") ?? "cloudflare") as AIProvider;
   const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openrouter;
-  const fastModel  = await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
-  const smartModel = await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
+  // AI_MODEL env var takes priority over both DB settings and compiled defaults.
+  // This lets VPS operators pin a model without touching the database.
+  const envModel   = process.env.AI_MODEL || null;
+  const fastModel  = envModel ?? await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
+  const smartModel = envModel ?? await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
   return { provider, fastModel, smartModel };
 }
 
@@ -110,9 +116,10 @@ export async function getAIClient(): Promise<OpenAI> {
     const baseURL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
     _cachedClient = new OpenAI({ apiKey: "ollama", baseURL });
   } else if (provider === "openai") {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
-    _cachedClient = new OpenAI({ apiKey });
+    const apiKey = process.env.OPENAI_API_KEY ?? process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    if (!apiKey) throw new Error("OPENAI_API_KEY (or AI_INTEGRATIONS_OPENAI_API_KEY) is not set.");
+    const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    _cachedClient = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
   } else {
     throw new Error(
       `Unknown AI provider: "${provider}". ` +
