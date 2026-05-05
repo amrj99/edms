@@ -774,9 +774,20 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
     // ── 7. Deduct credits — only when premium was actually used ──────────────
     // No deduction when: free provider chosen, premium failed (premiumFallbackOccurred), or no org.
-    if (cmdOrgId && tier === "premium" && !premiumFallbackOccurred) {
-      await deductCredits(cmdOrgId, "ai_classify").catch(() => {});
+    const creditsDeducted = (cmdOrgId && tier === "premium" && !premiumFallbackOccurred)
+      ? AI_FEATURE_COSTS.ai_classify
+      : 0;
+    if (creditsDeducted > 0) {
+      await deductCredits(cmdOrgId!, "ai_classify").catch(() => {});
     }
+
+    logger.info({
+      provider:        actualProvider,
+      baseURL:         getProviderBaseURL(actualProvider),
+      tier:            premiumFallbackOccurred ? "free" : tier,
+      creditsDeducted,
+      fallback:        fallbackOccurred,
+    }, "[AI/command] request complete");
 
     // ── 8. Respond with full transparency metadata ───────────────────────────
     res.json({
