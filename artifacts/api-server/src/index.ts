@@ -6,6 +6,7 @@ import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
 import { startTrialDowngradeScheduler } from "./lib/trial-downgrade-scheduler.js";
 import { validateStorageAtStartup } from "./lib/storageConfig.js";
 import { logAIConfigAtStartup } from "./lib/ai-core.js";
+import { seedAISettings } from "./lib/seed-ai-settings.js";
 
 const rawPort = process.env["PORT"];
 
@@ -85,7 +86,10 @@ server.listen(port, (err?: Error) => {
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
   startNotificationScheduler();
   startTrialDowngradeScheduler();
-  // Log AI provider config at boot — confirms env var resolution before any request.
+  // Seed AI routing defaults into system_settings (ON CONFLICT DO NOTHING — safe every boot).
+  // Look for "[seed-ai-settings] AI routing defaults seeded" in your logs.
+  seedAISettings().catch(() => {});
+  // Log resolved AI config AFTER seeding so the log reflects the DB values.
   // Look for "[AI] ═══ startup config resolved ═══" in your logs.
   logAIConfigAtStartup().catch(() => {});
 });
