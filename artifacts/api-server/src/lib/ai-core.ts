@@ -39,7 +39,7 @@ export interface AIProviderConfig {
 }
 
 export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: string }> = {
-  cloudflare:    { fastModel: "@cf/meta/llama-3.2-3b-instruct",        smartModel: "@cf/mistral/mistral-7b-instruct-v0.1" },
+  cloudflare:    { fastModel: "@cf/meta/llama-3.1-8b-instruct",        smartModel: "@cf/mistral/mistral-7b-instruct-v0.1" },
   groq:          { fastModel: "llama-3.3-70b-versatile",               smartModel: "llama-3.3-70b-versatile" },
   openrouter:    { fastModel: "meta-llama/llama-3.2-3b-instruct:free", smartModel: "mistralai/mistral-7b-instruct:free" },
   huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",    smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
@@ -456,6 +456,14 @@ export async function buildProviderClient(provider: string): Promise<OpenAI | nu
 
 const FALLBACK_CHAIN: string[] = ["cloudflare", "groq", "openrouter", "together", "huggingface", "ollama"];
 
+/**
+ * Providers that are always free-tier regardless of routing mode.
+ * Used to derive `AICallResult.tier` in callAI() — works for all resolution
+ * modes (credits_premium, org_override, env_override, etc.).
+ * Extend this set as additional free providers are integrated.
+ */
+const FREE_TIER_PROVIDERS = new Set(["cloudflare", "ollama", "huggingface"]);
+
 // ─── Tier-specific fallback chains ────────────────────────────────────────────
 // Controls which providers each subscription tier is allowed to fall back to.
 // Adding a new tier = one line here. No changes needed in callAI() or any route.
@@ -477,6 +485,14 @@ export interface AICallResult {
   tokensUsed?: number;
   latencyMs: number;
   usedFallback: boolean;
+  /** "premium" = paid provider (e.g. OpenRouter), "free" = cost-free provider (e.g. Cloudflare). */
+  tier: "premium" | "free";
+  /**
+   * True when the org has enough credits for premium but this call used the free provider
+   * (e.g. a simple /command request conserving credits). Always false for callAI() — complexity
+   * gating only applies in the /command route where the caller can re-request with advanced=true.
+   */
+  upgradeAvailable: boolean;
 }
 
 // ─── Credit-based routing ─────────────────────────────────────────────────────
@@ -867,12 +883,14 @@ export async function callAI(
       }
 
       return {
-        data:         parseAIContent(raw.content, jsonMode),
-        provider:     providerKey,
+        data:             parseAIContent(raw.content, jsonMode),
+        provider:         providerKey,
         model,
-        tokensUsed:   raw.tokensUsed,
-        latencyMs:    raw.latencyMs,
-        usedFallback: i > 0,
+        tokensUsed:       raw.tokensUsed,
+        latencyMs:        raw.latencyMs,
+        usedFallback:     i > 0,
+        tier:             FREE_TIER_PROVIDERS.has(providerKey) ? "free" : "premium",
+        upgradeAvailable: false, // callAI() always uses the resolved provider; complexity gating is in /command only
       };
     } catch (err: any) {
       if (i < chain.length - 1) {

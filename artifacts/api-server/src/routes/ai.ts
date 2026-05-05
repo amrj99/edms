@@ -29,7 +29,8 @@ import {
   PREMIUM_MODEL_DEFAULT,
   type AIProvider,
 } from "../lib/ai-service.js";
-import { deductCredits, getCreditsBalance } from "../lib/ai-credits.js";
+import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
+import { detectCommandComplexity } from "../lib/ai-complexity.js";
 
 const router = Router();
 
@@ -566,18 +567,26 @@ router.put("/settings", async (req, res) => {
 });
 
 // ─── AI Command Assistant ──────────────────────────────────────────────────────
+//
+// Decision flow (in order):
+//   1. Resolve credits info via resolveProviderForOrg()
+//   2. Detect complexity (rule-based, no AI call)
+//   3. Hybrid routing:
+//        advanced=true                  → skip complexity gate, use resolved provider
+//        simple (not advanced)          → always free, upgradeAvailable if has credits
+//        complex + credits (not adv)    → return requiresPremium prompt, do NOT execute
+//        complex + no credits           → use free, no deduction
+//   4. Execute with automatic failsafe fallback (premium fail → free, no deduction)
+//   5. Respond with _ai transparency metadata on every response
+//
 router.post("/command", async (req, res) => {
-  const { command, projectId } = req.body;
+  const { command, projectId, advanced = false } = req.body;
   if (!command?.trim()) {
     res.status(400).json({ error: "command is required" });
     return;
   }
 
   const cmdOrgId = req.user!.organizationId;
-  // No credit gate here — resolveProviderForOrg() handles routing:
-  //   balance ≥ threshold → premium provider (OpenRouter, credits deducted after)
-  //   balance < threshold → free provider (Cloudflare, no deduction)
-  // Every org gets AI responses; quality scales with their balance.
 
   try {
     const systemPrompt = `You are an EDMS (Engineering Document Management System) AI assistant.
@@ -607,62 +616,147 @@ If the command is ambiguous or you cannot determine the type, return:
 
 Return ONLY the JSON object, no markdown, no explanation.`;
 
-    // ── Resolve provider via credit-based routing ─────────────────────────────
-    const resolution = await resolveProviderForOrg(cmdOrgId, "fast");
-    const baseURL    = getProviderBaseURL(resolution.provider);
+    // ── 1. Resolve credits info ──────────────────────────────────────────────
+    const resolution       = await resolveProviderForOrg(cmdOrgId, "fast");
+    const creditsBalance   = resolution.creditsBalance  ?? 0;
+    const creditsThreshold = resolution.creditsThreshold ?? 50;
+    const hasEnoughCredits = creditsBalance >= creditsThreshold;
 
+    // Free provider is always available regardless of credit balance
+    const freeProv  = ((await getSystemSettingValue("ai_free_provider")) ?? "cloudflare") as AIProvider;
+    const freeModel = PROVIDER_DEFAULTS[freeProv]?.fastModel ?? "@cf/meta/llama-3.2-3b-instruct";
+
+    // ── 2. Detect complexity (rule-based, zero AI calls) ────────────────────
+    const complexityResult = detectCommandComplexity(command.trim());
+
+    // ── 3. Hybrid routing decision ───────────────────────────────────────────
+    // advanced=true  → user confirmed premium — skip complexity gating entirely
+    // advanced=false → apply complexity rules before deciding provider:
+    //   simple               → always free (conserve credits), upgradeAvailable if org has balance
+    //   complex + credits    → return premium prompt (do NOT execute, do NOT charge)
+    //   complex + no credits → use free anyway, no deduction
+    let useProvider: AIProvider = resolution.provider;
+    let useModel: string        = resolution.model;
+    let upgradeAvailable        = false;
+
+    if (!advanced) {
+      if (complexityResult.complexity === "simple") {
+        // Simple → force free path regardless of credits (save credits for complex requests)
+        useProvider      = freeProv;
+        useModel         = freeModel;
+        upgradeAvailable = hasEnoughCredits; // true = could go premium if user adds advanced=true
+      } else if (hasEnoughCredits) {
+        // Complex + credits available → prompt user, do NOT execute or charge
+        logger.info({
+          orgId:            cmdOrgId,
+          creditsBalance,
+          creditsThreshold,
+          complexity:       complexityResult.complexity,
+          complexityReason: complexityResult.reason,
+          estimatedCredits: AI_FEATURE_COSTS.ai_classify,
+        }, "[AI/command] complex request — returning premium prompt (no AI call made)");
+
+        res.json({
+          requiresPremium:  true,
+          estimatedCredits: AI_FEATURE_COSTS.ai_classify,
+          complexity:       complexityResult.complexity,
+          complexityReason: complexityResult.reason,
+          _ai: {
+            provider:         freeProv,
+            tier:             "free" as const,
+            upgradeAvailable: true,
+          },
+        });
+        return;
+      }
+      // else: complex + no credits → fall through using the resolved (free) provider
+    }
+    // advanced=true: resolveProviderForOrg() already chose premium (if credits allow) or free (if not)
+
+    // Tier is derived from the actual provider after the routing decision.
+    // Compares useProvider against freeProv so it is correct for ALL resolution
+    // modes: org_override, credits_premium, credits_free, env_override, etc.
+    const tier: "premium" | "free" = useProvider === freeProv ? "free" : "premium";
+
+    // ── 4. Log outbound request ──────────────────────────────────────────────
     logger.info({
-      provider:         resolution.provider,
-      model:            resolution.model,
-      baseURL,
+      provider:         useProvider,
+      model:            useModel,
+      baseURL:          getProviderBaseURL(useProvider),
+      tier,
+      complexity:       complexityResult.complexity,
+      complexityReason: complexityResult.reason,
+      advanced,
+      creditsBalance,
+      creditsThreshold,
+      upgradeAvailable,
       reason:           resolution.reason,
-      creditsBalance:   resolution.creditsBalance,
-      creditsThreshold: resolution.creditsThreshold,
     }, "[AI/command] outbound request");
 
-    // ── Call primary provider, with automatic fallback to free on failure ─────
-    // If the premium provider (OpenRouter) fails for any reason (network error,
-    // rate limit, bad key, etc.) we transparently fall back to the free provider
-    // (Cloudflare) rather than returning a 500 to the user.
-    let completion: any;
-    let usedProvider = resolution.provider;
-    let usedModel    = resolution.model;
-
-    const messages = [
+    // ── 5. Execute with automatic failsafe fallback ──────────────────────────
+    // If premium provider fails (network, rate-limit, bad key, etc.) we fall back
+    // to the free provider automatically — no crash, no credits deducted.
+    const messages   = [
       { role: "system" as const, content: systemPrompt },
       { role: "user"   as const, content: command.trim() },
     ];
     const callParams = { max_tokens: 600, temperature: 0.2 } as const;
 
+    let completion: any;
+    let actualProvider          = useProvider;
+    let fallbackOccurred        = false; // any fallback — drives _ai.fallback visibility flag
+    let premiumFallbackOccurred = false; // premium specifically failed → suppresses upgradeAvailable + flips tier
+
     try {
-      const client = await getAIClient(resolution.provider);
-      completion   = await client.chat.completions.create({
-        model: resolution.model, messages, ...callParams,
-      });
+      const client = await getAIClient(useProvider);
+      completion   = await client.chat.completions.create({ model: useModel, messages, ...callParams });
     } catch (primaryErr: any) {
-      // Automatic fallback — only triggered on premium calls; free failures propagate normally.
-      if (resolution.reason === "credits_premium") {
-        const freeProv = ((await getSystemSettingValue("ai_free_provider")) ?? "cloudflare") as AIProvider;
-        const freeModel = PROVIDER_DEFAULTS[freeProv]?.fastModel ?? "";
+      if (tier === "premium") {
+        // [AI] premium failed → fallback to free
         logger.warn({
-          failedProvider: resolution.provider,
+          failedProvider: useProvider,
           error:          primaryErr.message,
           fallbackTo:     freeProv,
-          fallbackModel:  freeModel,
           baseURL:        getProviderBaseURL(freeProv),
-        }, "[AI/command] ⚠ premium provider failed — falling back to free provider (no credits deducted)");
+        }, "[AI] premium failed → fallback to free");
 
-        usedProvider = freeProv;
-        usedModel    = freeModel;
+        actualProvider          = freeProv;
+        fallbackOccurred        = true;
+        premiumFallbackOccurred = true; // premium broke — don't tell user upgrade is available
         const fallbackClient = await getAIClient(freeProv);
         completion = await fallbackClient.chat.completions.create({
           model: freeModel, messages, ...callParams,
         });
       } else {
-        throw primaryErr; // Free-tier failure — propagate to outer catch
+        // Free provider unavailable → emergency fallback to the org's configured provider.
+        // Credits are NOT deducted — tier stays "free"; credit gate is only on tier==="premium".
+        // upgradeAvailable is NOT suppressed — the org can still request premium via advanced=true.
+        // For orgs whose configured provider IS the free provider, nothing more to try → throw.
+        if (resolution.provider === freeProv) {
+          throw primaryErr;
+        }
+        logger.warn({
+          failedProvider: useProvider,
+          error:          primaryErr.message,
+          fallbackTo:     resolution.provider,
+          model:          resolution.model,
+          baseURL:        getProviderBaseURL(resolution.provider),
+        }, "[AI] free provider unavailable → emergency fallback to org provider (no credits charged)");
+
+        try {
+          actualProvider   = resolution.provider;
+          fallbackOccurred = true; // visible in _ai.fallback, but premiumFallbackOccurred stays false
+          const orgClient  = await getAIClient(resolution.provider);
+          completion = await orgClient.chat.completions.create({
+            model: resolution.model, messages, ...callParams,
+          });
+        } catch {
+          throw primaryErr; // Org provider also failed — propagate original error
+        }
       }
     }
 
+    // ── 6. Parse AI response ─────────────────────────────────────────────────
     const raw = completion.choices[0]?.message?.content ?? "{}";
     let parsed: any;
     try {
@@ -671,12 +765,23 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       parsed = { action: "unknown", summary: "Could not parse the AI response. Please rephrase your command." };
     }
 
-    // Deduct credits ONLY when the premium provider was actually used (not on fallback to free).
-    if (cmdOrgId && resolution.reason === "credits_premium" && usedProvider === resolution.provider) {
+    // ── 7. Deduct credits — only when premium was actually used ──────────────
+    // No deduction when: free provider chosen, premium failed (premiumFallbackOccurred), or no org.
+    if (cmdOrgId && tier === "premium" && !premiumFallbackOccurred) {
       await deductCredits(cmdOrgId, "ai_classify").catch(() => {});
     }
 
-    res.json(parsed);
+    // ── 8. Respond with full transparency metadata ───────────────────────────
+    res.json({
+      ...parsed,
+      _ai: {
+        provider:         actualProvider,
+        tier:             premiumFallbackOccurred ? "free" : tier,
+        upgradeAvailable: upgradeAvailable && !premiumFallbackOccurred,
+        complexity:       complexityResult.complexity,
+        fallback:         fallbackOccurred,
+      },
+    });
   } catch (err: any) {
     logger.error({ error: err.message, stack: err.stack }, "[AI/command] all providers failed");
     res.status(500).json({ error: "AI service unavailable", message: err.message });
