@@ -23,6 +23,7 @@ import {
   getAIClient,
   callAI,
   resolveProviderForOrg,
+  resolveFreeProvider,
   getProviderBaseURL,
   getSystemSettingValue,
   PROVIDER_DEFAULTS,
@@ -580,7 +581,7 @@ router.put("/settings", async (req, res) => {
 //   5. Respond with _ai transparency metadata on every response
 //
 router.post("/command", async (req, res) => {
-  const { command, projectId, advanced = false } = req.body;
+  const { command, projectId, advanced = false, bypassGate = false } = req.body;
   if (!command?.trim()) {
     res.status(400).json({ error: "command is required" });
     return;
@@ -622,9 +623,9 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     const creditsThreshold = resolution.creditsThreshold ?? 50;
     const hasEnoughCredits = creditsBalance >= creditsThreshold;
 
-    // Free provider is always available regardless of credit balance
-    const freeProv  = ((await getSystemSettingValue("ai_free_provider")) ?? "cloudflare") as AIProvider;
-    const freeModel = PROVIDER_DEFAULTS[freeProv]?.fastModel ?? "@cf/meta/llama-3.2-3b-instruct";
+    // Free provider chain: cloudflare → groq (first configured wins)
+    // resolveFreeProvider() reads env vars only — zero DB queries.
+    const { provider: freeProv, model: freeModel } = await resolveFreeProvider();
 
     // ── 2. Detect complexity (rule-based, zero AI calls) ────────────────────
     const complexityResult = detectCommandComplexity(command.trim());
@@ -645,8 +646,9 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         useProvider      = freeProv;
         useModel         = freeModel;
         upgradeAvailable = hasEnoughCredits; // true = could go premium if user adds advanced=true
-      } else if (hasEnoughCredits) {
+      } else if (hasEnoughCredits && !bypassGate) {
         // Complex + credits available → prompt user, do NOT execute or charge
+        // bypassGate=true: user explicitly chose "Use Free Analysis" from the gate card
         logger.info({
           orgId:            cmdOrgId,
           creditsBalance,
@@ -668,8 +670,13 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           },
         });
         return;
+      } else {
+        // complex + no credits, OR bypassGate=true (user explicitly chose free)
+        // Always use free provider — no credits deducted in either case.
+        useProvider      = freeProv;
+        useModel         = freeModel;
+        upgradeAvailable = false; // user already on the free path; suppress upgrade hint
       }
-      // else: complex + no credits → fall through using the resolved (free) provider
     }
     // advanced=true: resolveProviderForOrg() already chose premium (if credits allow) or free (if not)
 

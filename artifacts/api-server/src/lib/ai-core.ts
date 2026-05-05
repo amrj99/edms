@@ -462,7 +462,46 @@ const FALLBACK_CHAIN: string[] = ["cloudflare", "groq", "openrouter", "together"
  * modes (credits_premium, org_override, env_override, etc.).
  * Extend this set as additional free providers are integrated.
  */
-const FREE_TIER_PROVIDERS = new Set(["cloudflare", "ollama", "huggingface"]);
+const FREE_TIER_PROVIDERS = new Set(["cloudflare", "groq", "ollama", "huggingface"]);
+
+/**
+ * Resolve the best available free-tier provider for the current environment.
+ *
+ * Priority chain: cloudflare → groq
+ * Returns the first provider whose required credentials are present in the environment.
+ * Falls back to the ai_free_provider system setting (default: "cloudflare") if neither
+ * entry in the chain has credentials — so callers always receive a valid provider string
+ * for tier derivation and logging even when no free provider is reachable at runtime.
+ *
+ * Callers use the returned provider string for tier derivation (`useProvider === freeProv`)
+ * and pass the returned model string directly to the AI call. Client construction is
+ * handled by getAIClient() / buildProviderClient() using the resolved provider key.
+ */
+export async function resolveFreeProvider(): Promise<{ provider: AIProvider; model: string }> {
+  const chain: Array<{ provider: AIProvider; configured: () => boolean }> = [
+    {
+      provider: "cloudflare",
+      configured: () => !!(process.env.CF_ACCOUNT_ID && process.env.CF_AI_TOKEN),
+    },
+    {
+      provider: "groq",
+      configured: () => !!process.env.GROQ_API_KEY,
+    },
+  ];
+
+  for (const entry of chain) {
+    if (entry.configured()) {
+      const model = PROVIDER_DEFAULTS[entry.provider]?.fastModel ?? "";
+      return { provider: entry.provider, model };
+    }
+  }
+
+  // Neither primary free provider has credentials — fall back to the system setting
+  // so the route still has a valid freeProv for tier derivation and logging.
+  const settingProv = ((await getSystemSettingValue("ai_free_provider")) ?? "cloudflare") as AIProvider;
+  const model = PROVIDER_DEFAULTS[settingProv]?.fastModel ?? "@cf/meta/llama-3.1-8b-instruct";
+  return { provider: settingProv, model };
+}
 
 // ─── Tier-specific fallback chains ────────────────────────────────────────────
 // Controls which providers each subscription tier is allowed to fall back to.
