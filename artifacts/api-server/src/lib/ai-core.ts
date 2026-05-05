@@ -45,10 +45,35 @@ export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartMod
   huggingface:   { fastModel: "mistralai/Mistral-7B-Instruct-v0.3",    smartModel: "meta-llama/Meta-Llama-3-8B-Instruct" },
   together:      { fastModel: "meta-llama/Llama-3.2-3B-Instruct-Turbo", smartModel: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" },
   ollama:        { fastModel: "llama3.2",                              smartModel: "llama3.1" },
-  openai:        { fastModel: process.env.AI_MODEL ?? "anthropic/claude-3.5-sonnet", smartModel: process.env.AI_MODEL ?? "anthropic/claude-3.5-sonnet" },
+  openai:        { fastModel: "anthropic/claude-3.5-sonnet",           smartModel: "anthropic/claude-3.5-sonnet" },
   anthropic:     { fastModel: "claude-3-haiku-20240307",               smartModel: "claude-3-5-sonnet-20241022" },
   none:          { fastModel: "",                                       smartModel: "" },
 };
+
+/**
+ * Default model for all premium AI calls.
+ * Resolved at runtime: AI_MODEL env var → "anthropic/claude-3.5-sonnet".
+ * This applies to ANY premium provider (openai, openrouter, etc.) when no
+ * explicit model is configured in system_settings.ai_premium_model.
+ */
+export const PREMIUM_MODEL_DEFAULT = process.env.AI_MODEL ?? "anthropic/claude-3.5-sonnet";
+
+/**
+ * Return the outbound base URL for a given provider key.
+ * Used for logging — actual client construction is in getAIClient() / buildProviderClient().
+ */
+export function getProviderBaseURL(provider: string): string {
+  switch (provider) {
+    case "cloudflare":  return `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID ?? "<CF_ACCOUNT_ID>"}/ai/v1`;
+    case "openrouter":  return "https://openrouter.ai/api/v1";
+    case "openai":      return process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "https://api.openai.com/v1";
+    case "groq":        return "https://api.groq.com/openai/v1";
+    case "together":    return "https://api.together.xyz/v1";
+    case "huggingface": return "https://api-inference.huggingface.co/models";
+    case "ollama":      return process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1";
+    default:            return "unknown";
+  }
+}
 
 // ─── System settings helper ───────────────────────────────────────────────────
 
@@ -90,29 +115,46 @@ export async function getAIProviderConfig(): Promise<AIProviderConfig> {
  */
 export async function logAIConfigAtStartup(): Promise<void> {
   try {
-    const cfg         = await getAIProviderConfig();
     const routingMode = (await getSystemSettingValue("ai_routing_mode")) ?? "credits";
     const threshold   = (await getSystemSettingValue("ai_credits_threshold")) ?? String(50);
     const premiumProv = (await getSystemSettingValue("ai_premium_provider")) ?? "openai";
+    const premiumMdl  = (await getSystemSettingValue("ai_premium_model"))    ?? "(not set — using PREMIUM_MODEL_DEFAULT)";
     const freeProv    = (await getSystemSettingValue("ai_free_provider"))    ?? "cloudflare";
+
+    const envProvider     = process.env.AI_PROVIDER   ?? null;
+    const isDebugOverride = process.env.AI_DEBUG_OVERRIDE === "true";
+    // In credits mode, AI_PROVIDER only fires when AI_DEBUG_OVERRIDE=true
+    const envOverrideWouldFire = envProvider && (routingMode !== "credits" || isDebugOverride);
+
     logger.info({
-      // ── Current env-based resolution ──────────────────────────────────────
-      provider:         cfg.provider,
-      fastModel:        cfg.fastModel,
-      providerSource:   cfg.providerSource,
-      modelSource:      cfg.modelSource,
-      // ── Credit routing config ─────────────────────────────────────────────
+      // ── Routing ───────────────────────────────────────────────────────────
       routingMode,
-      creditsThreshold:   Number(threshold),
-      premiumProvider:    premiumProv,
-      freeProvider:       freeProv,
-      // ── Raw env vars ──────────────────────────────────────────────────────
-      envAI_PROVIDER:     process.env.AI_PROVIDER                     ?? "(not set)",
-      envAI_MODEL:        process.env.AI_MODEL                        ?? "(not set)",
-      envBaseURL:         process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
-      integrationKeySet:  !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
-      cloudflareKeySet:   !!(process.env.CF_AI_TOKEN),
+      creditsThreshold:    Number(threshold),
+      premiumProvider:     premiumProv,
+      premiumBaseURL:      getProviderBaseURL(premiumProv),
+      premiumModel:        premiumMdl,
+      freeProvider:        freeProv,
+      freeBaseURL:         getProviderBaseURL(freeProv),
+      // ── ENV override status ───────────────────────────────────────────────
+      envAI_PROVIDER:      envProvider                                  ?? "(not set)",
+      envAI_MODEL:         process.env.AI_MODEL                        ?? "(not set)",
+      envOverrideActive:   envOverrideWouldFire ? "YES ⚠" : "no",
+      debugOverrideFlag:   isDebugOverride ? "AI_DEBUG_OVERRIDE=true ⚠" : "(not set)",
+      // ── Key presence ──────────────────────────────────────────────────────
+      envBaseURL:          process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
+      integrationKeySet:   !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+      cloudflareKeySet:    !!(process.env.CF_AI_TOKEN),
+      openrouterKeySet:    !!(process.env.OPENROUTER_API_KEY),
+      // ── Effective model at startup ────────────────────────────────────────
+      effectivePremiumModel: PREMIUM_MODEL_DEFAULT,
     }, "[AI] ═══ startup config resolved ═══");
+
+    if (envOverrideWouldFire) {
+      logger.warn(
+        { envAI_PROVIDER: envProvider, routingMode, debugOverride: isDebugOverride },
+        "[AI] ⚠ startup: ENV override is ACTIVE — credit routing is bypassed for every request",
+      );
+    }
   } catch (err) {
     logger.warn({ err }, "[AI] Could not resolve startup config (DB may not be ready yet)");
   }
@@ -490,20 +532,50 @@ export async function resolveProviderForOrg(
   orgId: number | null | undefined,
   modelKey: "fast" | "smart" = "fast",
 ): Promise<ProviderResolution> {
-  // ── 1. ENV override (highest priority — ops/debug only) ──────────────────
-  const envProvider = (process.env.AI_PROVIDER || null) as AIProvider | null;
-  if (envProvider) {
+  // ── 0. Fetch routing mode first — it controls ENV override eligibility ─────
+  // Done before any other check so the ENV guard below is always correct.
+  const routingMode = ((await getSystemSettingValue("ai_routing_mode")) ?? "credits") as AIRoutingMode;
+
+  // ── 1. ENV override — DEBUG / OPS ONLY, not production routing logic ───────
+  // In production (ai_routing_mode = "credits"), AI_PROVIDER is intentionally
+  // ignored UNLESS the operator also sets AI_DEBUG_OVERRIDE=true.  This ensures
+  // that leftover or stale AI_PROVIDER env vars on the VPS cannot silently
+  // bypass the credit-based routing that is the intended production behaviour.
+  //
+  // To use the override in production:  set both AI_PROVIDER=<x> AND AI_DEBUG_OVERRIDE=true.
+  // To disable:                         unset AI_PROVIDER or unset AI_DEBUG_OVERRIDE.
+  const envProvider     = (process.env.AI_PROVIDER || null) as AIProvider | null;
+  const isDebugOverride = process.env.AI_DEBUG_OVERRIDE === "true";
+  const applyEnvOverride = envProvider && (routingMode !== "credits" || isDebugOverride);
+
+  if (applyEnvOverride) {
     const envModel = process.env.AI_MODEL || null;
-    const defaults = PROVIDER_DEFAULTS[envProvider] ?? PROVIDER_DEFAULTS.openrouter;
+    const defaults = PROVIDER_DEFAULTS[envProvider!] ?? PROVIDER_DEFAULTS.openrouter;
     const model    = envModel ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel);
-    return { provider: envProvider, model, reason: "env_override" };
+    logger.warn(
+      { provider: envProvider, model, routingMode, debugOverride: isDebugOverride,
+        hint: "Remove AI_PROVIDER or unset AI_DEBUG_OVERRIDE to restore production credit routing" },
+      "[AI] ⚠ ENV_OVERRIDE active — credit-based routing is bypassed",
+    );
+    return { provider: envProvider!, model, reason: "env_override" };
   }
 
-  // ── 2. Fetch org data (single join — config + credits balance) ────────────
-  let orgProvider: string | null     = null;
-  let orgModel:    string | null     = null;
-  let creditsBalance                 = 0;
-  let tier                           = "free";
+  if (envProvider && !applyEnvOverride) {
+    // AI_PROVIDER is set but credits routing mode is on and debug is not enabled — log and ignore.
+    logger.debug(
+      { envAI_PROVIDER: envProvider, routingMode, action: "ignored",
+        hint: "Set AI_DEBUG_OVERRIDE=true alongside AI_PROVIDER to activate in credits mode" },
+      "[AI] AI_PROVIDER env var present but ignored (credits routing active, debug override not set)",
+    );
+  }
+
+  // ── 2. Fetch org data — single DB join for config + credits balance ────────
+  // Reads from: org_config (aiProvider, aiModel, subscriptionTier)
+  //             organizations (aiCreditsBalance)
+  let orgProvider: string | null = null;
+  let orgModel:    string | null = null;
+  let creditsBalance             = 0;
+  let tier                       = "free";
 
   if (orgId) {
     const [row] = await db
@@ -523,50 +595,53 @@ export async function resolveProviderForOrg(
     creditsBalance = row?.aiCreditsBalance ?? 0;
   }
 
-  // ── 3. Explicit per-org admin override ──────────────────────────────────
+  // ── 3. Explicit per-org admin override ────────────────────────────────────
+  // Admin has pinned this org to a specific provider in org_config.
   if (orgProvider && orgProvider !== "none" && orgProvider !== "auto") {
     const defaults = PROVIDER_DEFAULTS[orgProvider as AIProvider] ?? PROVIDER_DEFAULTS.openrouter;
     const model    = orgModel ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel) ?? "";
     return { provider: orgProvider as AIProvider, model, reason: "org_override", creditsBalance, tier };
   }
 
-  // ── 4. Credits-based routing ────────────────────────────────────────────
-  const routingMode = ((await getSystemSettingValue("ai_routing_mode")) ?? "credits") as AIRoutingMode;
-
+  // ── 4. Credits-based routing (default production mode) ────────────────────
   if (routingMode === "credits") {
     const thresholdStr = await getSystemSettingValue("ai_credits_threshold");
     const threshold    = thresholdStr ? parseInt(thresholdStr, 10) : CREDITS_THRESHOLD_DEFAULT;
 
     if (creditsBalance >= threshold) {
-      // Enough credits → premium provider
+      // ── Premium path ──────────────────────────────────────────────────────
+      // Uses: system_settings.ai_premium_provider (default "openai" → OpenRouter)
+      // Model priority: system_settings.ai_premium_model → AI_MODEL env → PREMIUM_MODEL_DEFAULT
       const premiumProvider = (
         (await getSystemSettingValue("ai_premium_provider")) ?? CREDITS_PREMIUM_PROVIDER_DEFAULT
       ) as AIProvider;
-      const envModel        = process.env.AI_MODEL || null;
-      const premiumModel    = await getSystemSettingValue("ai_premium_model");
-      const pDefaults       = PROVIDER_DEFAULTS[premiumProvider] ?? PROVIDER_DEFAULTS.openrouter;
-      const model           = envModel ?? premiumModel ?? (modelKey === "smart" ? pDefaults.smartModel : pDefaults.fastModel);
+      const premiumModelDB = await getSystemSettingValue("ai_premium_model");
+      const model          = premiumModelDB ?? (process.env.AI_MODEL || null) ?? PREMIUM_MODEL_DEFAULT;
       logger.debug(
-        { provider: premiumProvider, model, creditsBalance, threshold, reason: "credits_premium" },
+        { provider: premiumProvider, model, creditsBalance, threshold, reason: "credits_premium",
+          baseURL: getProviderBaseURL(premiumProvider) },
         "[AI] credit routing → premium",
       );
       return { provider: premiumProvider, model, reason: "credits_premium", creditsBalance, creditsThreshold: threshold, tier };
     } else {
-      // Insufficient credits → free provider
+      // ── Free path ─────────────────────────────────────────────────────────
+      // Uses: system_settings.ai_free_provider (default "cloudflare")
+      // No credits deducted for free-path calls.
       const freeProvider = (
         (await getSystemSettingValue("ai_free_provider")) ?? CREDITS_FREE_PROVIDER_DEFAULT
       ) as AIProvider;
       const fDefaults = PROVIDER_DEFAULTS[freeProvider] ?? PROVIDER_DEFAULTS.cloudflare;
       const model     = modelKey === "smart" ? fDefaults.smartModel : fDefaults.fastModel;
       logger.debug(
-        { provider: freeProvider, model, creditsBalance, threshold, reason: "credits_free" },
+        { provider: freeProvider, model, creditsBalance, threshold, reason: "credits_free",
+          baseURL: getProviderBaseURL(freeProvider) },
         "[AI] credit routing → free (low balance)",
       );
       return { provider: freeProvider, model, reason: "credits_free", creditsBalance, creditsThreshold: threshold, tier };
     }
   }
 
-  // ── 5. Tier-based routing ────────────────────────────────────────────────
+  // ── 5. Tier-based routing (explicit mode) ─────────────────────────────────
   if (routingMode === "tier") {
     const tierCfg = SUBSCRIPTION_TIERS[tier as SubscriptionTier];
     if (tierCfg) {
@@ -577,7 +652,7 @@ export async function resolveProviderForOrg(
     }
   }
 
-  // ── 6. System-level fallback ─────────────────────────────────────────────
+  // ── 6. System-level fallback ──────────────────────────────────────────────
   const sysCfg = await getAIProviderConfig();
   return {
     provider: sysCfg.provider,
@@ -770,16 +845,24 @@ export async function callAI(
 
       if (i > 0) {
         logger.info({
-          usedProvider: providerKey, primaryProvider: chain[0], model,
-          reason: resolution.reason, creditsBalance: resolution.creditsBalance,
-        }, "[AI] Fallback provider used");
+          usedProvider:    providerKey,
+          primaryProvider: chain[0],
+          model,
+          baseURL:         getProviderBaseURL(providerKey),
+          reason:          resolution.reason,
+          creditsBalance:  resolution.creditsBalance,
+          latencyMs:       raw.latencyMs,
+        }, "[AI] fallback provider used");
       } else {
-        logger.debug({
-          provider: providerKey, model,
-          reason: resolution.reason,
-          creditsBalance: resolution.creditsBalance,
+        logger.info({
+          provider:         providerKey,
+          model,
+          baseURL:          getProviderBaseURL(providerKey),
+          reason:           resolution.reason,
+          creditsBalance:   resolution.creditsBalance,
           creditsThreshold: resolution.creditsThreshold,
-          latencyMs: raw.latencyMs, tokens: raw.tokensUsed,
+          latencyMs:        raw.latencyMs,
+          tokens:           raw.tokensUsed,
         }, "[AI] call completed");
       }
 

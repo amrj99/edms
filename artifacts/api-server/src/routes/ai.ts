@@ -23,6 +23,11 @@ import {
   getAIClient,
   callAI,
   resolveProviderForOrg,
+  getProviderBaseURL,
+  getSystemSettingValue,
+  PROVIDER_DEFAULTS,
+  PREMIUM_MODEL_DEFAULT,
+  type AIProvider,
 } from "../lib/ai-service.js";
 import { deductCredits, getCreditsBalance } from "../lib/ai-credits.js";
 
@@ -603,33 +608,60 @@ If the command is ambiguous or you cannot determine the type, return:
 Return ONLY the JSON object, no markdown, no explanation.`;
 
     // ── Resolve provider via credit-based routing ─────────────────────────────
-    const resolution  = await resolveProviderForOrg(cmdOrgId, "fast");
-    const client      = await getAIClient(resolution.provider);
-    const diagBaseURL = (client as any).baseURL ?? (client as any)._options?.baseURL ?? "unknown";
+    const resolution = await resolveProviderForOrg(cmdOrgId, "fast");
+    const baseURL    = getProviderBaseURL(resolution.provider);
 
-    // ── [AI CONFIG RESOLVED] ─────────────────────────────────────────────────
     logger.info({
-      provider:          resolution.provider,
-      reason:            resolution.reason,            // why this provider was chosen
-      model:             resolution.model,
-      creditsBalance:    resolution.creditsBalance,
-      creditsThreshold:  resolution.creditsThreshold,
-      baseURL:           diagBaseURL,
-      envAI_PROVIDER:    process.env.AI_PROVIDER                     ?? "(not set)",
-      envAI_MODEL:       process.env.AI_MODEL                        ?? "(not set)",
-      envBaseURL:        process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
-      integrationKeySet: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+      provider:         resolution.provider,
+      model:            resolution.model,
+      baseURL,
+      reason:           resolution.reason,
+      creditsBalance:   resolution.creditsBalance,
+      creditsThreshold: resolution.creditsThreshold,
     }, "[AI/command] outbound request");
 
-    const completion = await client.chat.completions.create({
-      model:       resolution.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user",   content: command.trim() },
-      ],
-      max_tokens:  600,
-      temperature: 0.2,
-    });
+    // ── Call primary provider, with automatic fallback to free on failure ─────
+    // If the premium provider (OpenRouter) fails for any reason (network error,
+    // rate limit, bad key, etc.) we transparently fall back to the free provider
+    // (Cloudflare) rather than returning a 500 to the user.
+    let completion: any;
+    let usedProvider = resolution.provider;
+    let usedModel    = resolution.model;
+
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user"   as const, content: command.trim() },
+    ];
+    const callParams = { max_tokens: 600, temperature: 0.2 } as const;
+
+    try {
+      const client = await getAIClient(resolution.provider);
+      completion   = await client.chat.completions.create({
+        model: resolution.model, messages, ...callParams,
+      });
+    } catch (primaryErr: any) {
+      // Automatic fallback — only triggered on premium calls; free failures propagate normally.
+      if (resolution.reason === "credits_premium") {
+        const freeProv = ((await getSystemSettingValue("ai_free_provider")) ?? "cloudflare") as AIProvider;
+        const freeModel = PROVIDER_DEFAULTS[freeProv]?.fastModel ?? "";
+        logger.warn({
+          failedProvider: resolution.provider,
+          error:          primaryErr.message,
+          fallbackTo:     freeProv,
+          fallbackModel:  freeModel,
+          baseURL:        getProviderBaseURL(freeProv),
+        }, "[AI/command] ⚠ premium provider failed — falling back to free provider (no credits deducted)");
+
+        usedProvider = freeProv;
+        usedModel    = freeModel;
+        const fallbackClient = await getAIClient(freeProv);
+        completion = await fallbackClient.chat.completions.create({
+          model: freeModel, messages, ...callParams,
+        });
+      } else {
+        throw primaryErr; // Free-tier failure — propagate to outer catch
+      }
+    }
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     let parsed: any;
@@ -639,14 +671,14 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       parsed = { action: "unknown", summary: "Could not parse the AI response. Please rephrase your command." };
     }
 
-    // Deduct credits only when the premium provider was used — free provider calls cost nothing.
-    if (cmdOrgId && resolution.reason === "credits_premium") {
+    // Deduct credits ONLY when the premium provider was actually used (not on fallback to free).
+    if (cmdOrgId && resolution.reason === "credits_premium" && usedProvider === resolution.provider) {
       await deductCredits(cmdOrgId, "ai_classify").catch(() => {});
     }
 
     res.json(parsed);
   } catch (err: any) {
-    console.error("AI command error:", err);
+    logger.error({ error: err.message, stack: err.stack }, "[AI/command] all providers failed");
     res.status(500).json({ error: "AI service unavailable", message: err.message });
   }
 });
