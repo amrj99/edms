@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { db } from "@workspace/db";
 import {
   aiCacheTable, aiLogsTable, aiAnalysisTable,
-  systemSettingsTable, orgConfigTable,
+  systemSettingsTable, orgConfigTable, organizationsTable,
 } from "@workspace/db";
 import { and, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
@@ -90,16 +90,28 @@ export async function getAIProviderConfig(): Promise<AIProviderConfig> {
  */
 export async function logAIConfigAtStartup(): Promise<void> {
   try {
-    const cfg = await getAIProviderConfig();
+    const cfg         = await getAIProviderConfig();
+    const routingMode = (await getSystemSettingValue("ai_routing_mode")) ?? "credits";
+    const threshold   = (await getSystemSettingValue("ai_credits_threshold")) ?? String(50);
+    const premiumProv = (await getSystemSettingValue("ai_premium_provider")) ?? "openai";
+    const freeProv    = (await getSystemSettingValue("ai_free_provider"))    ?? "cloudflare";
     logger.info({
+      // ── Current env-based resolution ──────────────────────────────────────
       provider:         cfg.provider,
       fastModel:        cfg.fastModel,
       providerSource:   cfg.providerSource,
       modelSource:      cfg.modelSource,
-      envAI_PROVIDER:   process.env.AI_PROVIDER  ?? "(not set)",
-      envAI_MODEL:      process.env.AI_MODEL     ?? "(not set)",
-      envBaseURL:       process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
-      integrationKeySet: !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+      // ── Credit routing config ─────────────────────────────────────────────
+      routingMode,
+      creditsThreshold:   Number(threshold),
+      premiumProvider:    premiumProv,
+      freeProvider:       freeProv,
+      // ── Raw env vars ──────────────────────────────────────────────────────
+      envAI_PROVIDER:     process.env.AI_PROVIDER                     ?? "(not set)",
+      envAI_MODEL:        process.env.AI_MODEL                        ?? "(not set)",
+      envBaseURL:         process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
+      integrationKeySet:  !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+      cloudflareKeySet:   !!(process.env.CF_AI_TOKEN),
     }, "[AI] ═══ startup config resolved ═══");
   } catch (err) {
     logger.warn({ err }, "[AI] Could not resolve startup config (DB may not be ready yet)");
@@ -111,8 +123,8 @@ export async function logAIConfigAtStartup(): Promise<void> {
 let _cachedClient: OpenAI | null = null;
 let _cachedProvider: string | null = null;
 
-export async function getAIClient(): Promise<OpenAI> {
-  const { provider } = await getAIProviderConfig();
+export async function getAIClient(providerOverride?: AIProvider | null): Promise<OpenAI> {
+  const provider = providerOverride ?? (await getAIProviderConfig()).provider;
   if (_cachedClient && _cachedProvider === provider) return _cachedClient;
 
   _cachedClient = null;
@@ -425,6 +437,157 @@ export interface AICallResult {
   usedFallback: boolean;
 }
 
+// ─── Credit-based routing ─────────────────────────────────────────────────────
+
+export type AIRoutingMode = "credits" | "tier" | "fixed";
+
+/** Minimum credit balance to use the premium provider (system_settings override available). */
+const CREDITS_THRESHOLD_DEFAULT = 50;
+/** Provider used when credits ≥ threshold. "openai" routes through OpenRouter if AI_INTEGRATIONS env vars are set. */
+const CREDITS_PREMIUM_PROVIDER_DEFAULT: AIProvider = "openai";
+/** Provider used when credits < threshold (always free). */
+const CREDITS_FREE_PROVIDER_DEFAULT: AIProvider = "cloudflare";
+
+/**
+ * The resolved provider decision for a single AI request.
+ * Every AI call log entry should include this so operators can see exactly
+ * why a provider was chosen.
+ */
+export interface ProviderResolution {
+  provider: AIProvider;
+  model: string;
+  /** Why this provider was selected. Included in every AI log entry. */
+  reason:
+    | "env_override"      // AI_PROVIDER env var is set — debug/ops use only
+    | "org_override"      // admin manually set org_config.aiProvider
+    | "credits_premium"   // balance ≥ threshold → premium provider
+    | "credits_free"      // balance < threshold → free provider
+    | "tier_config"       // routing_mode = "tier"
+    | "system_fallback";  // no other rule matched
+  creditsBalance?: number;
+  creditsThreshold?: number;
+  /** Subscription tier — used by callAI() to pick the fallback chain. */
+  tier?: string;
+}
+
+/**
+ * Resolve the AI provider for one request using the configured routing mode.
+ *
+ * Priority order (first match wins):
+ *   1. AI_PROVIDER env var       — always wins, for debugging/ops
+ *   2. org_config.aiProvider     — explicit per-org admin override
+ *   3. Credits mode (default)    — balance ≥ threshold → premium, < threshold → free
+ *   4. System-level fallback     — env → DB → hardcoded "cloudflare"
+ *
+ * Configuration lives in system_settings (key/value, no schema change needed):
+ *   ai_routing_mode      — "credits" (default) | "tier" | "fixed"
+ *   ai_credits_threshold — integer, default 50
+ *   ai_premium_provider  — default "openai" (routes to OpenRouter via AI_INTEGRATIONS env)
+ *   ai_premium_model     — default: reads AI_MODEL env or provider default
+ *   ai_free_provider     — default "cloudflare"
+ */
+export async function resolveProviderForOrg(
+  orgId: number | null | undefined,
+  modelKey: "fast" | "smart" = "fast",
+): Promise<ProviderResolution> {
+  // ── 1. ENV override (highest priority — ops/debug only) ──────────────────
+  const envProvider = (process.env.AI_PROVIDER || null) as AIProvider | null;
+  if (envProvider) {
+    const envModel = process.env.AI_MODEL || null;
+    const defaults = PROVIDER_DEFAULTS[envProvider] ?? PROVIDER_DEFAULTS.openrouter;
+    const model    = envModel ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel);
+    return { provider: envProvider, model, reason: "env_override" };
+  }
+
+  // ── 2. Fetch org data (single join — config + credits balance) ────────────
+  let orgProvider: string | null     = null;
+  let orgModel:    string | null     = null;
+  let creditsBalance                 = 0;
+  let tier                           = "free";
+
+  if (orgId) {
+    const [row] = await db
+      .select({
+        aiProvider:       orgConfigTable.aiProvider,
+        aiModel:          orgConfigTable.aiModel,
+        subscriptionTier: orgConfigTable.subscriptionTier,
+        aiCreditsBalance: organizationsTable.aiCreditsBalance,
+      })
+      .from(orgConfigTable)
+      .innerJoin(organizationsTable, eq(organizationsTable.id, orgConfigTable.organizationId))
+      .where(eq(orgConfigTable.organizationId, orgId));
+
+    orgProvider    = row?.aiProvider       ?? null;
+    orgModel       = row?.aiModel          ?? null;
+    tier           = row?.subscriptionTier ?? "free";
+    creditsBalance = row?.aiCreditsBalance ?? 0;
+  }
+
+  // ── 3. Explicit per-org admin override ──────────────────────────────────
+  if (orgProvider && orgProvider !== "none" && orgProvider !== "auto") {
+    const defaults = PROVIDER_DEFAULTS[orgProvider as AIProvider] ?? PROVIDER_DEFAULTS.openrouter;
+    const model    = orgModel ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel) ?? "";
+    return { provider: orgProvider as AIProvider, model, reason: "org_override", creditsBalance, tier };
+  }
+
+  // ── 4. Credits-based routing ────────────────────────────────────────────
+  const routingMode = ((await getSystemSettingValue("ai_routing_mode")) ?? "credits") as AIRoutingMode;
+
+  if (routingMode === "credits") {
+    const thresholdStr = await getSystemSettingValue("ai_credits_threshold");
+    const threshold    = thresholdStr ? parseInt(thresholdStr, 10) : CREDITS_THRESHOLD_DEFAULT;
+
+    if (creditsBalance >= threshold) {
+      // Enough credits → premium provider
+      const premiumProvider = (
+        (await getSystemSettingValue("ai_premium_provider")) ?? CREDITS_PREMIUM_PROVIDER_DEFAULT
+      ) as AIProvider;
+      const envModel        = process.env.AI_MODEL || null;
+      const premiumModel    = await getSystemSettingValue("ai_premium_model");
+      const pDefaults       = PROVIDER_DEFAULTS[premiumProvider] ?? PROVIDER_DEFAULTS.openrouter;
+      const model           = envModel ?? premiumModel ?? (modelKey === "smart" ? pDefaults.smartModel : pDefaults.fastModel);
+      logger.debug(
+        { provider: premiumProvider, model, creditsBalance, threshold, reason: "credits_premium" },
+        "[AI] credit routing → premium",
+      );
+      return { provider: premiumProvider, model, reason: "credits_premium", creditsBalance, creditsThreshold: threshold, tier };
+    } else {
+      // Insufficient credits → free provider
+      const freeProvider = (
+        (await getSystemSettingValue("ai_free_provider")) ?? CREDITS_FREE_PROVIDER_DEFAULT
+      ) as AIProvider;
+      const fDefaults = PROVIDER_DEFAULTS[freeProvider] ?? PROVIDER_DEFAULTS.cloudflare;
+      const model     = modelKey === "smart" ? fDefaults.smartModel : fDefaults.fastModel;
+      logger.debug(
+        { provider: freeProvider, model, creditsBalance, threshold, reason: "credits_free" },
+        "[AI] credit routing → free (low balance)",
+      );
+      return { provider: freeProvider, model, reason: "credits_free", creditsBalance, creditsThreshold: threshold, tier };
+    }
+  }
+
+  // ── 5. Tier-based routing ────────────────────────────────────────────────
+  if (routingMode === "tier") {
+    const tierCfg = SUBSCRIPTION_TIERS[tier as SubscriptionTier];
+    if (tierCfg) {
+      const tierProvider = tierCfg.aiProvider as AIProvider;
+      const tDefaults    = PROVIDER_DEFAULTS[tierProvider] ?? PROVIDER_DEFAULTS.cloudflare;
+      const model        = tierCfg.aiModel ?? (modelKey === "smart" ? tDefaults.smartModel : tDefaults.fastModel);
+      return { provider: tierProvider, model, reason: "tier_config", creditsBalance, tier };
+    }
+  }
+
+  // ── 6. System-level fallback ─────────────────────────────────────────────
+  const sysCfg = await getAIProviderConfig();
+  return {
+    provider: sysCfg.provider,
+    model:    modelKey === "smart" ? sysCfg.smartModel : sysCfg.fastModel,
+    reason:   "system_fallback",
+    creditsBalance,
+    tier,
+  };
+}
+
 // ─── Single-provider executor ─────────────────────────────────────────────────
 
 async function executeOnProvider(
@@ -580,61 +743,14 @@ export async function callAI(
   jsonMode = true,
   organizationId?: number | null,
 ): Promise<AICallResult> {
-  // ── Provider resolution priority: ENV → org_config → system_settings ─────────
-  // AI_PROVIDER env var wins over everything — including per-org DB overrides.
-  // This lets VPS operators lock the provider without editing any DB row.
-  const envProviderOverride = (process.env.AI_PROVIDER || null) as AIProvider | null;
-  const envModelOverride    = process.env.AI_MODEL || null;
+  // ── Provider resolution via resolveProviderForOrg() ────────────────────────
+  // Full priority chain: ENV override → org_config admin override → credits
+  // routing (balance ≥ threshold → premium, < threshold → free) → fallback.
+  const resolution = await resolveProviderForOrg(organizationId, modelKey);
 
-  let primaryProvider: string;
-  let primaryModel: string;
-  let tierChain: string[] = [...FALLBACK_CHAIN];
-
-  if (envProviderOverride) {
-    // ── Env-level override (highest priority) ────────────────────────────────
-    primaryProvider = envProviderOverride;
-    const defaults  = PROVIDER_DEFAULTS[envProviderOverride] ?? PROVIDER_DEFAULTS.openrouter;
-    primaryModel    = envModelOverride ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel);
-    logger.debug({ primaryProvider, primaryModel, source: "env" }, "[AI] provider resolved from env var");
-
-    // Still fetch subscription tier from org_config for the fallback chain
-    if (organizationId) {
-      const [orgCfg] = await db
-        .select({ subscriptionTier: orgConfigTable.subscriptionTier })
-        .from(orgConfigTable)
-        .where(eq(orgConfigTable.organizationId, organizationId));
-      const tier = orgCfg?.subscriptionTier ?? "free";
-      tierChain = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
-    }
-  } else if (organizationId) {
-    // ── Org-level override from DB ───────────────────────────────────────────
-    const [orgCfg] = await db
-      .select({
-        aiProvider:       orgConfigTable.aiProvider,
-        aiModel:          orgConfigTable.aiModel,
-        subscriptionTier: orgConfigTable.subscriptionTier,
-      })
-      .from(orgConfigTable)
-      .where(eq(orgConfigTable.organizationId, organizationId));
-    const orgProvider = orgCfg?.aiProvider;
-    if (orgProvider && orgProvider !== "none") {
-      primaryProvider = orgProvider;
-      const orgModel  = orgCfg?.aiModel;
-      const defaults  = PROVIDER_DEFAULTS[orgProvider as AIProvider];
-      primaryModel    = orgModel ?? (modelKey === "smart" ? defaults?.smartModel : defaults?.fastModel) ?? "";
-    } else {
-      const sysConfig = await getAIProviderConfig();
-      primaryProvider = sysConfig.provider;
-      primaryModel    = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
-    }
-    const tier = orgCfg?.subscriptionTier ?? "free";
-    tierChain  = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
-  } else {
-    // ── System-level (system_settings DB / fallback) ─────────────────────────
-    const sysConfig = await getAIProviderConfig();
-    primaryProvider = sysConfig.provider;
-    primaryModel    = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
-  }
+  const primaryProvider = resolution.provider;
+  const primaryModel    = resolution.model;
+  const tierChain       = TIER_FALLBACK_CHAINS[resolution.tier ?? "free"] ?? FALLBACK_CHAIN;
 
   const chain: string[] = primaryProvider && primaryProvider !== "none"
     ? [primaryProvider, ...tierChain.filter(p => p !== primaryProvider)]
@@ -653,9 +769,18 @@ export async function callAI(
       const raw = await executeOnProvider(providerKey, model, systemPrompt, prompt);
 
       if (i > 0) {
-        logger.info({ usedProvider: providerKey, primaryProvider: chain[0], model }, "[AI] Fallback provider used");
+        logger.info({
+          usedProvider: providerKey, primaryProvider: chain[0], model,
+          reason: resolution.reason, creditsBalance: resolution.creditsBalance,
+        }, "[AI] Fallback provider used");
       } else {
-        logger.debug({ provider: providerKey, model, latencyMs: raw.latencyMs, tokens: raw.tokensUsed }, "AI call completed");
+        logger.debug({
+          provider: providerKey, model,
+          reason: resolution.reason,
+          creditsBalance: resolution.creditsBalance,
+          creditsThreshold: resolution.creditsThreshold,
+          latencyMs: raw.latencyMs, tokens: raw.tokensUsed,
+        }, "[AI] call completed");
       }
 
       return {

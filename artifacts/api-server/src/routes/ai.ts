@@ -22,6 +22,7 @@ import {
   getProviderStatus,
   getAIClient,
   callAI,
+  resolveProviderForOrg,
 } from "../lib/ai-service.js";
 import { deductCredits, getCreditsBalance } from "../lib/ai-credits.js";
 
@@ -568,13 +569,10 @@ router.post("/command", async (req, res) => {
   }
 
   const cmdOrgId = req.user!.organizationId;
-  if (cmdOrgId) {
-    const { balance } = await getCreditsBalance(cmdOrgId);
-    if (balance < 5) {
-      res.status(402).json({ error: "Insufficient AI credits.", creditsRequired: 5, creditsBalance: balance });
-      return;
-    }
-  }
+  // No credit gate here — resolveProviderForOrg() handles routing:
+  //   balance ≥ threshold → premium provider (OpenRouter, credits deducted after)
+  //   balance < threshold → free provider (Cloudflare, no deduction)
+  // Every org gets AI responses; quality scales with their balance.
 
   try {
     const systemPrompt = `You are an EDMS (Engineering Document Management System) AI assistant.
@@ -604,30 +602,32 @@ If the command is ambiguous or you cannot determine the type, return:
 
 Return ONLY the JSON object, no markdown, no explanation.`;
 
-    const { provider, fastModel, providerSource, modelSource } = await getAIProviderConfig();
-    const client = await getAIClient();
+    // ── Resolve provider via credit-based routing ─────────────────────────────
+    const resolution  = await resolveProviderForOrg(cmdOrgId, "fast");
+    const client      = await getAIClient(resolution.provider);
     const diagBaseURL = (client as any).baseURL ?? (client as any)._options?.baseURL ?? "unknown";
 
     // ── [AI CONFIG RESOLVED] ─────────────────────────────────────────────────
     logger.info({
-      provider,
-      providerSource,        // "env" | "db" | "fallback" — confirms where it came from
-      model: fastModel,
-      modelSource,           // "env" | "db" | "fallback"
-      baseURL: diagBaseURL,
-      envAI_PROVIDER:           process.env.AI_PROVIDER                    ?? "(not set)",
-      envAI_MODEL:              process.env.AI_MODEL                       ?? "(not set)",
-      envAI_INTEGRATIONS_BASE:  process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
+      provider:          resolution.provider,
+      reason:            resolution.reason,            // why this provider was chosen
+      model:             resolution.model,
+      creditsBalance:    resolution.creditsBalance,
+      creditsThreshold:  resolution.creditsThreshold,
+      baseURL:           diagBaseURL,
+      envAI_PROVIDER:    process.env.AI_PROVIDER                     ?? "(not set)",
+      envAI_MODEL:       process.env.AI_MODEL                        ?? "(not set)",
+      envBaseURL:        process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
       integrationKeySet: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      openaiKeySet:      !!process.env.OPENAI_API_KEY,
     }, "[AI/command] outbound request");
+
     const completion = await client.chat.completions.create({
-      model: fastModel,
+      model:       resolution.model,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: command.trim() },
+        { role: "user",   content: command.trim() },
       ],
-      max_tokens: 600,
+      max_tokens:  600,
       temperature: 0.2,
     });
 
@@ -639,7 +639,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       parsed = { action: "unknown", summary: "Could not parse the AI response. Please rephrase your command." };
     }
 
-    if (cmdOrgId) {
+    // Deduct credits only when the premium provider was used — free provider calls cost nothing.
+    if (cmdOrgId && resolution.reason === "credits_premium") {
       await deductCredits(cmdOrgId, "ai_classify").catch(() => {});
     }
 
