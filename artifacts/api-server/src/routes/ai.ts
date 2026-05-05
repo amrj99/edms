@@ -7,6 +7,7 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, gt, desc, sql, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { logger } from "../lib/logger.js";
 import {
   analyzeDocument,
   analyzeCorrespondence,
@@ -603,8 +604,19 @@ If the command is ambiguous or you cannot determine the type, return:
 
 Return ONLY the JSON object, no markdown, no explanation.`;
 
-    const { fastModel } = await getAIProviderConfig();
+    const { provider, fastModel } = await getAIProviderConfig();
     const client = await getAIClient();
+    const diagBaseURL = (client as any).baseURL ?? (client as any)._options?.baseURL ?? "unknown";
+    logger.info({
+      provider,
+      model: fastModel,
+      baseURL: diagBaseURL,
+      envProvider: process.env.AI_PROVIDER ?? null,
+      envModel: process.env.AI_MODEL ?? null,
+      integrationBaseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? null,
+      integrationKeySet: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+      openaiKeySet: !!process.env.OPENAI_API_KEY,
+    }, "[AI/command] outbound request");
     const completion = await client.chat.completions.create({
       model: fastModel,
       messages: [
