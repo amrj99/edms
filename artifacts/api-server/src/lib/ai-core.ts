@@ -34,6 +34,8 @@ export interface AIProviderConfig {
   provider: AIProvider;
   fastModel: string;
   smartModel: string;
+  providerSource: "env" | "db" | "fallback";
+  modelSource: "env" | "db" | "fallback";
 }
 
 export const PROVIDER_DEFAULTS: Record<AIProvider, { fastModel: string; smartModel: string }> = {
@@ -58,17 +60,50 @@ export async function getSystemSettingValue(key: string): Promise<string | null>
 // ─── Provider config ──────────────────────────────────────────────────────────
 
 export async function getAIProviderConfig(): Promise<AIProviderConfig> {
-  // AI_PROVIDER env var takes priority over the DB setting.
-  // This lets VPS operators configure the provider without touching system_settings.
+  // ── Provider resolution: ENV → DB → hardcoded fallback ──────────────────────
+  // AI_PROVIDER env var ALWAYS wins. This lets VPS operators configure the
+  // provider without touching the database at all.
   const envProvider = (process.env.AI_PROVIDER || null) as AIProvider | null;
-  const provider = (envProvider ?? await getSystemSettingValue("ai_provider") ?? "cloudflare") as AIProvider;
+  const dbProvider  = envProvider ? null : ((await getSystemSettingValue("ai_provider")) as AIProvider | null);
+  const provider    = (envProvider ?? dbProvider ?? "cloudflare") as AIProvider;
+  const providerSource: AIProviderConfig["providerSource"] =
+    envProvider ? "env" : dbProvider ? "db" : "fallback";
+
   const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openrouter;
-  // AI_MODEL env var takes priority over both DB settings and compiled defaults.
-  // This lets VPS operators pin a model without touching the database.
+
+  // ── Model resolution: ENV → DB → compiled default ───────────────────────────
   const envModel   = process.env.AI_MODEL || null;
-  const fastModel  = envModel ?? await getSystemSettingValue("ai_fast_model")  ?? defaults.fastModel;
-  const smartModel = envModel ?? await getSystemSettingValue("ai_smart_model") ?? defaults.smartModel;
-  return { provider, fastModel, smartModel };
+  const dbFast     = envModel ? null : await getSystemSettingValue("ai_fast_model");
+  const dbSmart    = envModel ? null : await getSystemSettingValue("ai_smart_model");
+  const fastModel  = envModel ?? dbFast  ?? defaults.fastModel;
+  const smartModel = envModel ?? dbSmart ?? defaults.smartModel;
+  const modelSource: AIProviderConfig["modelSource"] =
+    envModel ? "env" : (dbFast || dbSmart) ? "db" : "fallback";
+
+  return { provider, fastModel, smartModel, providerSource, modelSource };
+}
+
+/**
+ * Log the resolved AI configuration at server startup.
+ * Prints exactly which source (env / db / fallback) each value came from so
+ * operators can verify configuration without making an AI request.
+ */
+export async function logAIConfigAtStartup(): Promise<void> {
+  try {
+    const cfg = await getAIProviderConfig();
+    logger.info({
+      provider:         cfg.provider,
+      fastModel:        cfg.fastModel,
+      providerSource:   cfg.providerSource,
+      modelSource:      cfg.modelSource,
+      envAI_PROVIDER:   process.env.AI_PROVIDER  ?? "(not set)",
+      envAI_MODEL:      process.env.AI_MODEL     ?? "(not set)",
+      envBaseURL:       process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
+      integrationKeySet: !!(process.env.AI_INTEGRATIONS_OPENAI_API_KEY),
+    }, "[AI] ═══ startup config resolved ═══");
+  } catch (err) {
+    logger.warn({ err }, "[AI] Could not resolve startup config (DB may not be ready yet)");
+  }
 }
 
 // ─── Dynamic AI client (cached singleton per provider) ────────────────────────
@@ -545,12 +580,34 @@ export async function callAI(
   jsonMode = true,
   organizationId?: number | null,
 ): Promise<AICallResult> {
-  // Resolve effective primary provider: org override → system default
+  // ── Provider resolution priority: ENV → org_config → system_settings ─────────
+  // AI_PROVIDER env var wins over everything — including per-org DB overrides.
+  // This lets VPS operators lock the provider without editing any DB row.
+  const envProviderOverride = (process.env.AI_PROVIDER || null) as AIProvider | null;
+  const envModelOverride    = process.env.AI_MODEL || null;
+
   let primaryProvider: string;
   let primaryModel: string;
   let tierChain: string[] = [...FALLBACK_CHAIN];
 
-  if (organizationId) {
+  if (envProviderOverride) {
+    // ── Env-level override (highest priority) ────────────────────────────────
+    primaryProvider = envProviderOverride;
+    const defaults  = PROVIDER_DEFAULTS[envProviderOverride] ?? PROVIDER_DEFAULTS.openrouter;
+    primaryModel    = envModelOverride ?? (modelKey === "smart" ? defaults.smartModel : defaults.fastModel);
+    logger.debug({ primaryProvider, primaryModel, source: "env" }, "[AI] provider resolved from env var");
+
+    // Still fetch subscription tier from org_config for the fallback chain
+    if (organizationId) {
+      const [orgCfg] = await db
+        .select({ subscriptionTier: orgConfigTable.subscriptionTier })
+        .from(orgConfigTable)
+        .where(eq(orgConfigTable.organizationId, organizationId));
+      const tier = orgCfg?.subscriptionTier ?? "free";
+      tierChain = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
+    }
+  } else if (organizationId) {
+    // ── Org-level override from DB ───────────────────────────────────────────
     const [orgCfg] = await db
       .select({
         aiProvider:       orgConfigTable.aiProvider,
@@ -562,20 +619,21 @@ export async function callAI(
     const orgProvider = orgCfg?.aiProvider;
     if (orgProvider && orgProvider !== "none") {
       primaryProvider = orgProvider;
-      const orgModel = orgCfg?.aiModel;
-      const defaults = PROVIDER_DEFAULTS[orgProvider as AIProvider];
-      primaryModel = orgModel ?? (modelKey === "smart" ? defaults?.smartModel : defaults?.fastModel) ?? "";
+      const orgModel  = orgCfg?.aiModel;
+      const defaults  = PROVIDER_DEFAULTS[orgProvider as AIProvider];
+      primaryModel    = orgModel ?? (modelKey === "smart" ? defaults?.smartModel : defaults?.fastModel) ?? "";
     } else {
       const sysConfig = await getAIProviderConfig();
       primaryProvider = sysConfig.provider;
-      primaryModel = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
+      primaryModel    = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
     }
     const tier = orgCfg?.subscriptionTier ?? "free";
-    tierChain = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
+    tierChain  = TIER_FALLBACK_CHAINS[tier] ?? FALLBACK_CHAIN;
   } else {
+    // ── System-level (system_settings DB / fallback) ─────────────────────────
     const sysConfig = await getAIProviderConfig();
     primaryProvider = sysConfig.provider;
-    primaryModel = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
+    primaryModel    = modelKey === "smart" ? sysConfig.smartModel : sysConfig.fastModel;
   }
 
   const chain: string[] = primaryProvider && primaryProvider !== "none"

@@ -5,6 +5,7 @@ import { logger } from "./lib/logger.js";
 import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
 import { startTrialDowngradeScheduler } from "./lib/trial-downgrade-scheduler.js";
 import { validateStorageAtStartup } from "./lib/storageConfig.js";
+import { logAIConfigAtStartup } from "./lib/ai-core.js";
 
 const rawPort = process.env["PORT"];
 
@@ -84,4 +85,7 @@ server.listen(port, (err?: Error) => {
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
   startNotificationScheduler();
   startTrialDowngradeScheduler();
+  // Log AI provider config at boot — confirms env var resolution before any request.
+  // Look for "[AI] ═══ startup config resolved ═══" in your logs.
+  logAIConfigAtStartup().catch(() => {});
 });

@@ -604,18 +604,22 @@ If the command is ambiguous or you cannot determine the type, return:
 
 Return ONLY the JSON object, no markdown, no explanation.`;
 
-    const { provider, fastModel } = await getAIProviderConfig();
+    const { provider, fastModel, providerSource, modelSource } = await getAIProviderConfig();
     const client = await getAIClient();
     const diagBaseURL = (client as any).baseURL ?? (client as any)._options?.baseURL ?? "unknown";
+
+    // ── [AI CONFIG RESOLVED] ─────────────────────────────────────────────────
     logger.info({
       provider,
+      providerSource,        // "env" | "db" | "fallback" — confirms where it came from
       model: fastModel,
+      modelSource,           // "env" | "db" | "fallback"
       baseURL: diagBaseURL,
-      envProvider: process.env.AI_PROVIDER ?? null,
-      envModel: process.env.AI_MODEL ?? null,
-      integrationBaseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? null,
+      envAI_PROVIDER:           process.env.AI_PROVIDER                    ?? "(not set)",
+      envAI_MODEL:              process.env.AI_MODEL                       ?? "(not set)",
+      envAI_INTEGRATIONS_BASE:  process.env.AI_INTEGRATIONS_OPENAI_BASE_URL ?? "(not set)",
       integrationKeySet: !!process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      openaiKeySet: !!process.env.OPENAI_API_KEY,
+      openaiKeySet:      !!process.env.OPENAI_API_KEY,
     }, "[AI/command] outbound request");
     const completion = await client.chat.completions.create({
       model: fastModel,
