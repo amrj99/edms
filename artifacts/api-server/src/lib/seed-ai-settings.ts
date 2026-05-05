@@ -20,10 +20,13 @@
  *   ai_routing_mode      "credits"                     — routing algorithm
  *   ai_credits_threshold "50"                          — min balance for premium
  *   ai_free_provider     "cloudflare"                  — provider when credits < threshold
- *   ai_premium_provider  "openai"                      — provider when credits ≥ threshold
- *                                                         ("openai" routes to OpenRouter via
- *                                                          AI_INTEGRATIONS_OPENAI_BASE_URL)
+ *   ai_premium_provider  "openrouter"                  — provider when credits ≥ threshold
+ *                                                         (requires OPENROUTER_API_KEY)
  *   ai_premium_model     "anthropic/claude-3.5-sonnet" — model for premium calls
+ *
+ * MIGRATION (runs after seed):
+ *   If ai_premium_provider is still the old default "openai", it is upgraded to
+ *   "openrouter" automatically. Custom operator values are left untouched.
  */
 
 import { db } from "@workspace/db";
@@ -52,8 +55,8 @@ const AI_SETTING_DEFAULTS: Array<{ key: string; value: string; description: stri
   },
   {
     key:         "ai_premium_provider",
-    value:       "openai",
-    description: "'openai' routes to OpenRouter via AI_INTEGRATIONS_OPENAI_BASE_URL env var",
+    value:       "openrouter",
+    description: "Provider used when org credits >= threshold. Requires OPENROUTER_API_KEY.",
   },
   {
     key:         "ai_premium_model",
@@ -94,6 +97,27 @@ export async function seedAISettings(): Promise<void> {
       logger.info(
         { keys: AI_SETTING_DEFAULTS.slice(0, inserted).map(s => s.key) },
         "[seed-ai-settings] new rows — verify with: SELECT key, value FROM system_settings WHERE key LIKE 'ai_%';",
+      );
+    }
+
+    // ── Migration: upgrade old default "openai" → "openrouter" ───────────────
+    // Runs after the seed loop so it catches both:
+    //   (a) existing installations that had the old default seeded as "openai"
+    //   (b) manual DB sets of "openai" that predate this migration
+    // Custom operator values (anything that is not "openai") are left untouched.
+    const migResult = await db.execute(sql`
+      UPDATE system_settings
+      SET    value      = 'openrouter',
+             updated_at = now()
+      WHERE  key   = 'ai_premium_provider'
+        AND  value = 'openai'
+      RETURNING key, value
+    `);
+    const migRows = (migResult as any).rows ?? migResult;
+    if (Array.isArray(migRows) && migRows.length > 0) {
+      logger.info(
+        { from: "openai", to: "openrouter" },
+        "[seed-ai-settings] migrated ai_premium_provider: openai → openrouter",
       );
     }
   } catch (err) {
