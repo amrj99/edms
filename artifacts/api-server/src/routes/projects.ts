@@ -150,8 +150,8 @@ router.post("/", requireAuth, async (req, res) => {
   }
 
   // ── Per-plan project limit (applies to any plan that defines maxProjects) ──
-  // Currently: trial = 1, free = 1. Higher tiers have no cap (maxProjects = null).
-  const planForLimitCheck = PLANS.find(p => p.id === (normalizePlanId(org.subscriptionTier) === "expired" ? "free" : normalizePlanId(org.subscriptionTier)));
+  // Currently: trial = 1, expired = 1. Higher tiers have no cap (maxProjects = null).
+  const planForLimitCheck = PLANS.find(p => p.id === normalizePlanId(org.subscriptionTier));
   if (planForLimitCheck?.maxProjects != null) {
     const [{ projectCount }] = await db
       .select({ projectCount: count() })

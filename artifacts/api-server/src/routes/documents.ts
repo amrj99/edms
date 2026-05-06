@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { isExpiredPlan } from "../lib/plan-normalizer.js";
 import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
 import { checkStatusTransition } from "../lib/doc-status-machine.js";
@@ -1198,7 +1199,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
       .from(organizationsTable)
       .where(eq(organizationsTable.id, orgId))
       .limit(1);
-    if (uploadOrgCheck?.subscriptionTier === "free" && uploadOrgCheck.trialEndsAt !== null) {
+    if (isExpiredPlan(uploadOrgCheck?.subscriptionTier) && uploadOrgCheck?.trialEndsAt !== null) {
       return res.status(403).json({
         error: "UPLOAD_BLOCKED",
         message: "File uploads are not available on the free plan. Upgrade your plan to continue.",

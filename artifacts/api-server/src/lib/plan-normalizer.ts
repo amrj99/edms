@@ -3,9 +3,9 @@
  * Both 'free' (legacy DB value) and 'expired' (new canonical name) map to 'expired'.
  * This enables a phased migration without breaking existing data.
  *
- * Phase A: DB still stores 'free'. Code accepts both transparently.
- * Phase B: DB migrated to 'expired'. Normalizer becomes a no-op safety net.
- * Phase C (deferred): Remove 'free' from enum, simplify normalizer.
+ * Phase A (complete): DB stored 'free'. Code accepted both transparently.
+ * Phase B (complete): DB migrated to 'expired'. Normalizer is now a safety net only.
+ * Phase C (deferred): Remove 'free' from subscription_status enum, simplify normalizer.
  */
 
 /**

@@ -148,7 +148,7 @@ router.get("/status", requireAuth, async (req, res) => {
           planId: resolvedPlanId,
           stripeCustomerId: legacyData.customerId ?? null,
           stripeSubscriptionId: legacyData.subscriptionId ?? null,
-          status: legacyData.subscriptionId ? "active" : "free",
+          status: legacyData.subscriptionId ? "active" : "expired",
         });
         logger.info({ orgId, resolvedPlanId }, "Lazily migrated subscription from system_settings to subscriptions table");
       }
@@ -161,7 +161,7 @@ router.get("/status", requireAuth, async (req, res) => {
 
     // Try to refresh live status from Stripe if configured
     const stripe = getStripe();
-    let subscriptionStatus: string = sub?.status ?? "free";
+    let subscriptionStatus: string = sub?.status ?? "expired";
     let currentPeriodEnd: string | null = sub?.currentPeriodEnd?.toISOString() ?? null;
     let seats: number = sub?.seatsCount ?? 0;
 
@@ -361,7 +361,7 @@ router.post(
             break;
           }
 
-          const planId = session.metadata?.planId ?? "free";
+          const planId = session.metadata?.planId ?? "expired";
           const subscriptionId = session.subscription as string;
           const customerId = session.customer as string;
 
@@ -417,7 +417,7 @@ router.post(
             const legacyExisting = await getOrgStripeData(orgId);
             await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId: sub.id, planId: planId || legacyExisting.planId });
 
-            const resolvedPlanId = planId || legacyExisting.planId || "free";
+            const resolvedPlanId = planId || legacyExisting.planId || "expired";
             await upsertSubscription(orgId, {
               stripeSubscriptionId: sub.id,
               planId: resolvedPlanId,
@@ -450,10 +450,10 @@ router.post(
 
           if (orgId) {
             const legacyExisting = await getOrgStripeData(orgId);
-            await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId: sub.id, planId: "free" });
+            await setOrgStripeData(orgId, { ...legacyExisting, subscriptionId: sub.id, planId: "expired" });
 
             await upsertSubscription(orgId, {
-              planId: "free",
+              planId: "expired",
               status: "canceled",
               stripeSubscriptionId: sub.id,
               currentPeriodEnd: null,
@@ -461,13 +461,13 @@ router.post(
             });
 
             await db.update(organizationsTable)
-              .set({ subscriptionTier: "free", updatedAt: new Date() })
+              .set({ subscriptionTier: "expired", updatedAt: new Date() })
               .where(eq(organizationsTable.id, orgId));
 
-            // Reset modules to free-tier mapping
-            await applyModulesForPlan(orgId, "free");
+            // Reset modules to expired-tier mapping
+            await applyModulesForPlan(orgId, "expired");
 
-            logger.info({ orgId }, "Subscription cancelled — reverted to free");
+            logger.info({ orgId }, "Subscription cancelled — reverted to expired");
           }
           break;
         }

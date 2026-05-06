@@ -53,9 +53,9 @@ const PLAN_SEED_DATA = [
     isActive:           true,
   },
   {
-    planId:             "free",
-    name:               "Free",
-    description:        "Retained access after trial expiry. Upgrade to unlock all features.",
+    planId:             "expired",
+    name:               "Expired (Read-only)",
+    description:        "Access after trial expiry. Upgrade to unlock all features.",
     priceAed:           0,
     currency:           "aed",
     interval:           "month",

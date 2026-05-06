@@ -20,9 +20,9 @@ export interface PlanConfig {
 
 export const PLANS: PlanConfig[] = [
   {
-    id: "free",
-    name: "Free",
-    description: "Retained access after trial expiry. Upgrade to unlock all features.",
+    id: "expired",
+    name: "Expired (Read-only)",
+    description: "Access after trial expiry. Upgrade to unlock all features.",
     priceAed: 0,
     currency: "aed",
     interval: "month",
@@ -157,9 +157,7 @@ export function getPlanById(planId: string): PlanConfig | null {
 
 export function getPlanByTier(tier: string | null | undefined): PlanConfig | null {
   const normalized = normalizePlanId(tier);
-  // Phase A: plan catalog still uses 'free' as id — map 'expired' → 'free' for lookup.
-  const lookupId = normalized === "expired" ? "free" : normalized;
-  return PLANS.find(p => p.id === lookupId) ?? null;
+  return PLANS.find(p => p.id === normalized) ?? null;
 }
 
 export type OrgModuleFlags = {
@@ -172,7 +170,6 @@ export type OrgModuleFlags = {
 
 export function getDefaultModulesForPlan(planId: string): OrgModuleFlags {
   const map: Record<string, OrgModuleFlags> = {
-    free:         { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
     expired:      { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
     trial:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     starter:      { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: false },

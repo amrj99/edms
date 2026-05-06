@@ -2,7 +2,7 @@
  * Trial Auto-Downgrade Scheduler
  *
  * Polls every 5 minutes for organisations whose trial has expired and
- * automatically downgrades them from trial → free with full data preservation.
+ * automatically downgrades them from trial → expired with full data preservation.
  *
  * Rules (approved 2026-05-03):
  *   - No data is deleted: users, projects and documents are preserved.
@@ -11,7 +11,7 @@
  *       All other active users → is_read_only_override = true.
  *   - 1 project is kept visible (oldest by created_at).
  *       All other projects → visible_on_free = false.
- *   - org.subscription_tier is set to "free".
+ *   - org.subscription_tier is set to "expired".
  *
  * Idempotent: already-downgraded orgs (tier ≠ "trial") are never touched.
  *
@@ -73,9 +73,9 @@ async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
   if (allUsers.length === 0) {
     await db
       .update(organizationsTable)
-      .set({ subscriptionTier: "free", updatedAt: new Date() })
+      .set({ subscriptionTier: "expired", updatedAt: new Date() })
       .where(eq(organizationsTable.id, orgId));
-    logger.info({ orgId }, "[trial-downgrade] No active users — tier set to free");
+    logger.info({ orgId }, "[trial-downgrade] No active users — tier set to expired");
     return;
   }
 
@@ -128,7 +128,7 @@ async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
   // ── 4. Downgrade the org tier ─────────────────────────────────────────────
   await db
     .update(organizationsTable)
-    .set({ subscriptionTier: "free", updatedAt: new Date() })
+    .set({ subscriptionTier: "expired", updatedAt: new Date() })
     .where(eq(organizationsTable.id, orgId));
 
   logger.info(
@@ -140,7 +140,7 @@ async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
       keptProjectId: keepProjectId,
       hiddenProjectCount: hideProjectIds.length,
     },
-    "[trial-downgrade] Org downgraded trial → free",
+    "[trial-downgrade] Org downgraded trial → expired",
   );
 
   // ── 5. Audit log — fire-and-forget, never blocks or throws ────────────────

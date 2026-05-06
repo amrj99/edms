@@ -236,7 +236,7 @@ router.get("/usage", async (req, res) => {
     // Phase 1 SSOT: subscriptions.plan_id is primary; org.subscriptionTier is legacy fallback.
     // Both are pre-fetched in the batch queries above — no extra DB call needed.
     const billingPlan    = normalizePlanId(sub?.planId ?? org.subscriptionTier);
-    const billingStatus  = sub?.status ?? "free";
+    const billingStatus  = sub?.status ?? "expired";
     const plan           = PLANS.find(p => p.id === billingPlan) ?? null;
     const seatsUsed      = memberMap.get(org.id)?.seats ?? 0;
 
@@ -826,7 +826,7 @@ router.post("/organizations/:orgId/change-plan", async (req, res) => {
   const orgId = parseInt(req.params.orgId);
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
-  const validPlanIds = ["free", "expired", ...PLANS.map(p => p.id)];
+  const validPlanIds = ["expired", ...PLANS.map(p => p.id)];
   if (!validPlanIds.includes(planId)) { res.status(400).json({ error: "Invalid planId" }); return; }
   const [org] = await db.select({ id: organizationsTable.id }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
   if (!org) { res.status(404).json({ error: "Organization not found" }); return; }

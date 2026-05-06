@@ -29,6 +29,27 @@
       "when": 1778035122233,
       "tag": "0003_light_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1778042946000,
+      "tag": "0004a_add_expired_enum_value",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1778042946001,
+      "tag": "0004b_migrate_data_and_defaults",
+      "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1778042946002,
+      "tag": "0004c_update_plans_catalog",
+      "breakpoints": false
     }
   ]
 }
