@@ -22,6 +22,13 @@
       "when": 1777812000000,
       "tag": "0002_trial_downgrade",
       "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778035122233,
+      "tag": "0003_light_toro",
+      "breakpoints": true
     }
   ]
 }
