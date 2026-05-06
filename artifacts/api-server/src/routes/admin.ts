@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
+import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
@@ -234,7 +235,7 @@ router.get("/usage", async (req, res) => {
     const sub = subMap.get(org.id);
     // Phase 1 SSOT: subscriptions.plan_id is primary; org.subscriptionTier is legacy fallback.
     // Both are pre-fetched in the batch queries above — no extra DB call needed.
-    const billingPlan    = sub?.planId ?? org.subscriptionTier ?? "free";
+    const billingPlan    = normalizePlanId(sub?.planId ?? org.subscriptionTier);
     const billingStatus  = sub?.status ?? "free";
     const plan           = PLANS.find(p => p.id === billingPlan) ?? null;
     const seatsUsed      = memberMap.get(org.id)?.seats ?? 0;
@@ -813,7 +814,7 @@ router.get("/org-plans", async (req, res) => {
     .select({
       orgId: organizationsTable.id,
       orgName: organizationsTable.name,
-      planId: sql<string>`COALESCE(${subscriptionsTable.planId}, ${organizationsTable.subscriptionTier}, 'free')`,
+      planId: sql<string>`COALESCE(${subscriptionsTable.planId}, ${organizationsTable.subscriptionTier}, 'expired')`,
     })
     .from(organizationsTable)
     .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id));
@@ -825,7 +826,7 @@ router.post("/organizations/:orgId/change-plan", async (req, res) => {
   const orgId = parseInt(req.params.orgId);
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
-  const validPlanIds = ["free", ...PLANS.map(p => p.id)];
+  const validPlanIds = ["free", "expired", ...PLANS.map(p => p.id)];
   if (!validPlanIds.includes(planId)) { res.status(400).json({ error: "Invalid planId" }); return; }
   const [org] = await db.select({ id: organizationsTable.id }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
   if (!org) { res.status(404).json({ error: "Organization not found" }); return; }

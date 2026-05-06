@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { PLANS, getDefaultModulesForPlan } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { isExpiredPlan } from "../lib/plan-normalizer.js";
 import { grantCredits, AI_CREDIT_PACKS } from "../lib/ai-credits.js";
 import { createAuditLog } from "../lib/audit.js";
 
@@ -432,10 +433,10 @@ router.post(
                 .set({ subscriptionTier: planId, updatedAt: new Date() })
                 .where(eq(organizationsTable.id, orgId));
               await applyModulesForPlan(orgId, planId);
-              // Restore users + projects visibility if upgrading from free/trial.
-              // Guard against downgrade events (e.g. plan change back to free) by
-              // only calling upgradeOrgFromFree when the incoming plan is not free.
-              if (planId !== "free") await upgradeOrgFromFree(orgId);
+              // Restore users + projects visibility if upgrading from expired/trial.
+              // Guard against downgrade events (e.g. plan change back to expired) by
+              // only calling upgradeOrgFromFree when the incoming plan is not expired.
+              if (!isExpiredPlan(planId)) await upgradeOrgFromFree(orgId);
             }
 
             logger.info({ orgId, status: sub.status, planId: resolvedPlanId }, "Subscription updated");

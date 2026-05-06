@@ -1,3 +1,5 @@
+import { normalizePlanId } from "./plan-normalizer.js";
+
 export interface PlanConfig {
   id: string;
   name: string;
@@ -154,7 +156,10 @@ export function getPlanById(planId: string): PlanConfig | null {
 }
 
 export function getPlanByTier(tier: string | null | undefined): PlanConfig | null {
-  return PLANS.find(p => p.id === (tier ?? "free")) ?? null;
+  const normalized = normalizePlanId(tier);
+  // Phase A: plan catalog still uses 'free' as id — map 'expired' → 'free' for lookup.
+  const lookupId = normalized === "expired" ? "free" : normalized;
+  return PLANS.find(p => p.id === lookupId) ?? null;
 }
 
 export type OrgModuleFlags = {
@@ -168,11 +173,12 @@ export type OrgModuleFlags = {
 export function getDefaultModulesForPlan(planId: string): OrgModuleFlags {
   const map: Record<string, OrgModuleFlags> = {
     free:         { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
+    expired:      { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
     trial:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     starter:      { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: false },
     basic:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     professional: { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
     enterprise:   { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
   };
-  return map[planId] ?? map.free;
+  return map[normalizePlanId(planId)] ?? map.expired;
 }

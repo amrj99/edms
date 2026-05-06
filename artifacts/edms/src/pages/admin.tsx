@@ -327,7 +327,7 @@ export default function Admin() {
   const [deleteOrg, setDeleteOrg] = useState<any>(null);
   const [orgForm, setOrgForm] = useState({ name: "", code: "", type: "contractor", contactEmail: "", contactPhone: "", address: "" });
   const [changePlanOrg, setChangePlanOrg] = useState<any>(null);
-  const [selectedPlan, setSelectedPlan] = useState("free");
+  const [selectedPlan, setSelectedPlan] = useState("expired");
 
   const createOrg = useMutation({
     mutationFn: async (data: any) => {
@@ -585,7 +585,7 @@ export default function Admin() {
                       <TableCell>
                         {isSysOwner ? (
                           <button
-                            onClick={() => { setChangePlanOrg(org); setSelectedPlan(orgPlanMap[org.id] ?? "free"); }}
+                            onClick={() => { setChangePlanOrg(org); setSelectedPlan(orgPlanMap[org.id] === "free" ? "expired" : (orgPlanMap[org.id] ?? "expired")); }}
                             className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize cursor-pointer hover:opacity-75 ${planBadgeClass(orgPlanMap[org.id] ?? "free")}`}
                           >
                             {orgPlanMap[org.id] ?? "—"}
@@ -634,7 +634,7 @@ export default function Admin() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="free">Free</SelectItem>
+                      <SelectItem value="expired">Expired (Read-only)</SelectItem>
                       <SelectItem value="starter">Starter</SelectItem>
                       <SelectItem value="basic">Basic</SelectItem>
                       <SelectItem value="professional">Professional</SelectItem>

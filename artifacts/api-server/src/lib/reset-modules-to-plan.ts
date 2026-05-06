@@ -26,6 +26,7 @@ import { organizationsTable, orgConfigTable, subscriptionsTable } from "@workspa
 import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getDefaultModulesForPlan } from "./plans.js";
+import { normalizePlanId } from "./plan-normalizer.js";
 
 export async function resetModulesToPlan(): Promise<void> {
   const LABEL = "[reset-modules]";
@@ -67,10 +68,10 @@ export async function resetModulesToPlan(): Promise<void> {
       const orgName = (row as any).org_name as string;
 
       // ── 2. Resolve plan ID ───────────────────────────────────────────────
-      const planId: string =
+      const planId: string = normalizePlanId(
         ((row as any).sub_plan_id as string | null) ??
-        ((row as any).subscription_tier as string | null) ??
-        "free";
+        ((row as any).subscription_tier as string | null),
+      );
 
       const source = (row as any).sub_plan_id ? "subscriptions" : "org_fallback";
 

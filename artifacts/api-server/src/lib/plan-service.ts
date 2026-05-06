@@ -39,12 +39,14 @@ import {
 import { eq, and, or, isNull, gt } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getDefaultModulesForPlan } from "./plans.js";
+import { normalizePlanId } from "./plan-normalizer.js";
 
 // ─── Legacy limit maps (shadow comparison only — do NOT use for enforcement) ──
 
 /** Mirrors TIER_RPM in middlewares/tenant-rate-limit.ts */
 const LEGACY_TIER_RPM: Record<string, number | null> = {
-  free:         300,
+  free:         300,   // Phase A alias — same as expired
+  expired:      300,
   starter:      400,
   basic:        600,
   professional: 1500,
@@ -53,7 +55,8 @@ const LEGACY_TIER_RPM: Record<string, number | null> = {
 
 /** Mirrors PLAN_LIMITS in routes/migrations.ts (-1 = Infinity in the legacy map) */
 const LEGACY_PLAN_LIMITS: Record<string, number> = {
-  free:         0,
+  free:         0,     // Phase A alias — same as expired
+  expired:      0,
   starter:      0,
   basic:        200,
   professional: 1000,
@@ -163,7 +166,7 @@ export async function getOrgPlan(orgId: number): Promise<string> {
       .where(eq(organizationsTable.id, orgId))
       .limit(1);
 
-    const tier = org?.subscriptionTier ?? "free";
+    const tier = normalizePlanId(org?.subscriptionTier);
     logger.warn(
       { orgId, fallbackTier: tier },
       "[plan-service] SSOT FALLBACK: no subscriptions row — using organizations.subscription_tier",
@@ -172,9 +175,9 @@ export async function getOrgPlan(orgId: number): Promise<string> {
   } catch (err) {
     logger.error(
       { err, orgId },
-      "[plan-service] DB error reading subscription_tier — defaulting to 'free'",
+      "[plan-service] DB error reading subscription_tier — defaulting to 'expired'",
     );
-    return "free";
+    return "expired";
   }
 }
 
@@ -200,7 +203,7 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
   const now = new Date();
 
   // ── Step 1: Resolve plan ID (same logic as getOrgPlan, no extra DB round-trip) ─
-  let planId = "free";
+  let planId = "expired";
   let source: PlanSource = "default_free";
 
   try {
@@ -211,7 +214,7 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
       .limit(1);
 
     if (sub?.planId) {
-      planId = sub.planId;
+      planId = normalizePlanId(sub.planId);
       source = "subscriptions";
     } else {
       const [org] = await db
@@ -219,11 +222,11 @@ export async function getResolvedPlan(orgId: number): Promise<ResolvedPlan> {
         .from(organizationsTable)
         .where(eq(organizationsTable.id, orgId))
         .limit(1);
-      planId = org?.subscriptionTier ?? "free";
+      planId = normalizePlanId(org?.subscriptionTier);
       source = org ? "org_fallback" : "default_free";
     }
   } catch (err) {
-    logger.error({ err, orgId }, "[plan-service:shadow] error resolving plan ID — using free");
+    logger.error({ err, orgId }, "[plan-service:shadow] error resolving plan ID — using expired");
   }
 
   // ── Step 2: Look up plan definition in the plans catalog ───────────────────

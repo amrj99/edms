@@ -33,6 +33,7 @@ import { eq, and, or, isNull, gt } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getDefaultModulesForPlan, type OrgModuleFlags } from "./plans.js";
+import { normalizePlanId } from "./plan-normalizer.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ export async function syncOrgModules(
   const LABEL = "[module-sync]";
 
   // ── Step 1: Resolve plan ──────────────────────────────────────────────────
-  let planId = "free";
+  let planId = "expired";
   let source: OrgSyncResult["source"] = "default_free";
 
   try {
@@ -139,7 +140,7 @@ export async function syncOrgModules(
       .limit(1);
 
     if (sub?.planId) {
-      planId = sub.planId;
+      planId = normalizePlanId(sub.planId);
       source = "subscriptions";
     } else {
       const [org] = await db
@@ -147,13 +148,13 @@ export async function syncOrgModules(
         .from(organizationsTable)
         .where(eq(organizationsTable.id, orgId))
         .limit(1);
-      planId = org?.subscriptionTier ?? "free";
+      planId = normalizePlanId(org?.subscriptionTier);
       source = org ? "org_fallback" : "default_free";
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ err, orgId, orgName }, `${LABEL} error resolving plan — defaulting to free`);
-    return { orgId, orgName, planId: "free", source: "default_free", status: "error", error: msg };
+    logger.error({ err, orgId, orgName }, `${LABEL} error resolving plan — defaulting to expired`);
+    return { orgId, orgName, planId: "expired", source: "default_free", status: "error", error: msg };
   }
 
   // ── Step 2: Compute effective modules (plan defaults + overrides) ─────────

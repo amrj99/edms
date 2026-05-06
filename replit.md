@@ -42,6 +42,7 @@ The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) an
 -   **Stripe Billing:** Integrated for subscription management.
 -   **AI Credits System:** Organization-level credit wallet with atomic deduction, separate from subscription plans. Offers free credits and purchasable packs via Stripe Checkout.
 -   **Trial Mode:** Self-service organization registration for a 14-day trial with limits on users, storage, file size, projects, and AI credits. Enforcement gates prevent usage past limits or without email verification.
+-   **Plan Tier Rename (Phase A complete):** `"free"` (post-trial expired state) is being renamed to `"expired"` via a 3-phase migration. Phase A is live: `lib/plan-normalizer.ts` normalizes both values transparently; DB still stores `"free"`. Phase B (data migration, needs explicit approval after 7 days of Phase A stability) adds `"expired"` to the `subscription_status` enum and migrates all rows. Phase C (deferred) removes the old enum value.
 -   **Elasticsearch Search:** Provides full-text search with SQL fallback.
 -   **Key Features:**
     -   **Document Management:** Revision history, AI validation, multi-file support, unique document numbers.

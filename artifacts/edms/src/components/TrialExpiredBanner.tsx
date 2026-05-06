@@ -25,7 +25,7 @@ export function TrialExpiredBanner() {
   }, []);
 
   if (!status) return null;
-  if (status.tier !== "free") return null;
+  if (status.tier !== "free" && status.tier !== "expired") return null;
   if (!status.trialEndsAt) return null;
   if (location === "/billing") return null;
 

@@ -6,6 +6,7 @@ import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { PLANS } from "../lib/plans.js";
+import { normalizePlanId } from "../lib/plan-normalizer.js";
 
 const router = Router();
 
@@ -150,7 +151,7 @@ router.post("/", requireAuth, async (req, res) => {
 
   // ── Per-plan project limit (applies to any plan that defines maxProjects) ──
   // Currently: trial = 1, free = 1. Higher tiers have no cap (maxProjects = null).
-  const planForLimitCheck = PLANS.find(p => p.id === (org.subscriptionTier ?? "free"));
+  const planForLimitCheck = PLANS.find(p => p.id === (normalizePlanId(org.subscriptionTier) === "expired" ? "free" : normalizePlanId(org.subscriptionTier)));
   if (planForLimitCheck?.maxProjects != null) {
     const [{ projectCount }] = await db
       .select({ projectCount: count() })

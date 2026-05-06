@@ -9,6 +9,7 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
 
 const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
@@ -16,15 +17,16 @@ const router = Router({ mergeParams: true });
 
 // ── Plan gates ───────────────────────────────────────────────────────────────
 const PLAN_LIMITS: Record<string, number> = {
-  starter: 0,
-  free: 0,
-  basic: 200,
+  free:         0,    // Phase A alias — same as expired
+  expired:      0,
+  starter:      0,
+  basic:        200,
   professional: 1000,
-  enterprise: Infinity,
+  enterprise:   Infinity,
 };
 
 function planFromTier(tier: string | null | undefined): { plan: string; maxFiles: number } {
-  const t = (tier ?? "free").toLowerCase();
+  const t = normalizePlanId(tier).toLowerCase();
   const maxFiles = PLAN_LIMITS[t] ?? 0;
   return { plan: t, maxFiles };
 }

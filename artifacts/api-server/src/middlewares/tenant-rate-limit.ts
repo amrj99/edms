@@ -2,12 +2,14 @@ import { Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 import { logger } from "../lib/logger.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { normalizePlanId } from "../lib/plan-normalizer.js";
 
 const isProd = process.env.NODE_ENV === "production";
 
 // ─── Requests-per-minute caps per subscription tier ────────────────────────────
 const TIER_RPM: Record<string, number | null> = {
-  free:         300,
+  free:         300,   // Phase A alias — same as expired
+  expired:      300,
   starter:      400,
   basic:        600,
   professional: 1500,
@@ -61,7 +63,8 @@ function buildLimiter(tier: string, rpm: number): RateLimitRequestHandler {
 }
 
 const limiters: Record<string, RateLimitRequestHandler> = {
-  free:         buildLimiter("free",         300),
+  free:         buildLimiter("free",         300),   // Phase A alias
+  expired:      buildLimiter("expired",      300),
   basic:        buildLimiter("basic",        600),
   professional: buildLimiter("professional", 1500),
 };
@@ -106,14 +109,15 @@ export async function tenantRateLimit(req: Request, res: Response, next: NextFun
     return next();
   }
 
-  const tier = await getOrgTier(orgId);
-  const rpm  = TIER_RPM[tier];
+  const rawTier = await getOrgTier(orgId);
+  const tier    = normalizePlanId(rawTier);
+  const rpm     = TIER_RPM[tier];
 
   if (rpm === null) {
     // enterprise — unlimited
     return next();
   }
 
-  const limiter = limiters[tier] ?? limiters.free;
+  const limiter = limiters[tier] ?? limiters.expired;
   return limiter(req, res, next);
 }
