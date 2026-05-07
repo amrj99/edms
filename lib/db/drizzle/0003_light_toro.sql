@@ -1,2 +1,2 @@
-ALTER TABLE "users" ADD COLUMN "is_read_only_override" boolean DEFAULT false NOT NULL;--> statement-breakpoint
-ALTER TABLE "projects" ADD COLUMN "visible_on_free" boolean DEFAULT true NOT NULL;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "is_read_only_override" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "visible_on_free" boolean DEFAULT true NOT NULL;
