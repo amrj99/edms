@@ -21,8 +21,10 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE migration_item_status    AS ENUM ('pending','analyzing','analyzed','confirmed','skipped','imported','failed');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-DO $$ BEGIN CREATE TYPE subscription_status      AS ENUM ('free','active','trialing','past_due','canceled');
+DO $$ BEGIN CREATE TYPE subscription_status      AS ENUM ('free','active','trialing','past_due','canceled','expired');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- Ensure 'expired' exists in subscription_status for databases created before Phase B
+ALTER TYPE subscription_status ADD VALUE IF NOT EXISTS 'expired';
 
 DO $$ BEGIN CREATE TYPE task_status              AS ENUM ('pending','in_progress','completed','cancelled');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -61,6 +63,19 @@ DO $$ BEGIN ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'action_item_as
 DO $$ BEGIN ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'workflow_sla_reminder'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'meeting_assigned';      EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'meeting_reminder';      EXCEPTION WHEN others THEN NULL; END $$;
+
+-- Phase B: migrate 'free' → 'expired' for plan identifier columns (TEXT, idempotent)
+UPDATE organizations  SET subscription_tier = 'expired', updated_at = NOW() WHERE subscription_tier = 'free';
+UPDATE subscriptions  SET plan_id           = 'expired', updated_at = NOW() WHERE plan_id = 'free';
+UPDATE subscriptions  SET status            = 'expired', updated_at = NOW() WHERE status = 'free';
+UPDATE org_config     SET subscription_tier = 'expired', updated_at = NOW() WHERE subscription_tier = 'free';
+UPDATE plans          SET plan_id           = 'expired', updated_at = NOW() WHERE plan_id = 'free';
+UPDATE plans          SET name = 'Expired (Read-only)', description = 'Access after trial expiry. Read-only until upgraded.', updated_at = NOW() WHERE plan_id = 'expired' AND name = 'Free';
+-- Phase B: update column defaults to 'expired'
+ALTER TABLE organizations  ALTER COLUMN subscription_tier SET DEFAULT 'expired';
+ALTER TABLE subscriptions  ALTER COLUMN plan_id           SET DEFAULT 'expired';
+ALTER TABLE subscriptions  ALTER COLUMN status            SET DEFAULT 'expired';
+ALTER TABLE org_config     ALTER COLUMN subscription_tier SET DEFAULT 'expired';
 
 -- ─── SECTION 2: NEW COLUMNS ON EXISTING TABLES ────────────────────────────────
 
@@ -395,11 +410,11 @@ CREATE TABLE IF NOT EXISTS system_settings (
 CREATE TABLE IF NOT EXISTS subscriptions (
   id                      serial               PRIMARY KEY,
   organization_id         integer              NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
-  plan_id                 text                 NOT NULL DEFAULT 'free',
+  plan_id                 text                 NOT NULL DEFAULT 'expired',
   stripe_customer_id      text,
   stripe_subscription_id  text,
   stripe_price_id         text,
-  status                  subscription_status  NOT NULL DEFAULT 'free',
+  status                  subscription_status  NOT NULL DEFAULT 'expired',
   current_period_start    timestamp,
   current_period_end      timestamp,
   seats_count             integer              NOT NULL DEFAULT 1,

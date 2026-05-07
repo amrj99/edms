@@ -7,6 +7,7 @@ export const subscriptionStatusEnum = pgEnum("subscription_status", [
   "trialing",
   "past_due",
   "canceled",
+  "expired",
 ]);
 
 export const subscriptionsTable = pgTable("subscriptions", {
@@ -15,11 +16,11 @@ export const subscriptionsTable = pgTable("subscriptions", {
     .notNull()
     .unique()
     .references(() => organizationsTable.id, { onDelete: "cascade" }),
-  planId: text("plan_id").notNull().default("free"),
+  planId: text("plan_id").notNull().default("expired"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   stripePriceId: text("stripe_price_id"),
-  status: subscriptionStatusEnum("status").notNull().default("free"),
+  status: subscriptionStatusEnum("status").notNull().default("expired"),
   currentPeriodStart: timestamp("current_period_start"),
   currentPeriodEnd: timestamp("current_period_end"),
   seatsCount: integer("seats_count").notNull().default(1),

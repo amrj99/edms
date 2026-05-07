@@ -50,6 +50,13 @@
       "when": 1778042946002,
       "tag": "0004c_update_plans_catalog",
       "breakpoints": false
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1778175259470,
+      "tag": "0007_remarkable_ben_urich",
+      "breakpoints": true
     }
   ]
 }
