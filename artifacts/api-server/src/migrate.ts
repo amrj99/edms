@@ -16,6 +16,15 @@
  *   created_at DESC.  Any migration whose `when` timestamp (folderMillis) is
  *   greater than that last created_at is executed.  So we just need to insert
  *   every baseline entry with its correct journal timestamp.
+ *
+ * ENUM VALUE PRE-COMMIT (ensureEnumValues):
+ *   drizzle-orm's migrate() wraps ALL pending migrations in a single outer
+ *   BEGIN/COMMIT transaction (confirmed: pg-core/dialect.js → migrate()).
+ *   PostgreSQL forbids referencing a new enum value added by ALTER TYPE ADD VALUE
+ *   in the same transaction where it was added — the value must be committed first.
+ *   Running ALTER TYPE ADD VALUE via pool.query() here (autocommit, outside the
+ *   Drizzle transaction) pre-commits the value so every migration in the batch
+ *   can reference it safely.  IF NOT EXISTS makes every call idempotent.
  */
 
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -44,10 +53,56 @@ async function main() {
 
   try {
     await ensureBaseline();
+    await ensureEnumValues();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     console.log("[migrate] All migrations applied successfully.");
   } finally {
     await pool.end();
+  }
+}
+
+/**
+ * Pre-commit enum values that migrations need to reference inside DML.
+ *
+ * WHY THIS EXISTS:
+ *   drizzle-orm's migrate() wraps all pending migrations in a single
+ *   BEGIN/COMMIT transaction.  PostgreSQL raises:
+ *     "unsafe use of new value of enum type"
+ *     "new enum values must be committed before they can be used"
+ *   when ALTER TYPE ADD VALUE and any DML that references the new value
+ *   both run inside the same transaction.
+ *
+ *   Running the ADD VALUE statements here — via pool.query() in autocommit
+ *   mode, before migrate() opens its outer transaction — guarantees the
+ *   values are committed and visible to all subsequent migrations.
+ *
+ * SAFETY:
+ *   · IF NOT EXISTS makes every statement idempotent (safe to re-run).
+ *   · Error code 42704 (undefined_object) is caught and ignored: on a
+ *     fresh database the enum type does not exist yet and will be created
+ *     by 0000_init.sql, so there is nothing to pre-commit.
+ *   · All other errors are re-thrown and abort startup.
+ */
+async function ensureEnumValues(): Promise<void> {
+  const statements: Array<{ sql: string; label: string }> = [
+    {
+      sql: "ALTER TYPE subscription_status ADD VALUE IF NOT EXISTS 'expired'",
+      label: "subscription_status → 'expired'",
+    },
+  ];
+
+  for (const { sql, label } of statements) {
+    try {
+      await pool.query(sql);
+      console.log(`[migrate] ensureEnumValues: committed ${label}`);
+    } catch (err: any) {
+      if (err.code === "42704") {
+        // Type does not exist yet — fresh database; 0000_init.sql will create it.
+        console.log(`[migrate] ensureEnumValues: type not found (fresh DB) — skipping ${label}`);
+      } else {
+        throw err;
+      }
+    }
   }
 }
 
