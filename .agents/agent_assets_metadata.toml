@@ -6,3 +6,9 @@ id = "FnRco_SQRmn5AXtogAzmj"
 uri = "file://ArcScale_EDMS_System_Guide.md"
 type = "text"
 title = "ArcScale EDMS — System Guide Outline v0.1"
+
+[[outputs]]
+id = "VfZpIf_f2aQjl4POJv-D1"
+uri = "file://docs/exports/ArcScale_EDMS_Architecture_and_Recovery_State.docx"
+type = "word_document"
+title = "ArcScale EDMS — Architecture & Recovery State (Word)"
