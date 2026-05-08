@@ -1,12 +1,27 @@
 -- Phase B · Step 1: Add 'expired' to the subscription_status enum
 --
--- Must be committed in its own transaction before Step 2 (0004b) can
--- reference the new value.  Postgres requires the ADD VALUE to be visible
--- (i.e., committed) before 'expired' can appear in any UPDATE or DEFAULT.
+-- TRANSACTION NOTE:
+--   drizzle-orm's migrate() wraps all pending migrations in a single outer
+--   BEGIN/COMMIT.  migrate.ts::ensureEnumValues() pre-commits this value
+--   via pool.query() in autocommit mode BEFORE migrate() opens that outer
+--   transaction, so this migration is a guaranteed no-op by the time it runs.
 --
--- Safe to run more than once — IF NOT EXISTS is a no-op when already present.
+-- IDEMPOTENCY:
+--   The DO-block EXCEPTION handler catches error 42710 (duplicate_object)
+--   so this migration is safe regardless of the database state — whether the
+--   value was pre-committed by ensureEnumValues(), added by a previous manual
+--   run of migrate_production.sql, or is being applied for the first time on
+--   a fresh database.
 --
 -- Affected enum:  subscription_status
--- New value:      'expired'  (placed after the existing 'free' value)
+-- New value:      'expired'
 
-ALTER TYPE subscription_status ADD VALUE IF NOT EXISTS 'expired';
+DO $$
+BEGIN
+    ALTER TYPE subscription_status ADD VALUE IF NOT EXISTS 'expired';
+EXCEPTION
+    WHEN duplicate_object THEN
+        -- enum label 'expired' already exists — nothing to do.
+        NULL;
+END;
+$$;
