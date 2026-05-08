@@ -12,6 +12,29 @@
 --       ai_models.tier_minimum          = 'free'  → 0 rows  (table empty)
 --
 -- Idempotent: WHERE clauses ensure re-running is safe.
+--
+-- PRODUCTION NOTE: VPS databases provisioned via migrate_production.sql before May 2026
+-- do not have the ai_models table (it was added to 0000_init.sql after migrate_production.sql
+-- was last written, and 0001_incremental.sql did not include it). The CREATE TABLE IF NOT EXISTS
+-- block below is a safe no-op on any database that already has the table, and creates it
+-- correctly on any database that does not.
+
+-- ── 0. Ensure ai_models table exists before any DML touches it ────────────────
+-- Must run outside the transaction block: Drizzle's runner treats the file as
+-- a single statement batch; DDL here auto-commits before BEGIN is reached.
+CREATE TABLE IF NOT EXISTS "ai_models" (
+    "id"           serial      PRIMARY KEY NOT NULL,
+    "provider"     text        NOT NULL,
+    "model_id"     text        NOT NULL,
+    "display_name" text        NOT NULL,
+    "tier_minimum" text        NOT NULL DEFAULT 'free',
+    "is_active"    boolean     NOT NULL DEFAULT true,
+    "created_at"   timestamp   NOT NULL DEFAULT now(),
+    "updated_at"   timestamp   NOT NULL DEFAULT now(),
+    CONSTRAINT "ai_models_provider_model" UNIQUE ("provider", "model_id")
+);
+CREATE INDEX IF NOT EXISTS "idx_ai_models_provider" ON "ai_models" USING btree ("provider");
+CREATE INDEX IF NOT EXISTS "idx_ai_models_active"   ON "ai_models" USING btree ("is_active");
 
 BEGIN;
 

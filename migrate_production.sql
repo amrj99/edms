@@ -721,6 +721,21 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at       timestamp NOT NULL DEFAULT now()
 );
 
+-- ai_models
+CREATE TABLE IF NOT EXISTS ai_models (
+  id            serial    PRIMARY KEY,
+  provider      text      NOT NULL,
+  model_id      text      NOT NULL,
+  display_name  text      NOT NULL,
+  tier_minimum  text      NOT NULL DEFAULT 'free',
+  is_active     boolean   NOT NULL DEFAULT true,
+  created_at    timestamp NOT NULL DEFAULT now(),
+  updated_at    timestamp NOT NULL DEFAULT now(),
+  UNIQUE (provider, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_models_provider ON ai_models (provider);
+CREATE INDEX IF NOT EXISTS idx_ai_models_active   ON ai_models (is_active);
+
 -- ai_settings
 CREATE TABLE IF NOT EXISTS ai_settings (
   id               serial     PRIMARY KEY,
