@@ -37,6 +37,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/lib/i18n";
 import { useModules } from "@/hooks/use-modules";
+import { useAiAccess } from "@/hooks/use-ai-access";
 import { StorageBanner } from "@/components/StorageBanner";
 import { TrialExpiredBanner } from "@/components/TrialExpiredBanner";
 import { PlanRestrictionModal } from "@/components/PlanRestrictionModal";
@@ -349,6 +350,7 @@ export function AppSidebar() {
   const [recentProjects, setRecentProjects] = useState<{ id: number; code: string; name: string }[]>([]);
   const [recentOpen, setRecentOpen] = useState(true);
   const { modules } = useModules();
+  const { access: aiAccess } = useAiAccess();
   const { t, isRtl } = useI18n();
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -398,7 +400,7 @@ export function AppSidebar() {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
     },
-    { title: t("aiInsights"), url: "/ai-insights", icon: Brain },
+    ...(aiAccess.aiEnabled ? [{ title: t("aiInsights"), url: "/ai-insights", icon: Brain }] : []),
     ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: t("navSearch"), url: "/search", icon: Search },
@@ -941,6 +943,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
   const [location] = useLocation();
   const { modules } = useModules();
+  const { access: aiAccess } = useAiAccess();
   const { isRtl } = useI18n();
   const { activeOrgId } = useOrgContext();
 
@@ -970,9 +973,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
             <div className="flex-1 min-w-0" />
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-              <div className="hidden md:block">
-                <AICommandAssistant />
-              </div>
+              {aiAccess.aiEnabled && (
+                <div className="hidden md:block">
+                  <AICommandAssistant />
+                </div>
+              )}
               {user?.organizationName && !activeOrgId && (
                 <div className="hidden lg:flex flex-col items-end max-w-[160px] shrink-0">
                   <span className="text-[10px] text-muted-foreground/70 leading-none">Organization</span>

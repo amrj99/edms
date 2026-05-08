@@ -71,6 +71,15 @@ export const orgConfigTable = pgTable("org_config", {
   // When true: send only metadata (filename, type, size, path) to external AI.
   // Never send document content. Future: auto-route to Ollama when available.
   aiPrivacyMode: boolean("ai_privacy_mode").notNull().default(false),
+  // ─── AI Governance (0008_ai_governance) ──────────────────────────────────
+  // Master AI switch. false = AI completely disabled for this org.
+  // New organizations default to disabled; must be explicitly enabled by admin.
+  aiEnabled: boolean("ai_enabled").notNull().default(false),
+  // AI plan tier. Controls routing and feature access.
+  // 'disabled' | 'basic' | 'premium'
+  aiPlan: text("ai_plan").notNull().default("disabled"),
+  // Monthly AI request ceiling. 0 = unlimited (governed by credits only).
+  aiMonthlyLimit: integer("ai_monthly_limit").notNull().default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

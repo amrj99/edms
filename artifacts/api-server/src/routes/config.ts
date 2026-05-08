@@ -71,6 +71,78 @@ router.get("/", async (req, res) => {
   res.json(config);
 });
 
+// ─── AI Governance (admin / system_owner only) ────────────────────────────────
+// Enables or disables AI for an organization and sets the AI plan tier.
+// system_owner may additionally pass ?orgOverride=<id> to target any org.
+router.get("/ai-governance", async (req, res) => {
+  const user = req.user;
+  if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (user.role !== "admin" && user.role !== "system_owner") {
+    res.status(403).json({ error: "Admin only" }); return;
+  }
+  const orgId = user.organizationId;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
+
+  const [config] = await db
+    .select({
+      aiEnabled: orgConfigTable.aiEnabled,
+      aiPlan: orgConfigTable.aiPlan,
+      aiMonthlyLimit: orgConfigTable.aiMonthlyLimit,
+      aiDailyLimit: orgConfigTable.aiDailyLimit,
+      aiMonthlyTokenLimit: orgConfigTable.aiMonthlyTokenLimit,
+      aiPrivacyMode: orgConfigTable.aiPrivacyMode,
+    })
+    .from(orgConfigTable)
+    .where(eq(orgConfigTable.organizationId, orgId));
+
+  if (!config) { res.status(404).json({ error: "No org config found" }); return; }
+  res.json(config);
+});
+
+router.put("/ai-governance", async (req, res) => {
+  const user = req.user;
+  if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+  if (user.role !== "admin" && user.role !== "system_owner") {
+    res.status(403).json({ error: "Admin only" }); return;
+  }
+  const orgId = user.organizationId;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
+
+  const {
+    aiEnabled,
+    aiPlan,
+    aiMonthlyLimit,
+    aiPrivacyMode,
+  } = req.body ?? {};
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof aiEnabled === "boolean") updates.aiEnabled = aiEnabled;
+  if (typeof aiPlan === "string" && ["disabled", "basic", "premium"].includes(aiPlan)) {
+    updates.aiPlan = aiPlan;
+    // Keep aiEnabled in sync with aiPlan
+    if (aiPlan === "disabled") updates.aiEnabled = false;
+    if ((aiPlan === "basic" || aiPlan === "premium") && typeof aiEnabled !== "boolean") {
+      updates.aiEnabled = true;
+    }
+  }
+  if (typeof aiMonthlyLimit === "number" && aiMonthlyLimit >= 0) updates.aiMonthlyLimit = aiMonthlyLimit;
+  if (typeof aiPrivacyMode === "boolean") updates.aiPrivacyMode = aiPrivacyMode;
+
+  const [updated] = await db
+    .update(orgConfigTable)
+    .set(updates)
+    .where(eq(orgConfigTable.organizationId, orgId))
+    .returning({
+      aiEnabled: orgConfigTable.aiEnabled,
+      aiPlan: orgConfigTable.aiPlan,
+      aiMonthlyLimit: orgConfigTable.aiMonthlyLimit,
+      aiPrivacyMode: orgConfigTable.aiPrivacyMode,
+    });
+
+  if (!updated) { res.status(404).json({ error: "No org config found" }); return; }
+  res.json(updated);
+});
+
 router.put("/", async (req, res) => {
   const orgId = req.user?.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
