@@ -683,7 +683,7 @@ export default function Admin() {
                   <Label>Temporary Password *</Label>
                   <Input type="password" value={userForm.password} onChange={e => setUserForm(f => ({ ...f, password: e.target.value }))} placeholder="Min. 6 characters" className="mt-1" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className={isSysOwner ? "grid grid-cols-2 gap-3" : ""}>
                   <div>
                     <Label>System Role *</Label>
                     <Select value={userForm.role} onValueChange={v => setUserForm(f => ({ ...f, role: v }))}>
@@ -693,16 +693,18 @@ export default function Admin() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div>
-                    <Label>{t("orgName_label")}</Label>
-                    <Select value={userForm.organizationId} onValueChange={v => setUserForm(f => ({ ...f, organizationId: v }))}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">None</SelectItem>
-                        {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {isSysOwner && (
+                    <div>
+                      <Label>{t("orgName_label")}</Label>
+                      <Select value={userForm.organizationId} onValueChange={v => setUserForm(f => ({ ...f, organizationId: v }))}>
+                        <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">None</SelectItem>
+                          {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               </div>
               <DialogFooter>
@@ -732,7 +734,7 @@ export default function Admin() {
                     <Input value={editForm.lastName} onChange={e => setEditForm(f => ({ ...f, lastName: e.target.value }))} className="mt-1" />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className={isSysOwner ? "grid grid-cols-2 gap-3" : ""}>
                   <div>
                     <Label>System Role</Label>
                     <Select value={editForm.role} onValueChange={v => setEditForm(f => ({ ...f, role: v }))}>
@@ -742,16 +744,18 @@ export default function Admin() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div>
-                    <Label>{t("orgName_label")}</Label>
-                    <Select value={editForm.organizationId} onValueChange={v => setEditForm(f => ({ ...f, organizationId: v }))}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">None</SelectItem>
-                        {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {isSysOwner && (
+                    <div>
+                      <Label>{t("orgName_label")}</Label>
+                      <Select value={editForm.organizationId} onValueChange={v => setEditForm(f => ({ ...f, organizationId: v }))}>
+                        <SelectTrigger className="mt-1"><SelectValue placeholder="None" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">None</SelectItem>
+                          {orgs.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Label>Department <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>

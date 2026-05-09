@@ -700,7 +700,7 @@ export default function UsersPage() {
               <Label className="text-xs">Email <span className="text-destructive">*</span></Label>
               <Input type="email" className="mt-1 h-8 text-sm" value={addForm.email} onChange={e => setAddForm(f => ({ ...f, email: e.target.value }))} placeholder="user@company.com" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className={me?.role === "system_owner" ? "grid grid-cols-2 gap-3" : ""}>
               <div>
                 <Label className="text-xs">System Role</Label>
                 <Select value={addForm.role} onValueChange={v => setAddForm(f => ({ ...f, role: v }))}>
@@ -712,16 +712,18 @@ export default function UsersPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label className="text-xs">Organization</Label>
-                <Select value={addForm.organizationId || "_none"} onValueChange={v => setAddForm(f => ({ ...f, organizationId: v === "_none" ? "" : v }))}>
-                  <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue placeholder="None" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_none">None</SelectItem>
-                    {organizations.map((o: any) => <SelectItem key={o.id} value={String(o.id)} className="text-xs">{o.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
+              {me?.role === "system_owner" && (
+                <div>
+                  <Label className="text-xs">Organization</Label>
+                  <Select value={addForm.organizationId || "_none"} onValueChange={v => setAddForm(f => ({ ...f, organizationId: v === "_none" ? "" : v }))}>
+                    <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue placeholder="None" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">None</SelectItem>
+                      {organizations.map((o: any) => <SelectItem key={o.id} value={String(o.id)} className="text-xs">{o.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <div>
               <Label className="text-xs">Department</Label>
