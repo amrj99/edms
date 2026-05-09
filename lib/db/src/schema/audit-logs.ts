@@ -17,10 +17,20 @@ export const auditLogsTable = pgTable("audit_logs", {
   projectId: integer("project_id").references(() => projectsTable.id),
   ipAddress: text("ip_address"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // ── Added by 0010_audit_schema.sql ───────────────────────────────────────
+  // Structured state capture for update/delete events.
+  // All nullable — existing rows and existing call sites are unaffected.
+  beforeState: jsonb("before_state"),
+  afterState: jsonb("after_state"),
+  actorRole: text("actor_role"),
+  userAgent: text("user_agent"),
 }, (t) => [
   index("idx_audit_logs_organization_id").on(t.organizationId),
   index("idx_audit_logs_project_id").on(t.projectId),
   index("idx_audit_logs_created_at").on(t.createdAt),
+  // Added by 0010_audit_schema.sql
+  index("idx_audit_logs_entity").on(t.entityType, t.entityId, t.createdAt),
+  index("idx_audit_logs_user_created").on(t.userId, t.createdAt),
 ]);
 
 export const insertAuditLogSchema = createInsertSchema(auditLogsTable).omit({

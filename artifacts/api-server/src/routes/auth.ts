@@ -382,6 +382,17 @@ router.post("/refresh-token", async (req, res) => {
     expiresAt: getRefreshTokenExpiryDate(),
   });
 
+  createAuditLog({
+    userId: user.id,
+    organizationId: user.organizationId ?? undefined,
+    action: "token_refresh",
+    entityType: "auth",
+    entityId: user.id,
+    entityTitle: user.email,
+    details: { rotatedTokenId: tokenRecord.id },
+    ipAddress: req.ip,
+  });
+
   res.json({ token: newAccessToken, refreshToken: newRefreshToken });
 });
 
@@ -477,6 +488,17 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
   await db.update(refreshTokensTable)
     .set({ revokedAt: new Date() })
     .where(eq(refreshTokensTable.userId, claimedToken.userId));
+
+  createAuditLog({
+    userId: tokenOwner.id,
+    organizationId: tokenOwner.organizationId ?? undefined,
+    action: "session_invalidated",
+    entityType: "auth",
+    entityId: tokenOwner.id,
+    entityTitle: tokenOwner.email,
+    details: { reason: "password_reset" },
+    ipAddress: req.ip,
+  });
 
   res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
 });
@@ -624,6 +646,54 @@ router.get("/verify-email", async (req, res) => {
   });
 
   res.json({ success: true, message: "Email verified successfully. You can now upload files." });
+});
+
+// ─── Logout ───────────────────────────────────────────────────────────────────
+// POST /api/auth/logout
+//
+// Revokes the supplied refresh token and records a logout audit event.
+// Requires a valid access token (JWT) — the global fetch interceptor on the
+// frontend attaches it automatically.
+//
+// Behaviour:
+//   - If a refreshToken is provided in the body, it is marked revokedAt.
+//   - If the token is already revoked or not found, logout still succeeds.
+//   - A logout audit event is always written (whether or not a token was given).
+//   - Returns 200 { success: true } in all non-error cases.
+//
+// The frontend clears localStorage immediately on click — this call is
+// fire-and-forget from the client's perspective.
+router.post("/logout", requireAuth, async (req, res) => {
+  const { refreshToken } = req.body ?? {};
+  const ip = req.ip;
+
+  if (refreshToken && typeof refreshToken === "string") {
+    try {
+      await db.update(refreshTokensTable)
+        .set({ revokedAt: new Date() })
+        .where(and(
+          eq(refreshTokensTable.token, hashToken(refreshToken)),
+          isNull(refreshTokensTable.revokedAt),
+        ));
+    } catch {
+      // Non-fatal — logout audit and response proceed regardless.
+    }
+  }
+
+  createAuditLog({
+    userId: req.user!.id,
+    organizationId: req.user!.organizationId ?? undefined,
+    action: "logout",
+    entityType: "auth",
+    entityId: req.user!.id,
+    entityTitle: req.user!.email,
+    details: {
+      tokenProvided: !!refreshToken,
+    },
+    ipAddress: ip,
+  });
+
+  res.json({ success: true });
 });
 
 export default router;

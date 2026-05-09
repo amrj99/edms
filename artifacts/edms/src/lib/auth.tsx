@@ -82,7 +82,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    // Best-effort server-side refresh token revocation + audit log.
+    // Fire-and-forget: the user is redirected immediately regardless of the
+    // server response. localStorage is cleared synchronously below.
+    const refreshToken = localStorage.getItem("edms_refresh_token");
+    if (refreshToken) {
+      fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      }).catch(() => {});
+    }
+
     localStorage.removeItem("edms_token");
+    localStorage.removeItem("edms_refresh_token");
     setToken(null);
     setLocation("/login");
   };
