@@ -1,5 +1,5 @@
+import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { auditLogsTable } from "@workspace/db";
 
 /**
  * Structured payload for audit log details.
@@ -19,7 +19,7 @@ export interface AuditDetails {
 /**
  * Write a structured audit event to audit_logs.
  *
- * Fire-and-forget: errors are caught and suppressed so that an audit write
+ * Fire-and-forget: errors are caught and logged so that an audit write
  * failure never interrupts the main request flow.
  *
  * The audit_logs table is append-only at the DB level (0009_audit_immutable.sql).
@@ -30,6 +30,15 @@ export interface AuditDetails {
  *   afterState   — snapshot of entity fields after a mutation
  *   actorRole    — resolved role of the acting user at the time of the event
  *   userAgent    — HTTP User-Agent header (for session forensics)
+ *
+ * WHY RAW SQL:
+ *   Drizzle 0.45 includes every column defined in the table schema in each
+ *   INSERT, emitting DEFAULT for keys absent from the values object.  When
+ *   the optional 0010 migration columns do not yet exist in the target database
+ *   that produces "column does not exist" from Postgres, which is silently
+ *   swallowed by the catch block and results in no row being written.
+ *   Building the INSERT with sql.join() lets us include only the columns that
+ *   have actual values, making the function resilient across migration states.
  */
 export async function createAuditLog(params: {
   userId?: number;
@@ -47,22 +56,42 @@ export async function createAuditLog(params: {
   userAgent?: string;
 }): Promise<void> {
   try {
-    await db.insert(auditLogsTable).values({
-      userId: params.userId,
-      organizationId: params.organizationId,
-      action: params.action,
-      entityType: params.entityType,
-      entityId: params.entityId,
-      entityTitle: params.entityTitle,
-      details: params.details ?? {},
-      projectId: params.projectId,
-      ipAddress: params.ipAddress,
-      beforeState: params.beforeState,
-      afterState: params.afterState,
-      actorRole: params.actorRole,
-      userAgent: params.userAgent,
-    });
-  } catch {
+    // Build column and value lists dynamically so only columns with real values
+    // appear in the INSERT statement.
+    type SQLChunk = ReturnType<typeof sql>;
+    const cols: SQLChunk[] = [];
+    const vals: SQLChunk[] = [];
+
+    const add = (col: string, val: unknown) => {
+      cols.push(sql.raw(`"${col}"`));
+      vals.push(sql`${val}`);
+    };
+
+    // Base columns — always present in every audit row.
+    if (params.userId !== undefined)         add("user_id",         params.userId);
+    if (params.organizationId !== undefined) add("organization_id", params.organizationId);
+    add("action",      params.action);
+    add("entity_type", params.entityType);
+    add("entity_id",   params.entityId);
+    if (params.entityTitle !== undefined)    add("entity_title", params.entityTitle);
+    add("details", params.details ?? {});
+    if (params.projectId !== undefined)      add("project_id",  params.projectId);
+    if (params.ipAddress !== undefined)      add("ip_address",  params.ipAddress);
+
+    // 0010_audit_schema.sql columns — only included when the caller provides
+    // a value so the INSERT succeeds even if the migration has not yet been
+    // applied to the target database.
+    if (params.beforeState !== undefined) add("before_state", params.beforeState);
+    if (params.afterState  !== undefined) add("after_state",  params.afterState);
+    if (params.actorRole   !== undefined) add("actor_role",   params.actorRole);
+    if (params.userAgent   !== undefined) add("user_agent",   params.userAgent);
+
+    await db.execute(
+      sql`INSERT INTO audit_logs (${sql.join(cols, sql`, `)}) VALUES (${sql.join(vals, sql`, `)})`,
+    );
+  } catch (err) {
     // Audit logs must never break the main request flow.
+    // Log so that silent INSERT failures are visible in server output.
+    console.error("[audit] createAuditLog failed:", (err as Error)?.message ?? err);
   }
 }
