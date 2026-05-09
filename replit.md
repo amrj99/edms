@@ -16,6 +16,34 @@ EDMS is a full-stack Engineering Document Management System designed as a scalab
 - Do not make changes to the `lib/db/` folder without explicit approval.
 - All database migrations should be explicitly reviewed before execution.
 
+## VPS Production Environment
+
+All VPS deployment instructions must use these exact names. Do **not** use `edms-db`, `edms_user`, or a service named `edms`.
+
+| Resource | Name |
+|---|---|
+| Postgres container | `edms_postgres` |
+| API container | `edms_api` |
+| Frontend container | `edms_frontend` |
+| Database user | `edms` |
+| Database name | `edms` |
+| Compose services | `api`, `frontend`, `postgres` |
+| Project path | `/var/www/edms` |
+
+**Correct psql pattern:**
+```bash
+docker compose exec postgres psql -U edms -d edms -c "SELECT 1;"
+```
+
+**Correct deploy pattern:**
+```bash
+cd /var/www/edms
+git pull
+docker compose build api
+docker compose up -d --force-recreate api
+docker compose logs api --tail=80
+```
+
 ## System Architecture
 
 The EDMS is structured as a pnpm monorepo, separating frontend (React + Vite) and backend (Express 5). Data persistence uses PostgreSQL with Drizzle ORM. Authentication is JWT-based.
