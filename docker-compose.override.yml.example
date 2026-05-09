@@ -23,11 +23,12 @@
 # additional services, etc.
 #
 # ── Current production .env is sufficient for: ───────────────
-#   DATABASE_URL          → already honored by docker-compose.yml
-#   DEFAULT_STORAGE_TYPE  → already honored by docker-compose.yml
-#   R2_BUCKET / R2_*      → injected via env_file: .env
+#   DATABASE_URL          → honored by docker-compose.yml (${DATABASE_URL:-...})
+#   DEFAULT_STORAGE_TYPE  → honored by docker-compose.yml (keep as "onpremise"
+#                           or unset; do NOT set to "r2" — R2 is auto-detected)
+#   R2_BUCKET / R2_*      → injected via env_file: .env (auto-activates R2)
 #   CF_ACCOUNT_ID / etc.  → injected via env_file: .env
-#   JWT_SECRET            → already honored by docker-compose.yml
+#   JWT_SECRET            → honored by docker-compose.yml
 #
 # ── Example overrides (uncomment as needed) ──────────────────
 
