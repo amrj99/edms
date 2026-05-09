@@ -48,5 +48,9 @@ Thumbs.db
 .cache/
 .local/
 
+# Docker Compose local overrides — never commit production-specific overrides
+# Create docker-compose.override.yml on each deployment host from the .example template
+docker-compose.override.yml
+
 # Pasted log/asset files from Replit chat (should never be committed)
 attached_assets/

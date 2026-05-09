@@ -38,7 +38,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8080
-      DATABASE_URL: postgresql://edms:${POSTGRES_PASSWORD:-edms_dev_password}@postgres:5432/edms
+      # Reads DATABASE_URL from .env first; falls back to the internal postgres
+      # container using the dev default password. In production, set DATABASE_URL
+      # in your .env file — that value always takes precedence over this fallback.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://edms:edms_dev_password@postgres:5432/edms}
       JWT_SECRET: ${JWT_SECRET:-edms-secret-key-change-in-production}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-edms-refresh-key-change-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
@@ -55,7 +58,9 @@ services:
       APP_URL: ${APP_URL:-}
       # ── Default storage for self-hosted VPS deployments ─────────────────────
       # Override per-org via Admin → Storage settings.
-      # Change DEFAULT_STORAGE_TYPE to "s3" and set S3_* vars to use MinIO / S3.
+      # Set DEFAULT_STORAGE_TYPE in .env to change the fallback (e.g. "r2", "s3").
+      # All R2/S3 credentials are read from .env via env_file above — no changes
+      # to this file are needed for storage configuration.
       DEFAULT_STORAGE_TYPE: ${DEFAULT_STORAGE_TYPE:-onpremise}
       DEFAULT_STORAGE_PATH: ${DEFAULT_STORAGE_PATH:-/app/uploads}
       # ── Upload size limit ────────────────────────────────────────────────────

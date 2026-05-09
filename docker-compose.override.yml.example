@@ -1,0 +1,59 @@
+# ============================================================
+# Docker Compose Production Override Template
+# ============================================================
+# This file is an EXAMPLE. Copy it to docker-compose.override.yml
+# on your deployment host:
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#
+# docker-compose.override.yml is gitignored — it will never be committed
+# and will survive git pull without merge conflicts.
+#
+# Docker Compose merges this file automatically with docker-compose.yml.
+# No -f flags are needed. Precedence (highest → lowest):
+#   1. docker-compose.override.yml   ← host-specific overrides
+#   2. docker-compose.yml            ← repository defaults
+#   3. .env                          ← variable substitution source
+#
+# ── When do you need this file? ──────────────────────────────
+# Most production config (DATABASE_URL, storage credentials, API keys)
+# should be set in .env — no override file needed for those.
+# Use this file only for Docker-level overrides that cannot be expressed
+# as environment variables: port remapping, extra volumes, resource limits,
+# additional services, etc.
+#
+# ── Current production .env is sufficient for: ───────────────
+#   DATABASE_URL          → already honored by docker-compose.yml
+#   DEFAULT_STORAGE_TYPE  → already honored by docker-compose.yml
+#   R2_BUCKET / R2_*      → injected via env_file: .env
+#   CF_ACCOUNT_ID / etc.  → injected via env_file: .env
+#   JWT_SECRET            → already honored by docker-compose.yml
+#
+# ── Example overrides (uncomment as needed) ──────────────────
+
+# version: "3.9"
+#
+# services:
+#   api:
+#     # Remap the API port if 8080 is taken on this host
+#     ports:
+#       - "9090:8080"
+#
+#     # Add host-specific environment overrides (supplements .env)
+#     environment:
+#       SOME_HOST_SPECIFIC_VAR: value
+#
+#     # Mount extra volumes (e.g. TLS certs, custom configs)
+#     volumes:
+#       - /etc/ssl/certs:/etc/ssl/certs:ro
+#
+#     # Resource limits (Docker Swarm / Compose v3 deploy key)
+#     # deploy:
+#     #   resources:
+#     #     limits:
+#     #       memory: 2g
+#
+#   frontend:
+#     # Use a custom nginx config from a host path
+#     volumes:
+#       - /etc/edms/nginx.conf:/etc/nginx/conf.d/default.conf:ro
