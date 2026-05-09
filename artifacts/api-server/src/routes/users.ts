@@ -89,9 +89,11 @@ router.post("/", requireAuth, async (req, res) => {
     return;
   }
 
-  // Enforce per-plan user limit
+  // Enforce per-plan user limit.
+  // system_owner is a platform-level actor and must never be blocked by tenant
+  // plan quotas — they manage all orgs, including expired ones.
   const targetOrgId = organizationId ? parseInt(String(organizationId)) : req.user!.organizationId;
-  if (targetOrgId) {
+  if (targetOrgId && !isSystemOwner(req.user!)) {
     // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
     const planId = await getOrgPlan(targetOrgId);
     const plan = PLANS.find(p => p.id === planId);
