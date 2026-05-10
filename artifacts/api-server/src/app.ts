@@ -8,6 +8,7 @@ import { logger } from "./lib/logger.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { seedPlans } from "./lib/seed-plans.js";
+import { runIntegrityMigrations } from "./lib/integrity-migrations.js";
 import { resetModulesToPlan } from "./lib/reset-modules-to-plan.js";
 import { startModuleSyncScheduler } from "./lib/module-sync-scheduler.js";
 import { initRlsPolicies } from "./lib/rls-init.js";
@@ -160,19 +161,6 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
-// ── Development-only seed ─────────────────────────────────────────────────────
-// seedDefaultAdmin() creates admin@admin.com / owner@system.com with hardcoded
-// passwords for local development convenience. It must never run in production
-// where those accounts would be a security liability.
-// Guard: NODE_ENV must be explicitly set to "production" to suppress this.
-if (!isProd) {
-  seedDefaultAdmin().catch((err) => {
-    logger.error({ err }, "[seed] seedDefaultAdmin failed — continuing anyway");
-  });
-} else {
-  logger.info("[seed] seedDefaultAdmin skipped (NODE_ENV=production) — demo credentials will not be created");
-}
-
 // Phase 0 security fix — ensure every org has an org_config row so the
 // fail-closed requireModule middleware never denies access to a legitimately
 // configured organization. Safe to call multiple times (idempotent).
@@ -180,12 +168,38 @@ backfillOrgConfig().catch((err) => {
   logger.error({ err }, "[backfill] org_config startup backfill failed — continuing, but unconfigured orgs may be denied access");
 });
 
-// Phase 2 foundation — populate the plans catalog table from hardcoded PLANS array.
-// Shadow mode: no behavior change. getResolvedPlan() uses these rows for mismatch logging.
-// Safe to call multiple times (upsert — will update plan fields if changed).
-seedPlans().catch((err) => {
-  logger.error({ err }, "[seed-plans] startup plan seed failed — getResolvedPlan() will log warnings until plans are seeded");
-});
+// Phase 2 foundation — populate the plans catalog table and apply schema
+// column additions (ensureTablesExist). Must complete before anything that
+// queries the users table with the full Drizzle schema (e.g. seedDefaultAdmin).
+//
+// Chained sequence after seedPlans() resolves:
+//   1. seedDefaultAdmin  — dev only; needs email_verification_token_expires_at
+//      to exist, which ensureTablesExist() guarantees before this runs.
+//   2. runIntegrityMigrations — applies FK constraints + orphan detection.
+//      Also adds the token-expiry column as belt-and-suspenders, but the
+//      column is already present from ensureTablesExist() so the ALTER is a no-op.
+seedPlans()
+  .then(() => {
+    // ── Development-only seed ──────────────────────────────────────────────
+    // seedDefaultAdmin() creates admin@admin.com / owner@system.com with
+    // hardcoded passwords. Must never run in production.
+    if (!isProd) {
+      seedDefaultAdmin().catch((err) => {
+        logger.error({ err }, "[seed] seedDefaultAdmin failed — continuing anyway");
+      });
+    } else {
+      logger.info("[seed] seedDefaultAdmin skipped (NODE_ENV=production) — demo credentials will not be created");
+    }
+
+    // H1 — Database integrity migrations (FK constraints + orphan detection).
+    // Runs after seedPlans() so all tables and columns are guaranteed to exist.
+    runIntegrityMigrations().catch((err) => {
+      logger.error({ err }, "[integrity] runIntegrityMigrations failed — startup continues, but DB constraints may be missing");
+    });
+  })
+  .catch((err) => {
+    logger.error({ err }, "[seed-plans] startup plan seed failed — getResolvedPlan() will log warnings until plans are seeded");
+  });
 
 // Phase 2.95 — Reset org_config.modules to exactly match plan defaults.
 // Eliminates all plan_gap and orphan mismatches on test/demo data.

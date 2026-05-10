@@ -214,6 +214,9 @@ async function ensureTablesExist(): Promise<void> {
   await db.execute(sql`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMP`);
   await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`);
   await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token TEXT`);
+  // H1.3 — token expiry column. Added here (in ensureTablesExist) so the column
+  // is guaranteed to exist before any startup function queries the users table.
+  await db.execute(sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verification_token_expires_at TIMESTAMP`);
 
   // org_feature_overrides — references organizations + users (both exist in prod)
   await db.execute(sql`

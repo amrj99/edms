@@ -568,6 +568,7 @@ router.post("/register-org", registerOrgLimiter, async (req, res) => {
   // Create admin user (email unverified until token is clicked)
   const passwordHash = await hashPassword(adminPassword);
   const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+  const emailVerificationTokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 h
 
   const [user] = await db.insert(usersTable).values({
     email: adminEmail.toLowerCase().trim(),
@@ -578,6 +579,7 @@ router.post("/register-org", registerOrgLimiter, async (req, res) => {
     organizationId: org.id,
     isActive: true,
     emailVerificationToken,
+    emailVerificationTokenExpiresAt,
   }).returning();
 
   // Auto-grant trial AI credits (fire-and-forget — non-fatal if it fails)
@@ -630,9 +632,21 @@ router.get("/verify-email", async (req, res) => {
     return;
   }
 
+  // H1.3: enforce token expiry.
+  // Tokens issued before this column existed will have NULL here — treated as
+  // "no expiry set" for backward compatibility with any pre-existing tokens.
+  if (user.emailVerificationTokenExpiresAt && new Date() > user.emailVerificationTokenExpiresAt) {
+    res.status(400).json({
+      error: "Token Expired",
+      message: "Your verification link has expired. Please request a new verification email from your administrator.",
+    });
+    return;
+  }
+
   await db.update(usersTable).set({
     emailVerifiedAt: new Date(),
     emailVerificationToken: null,
+    emailVerificationTokenExpiresAt: null,
     updatedAt: new Date(),
   }).where(eq(usersTable.id, user.id));
 
