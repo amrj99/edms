@@ -160,9 +160,18 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
-seedDefaultAdmin().catch((err) => {
-  logger.error({ err }, "Seed failed — continuing anyway");
-});
+// ── Development-only seed ─────────────────────────────────────────────────────
+// seedDefaultAdmin() creates admin@admin.com / owner@system.com with hardcoded
+// passwords for local development convenience. It must never run in production
+// where those accounts would be a security liability.
+// Guard: NODE_ENV must be explicitly set to "production" to suppress this.
+if (!isProd) {
+  seedDefaultAdmin().catch((err) => {
+    logger.error({ err }, "[seed] seedDefaultAdmin failed — continuing anyway");
+  });
+} else {
+  logger.info("[seed] seedDefaultAdmin skipped (NODE_ENV=production) — demo credentials will not be created");
+}
 
 // Phase 0 security fix — ensure every org has an org_config row so the
 // fail-closed requireModule middleware never denies access to a legitimately

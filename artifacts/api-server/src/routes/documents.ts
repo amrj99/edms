@@ -1167,9 +1167,26 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
 
   const orgId = req.user!.organizationId ?? null;
 
+  // ── system_owner full bypass ─────────────────────────────────────────────
+  // system_owner is a platform-level actor and must never be blocked by
+  // per-org quota or restriction logic (trial expiry, upload block, storage
+  // quota). This mirrors the global read-only override bypass in routes/index.ts.
+  const skipQuotaChecks = req.user?.role === "system_owner";
+
   // ── Email verification gate ──────────────────────────────────────────────
   // Users must verify their email before uploading files.
-  {
+  //
+  // Exempt roles (skipEmailGate):
+  //   system_owner — platform-level actor; no verification token is issued at
+  //     account creation (first-user path or seed), so the column is always NULL.
+  //   admin — created administratively via POST /api/users; no verification token
+  //     or email is sent at creation. Blocking admins from uploading is a data
+  //     integrity hazard (they manage documents on behalf of the org).
+  //
+  // All other roles (project_manager, document_controller, reviewer, member,
+  // viewer) must have email_verified_at set before uploading.
+  const skipEmailGate = req.user?.role === "system_owner" || req.user?.role === "admin";
+  if (!skipEmailGate) {
     const [uploader] = await db
       .select({ emailVerifiedAt: usersTable.emailVerifiedAt })
       .from(usersTable)
@@ -1182,12 +1199,6 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req, res) =
       });
     }
   }
-
-  // ── system_owner full bypass ─────────────────────────────────────────────
-  // system_owner is a platform-level actor and must never be blocked by
-  // per-org quota or restriction logic (trial expiry, upload block, storage
-  // quota). This mirrors the global read-only override bypass in routes/index.ts.
-  const skipQuotaChecks = req.user?.role === "system_owner";
 
   // ── Trial-expired upload block ────────────────────────────────────────────
   // Orgs that were on trial and have been downgraded to free (trialEndsAt IS

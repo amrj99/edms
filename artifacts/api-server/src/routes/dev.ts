@@ -25,6 +25,20 @@ import { eq, inArray } from "drizzle-orm";
 import { hashPassword, isSysAdmin, requireAuth } from "../lib/auth.js";
 
 const router = Router();
+
+// ── Defense-in-depth production guard ────────────────────────────────────────
+// Primary guard: this router is only mounted when NODE_ENV !== "production"
+// (see routes/index.ts). This secondary guard is a belt-and-suspenders check
+// so that even if the mount guard is accidentally removed or NODE_ENV is wrong,
+// no dev/seed endpoint is reachable in production.
+router.use((req, res, next) => {
+  if (process.env.NODE_ENV === "production") {
+    res.status(404).json({ error: "Not Found" });
+    return;
+  }
+  next();
+});
+
 router.use(requireAuth);
 
 const PLACEHOLDER_PDF_SIZE = 512; // bytes (simulated)
