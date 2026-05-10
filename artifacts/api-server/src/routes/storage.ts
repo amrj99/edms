@@ -8,6 +8,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.
 import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { shouldAuditFileAccess } from "../lib/file-access-cache.js";
 import { getEffectiveOnPremPath } from "../lib/storageConfig.js";
 
 // ─── MIME type detection ──────────────────────────────────────────────────────
@@ -53,12 +54,43 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
 
     if (viewToken) {
       const payload = verifyToken(viewToken) as Record<string, unknown> | null;
+      const expectedPath = expectedPathFn(req);
+
       if (!payload || payload.type !== "view_file") {
+        // Security audit: invalid or expired view token presented
+        createAuditLog({
+          action: "INVALID_VIEW_TOKEN",
+          entityType: "file",
+          entityId: 0,
+          entityTitle: expectedPath,
+          details: {
+            reason: !payload ? "invalid_or_expired" : "wrong_token_type",
+            requestedPath: expectedPath,
+            accessSource: "web",
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"] as string | undefined,
+        });
         res.status(401).json({ error: "Invalid or expired view token" });
         return;
       }
-      const expectedPath = expectedPathFn(req);
       if (payload.url !== expectedPath) {
+        // Security audit: token path mismatch — could be deliberate spoofing
+        createAuditLog({
+          userId: payload.userId as number | undefined,
+          action: "INVALID_VIEW_TOKEN",
+          entityType: "file",
+          entityId: 0,
+          entityTitle: expectedPath,
+          details: {
+            reason: "path_mismatch",
+            requestedPath: expectedPath,
+            tokenPath: String(payload.url),
+            accessSource: "web",
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"] as string | undefined,
+        });
         res.status(403).json({ error: "View token does not match this file" });
         return;
       }
@@ -89,6 +121,18 @@ const SAFE_INLINE_TYPES = new Set([
   "text/plain", "text/csv",
   "video/mp4",
 ]);
+
+/**
+ * Infer a human-readable storage provider label from a storage URL.
+ * Used to populate details.storageType in file access audit events.
+ */
+function resolveStorageType(url: string): string {
+  if (url.startsWith("/api/storage/r2-object/")) return "r2";
+  if (url.startsWith("/api/storage/s3-object/")) return "s3";
+  if (url.startsWith("/api/storage/onpremise/")) return "onpremise";
+  if (url.startsWith("/api/storage/objects/") || url.startsWith("/objects/")) return "cloud";
+  return "unknown";
+}
 
 /**
  * Log an unauthorized storage access attempt and return false.
@@ -172,6 +216,24 @@ router.get("/view-token", requireAuth, (req: Request, res: Response) => {
     },
     300, // 5 minutes
   );
+
+  createAuditLog({
+    userId: req.user!.id,
+    organizationId: req.user!.organizationId ?? undefined,
+    action: "view_token_issued",
+    entityType: "file",
+    entityId: 0,
+    entityTitle: decodedUrl,
+    details: {
+      storageUrl: decodedUrl,
+      storageType: resolveStorageType(decodedUrl),
+      expiresInSec: 300,
+      accessSource: "web",
+    },
+    ipAddress: req.ip,
+    userAgent: req.headers["user-agent"] as string | undefined,
+    actorRole: req.user!.role,
+  });
 
   res.json({ token, expiresIn: 300 });
 });
@@ -367,6 +429,31 @@ router.get(
       const filename = wildcardPath.split("/").pop() ?? "";
       const ctHint = req.query.ct as string | undefined;
       const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint)) ? ctHint : getMimeType(filename);
+
+      // ── File access audit ─────────────────────────────────────────────────
+      const isViewToken = !!req.query.vt;
+      const accessAction = isViewToken ? "file_preview" : "file_download";
+      if (!isViewToken || shouldAuditFileAccess(req.user!.id, wildcardPath)) {
+        createAuditLog({
+          userId: req.user!.id,
+          organizationId: req.user!.organizationId ?? undefined,
+          action: accessAction,
+          entityType: "file",
+          entityId: 0,
+          entityTitle: filename,
+          details: {
+            objectKey: wildcardPath,
+            storageType: "cloud",
+            mimeType,
+            accessMethod: isViewToken ? "view_token" : "bearer_token",
+            accessSource: "web",
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"] as string | undefined,
+          actorRole: req.user!.role,
+        });
+      }
+
       res.setHeader("Content-Type", mimeType);
       res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
       // Forward remaining headers from object storage (but not Content-Type — we set it)
@@ -458,6 +545,32 @@ router.get(
     const mimeType = (ctHint && SAFE_INLINE_TYPES.has(ctHint))
       ? ctHint
       : getMimeType(safeFilename);
+
+    // ── File access audit ─────────────────────────────────────────────────────
+    const isViewToken = !!req.query.vt;
+    const accessAction = isViewToken ? "file_preview" : "file_download";
+    const auditKey = `${orgId}/${projectId}/${fileType}/${safeFilename}`;
+    if (!isViewToken || shouldAuditFileAccess(req.user!.id, auditKey)) {
+      createAuditLog({
+        userId: req.user!.id,
+        organizationId: targetOrgId,
+        action: accessAction,
+        entityType: "file",
+        entityId: 0,
+        entityTitle: safeFilename,
+        details: {
+          objectKey: auditKey,
+          storageType: "onpremise",
+          mimeType,
+          fileSizeBytes: fileSize,
+          accessMethod: isViewToken ? "view_token" : "bearer_token",
+          accessSource: "web",
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] as string | undefined,
+        actorRole: req.user!.role,
+      });
+    }
 
     // ── Common response headers ───────────────────────────────────────────────
     res.setHeader("Content-Type", mimeType);
@@ -567,6 +680,28 @@ router.get(
       res.status(404).json({ error: "S3 not configured or object not found" });
       return;
     }
+
+    // ── File access audit ─────────────────────────────────────────────────────
+    createAuditLog({
+      userId: req.user?.id,
+      organizationId: orgId,
+      action: "file_signed_access",
+      entityType: "file",
+      entityId: 0,
+      entityTitle: objectKey.split("/").pop() ?? objectKey,
+      details: {
+        objectKey,
+        storageType: "s3",
+        presignedTtlSec: 600,
+        accessMethod: req.query.vt ? "view_token" : "bearer_token",
+        accessSource: "web",
+        redirected: true,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"] as string | undefined,
+      actorRole: req.user?.role,
+    });
+
     res.redirect(302, presignedUrl);
   } catch (err: any) {
     console.error("S3 serve error:", err.message);
@@ -638,6 +773,28 @@ router.get(
         res.status(404).json({ error: "R2 not configured or object not found" });
         return;
       }
+
+      // ── File access audit ───────────────────────────────────────────────────
+      createAuditLog({
+        userId: req.user?.id,
+        organizationId: orgId,
+        action: "file_signed_access",
+        entityType: "file",
+        entityId: 0,
+        entityTitle: objectKeyDecoded.split("/").pop() ?? objectKeyDecoded,
+        details: {
+          objectKey: objectKeyDecoded,
+          storageType: "r2",
+          presignedTtlSec: 3600,
+          accessMethod: req.query.vt ? "view_token" : "bearer_token",
+          accessSource: "web",
+          redirected: true,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] as string | undefined,
+        actorRole: req.user?.role,
+      });
+
       res.redirect(302, presignedUrl);
     } catch (err: any) {
       console.error("[storage] R2 serve error:", err.message);
