@@ -710,7 +710,7 @@ export async function sendEmailVerificationEmail(opts: {
   token: string;
 }): Promise<ReturnType<typeof sendEmail>> {
   const verifyUrl = `${APP_URL}/verify-email?token=${opts.token}`;
-  const html = buildTemplate(`
+  const html = baseLayout(`
     <h2 style="color:#0f172a;margin:0 0 8px;">Verify your email address</h2>
     <p style="color:#374151;font-size:15px;margin:0 0 20px;">
       Hi ${opts.firstName}, thanks for signing up for ArcScale EDMS. Please verify your email address to enable full access to your account.
