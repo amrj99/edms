@@ -601,6 +601,14 @@ router.post("/register-org", registerOrgLimiter, async (req, res) => {
     entityTitle: org.name,
   });
 
+  // ── P0: never expose one-time credentials in production API responses ────────
+  // The emailVerificationToken is a one-time secret. Including it in the JSON
+  // response means any proxy, log aggregator, or API monitoring tool that logs
+  // response bodies will persist it, breaking the one-time guarantee.
+  // In development it is included as a convenience (no email server required).
+  // In production the user must follow the link sent to their email address.
+  const isProd = process.env.NODE_ENV === "production";
+
   res.status(201).json({
     success: true,
     message: `Organisation "${org.name}" created on a 14-day free trial. Please check your email to verify your address.`,
@@ -608,9 +616,12 @@ router.post("/register-org", registerOrgLimiter, async (req, res) => {
     orgName: org.name,
     userId: user.id,
     trialEndsAt: trialEndsAt.toISOString(),
-    // Dev convenience — token also emailed when RESEND_API_KEY is set
-    emailVerificationToken,
-    note: "Check your email to verify your address. In dev mode the token is also included in this response.",
+    ...(isProd
+      ? {}
+      : {
+          emailVerificationToken,
+          note: "Development mode only: token included in response for convenience. In production, check email.",
+        }),
   });
 });
 

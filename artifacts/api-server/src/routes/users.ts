@@ -83,17 +83,43 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 router.post("/", requireAuth, async (req, res) => {
+  const caller = req.user!;
+
+  // ── P0 security fix: role guard ────────────────────────────────────────────
+  // Only admin+ may create users. Without this check any authenticated user
+  // (viewer, member, reviewer, etc.) could POST to this endpoint and create
+  // accounts with elevated roles — a direct privilege escalation path.
+  if (!isSysAdmin(caller)) {
+    res.status(403).json({ error: "Forbidden", message: "Administrator privileges required to create users." });
+    return;
+  }
+
   const { email, password, firstName, lastName, role, organizationId } = req.body;
   if (!email || !password || !firstName || !lastName || !role) {
     res.status(400).json({ error: "Bad Request", message: "All fields required" });
     return;
   }
 
+  // ── Role assignment guard ──────────────────────────────────────────────────
+  // system_owner is a platform-level role — it must never be assignable via
+  // the API. It can only be set directly in the database.
+  // Non-system_owner callers (org admins) may only assign org-level roles.
+  const ORG_ASSIGNABLE_ROLES = ["admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
+  if (!ORG_ASSIGNABLE_ROLES.includes(role)) {
+    res.status(400).json({ error: "Bad Request", message: `Role "${role}" is not assignable via this endpoint.` });
+    return;
+  }
+
+  if (password.length < 8) {
+    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters." });
+    return;
+  }
+
   // Enforce per-plan user limit.
   // system_owner is a platform-level actor and must never be blocked by tenant
   // plan quotas — they manage all orgs, including expired ones.
-  const targetOrgId = organizationId ? parseInt(String(organizationId)) : req.user!.organizationId;
-  if (targetOrgId && !isSystemOwner(req.user!)) {
+  const targetOrgId = organizationId ? parseInt(String(organizationId)) : caller.organizationId;
+  if (targetOrgId && !isSystemOwner(caller)) {
     // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
     const planId = await getOrgPlan(targetOrgId);
     const plan = PLANS.find(p => p.id === planId);
@@ -115,9 +141,9 @@ router.post("/", requireAuth, async (req, res) => {
 
   // Only system_owner may create users in a different organization.
   // Admins and all other callers are restricted to their own org.
-  const resolvedOrgId = isSystemOwner(req.user!)
+  const resolvedOrgId = isSystemOwner(caller)
     ? (organizationId ? parseInt(String(organizationId)) : null)
-    : (req.user!.organizationId ?? null);
+    : (caller.organizationId ?? null);
 
   const [user] = await db.insert(usersTable).values({
     email: email.toLowerCase(),
@@ -128,7 +154,15 @@ router.post("/", requireAuth, async (req, res) => {
     organizationId: resolvedOrgId,
     isActive: true,
   }).returning();
-  await createAuditLog({ userId: req.user!.id, action: "create", entityType: "user", entityId: user.id, entityTitle: `${user.firstName} ${user.lastName}` });
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: resolvedOrgId ?? undefined,
+    action: "create",
+    entityType: "user",
+    entityId: user.id,
+    entityTitle: `${user.firstName} ${user.lastName}`,
+    details: { role: user.role, createdByRole: caller.role },
+  });
   res.status(201).json({
     id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
     role: user.role, organizationId: user.organizationId, isActive: user.isActive, createdAt: user.createdAt,
@@ -252,9 +286,58 @@ router.put("/:id", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+  const caller = req.user!;
+
+  // ── P0 security fix: role guard ────────────────────────────────────────────
+  if (!isSysAdmin(caller)) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
   const id = parseInt(req.params.id);
+
+  // Prevent self-deletion — an admin deleting their own account could leave an
+  // org with no admin, and the action cannot be undone.
+  if (caller.id === id) {
+    res.status(400).json({ error: "Bad Request", message: "You cannot delete your own account." });
+    return;
+  }
+
+  // Fetch the target user before acting on it.
+  const [target] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+  if (!target) {
+    res.status(404).json({ error: "Not Found" });
+    return;
+  }
+
+  // ── P0 security fix: org boundary check ───────────────────────────────────
+  // Without this check, an admin from org A who knows a user ID from org B
+  // can delete that user. system_owner spans all orgs by design; org admins
+  // must stay within their own organization.
+  if (!isSystemOwner(caller) && target.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "Cross-organization deletion denied." });
+    return;
+  }
+
+  // Prevent deletion of system_owner accounts via the API.
+  // system_owner accounts are platform-level and must only be managed via DB.
+  if (target.role === "system_owner") {
+    res.status(403).json({ error: "Forbidden", message: "System owner accounts cannot be deleted via the API." });
+    return;
+  }
+
   await db.delete(usersTable).where(eq(usersTable.id, id));
+
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId ?? undefined,
+    action: "delete",
+    entityType: "user",
+    entityId: id,
+    entityTitle: `${target.firstName} ${target.lastName}`,
+    details: { deletedUserRole: target.role, deletedUserOrg: target.organizationId, deletedByRole: caller.role },
+  });
+
   res.status(204).send();
 });
 
@@ -266,8 +349,9 @@ router.post("/:id/reset-password", requireAuth, async (req, res) => {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   const { newPassword } = req.body;
-  if (!newPassword || newPassword.length < 6) {
-    res.status(400).json({ error: "Password must be at least 6 characters" });
+  // P0: enforce same 8-character minimum as all other password-setting paths.
+  if (!newPassword || newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters" });
     return;
   }
   const now = new Date();
