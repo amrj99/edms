@@ -38,17 +38,28 @@ router.get("/system-info", async (req, res) => {
     countRow(organizationsTable),
   ]);
 
+  // ── P1 fix: stale SMTP env var check ──────────────────────────────────────
+  // The email system was migrated from SMTP to Resend. The old SMTP_HOST/
+  // SMTP_USER/SMTP_PASS vars are not used and will never be set. Checking them
+  // caused the admin panel to always report email as "not configured" even when
+  // Resend is correctly set up. Now correctly reflects Resend configuration.
+  const resendConfigured = !!process.env.RESEND_API_KEY;
+  const fromEmail = process.env.FROM_EMAIL ?? null;
+  const emailFullyConfigured = resendConfigured && !!fromEmail;
+
   res.json({
     counts: { users, projects, documents, organizations: orgs },
     nodeVersion: process.version,
     uptime: Math.floor(process.uptime()),
     memory: process.memoryUsage(),
     env: process.env.NODE_ENV ?? "development",
-    emailConfigured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
+    emailConfigured: emailFullyConfigured,
+    emailProvider: "resend",
+    resendConfigured,
+    fromEmail,
+    fromEmailConfigured: !!fromEmail,
     storageConfigured: !!(process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID),
     appUrl: process.env.APP_URL ?? null,
-    smtpHost: process.env.SMTP_HOST ?? null,
-    smtpFrom: process.env.SMTP_FROM ?? null,
   });
 });
 

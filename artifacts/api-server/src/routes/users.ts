@@ -253,6 +253,21 @@ router.put("/:id", requireAuth, async (req, res) => {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
+  // ── P1 security fix: org boundary for PUT ──────────────────────────────────
+  // Without this check an org admin could modify any user in any org — changing
+  // their role, disabling their account, or updating their profile. Verified
+  // exploitable in T13 live testing: admin (org1) → PUT user (org2) → 200.
+  // system_owner spans all orgs by design; org admins must stay within their org.
+  if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
+    const [target] = await db.select({ organizationId: usersTable.organizationId })
+      .from(usersTable).where(eq(usersTable.id, id)).limit(1);
+    if (!target) { res.status(404).json({ error: "Not Found" }); return; }
+    if (target.organizationId !== caller.organizationId) {
+      res.status(403).json({ error: "Forbidden", message: "Cross-organization modification denied." });
+      return;
+    }
+  }
+
   // Non-admins cannot change privileged fields on their own profile
   if (!isSysAdmin(caller) && isSelf) {
     const forbidden = ["role", "isActive", "organizationId"];
@@ -276,19 +291,29 @@ router.put("/:id", requireAuth, async (req, res) => {
     updateSet.organizationId = organizationId ?? null;
   }
   if (department !== undefined) updateSet.department = department || null;
+
+  const changedFields = Object.keys(updateSet).filter(k => k !== "updatedAt");
   const [user] = await db.update(usersTable)
     .set(updateSet)
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
-  await createAuditLog({ userId: req.user!.id, action: "update", entityType: "user", entityId: id, entityTitle: `${user.firstName} ${user.lastName}` });
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId ?? undefined,
+    action: "update",
+    entityType: "user",
+    entityId: id,
+    entityTitle: `${user.firstName} ${user.lastName}`,
+    details: { callerRole: caller.role, changedFields },
+  });
   res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, department: user.department, isActive: user.isActive, createdAt: user.createdAt });
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
   const caller = req.user!;
 
-  // ── P0 security fix: role guard ────────────────────────────────────────────
+  // ── Role guard ─────────────────────────────────────────────────────────────
   if (!isSysAdmin(caller)) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -310,23 +335,49 @@ router.delete("/:id", requireAuth, async (req, res) => {
     return;
   }
 
-  // ── P0 security fix: org boundary check ───────────────────────────────────
-  // Without this check, an admin from org A who knows a user ID from org B
-  // can delete that user. system_owner spans all orgs by design; org admins
-  // must stay within their own organization.
-  if (!isSystemOwner(caller) && target.organizationId !== caller.organizationId) {
-    res.status(403).json({ error: "Forbidden", message: "Cross-organization deletion denied." });
-    return;
-  }
-
-  // Prevent deletion of system_owner accounts via the API.
-  // system_owner accounts are platform-level and must only be managed via DB.
+  // ── system_owner protection (check BEFORE org boundary) ───────────────────
+  // system_owner accounts have no organizationId (null). If the org boundary
+  // check ran first, it would fire with a misleading "cross-organization"
+  // message because null !== caller.organizationId. Check role first so the
+  // correct, accurate message is returned.
   if (target.role === "system_owner") {
     res.status(403).json({ error: "Forbidden", message: "System owner accounts cannot be deleted via the API." });
     return;
   }
 
-  await db.delete(usersTable).where(eq(usersTable.id, id));
+  // ── Org boundary check ─────────────────────────────────────────────────────
+  // system_owner spans all orgs by design; org admins must stay within their org.
+  if (!isSystemOwner(caller) && target.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "Cross-organization deletion denied." });
+    return;
+  }
+
+  try {
+    await db.delete(usersTable).where(eq(usersTable.id, id));
+  } catch (err: any) {
+    // FK violations occur when the user has project memberships, tasks, or
+    // other related records. Hard deletion requires clearing those first.
+    // Return 409 so the caller understands why (rather than a 500).
+    //
+    // Drizzle-orm wraps the underlying pg error — the PostgreSQL error code
+    // (23503 = foreign_key_violation) may be on err.code, err.cause.code, or
+    // somewhere in the stringified error. Check all three to be safe.
+    const errStr = String(err?.message ?? "") + String(err?.stack ?? "");
+    const isFkViolation =
+      err?.code === "23503" ||
+      err?.cause?.code === "23503" ||
+      errStr.includes("23503") ||
+      errStr.toLowerCase().includes("foreign key");
+
+    if (isFkViolation) {
+      res.status(409).json({
+        error: "Conflict",
+        message: "This user has related records (project memberships, tasks, etc.) and cannot be hard-deleted. Deactivate the account instead: PUT /:id with { isActive: false }.",
+      });
+      return;
+    }
+    throw err;
+  }
 
   await createAuditLog({
     userId: caller.id,
@@ -344,12 +395,29 @@ router.delete("/:id", requireAuth, async (req, res) => {
 router.post("/:id/reset-password", requireAuth, async (req, res) => {
   const caller = req.user!;
   const id = parseInt(req.params.id);
+  const isSelf = caller.id === id;
+
   // Only sysAdmins can reset other users' passwords; users may reset their own
-  if (!isSysAdmin(caller) && caller.id !== id) {
+  if (!isSysAdmin(caller) && !isSelf) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
+
+  // ── P1 security fix: org boundary for reset-password ─────────────────────
+  // Without this check an org admin could reset any user's password across orgs
+  // — a direct account takeover path. Verified exploitable in T12 live testing:
+  // admin (org1) → POST /users/5/reset-password (org2) → 200, password changed.
+  // system_owner spans all orgs by design; org admins must stay within their org.
+  if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
+    const [target] = await db.select({ organizationId: usersTable.organizationId })
+      .from(usersTable).where(eq(usersTable.id, id)).limit(1);
+    if (!target) { res.status(404).json({ error: "Not Found" }); return; }
+    if (target.organizationId !== caller.organizationId) {
+      res.status(403).json({ error: "Forbidden", message: "Cross-organization password reset denied." });
+      return;
+    }
+  }
+
   const { newPassword } = req.body;
-  // P0: enforce same 8-character minimum as all other password-setting paths.
   if (!newPassword || newPassword.length < 8) {
     res.status(400).json({ error: "Password must be at least 8 characters" });
     return;
@@ -360,7 +428,15 @@ router.post("/:id/reset-password", requireAuth, async (req, res) => {
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
-  await createAuditLog({ userId: req.user!.id, action: "reset_password", entityType: "user", entityId: id, entityTitle: `${user.firstName} ${user.lastName}` });
+  await createAuditLog({
+    userId: caller.id,
+    organizationId: caller.organizationId ?? undefined,
+    action: "reset_password",
+    entityType: "user",
+    entityId: id,
+    entityTitle: `${user.firstName} ${user.lastName}`,
+    details: { callerRole: caller.role, isSelf },
+  });
   res.json({ message: "Password reset successfully" });
 });
 
