@@ -12,3 +12,9 @@ id = "VfZpIf_f2aQjl4POJv-D1"
 uri = "file://docs/exports/ArcScale_EDMS_Architecture_and_Recovery_State.docx"
 type = "word_document"
 title = "ArcScale EDMS — Architecture & Recovery State (Word)"
+
+[[outputs]]
+id = "NpqTwA3-ywb4hvKZcalBm"
+uri = "file://journal_archive.zip"
+type = "unspecified"
+title = "journal_archive.zip — أرشيف رحلة ArcScale EDMS"

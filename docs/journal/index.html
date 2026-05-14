@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArcScale EDMS — أرشيف رحلة التطوير</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #1a1a24;
+    --bg3: #22222e;
+    --border: #2d2d3d;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #64748b;
+    --accent: #22c55e;
+    --accent2: #16a34a;
+    --code-bg: #0d0d14;
+    --code-border: #334155;
+    --table-head: #1e2533;
+    --link: #60a5fa;
+  }
+  .light {
+    --bg: #f8fafc;
+    --bg2: #f1f5f9;
+    --bg3: #e2e8f0;
+    --border: #cbd5e1;
+    --text: #1e293b;
+    --text2: #475569;
+    --text3: #94a3b8;
+    --accent: #16a34a;
+    --accent2: #15803d;
+    --code-bg: #f1f5f9;
+    --code-border: #94a3b8;
+    --table-head: #e2e8f0;
+    --link: #2563eb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* TOP BAR */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    flex-shrink: 0;
+    gap: 16px;
+  }
+  .header-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text2);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .header-title span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .theme-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.15s;
+  }
+  .theme-btn:hover { background: var(--border); }
+  .badge {
+    font-size: 11px;
+    color: var(--text3);
+    background: var(--bg3);
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  /* MAIN LAYOUT */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* SIDEBAR */
+  .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 14px 16px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text3);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .file-list { overflow-y: auto; flex: 1; padding: 8px 0; }
+  .file-item {
+    display: block;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: all 0.1s;
+    text-decoration: none;
+  }
+  .file-item:hover { background: var(--bg3); }
+  .file-item.active {
+    border-left-color: var(--accent);
+    background: var(--bg3);
+  }
+  .file-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.4;
+    display: block;
+  }
+  .file-item.active .file-name { color: var(--accent); }
+  .file-label {
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 2px;
+    display: block;
+  }
+  .file-item.gap .file-name { color: var(--text3); font-style: italic; }
+  .sidebar-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text3);
+    flex-shrink: 0;
+  }
+
+  /* CONTENT AREA */
+  .content-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 40px 48px;
+    max-width: 860px;
+  }
+  .content-area { max-width: 760px; }
+
+  /* MARKDOWN STYLES */
+  .md h1 {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 6px;
+    line-height: 1.3;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .md h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    margin-top: 32px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .md h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-top: 24px;
+    margin-bottom: 8px;
+  }
+  .md h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text2);
+    margin-top: 16px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .md p {
+    font-size: 14.5px;
+    line-height: 1.8;
+    color: var(--text);
+    margin-bottom: 12px;
+  }
+  .md ul, .md ol {
+    padding-right: 20px;
+    padding-left: 20px;
+    margin-bottom: 12px;
+  }
+  .md li {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .md li::marker { color: var(--accent); }
+  .md strong { color: var(--text); font-weight: 700; }
+  .md em { color: var(--text2); font-style: italic; }
+  .md del { color: var(--text3); text-decoration: line-through; }
+  .md a { color: var(--link); text-decoration: none; }
+  .md a:hover { text-decoration: underline; }
+  .md hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 24px 0;
+  }
+  .md blockquote {
+    border-right: 3px solid var(--accent);
+    border-left: 3px solid var(--accent);
+    background: var(--bg2);
+    padding: 10px 16px;
+    margin: 16px 0;
+    border-radius: 4px;
+    color: var(--text2);
+    font-style: italic;
+  }
+  .md code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12.5px;
+    background: var(--code-bg);
+    color: #86efac;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--code-border);
+  }
+  .md pre {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    margin: 16px 0;
+  }
+  .md pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #cbd5e1;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .md pre .kw { color: #c084fc; }
+  .md pre .cm { color: #64748b; font-style: italic; }
+  .md pre .str { color: #86efac; }
+  .md pre .num { color: #fb923c; }
+  /* Tables */
+  .md table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13.5px;
+  }
+  .md th {
+    background: var(--table-head);
+    padding: 8px 12px;
+    text-align: right;
+    font-weight: 600;
+    color: var(--text2);
+    border: 1px solid var(--border);
+  }
+  .md td {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  .md tr:nth-child(even) td { background: var(--bg2); }
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+  /* Empty state */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 60vh;
+    color: var(--text3);
+    text-align: center;
+  }
+  .empty-state p { font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-title"><span>ArcScale</span> EDMS — أرشيف رحلة التطوير</div>
+  <div class="header-right">
+    <span class="badge">2026-03-25 → 2026-05-13</span>
+    <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">☀ فاتح</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-header">ملفات الأرشيف</div>
+    <div class="file-list" id="fileList"></div>
+    <div class="sidebar-footer">10 ملفات · ~844 سطر</div>
+  </nav>
+  <div class="content-wrap">
+    <div class="content-area">
+      <div class="md" id="contentArea">
+        <div class="empty-state">
+          <div style="font-size:32px;margin-bottom:12px;">📂</div>
+          <strong style="color:var(--text2);font-size:15px;">اختر ملفاً من القائمة</strong>
+          <p>اضغط على أي فترة في الشريط الجانبي لقراءتها</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ EMBEDDED CONTENT ═══════════════ -->
+
+<script type="text/plain" id="fc-INDEX.md">
+# أرشيف رحلة تطوير ArcScale EDMS
+
+نظام توثيق هندسي تعليمي — رحلة حقيقية، بدون مبالغة.
+
+---
+
+## الهدف من هذا الأرشيف
+
+- توثيق رحلة بناء النظام كما حدثت فعلاً
+- حفظ المشاكل الحقيقية والحلول المستخدمة
+- إنشاء مرجع تعليمي للمستقبل
+- بنك أفكار للمحتوى والفيديوهات
+- سجل للقرارات المعمارية الكبيرة
+
+---
+
+## خريطة الفترات
+
+| الفترة | الموضوع الرئيسي |
+|--------|----------------|
+| 2026-03-25 → 2026-03-26 | البداية — بناء النواة الكاملة في يومين |
+| 2026-03-27 → 2026-03-29 | الوحدات، RBAC، التقارير، multi-org |
+| ~~2026-03-30 → 2026-04-23~~ | توقف تقريبي — أسباب وملاحظات |
+| 2026-04-24 → 2026-04-26 | تصلب أمني + نظام credits |
+| 2026-04-27 → 2026-04-29 | وضع تجريبي + تخزين Cloudflare R2 |
+| 2026-05-01 → 2026-05-05 | توجيه الذكاء الاصطناعي + CI/CD |
+| 2026-05-06 → 2026-05-08 | سلامة Migrations + Docker |
+| 2026-05-09 → 2026-05-13 | P0/P1 + backup + monitoring + فيديو |
+
+---
+
+## إحصاءات سريعة
+
+- **تاريخ البداية:** 2026-03-25
+- **آخر تحديث:** 2026-05-13
+- **عدد الـ commits الموثقة:** ~80+
+- **المكونات الرئيسية:** API (Express/Node), Frontend (React/Vite), PostgreSQL, Cloudflare R2, Docker
+- **أبرز الميزات:** Documents, Transmittals, Correspondence, NCR, AI commands, Multi-org, Billing, Audit logs
+
+---
+
+## ملاحظة صادقة
+
+هذا النظام بُني وحيداً (أو مع مساعد AI). ليس منتجاً مكتملاً ولا startup عالمية. هو تجربة حقيقية في بناء SaaS هندسي من الصفر — بكل أخطائها وإعادة كتابتها ولحظاتها الصعبة.
+</script>
+
+<script type="text/plain" id="fc-HOW_TO_UPDATE.md">
+# كيفية تحديث الأرشيف بطريقة اقتصادية
+
+الهدف: إنشاء قيد جديد لكل 7-10 أيام بأقل تكلفة ممكنة.
+
+---
+
+## الطريقة المقترحة (منخفضة التكلفة جداً)
+
+### الخطوة 1 — اجمع المادة الخام بأمر واحد
+
+```bash
+# آخر commits منذ آخر تحديث في الأرشيف
+git log --oneline --format="%ad | %s" --date=short --since="YYYY-MM-DD"
+
+# الملفات الجديدة أو المعدلة
+git diff --name-only HEAD~20 HEAD
+```
+
+### الخطوة 2 — أنشئ ملف الفترة
+
+اطلب من المساعد:
+
+```
+أنشئ قيد journal جديد للفترة من [تاريخ] إلى [تاريخ].
+اعتمد على:
+- هذا الـ git log: [الصق المخرجات]
+- ما ناقشناه في هذه الجلسة
+- لا تقرأ ملفات إضافية
+```
+
+### الخطوة 3 — أضفه للـ INDEX
+
+أضف سطراً في جدول الفترات في `INDEX.md`.
+
+---
+
+## قواعد صارمة لتوفير الرصيد
+
+| ما يُفعل | ما لا يُفعل |
+|---------|------------|
+| git log فقط كمصدر تقني | قراءة كل الكود من البداية |
+| الاعتماد على ذاكرة الجلسة | re-read ملفات كبيرة |
+| كتابة جميع الملفات دفعة واحدة | كتابة ملف ملف بشكل متسلسل |
+| الاكتفاء بالأحداث الهامة | توثيق كل تغيير صغير |
+
+---
+
+## تكرار التحديث المقترح
+
+- **كل 7-10 أيام** من العمل الفعلي
+- **عند كل قرار معماري كبير** (مثل: تغيير storage، إضافة نظام جديد)
+- **عند حل bug صعب** يستحق التوثيق
+
+---
+
+## هيكل الملف القياسي
+
+```markdown
+# الفترة: YYYY-MM-DD → YYYY-MM-DD
+**العنوان:** [اسم وصفي للفترة]
+
+## ما تم بناؤه
+## المشاكل والأخطاء
+## القرارات المعمارية
+## الدروس المستفادة
+## مصطلحات جديدة
+## أفكار محتوى مستقبلي
+```
+
+---
+
+## تنبيه أمني دائم
+
+لا تُدرج أبداً في ملفات الأرشيف:
+- عناوين IP حقيقية
+- emails شخصية
+- مفاتيح API أو secrets
+- أسماء مستخدمين حقيقيين
+- أي بيانات من قاعدة البيانات الحقيقية
+</script>
+
+<script type="text/plain" id="fc-GAP_march_april.md">
+# فجوة: 2026-03-30 → 2026-04-23
+**~3.5 أسابيع بدون commits**
+
+---
+
+## ما حدث
+
+لا توجد commits في هذه الفترة. الفجوة واضحة في git log.
+
+---
+
+## الأسباب المحتملة (صادقة)
+
+هذه الفترة لم تُوثَّق في وقتها، لذا ما يلي هو استنتاج وليس حقائق مؤكدة:
+
+- **احتمال:** إيقاف مؤقت للعمل على المشروع (حياة، عمل آخر، انشغال)
+- **احتمال:** فترة تفكير وإعادة تقييم لاتجاه المنتج
+- **احتمال:** العمل على أشياء لم تُدفع لـ git
+
+---
+
+## الدرس من هذه الفجوة
+
+**الفجوات طبيعية في المشاريع الجانبية.** المشاريع الحقيقية لا تسير بخط مستقيم. فترات الإيقاف ثم العودة بنشاط أكبر شيء طبيعي تماماً.
+
+ما يهم هو أن العودة في 2026-04-24 كانت بتركيز واضح على الأمان.
+
+---
+
+## ملاحظة للمستقبل
+
+إذا كانت هناك فجوة مشابهة، اكتب ملاحظة قصيرة حتى ولو كانت:
+
+> "فترة توقف — انشغال بأمور أخرى — سأعود لاحقاً"
+
+التوثيق الصادق يشمل أيضاً توثيق عدم التقدم.
+</script>
+
+<script type="text/plain" id="fc-2026-03-25_to_2026-03-26.md">
+# الفترة: 2026-03-25 → 2026-03-26
+**العنوان:** البداية — بناء النواة الكاملة في يومين
+
+---
+
+## ما تم بناؤه
+
+في يومين فقط، تم بناء هيكل النظام الكامل تقريباً:
+
+**البنية التقنية الأساسية:**
+- `artifacts/api-server/` — Express/Node.js API
+- `artifacts/edms/` — React + Vite frontend
+- PostgreSQL كقاعدة بيانات رئيسية
+- هيكل monorepo بـ pnpm
+
+**الوحدات التي بُنيت في أول يومين:**
+- نظام المصادقة (تسجيل دخول، JWT tokens، sessions)
+- إدارة المستخدمين وصلاحياتهم
+- Documents module (رفع، تصنيف، مراجعة، مقارنة)
+- Transmittals (حزم إرسال المستندات)
+- Notifications system
+- External sharing (مشاركة آمنة خارج المنظمة)
+- AI-powered document numbering
+- Multi-organization isolation (عزل البيانات بين المؤسسات)
+- Admin panel مع تبويبات: Audit logs, System info, Email config
+- تهيئة للـ production deployment
+
+---
+
+## المشاكل والأخطاء
+
+**التحدي الأكبر:** بناء كل شيء دفعة واحدة — خطر حقيقي.
+- عندما تبني نظاماً كاملاً في يومين، يصعب التتبع الدقيق لكل قرار
+- بعض الـ endpoints بُنيت بدون تفكير كافٍ في الـ authorization
+- هذا ظهر لاحقاً في أبريل كـ security debt
+
+**مشكلة معمارية اكتُشفت لاحقاً:**
+- الـ `canAccessProject` function لم تتحقق من org_id بشكل صحيح
+- أي مستخدم يعرف project ID يستطيع الوصول لمستنداته — ثغرة cross-org
+
+---
+
+## القرارات المعمارية
+
+| القرار | البديل الذي رُفض | السبب |
+|--------|----------------|-------|
+| pnpm monorepo | مشاريع منفصلة | مشاركة الكود والـ dependencies |
+| Express + Node.js | Fastify / NestJS | سرعة البدء والمرونة |
+| PostgreSQL | MongoDB | EDMS تعمل على بيانات علائقية |
+| JWT + sessions | OAuth only | التحكم الكامل في المصادقة |
+| React + Vite | Next.js | SPA خالص، لا حاجة لـ SSR |
+
+---
+
+## الدروس المستفادة
+
+1. **السرعة الأولية مكلفة لاحقاً** — الكود المكتوب بسرعة يحتاج re-hardening
+2. **Authorization ليس ميزة، هو بنية تحتية** — يجب التفكير فيه من اليوم الأول
+3. **Multi-tenancy معقد** — عزل البيانات بين organizations أكثر تعقيداً مما يبدو
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **Monorepo** | مشروع واحد يحتوي على عدة packages تشترك في الـ dependencies |
+| **pnpm** | مدير حزم أسرع من npm مع workspace support |
+| **JWT** | JSON Web Token — طريقة للمصادقة بدون sessions في الـ database |
+| **Multi-tenancy** | قدرة النظام على خدمة عدة عملاء من نفس الكود والـ database |
+| **Transmittal** | في EDMS: حزمة رسمية من المستندات تُرسل لطرف آخر مع رقم مرجعي |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"كيف تبني EDMS من الصفر في يومين"** — ليس مدحاً، بل تحليل صادق للمخاطر
+- **"Multi-tenancy: ما لا يُقال عنه"** — صعوبة عزل البيانات فعلاً
+- **"لماذا PostgreSQL وليس MongoDB لأنظمة المستندات"** — مقارنة تقنية حقيقية
+</script>
+
+<script type="text/plain" id="fc-2026-03-27_to_2026-03-29.md">
+# الفترة: 2026-03-27 → 2026-03-29
+**العنوان:** التوسع — وحدات كاملة، RBAC، bilingual، multi-org
+
+---
+
+## ما تم بناؤه
+
+**وحدات جديدة:**
+- Global documents page (عرض المستندات عبر كل المشاريع)
+- Document search محسّن مع file upload تحسينات
+- Correspondence module (المراسلات الرسمية)
+- Bilingual reporting module — تقارير بالعربية والإنجليزية
+- Meetings module
+- User profile page
+
+**التحسينات المعمارية:**
+- RBAC (Role-Based Access Control) — Task #1
+- Activity Log page مع role-gating — Task #2
+- Module Licensing (per-org feature flags) — Task #3
+- Multi-Organization Support Improvements — Task #5
+- Column visibility toggle في جداول NCR, ITR, Transmittals
+
+**تفصيل Task #5 (Multi-org):**
+كان هذا Task الأكثر تعقيداً — مر بـ 5 مراجعات (rejections) قبل القبول النهائي. المشكلة الجوهرية: عزل البيانات بين المؤسسات لم يكن كاملاً في التصميم الأولي.
+
+---
+
+## المشاكل والأخطاء
+
+**مشكلة Task #5 الممتدة:**
+- الـ Task مر بـ 5 دورات مراجعة
+- git log يظهر commits: "Task #5 Code Review Pass 4 Fixes", "5th rejection"
+- هذا طبيعي في بناء multi-tenancy — الأمر أصعب مما يبدو دائماً
+
+**مشكلة الـ state transitions:**
+- المستندات كانت تسمح بانتقالات غير منطقية (Draft مباشرة إلى Approved)
+- تم تطبيق state machine صريحة + مسح الـ metadata عند إعادة التقديم
+
+**مشكلة الـ bilingual:**
+- i18n للعربية والإنجليزية في نفس الوقت
+- التاريخ، الأرقام، اتجاه النص (RTL vs LTR) — تعقيدات حقيقية
+
+---
+
+## القرارات المعمارية
+
+**Module Licensing:**
+كل وحدة لها flag مستقل per-organization — يسمح بـ:
+- تفعيل وحدات مختلفة لمؤسسات مختلفة
+- الأساس لنظام subscription لاحقاً
+
+**Activity Log:**
+audit log منفصل عن notifications. الـ audit log للمراجعة التقنية والأمنية.
+
+---
+
+## الدروس المستفادة
+
+1. **Code review الصارم مؤلم لكنه ضروري** — Task #5 مر بـ 5 رفضات وخرج أفضل بكثير
+2. **i18n يجب أن يُبنى من البداية** — إضافته بعد بناء الواجهات صعبة جداً
+3. **State machines للمستندات ضرورية** — بدون انتقالات صريحة، تنشأ بيانات متناقضة
+4. **Feature flags أفضل من hardcoded permissions** — مرونة في التسعير والتفعيل
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **RBAC** | Role-Based Access Control — صلاحيات مبنية على الدور |
+| **i18n** | Internationalization — دعم عدة لغات |
+| **RTL** | Right-to-Left — اتجاه النص العربي |
+| **Feature Flag** | boolean يفعّل أو يعطّل ميزة دون deploy جديد |
+| **State Machine** | نموذج يحدد الحالات الممكنة والانتقالات المسموح بها |
+| **Audit Log** | سجل زمني لكل الأحداث للمراجعة الأمنية |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"State Machines في أنظمة المستندات"** — لماذا وثيقة ليست مجرد صف في DB
+- **"Multi-tenancy: 5 رفضات قبل أن يعمل"** — قصة Task #5 الحقيقية
+- **"i18n من الصفر: دروس عملية"** — العربية في React
+</script>
+
+<script type="text/plain" id="fc-2026-04-24_to_2026-04-26.md">
+# الفترة: 2026-04-24 → 2026-04-26
+**العنوان:** العودة بتركيز على الأمان والفوترة
+
+---
+
+## ما تم بناؤه
+
+**Security Hardening Phase 2 (6 مجالات):**
+- إزالة credentials من الـ startup logs
+- إصلاح cross-org document access bypass
+- إضافة project access guard لـ GET /documents/folders
+- تحسينات في أمان رفع الملفات
+- رفع حد حجم الملفات مع فحوصات أمنية
+
+**نظام AI Credits:**
+- credit system منفصلة عن خطط الاشتراك
+- صفحة billing تعرض الـ credits المتاحة
+- Stripe payment status indicator
+
+**تحديثات خطط الاشتراك:**
+- رفع حدود التخزين لعدة خطط
+- تحديث حدود المستخدمين
+- Enterprise plan: تحديث عرض الأسعار
+
+---
+
+## المشاكل والأخطاء
+
+**خطأ كريه — credentials في الـ logs:**
+
+```
+# مثال نظري — ما كان يظهر في startup logs:
+Database URL: postgres://user:PASSWORD@host/db
+```
+
+الخطأ الكلاسيكي: logs تفصيلية تُضاف للتطوير ثم تُنسى في production. أي شخص يرى الـ logs سيرى الـ credentials كاملة.
+
+**الثغرة الأخطر — cross-org access:**
+الدالة `canAccessProject` لم تربط الـ project بالـ organization الصحيحة. مستخدم في org A يعرف project_id لـ org B → يستطيع الوصول لمستنداتها. في multi-tenant SaaS هذا اختراق حقيقي.
+
+---
+
+## القرارات المعمارية
+
+**Credit system منفصلة عن الـ subscription:**
+- الـ AI consumption غير متوقع — صعب وضعه في خطة fixed
+- نموذج هجين: subscription للوصول + credits للاستهلاك
+
+---
+
+## الدروس المستفادة
+
+1. **كل log statement يعرض متغيراً: فكّر قبل كتابته**
+2. **Authorization = لا تصدّق الـ input** — حتى project_id يجب التحقق من أنه لـ org المستخدم
+3. **Security debt يتراكم** — الكود السريع في مارس أنتج ديناً ظهر في أبريل
+4. **Credit systems تحتاج تصميماً مسبقاً** — إضافتها لاحقاً يعقّد الـ billing logic
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **Security Debt** | تراكم مشاكل أمنية نتيجة قرارات سريعة |
+| **Cross-org access bypass** | ثغرة تسمح بالوصول لبيانات منظمة أخرى |
+| **Credit system** | نظام رصيد مستقل — المستخدم يشتري ويستهلك لميزات معينة |
+| **Stripe** | خدمة معالجة مدفوعات — المعيار الصناعي للـ SaaS |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"Credentials في الـ logs — الخطأ الذي يرتكبه الجميع"**
+- **"كيف يحدث cross-org data leakage"**
+- **"Credit systems vs. subscriptions: متى تستخدم كلاً منهما"**
+</script>
+
+<script type="text/plain" id="fc-2026-04-27_to_2026-04-29.md">
+# الفترة: 2026-04-27 → 2026-04-29
+**العنوان:** وضع تجريبي + تخزين Cloudflare R2
+
+---
+
+## ما تم بناؤه
+
+**Trial Mode للمنظمات الجديدة:**
+- أي منظمة جديدة تبدأ بفترة تجريبية تلقائية
+- التحقق من البريد الإلكتروني مطلوب لإكمال التسجيل
+- نهاية الـ trial → تحويل تلقائي لـ expired plan
+
+**تحسينات الأمان:**
+- تسجيل محاولات الدخول الفاشلة
+- سياسة lockout بعد محاولات فاشلة متعددة
+- تحسين رسائل الخطأ بدون كشف معلومات حساسة
+
+**Cloudflare R2 Integration:**
+- الملفات المرفوعة تذهب إلى Cloudflare R2
+- R2 مثل S3 لكن بدون رسوم egress
+- تحديث الكود لـ R2 SDK مع authentication
+
+**تقييد رؤية المشاريع:**
+- المستخدم العادي لا يرى مشاريع المنظمات الأخرى
+
+---
+
+## المشاكل والأخطاء
+
+**مشكلة R2 Setup:**
+R2 يستخدم نفس API كـ S3، لكن:
+- الـ endpoint مختلف (Cloudflare-specific)
+- يستخدم R2_ACCESS_KEY و R2_SECRET_KEY (وليس AWS credentials)
+- بعض SDK calls كانت تفترض behaviors خاصة بـ AWS
+
+**مشكلة Trial expiry:**
+- الحل: scheduled job دوري يتحقق من تواريخ الانتهاء
+- قرار: البيانات تبقى، الوصول يُقيَّد فقط
+
+**مشكلة Login lockout UX:**
+- الرسالة الأولى: "User is locked" — غير مفيدة
+- التحسين: "حسابك مؤقتاً معطل. انتظر X دقيقة أو تواصل مع المسؤول"
+
+---
+
+## القرارات المعمارية
+
+**Cloudflare R2 بدلاً من local storage أو AWS S3:**
+
+| الخيار | المزايا | العيوب |
+|--------|--------|--------|
+| Local disk (VPS) | بسيط، سريع | لا يتوسع، فقدان عند failure |
+| AWS S3 | معيار صناعي | رسوم egress مرتفعة |
+| Cloudflare R2 | لا egress fees | أحدث، documentation أقل |
+
+**Trial → Expired بدون حذف البيانات:**
+فقدان بيانات العملاء حتى في الـ trial يُضر بالثقة.
+
+---
+
+## الدروس المستفادة
+
+1. **Object storage أفضل من local disk في كل حال**
+2. **R2 = S3 API لكن ليس S3 بالضبط** — افحص التوثيق بدقة
+3. **Login lockout = توازن بين أمان وـ UX**
+4. **Trial periods تحتاج state machine واضحة**
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **Object Storage** | تخزين الملفات كـ objects في cloud |
+| **Egress fees** | رسوم نقل البيانات من السحابة للخارج — R2 لا تحتسبها |
+| **Lockout policy** | تقييد الوصول بعد محاولات فاشلة متعددة |
+| **Cron job** | مهمة تعمل تلقائياً بجدول زمني |
+| **Idempotent** | عملية تعطي نفس النتيجة مهما كررتها |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"Cloudflare R2 vs AWS S3: مقارنة واقعية للـ SaaS صغير"**
+- **"Trial periods: كيف تصمم الانتقالات بدون فقدان بيانات العملاء"**
+- **"Object storage من الصفر"**
+</script>
+
+<script type="text/plain" id="fc-2026-05-01_to_2026-05-05.md">
+# الفترة: 2026-05-01 → 2026-05-05
+**العنوان:** AI Routing، CI/CD، وتثبيت البنية التحتية
+
+---
+
+## ما تم بناؤه
+
+**نظام AI Routing الكامل:**
+- رصيد كافٍ → Premium route (OpenRouter → Claude 3.5 Sonnet)
+- رصيد أقل من threshold → Free route (Cloudflare Workers AI)
+- Groq أُضيف كـ free provider (سرعة استجابة عالية)
+
+**CI/CD والأتمتة:**
+- تحديث CI workflow لـ pnpm الأحدث
+- Schema drift detection تلقائي في الـ build
+- Automatic database migration system للـ production
+- Safeguard يكتشف schema تغيّر بدون migration
+
+**تحسينات الـ Storage:**
+- R2 environment variables في docker-compose
+- تحسين authentication وcaching
+- تعديل endpoints بناءً على دور المستخدم
+
+**Privacy Mode:**
+- يمنع إرسال محتوى المستندات للـ AI providers الخارجيين
+
+---
+
+## المشاكل والأخطاء
+
+**مشكلة Schema Drift:**
+السيناريو الكابوسي: عمود يُضاف مباشرة في DB بدون migration file → يعمل محلياً → في production لا يوجد → crash.
+
+الحل: script يقارن الـ schema مع آخر migration → يفشل الـ build إذا كان هناك drift.
+
+**مشكلة AI Provider Priority:**
+قرار: env var يتغلب دائماً على database setting. السبب: في production الـ ops team تريد تغيير المزود بدون deploy.
+
+**مشكلة Groq Integration:**
+Groq يستخدم OpenAI-compatible API لكن مع rate limits مختلفة → error handling يجب أن يعطي fallback.
+
+**خطأ Production Environment Detection:**
+
+```
+[startup] Error: Cannot detect production environment
+```
+
+السبب: كود يعتمد على `NODE_ENV === 'production'` لكن القيمة كانت مفقودة في Docker.
+
+---
+
+## القرارات المعمارية
+
+**Credits Threshold للتوجيه:**
+- أقل من 50 credit → free tier
+- 50 أو أكثر → premium tier
+
+**Schema drift كـ build blocker:**
+إذا الـ schema لا يتطابق مع الـ migrations → الـ build يفشل. لا استثناءات.
+
+---
+
+## الدروس المستفادة
+
+1. **Schema drift يُكتشف في أسوأ وقت** — اكتشفه في الـ build
+2. **AI providers تفشل** — صمم للـ fallback من البداية
+3. **Environment variables > database settings للـ ops-critical config**
+4. **Privacy by design** — أصعب إضافتها لاحقاً
+5. **Docker compose needs explicit env vars** — لا تفترض inheritance
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **Schema Drift** | تباين بين هيكل DB الفعلي وملفات الـ migration |
+| **AI Routing** | توجيه طلبات AI لمزود مختلف بناءً على قواعد |
+| **OpenRouter** | خدمة تجميع لعدة LLM providers — API واحد |
+| **Workers AI** | Cloudflare AI inference — سريع لكن نماذج أقل قوة |
+| **Groq** | استدلال AI بسرعة عالية جداً |
+| **Privacy Mode** | يمنع إرسال بيانات المستخدم لطرف ثالث |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"كيف بنينا AI Router للـ SaaS"**
+- **"Schema drift: كيف تكتشفه قبل Production"**
+- **"Groq vs. OpenAI vs. Cloudflare Workers AI: مقارنة حقيقية"**
+</script>
+
+<script type="text/plain" id="fc-2026-05-06_to_2026-05-08.md">
+# الفترة: 2026-05-06 → 2026-05-08
+**العنوان:** سلامة قاعدة البيانات، Docker، وتوثيق المعمارية
+
+---
+
+## ما تم بناؤه
+
+**تحسينات سلامة Database Migrations:**
+- Safety checks قبل إضافة أعمدة (تحقق من عدم وجودها)
+- Pre-migration step لـ enum values
+- Idempotent migrations: آمنة للتكرار
+- إصلاح: جدول مفقود في production أوقف الـ deployment
+
+**تحسينات Docker:**
+- PostgreSQL container أصبح internal-only
+- تنظيف Docker Compose configuration
+- تحديث Docker Compose ليعكس البنية الحالية
+
+**تحديثات مفاهيمية:**
+- إعادة تسمية: free → expired
+- السبب: "free" يوحي بخدمة مجانية، "expired" هو الواقع الدقيق
+
+**AI Governance Controls:**
+- المسؤول يمكنه تعطيل AI commands للمنظمة
+- Logging لكل استخدام AI مع credit deduction details
+
+---
+
+## المشاكل والأخطاء
+
+**الخطأ الأكثر إيلاماً — جدول مفقود في Production:**
+
+```
+Error: relation "table_name" does not exist
+```
+
+Migration أضافت جدولاً محلياً. في production لم تُشغَّل → API crashes.
+الحل كان يدوياً: تشغيل المهاجرة يدوياً على production database.
+
+**مشكلة Enum values في PostgreSQL:**
+PostgreSQL لا يسمح بإضافة enum value ثم استخدامها في نفس الـ transaction:
+
+```sql
+-- هذا يفشل:
+BEGIN;
+ALTER TYPE status_enum ADD VALUE 'new_value';
+UPDATE table SET status = 'new_value';  -- خطأ!
+COMMIT;
+
+-- الصواب: migration منفصلتان
+```
+
+**مشكلة connection string مع underscores:**
+URL parser فشل مع database names تحتوي على underscores. الحل: URL parsing library مختلفة.
+
+---
+
+## القرارات المعمارية
+
+**PostgreSQL = Internal only:**
+قرار أمني: DB لا تستمع من الخارج. API فقط يتحدث معها عبر Docker internal network.
+
+**"free" → "expired":**
+كلمات المنتج مهمة. "Free plan" تضلل. "Expired" واضحة ودقيقة.
+
+---
+
+## الدروس المستفادة
+
+1. **كل migration يجب أن تكون idempotent** — `CREATE TABLE IF NOT EXISTS`
+2. **PostgreSQL enum quirk حقيقية** — تحتاج 2 migrations منفصلتين
+3. **Database = internal network فقط** — يجب أن يكون الـ default
+4. **اسم الـ plan يؤثر على السلوك المتوقع** — naming is design
+5. **Deployment يُكسر بأبسط الأخطاء** — جدول مفقود = 100% downtime
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **Idempotent Migration** | مهاجرة آمنة للتكرار |
+| **Enum** | نوع بيانات بقيم ثابتة محددة (draft, submitted, approved) |
+| **Internal Network** | شبكة Docker الداخلية — containers تتحدث بدون الإنترنت |
+| **Semantic naming** | الأسماء تحمل معنى — تغيير الاسم = تغيير التوقع |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"PostgreSQL enum: الخطأ الذي يوقف الـ deployment"**
+- **"Database migrations: من الفوضى إلى النظام"**
+- **"الـ naming في المنتجات: 'free' vs 'expired'"**
+- **"Docker internal networking للمبتدئين"**
+</script>
+
+<script type="text/plain" id="fc-2026-05-09_to_2026-05-13.md">
+# الفترة: 2026-05-09 → 2026-05-13
+**العنوان:** تصلب العمليات، P0/P1، وبداية التوثيق العام
+
+---
+
+## ما تم بناؤه
+
+**Audit Logging الكامل:**
+- تسجيل: login، logout، failed login
+- ربط بـ user، ip_hash (وليس IP الحقيقي)، timestamp
+- سجل قابل للبحث والتصفية
+
+**إصلاح P0 — خطأ email verification:**
+
+```typescript
+// الكود المكسور:
+buildTemplate(...)  // دالة غير موجودة
+
+// الإصلاح:
+baseLayout(...)     // الاسم الصحيح
+```
+
+مستخدم جديد يسجل → لا يستقبل بريد التحقق → لا يستطيع تأكيد حسابه.
+
+**إصلاح P1 — Security Analysis شامل (7 مجالات):**
+1. Email infrastructure (sandbox mode، FROM_EMAIL غير مضبوط)
+2. Backup architecture (لا backups تلقائية)
+3. Monitoring (لا healthchecks خارجية)
+4. Named Docker volumes
+5. H2A design review (10 مخاطر)
+6. system_owner governance
+7. Storage hybrid analysis
+
+**5 سكريبتات عمليات:**
+- `scripts/backup.sh` — نسخ احتياطي للـ database
+- `scripts/pre-deploy-backup.sh` — نسخة قبل كل deployment
+- `scripts/restore-verify.sh` — التحقق من صحة النسخة
+- `scripts/check-disk.sh` — مراقبة القرص
+- `scripts/check-containers.sh` — حالة الـ containers
+
+**حالة Email الحقيقية (صادقة):**
+
+```
+FROM_EMAIL: (not set)
+Mode: sandbox
+Delivery: restricted to verified email only
+```
+
+أي مستخدم حقيقي يسجل لا يستقبل أي email — مشكلة production حقيقية.
+
+**فيديو الحلقة الأولى:**
+وثائقي عربي متحرك، 5 مشاهد، ~80 ثانية:
+- المشهد 1: "هذا ليس مشروعاً تجريبياً."
+- المشهد 2: مخطط معماري يرسم نفسه (SVG animation)
+- المشهد 3: dashboard مبسط مع إحصاءات
+- المشهد 4: terminal مزيف + نصوص سينمائية
+- المشهد 5: ArcScale EDMS wordmark + إغلاق هادئ
+
+---
+
+## المشاكل والأخطاء
+
+**P0 — buildTemplate vs baseLayout:**
+دالة مُعاد تسميتها في مكان وبقيت بالاسم القديم. JavaScript → runtime error فقط، لا يُمسك في compile time.
+
+التعليق الصادق: لم يُلاحظ لأن email flow لا يُختبر في كل تغيير وليس هناك unit tests تغطي هذا المسار.
+
+---
+
+## القرارات المعمارية
+
+**Backup Strategy:**
+- يدوي الآن، scripts جاهزة للأتمتة عبر cron
+- حفظ النسخ في R2 (وليس على نفس الـ VPS)
+
+**Monitoring Stack:**
+- UptimeRobot: external uptime check كل 5 دقائق
+- healthchecks.io: dead man's switch للـ cron jobs
+- cron scripts داخلية: disk space، container health
+
+**لماذا الفيديو العربي؟**
+التوثيق العام سيكون بالعربية. الهدف: توثيق رحلة حقيقية لجمهور يبني أو يريد أن يبني — لا منافسة مع منتجات عالمية.
+
+---
+
+## الدروس المستفادة
+
+1. **Email flow يجب اختباره في كل pipeline** — خطأ صامت أسوأ من خطأ واضح
+2. **Sandbox mode = لا delivery للمستخدمين الحقيقيين** — اضبط domain قبل فتح التسجيل
+3. **Operations قبل Features** — backup والـ monitoring ليسا extras
+4. **System owner role يحتاج governance policy** — ليس مجرد permission
+5. **التوثيق بالعربية له جمهور** — الصدق والتقنية كافيان
+
+---
+
+## مصطلحات جديدة
+
+| المصطلح | الشرح |
+|---------|-------|
+| **P0 / P1** | P0: نظام متوقف، P1: مشكلة حرجة لكن النظام يعمل |
+| **Sandbox mode** | وضع اختباري محدود — email فقط للمطور |
+| **Dead man's switch** | تنبيه يصرخ إذا لم يتلقَ إشارة "أنا بخير" |
+| **Named volume** | Docker volume يبقى بعد إيقاف الـ container |
+| **SPF / DKIM / DMARC** | بروتوكولات التحقق من هوية مرسل البريد |
+| **Governance** | سياسة إدارية لمن يملك أي صلاحية |
+
+---
+
+## أفكار محتوى مستقبلي
+
+- **"Email في Production: الأخطاء الثلاثة الكلاسيكية"**
+- **"Operations day zero: الـ scripts الأساسية لكل VPS"**
+- **"P0 في الـ Production: كيف أصلحت خطأ يمنع التسجيل"**
+- **"Dead man's switch: ما هو ولماذا تحتاجه"**
+</script>
+
+<!-- ═══════════════ JS ═══════════════ -->
+<script>
+const FILES = [
+  { id: 'INDEX.md',                        label: 'الفهرس',              sublabel: 'خريطة الرحلة الكاملة' },
+  { id: '2026-03-25_to_2026-03-26.md',     label: 'مارس 25–26',          sublabel: 'البداية — النواة في يومين' },
+  { id: '2026-03-27_to_2026-03-29.md',     label: 'مارس 27–29',          sublabel: 'RBAC، multi-org، bilingual' },
+  { id: 'GAP_march_april.md',              label: 'الفجوة',              sublabel: 'مارس 30 → أبريل 23', gap: true },
+  { id: '2026-04-24_to_2026-04-26.md',     label: 'أبريل 24–26',         sublabel: 'الأمان والفوترة' },
+  { id: '2026-04-27_to_2026-04-29.md',     label: 'أبريل 27–29',         sublabel: 'Trial + Cloudflare R2' },
+  { id: '2026-05-01_to_2026-05-05.md',     label: 'مايو 1–5',            sublabel: 'AI Routing + CI/CD' },
+  { id: '2026-05-06_to_2026-05-08.md',     label: 'مايو 6–8',            sublabel: 'DB Migrations + Docker' },
+  { id: '2026-05-09_to_2026-05-13.md',     label: 'مايو 9–13',           sublabel: 'P0/P1 + Ops + فيديو' },
+  { id: 'HOW_TO_UPDATE.md',               label: 'دليل التحديث',        sublabel: 'كيفية إضافة قيود جديدة' },
+];
+
+let activeId = null;
+let isDark = true;
+
+function getContent(id) {
+  const el = document.getElementById('fc-' + id);
+  return el ? el.textContent.trim() : '';
+}
+
+// ─── MARKDOWN PARSER ───────────────────────────────────────────────────────────
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function parseInline(s) {
+  s = escHtml(s);
+  // Bold+italic
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  // Bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  s = s.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+  // Strikethrough
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Links
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  return s;
+}
+
+function parseMarkdown(md) {
+  // 1. Extract code blocks
+  const codeBlocks = [];
+  md = md.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang: lang || '', code });
+    return `\x00CODE${idx}\x00`;
+  });
+
+  const lines = md.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code block placeholder
+    if (line.trim().startsWith('\x00CODE') && line.trim().endsWith('\x00')) {
+      const idx = parseInt(line.trim().replace('\x00CODE','').replace('\x00',''));
+      const { lang, code } = codeBlocks[idx];
+      const escaped = escHtml(code.trimEnd());
+      out.push(`<pre><code class="lang-${lang}">${escaped}</code></pre>`);
+      i++; continue;
+    }
+
+    // HR (must come before headers)
+    if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      out.push('<hr>');
+      i++; continue;
+    }
+
+    // Heading
+    const hm = line.match(/^(#{1,4})\s+(.+)/);
+    if (hm) {
+      const lvl = hm[1].length;
+      out.push(`<h${lvl} dir="auto">${parseInline(hm[2])}</h${lvl}>`);
+      i++; continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const bqLines = [];
+      while (i < lines.length && lines[i].startsWith('> ')) {
+        bqLines.push(lines[i].slice(2));
+        i++;
+      }
+      out.push(`<blockquote dir="auto">${bqLines.map(parseInline).join('<br>')}</blockquote>`);
+      continue;
+    }
+
+    // Table
+    if (line.includes('|') && i + 1 < lines.length && /^\|[-| :]+\|/.test(lines[i+1])) {
+      const headerCells = line.split('|').filter((_, j, a) => j > 0 && j < a.length - 1);
+      const bodyLines = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|')) {
+        bodyLines.push(lines[i].split('|').filter((_, j, a) => j > 0 && j < a.length - 1));
+        i++;
+      }
+      let tbl = '<table><thead><tr>';
+      headerCells.forEach(c => { tbl += `<th dir="auto">${parseInline(c.trim())}</th>`; });
+      tbl += '</tr></thead><tbody>';
+      bodyLines.forEach(row => {
+        tbl += '<tr>';
+        row.forEach(c => { tbl += `<td dir="auto">${parseInline(c.trim())}</td>`; });
+        tbl += '</tr>';
+      });
+      tbl += '</tbody></table>';
+      out.push(tbl);
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+] /.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*+] /.test(lines[i])) {
+        items.push(`<li dir="auto">${parseInline(lines[i].replace(/^[-*+] /,''))}</li>`);
+        i++;
+      }
+      out.push('<ul>' + items.join('') + '</ul>');
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\. /.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        items.push(`<li dir="auto">${parseInline(lines[i].replace(/^\d+\. /,''))}</li>`);
+        i++;
+      }
+      out.push('<ol>' + items.join('') + '</ol>');
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') {
+      i++; continue;
+    }
+
+    // Paragraph
+    const paraLines = [];
+    while (i < lines.length && lines[i].trim() !== '' &&
+           !/^#{1,4} /.test(lines[i]) && !lines[i].startsWith('> ') &&
+           !/^[-*+] /.test(lines[i]) && !/^\d+\. /.test(lines[i]) &&
+           !/^(-{3,}|\*{3,})$/.test(lines[i].trim()) &&
+           !lines[i].includes('|') &&
+           !(lines[i].trim().startsWith('\x00CODE'))) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length) {
+      out.push(`<p dir="auto">${paraLines.map(parseInline).join('<br>')}</p>`);
+    }
+  }
+
+  return out.join('\n');
+}
+// ───────────────────────────────────────────────────────────────────────────────
+
+function renderFile(id) {
+  activeId = id;
+  const md = getContent(id);
+  if (!md) return;
+  document.getElementById('contentArea').innerHTML = parseMarkdown(md);
+  document.querySelector('.content-wrap').scrollTop = 0;
+  document.querySelectorAll('.file-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === id);
+  });
+}
+
+function buildSidebar() {
+  const list = document.getElementById('fileList');
+  FILES.forEach(f => {
+    const a = document.createElement('div');
+    a.className = 'file-item' + (f.gap ? ' gap' : '');
+    a.dataset.id = f.id;
+    a.innerHTML = `<span class="file-name">${f.label}</span><span class="file-label">${f.sublabel}</span>`;
+    a.addEventListener('click', () => renderFile(f.id));
+    list.appendChild(a);
+  });
+}
+
+function toggleTheme() {
+  isDark = !isDark;
+  document.body.classList.toggle('light', !isDark);
+  document.getElementById('themeBtn').textContent = isDark ? '☀ فاتح' : '☾ داكن';
+}
+
+buildSidebar();
+renderFile('INDEX.md');
+</script>
+</body>
+</html>
