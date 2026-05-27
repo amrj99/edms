@@ -16,7 +16,9 @@ const external = [
   "lightningcss", "pg-native", "oracledb", "mongodb-client-encryption",
   "nodemailer", "handlebars", "knex", "typeorm", "protobufjs",
   "onnxruntime-node", "@tensorflow/*", "@prisma/client", "@mikro-orm/*",
-  "@grpc/*", "@swc/*", "@aws-sdk/*", "@azure/*", "@opentelemetry/*",
+  "@grpc/*", "@swc/*", "@aws-sdk/*", "@azure/*",
+  // NOTE: @opentelemetry/* is intentionally NOT external — @sentry/node requires
+  // these packages to be bundled since they are not installed in the container image.
   "@elastic/elasticsearch", "@elastic/transport",
   "apache-arrow", "elastic-apm-node",
   "@google-cloud/*", "@google/*", "googleapis", "firebase-admin",
