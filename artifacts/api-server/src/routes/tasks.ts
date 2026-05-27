@@ -9,6 +9,7 @@ import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { triggerSkillEvent } from "../lib/skill-engine.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router();
 
@@ -173,11 +174,20 @@ router.get("/:id", requireAuth, async (req, res) => {
           .where(eq(projectsTable.organizationId, user.organizationId));
         const orgProjectIds = orgProjects.map(p => p.id);
         if (!orgProjectIds.includes(task.projectId)) {
-          res.status(403).json({ error: "Forbidden" }); return;
+          throw new TenantIsolationError({
+            route: req.path, method: req.method,
+            userId: user.id, userOrgId: user.organizationId,
+            attemptedResourceType: "task", attemptedResourceId: id,
+            taskProjectId: task.projectId,
+          });
         }
       } else if (task.createdById !== user.id && task.assignedToId !== user.id) {
-        // Personal task not belonging to this user
-        res.status(403).json({ error: "Forbidden" }); return;
+        throw new TenantIsolationError({
+          route: req.path, method: req.method,
+          userId: user.id, userOrgId: user.organizationId,
+          attemptedResourceType: "task", attemptedResourceId: id,
+          reason: "personal_task_not_owned",
+        });
       }
     }
   }
@@ -205,10 +215,20 @@ router.put("/:id", requireAuth, async (req, res) => {
           .where(eq(projectsTable.organizationId, user.organizationId));
         const orgProjectIds = orgProjects.map(p => p.id);
         if (!orgProjectIds.includes(before.projectId)) {
-          res.status(403).json({ error: "Forbidden" }); return;
+          throw new TenantIsolationError({
+            route: req.path, method: req.method,
+            userId: user.id, userOrgId: user.organizationId,
+            attemptedResourceType: "task", attemptedResourceId: id,
+            taskProjectId: before.projectId,
+          });
         }
       } else if (before.createdById !== user.id && before.assignedToId !== user.id) {
-        res.status(403).json({ error: "Forbidden" }); return;
+        throw new TenantIsolationError({
+          route: req.path, method: req.method,
+          userId: user.id, userOrgId: user.organizationId,
+          attemptedResourceType: "task", attemptedResourceId: id,
+          reason: "personal_task_not_owned",
+        });
       }
     }
   }

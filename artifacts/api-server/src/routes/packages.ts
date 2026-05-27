@@ -4,6 +4,7 @@ import { packagesTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -56,7 +57,13 @@ router.put("/:id", async (req, res) => {
     const [project] = await db.select({ organizationId: projectsTable.organizationId })
       .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (!project || project.organizationId !== user.organizationId) {
-      res.status(403).json({ error: "Forbidden" }); return;
+      throw new TenantIsolationError({
+        route: req.path, method: req.method,
+        userId: user.id, userOrgId: user.organizationId,
+        attemptedResourceType: "package", attemptedResourceId: id,
+        packageProjectId: projectId,
+        projectOrgId: project?.organizationId,
+      });
     }
   }
 
@@ -78,7 +85,13 @@ router.delete("/:id", async (req, res) => {
     const [project] = await db.select({ organizationId: projectsTable.organizationId })
       .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
     if (!project || project.organizationId !== user.organizationId) {
-      res.status(403).json({ error: "Forbidden" }); return;
+      throw new TenantIsolationError({
+        route: req.path, method: req.method,
+        userId: user.id, userOrgId: user.organizationId,
+        attemptedResourceType: "package", attemptedResourceId: id,
+        packageProjectId: projectId,
+        projectOrgId: project?.organizationId,
+      });
     }
   }
 

@@ -8,6 +8,7 @@ import { logger } from "../lib/logger.js";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router();
 
@@ -390,7 +391,12 @@ router.get("/:id/members", requireAuth, async (req, res) => {
       .from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
     if (!project) { res.status(404).json({ error: "Not Found" }); return; }
     if (project.organizationId !== user.organizationId) {
-      res.status(403).json({ error: "Forbidden" }); return;
+      throw new TenantIsolationError({
+        route: req.path, method: req.method,
+        userId: user.id, userOrgId: user.organizationId,
+        attemptedResourceType: "project_members", attemptedResourceId: id,
+        projectOrgId: project.organizationId,
+      });
     }
   }
 
@@ -435,7 +441,12 @@ router.post("/:id/members", requireAuth, async (req, res) => {
 
   // Verify project belongs to caller's org
   if (!isSysAdmin(caller) && caller.organizationId && project.organizationId !== caller.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
+    throw new TenantIsolationError({
+      route: req.path, method: req.method,
+      userId: caller.id, userOrgId: caller.organizationId,
+      attemptedResourceType: "project_member_add", attemptedResourceId: id,
+      projectOrgId: project.organizationId, targetUserId: userId,
+    });
   }
 
   // Verify user exists

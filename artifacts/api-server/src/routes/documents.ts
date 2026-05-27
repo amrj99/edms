@@ -17,6 +17,7 @@ import { dispatchNotification } from "../lib/notifications/index.js";
 import { getProjectRecipientsByRole } from "../lib/notifications/recipients.js";
 import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
+import { TenantIsolationError } from '../lib/errors.js';
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
@@ -669,7 +670,12 @@ router.get("/:id/revisions", requireAuth, async (req, res) => {
       .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
     if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
     if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
-      res.status(403).json({ error: "Forbidden" }); return;
+      throw new TenantIsolationError({
+        route: req.path, method: req.method,
+        userId: user.id, userOrgId: user.organizationId,
+        attemptedResourceType: "document_revisions", attemptedResourceId: id,
+        resourceOrgId: doc.organizationId,
+      });
     }
   }
 

@@ -14,6 +14,7 @@ import {
 } from "@workspace/db";
 import { eq, isNull, desc, or, inArray, and } from "drizzle-orm";
 import { requireAuth, hashToken, isSysAdmin } from "../lib/auth.js";
+import { TenantIsolationError } from '../lib/errors.js';
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -135,7 +136,12 @@ router.get("/correspondence/:id", async (req, res) => {
 
   // Tenant isolation: verify org ownership (NULL organizationId = legacy record, allow access)
   if (!isSysAdmin(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
+    throw new TenantIsolationError({
+      route: req.path, method: req.method,
+      userId: user.id, userOrgId: user.organizationId,
+      attemptedResourceType: "correspondence", attemptedResourceId: id,
+      resourceOrgId: items[0].organizationId,
+    });
   }
 
   const enriched = await enrichItems(items);
@@ -243,7 +249,12 @@ router.put("/correspondence/:id/read", async (req, res) => {
 
   // Tenant isolation
   if (!isSysAdmin(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
+    throw new TenantIsolationError({
+      route: req.path, method: req.method,
+      userId: user.id, userOrgId: user.organizationId,
+      attemptedResourceType: "correspondence", attemptedResourceId: id,
+      resourceOrgId: existing.organizationId, action: "mark_read",
+    });
   }
 
   const [corr] = await db.update(correspondenceTable)
@@ -303,11 +314,14 @@ router.delete("/correspondence/:id", requireAuth, async (req, res) => {
     .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
-  // Tenant isolation: must belong to same org, and only sender or admin can delete
-  if (!isSysAdmin(user)) {
-    if (existing.organizationId !== null && existing.organizationId !== user.organizationId) {
-      res.status(403).json({ error: "Forbidden" }); return;
-    }
+  // Tenant isolation: must belong to same org
+  if (!isSysAdmin(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
+    throw new TenantIsolationError({
+      route: req.path, method: req.method,
+      userId: user.id, userOrgId: user.organizationId,
+      attemptedResourceType: "correspondence", attemptedResourceId: id,
+      resourceOrgId: existing.organizationId, action: "delete",
+    });
   }
 
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
