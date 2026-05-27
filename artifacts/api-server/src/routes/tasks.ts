@@ -156,18 +156,62 @@ router.post("/", requireAuth, requireOrgScope, async (req, res) => {
 
 router.get("/:id", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
   const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
   if (!tasks[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation: non-sysAdmin users can only access tasks within their org
+  if (!isSysAdmin(user) && user.organizationId) {
+    const task = tasks[0];
+    const belongsToOrg = task.organizationId === user.organizationId;
+    // Legacy tasks (no organizationId) — verify via project membership
+    if (!belongsToOrg) {
+      if (task.projectId) {
+        const { inArray: drizzleInArray } = await import("drizzle-orm");
+        const orgProjects = await db.select({ id: projectsTable.id })
+          .from(projectsTable)
+          .where(eq(projectsTable.organizationId, user.organizationId));
+        const orgProjectIds = orgProjects.map(p => p.id);
+        if (!orgProjectIds.includes(task.projectId)) {
+          res.status(403).json({ error: "Forbidden" }); return;
+        }
+      } else if (task.createdById !== user.id && task.assignedToId !== user.id) {
+        // Personal task not belonging to this user
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+    }
+  }
+
   const enriched = await enrichTasks(tasks);
   res.json(enriched[0]);
 });
 
 router.put("/:id", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
   const { title, description, status, priority, assignedToId, dueDate } = req.body;
 
-  // Fetch old state to detect changes
+  // Fetch old state to detect changes + tenant isolation check
   const [before] = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
+  if (!before) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation: verify the task belongs to the user's org
+  if (!isSysAdmin(user) && user.organizationId) {
+    const belongsToOrg = before.organizationId === user.organizationId;
+    if (!belongsToOrg) {
+      if (before.projectId) {
+        const orgProjects = await db.select({ id: projectsTable.id })
+          .from(projectsTable)
+          .where(eq(projectsTable.organizationId, user.organizationId));
+        const orgProjectIds = orgProjects.map(p => p.id);
+        if (!orgProjectIds.includes(before.projectId)) {
+          res.status(403).json({ error: "Forbidden" }); return;
+        }
+      } else if (before.createdById !== user.id && before.assignedToId !== user.id) {
+        res.status(403).json({ error: "Forbidden" }); return;
+      }
+    }
+  }
 
   const completedAt = status === "completed" ? new Date() : undefined;
 

@@ -661,6 +661,18 @@ router.patch("/:id/folder", requireAuth, async (req, res) => {
 
 router.get("/:id/revisions", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
+
+  // Tenant isolation: verify the document belongs to the user's org before returning revisions
+  if (!isSysAdmin(user) && user.organizationId) {
+    const [doc] = await db.select({ organizationId: documentsTable.organizationId })
+      .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+    if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+    if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
+      res.status(403).json({ error: "Forbidden" }); return;
+    }
+  }
+
   const revisions = await db.select({
     rev: documentRevisionsTable,
     user: usersTable,

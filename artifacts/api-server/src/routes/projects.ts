@@ -374,6 +374,18 @@ router.delete("/:id", requireAuth, async (req, res) => {
 // ─── GET /:id/members ─────────────────────────────────────────────────────────
 router.get("/:id/members", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
+
+  // Tenant isolation: verify project belongs to the user's org
+  if (!isSysAdmin(user) && user.organizationId) {
+    const [project] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
+    if (!project) { res.status(404).json({ error: "Not Found" }); return; }
+    if (project.organizationId !== user.organizationId) {
+      res.status(403).json({ error: "Forbidden" }); return;
+    }
+  }
+
   const members = await db.select({
     member: projectMembersTable,
     user: usersTable,
@@ -398,6 +410,7 @@ router.get("/:id/members", requireAuth, async (req, res) => {
 
 router.post("/:id/members", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const caller = req.user!;
   const { userId, role } = req.body;
 
   if (!userId || isNaN(parseInt(String(userId)))) {
@@ -405,11 +418,16 @@ router.post("/:id/members", requireAuth, async (req, res) => {
     return;
   }
 
-  // Verify project exists
-  const [project] = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
+  // Verify project exists + tenant isolation
+  const [project] = await db.select({ id: projectsTable.id, organizationId: projectsTable.organizationId }).from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!project) {
     res.status(404).json({ error: "Not Found", message: "Project not found" });
     return;
+  }
+
+  // Verify project belongs to caller's org
+  if (!isSysAdmin(caller) && caller.organizationId && project.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
   }
 
   // Verify user exists

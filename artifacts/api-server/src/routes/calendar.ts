@@ -4,8 +4,8 @@ import {
   meetingsTable, meetingActionItemsTable, tasksTable,
   usersTable, projectsTable,
 } from "@workspace/db";
-import { eq, and, gte, lte, or } from "drizzle-orm";
-import { requireAuth } from "../lib/auth.js";
+import { eq, and, gte, lte, or, inArray } from "drizzle-orm";
+import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
 
@@ -16,9 +16,26 @@ router.get("/events", requireAuth, async (req, res) => {
   const startDate = start ? new Date(start as string) : new Date(now.getFullYear(), now.getMonth(), 1);
   const endDate = end ? new Date(end as string) : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-  const userId = req.user!.id;
+  const user = req.user!;
+  const userId = user.id;
 
   try {
+    // Tenant isolation: scope meetings to user's org via project membership
+    let orgMeetingFilter;
+    if (!isSysAdmin(user) && user.organizationId) {
+      const orgProjects = await db
+        .select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(eq(projectsTable.organizationId, user.organizationId));
+      const orgProjectIds = orgProjects.map(p => p.id);
+      orgMeetingFilter = orgProjectIds.length > 0
+        ? or(
+            inArray(meetingsTable.projectId, orgProjectIds),
+            eq(meetingsTable.organizationId, user.organizationId),
+          )
+        : eq(meetingsTable.organizationId, user.organizationId);
+    }
+
     const [meetings, tasks, actionItems] = await Promise.all([
       db.select({
         id: meetingsTable.id,
@@ -33,6 +50,7 @@ router.get("/events", requireAuth, async (req, res) => {
         .where(and(
           gte(meetingsTable.meetingDate, startDate),
           lte(meetingsTable.meetingDate, endDate),
+          orgMeetingFilter,
         )),
 
       db.select({

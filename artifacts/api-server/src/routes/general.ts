@@ -13,7 +13,7 @@ import {
   projectMembersTable,
 } from "@workspace/db";
 import { eq, isNull, desc, or, inArray, and } from "drizzle-orm";
-import { requireAuth, hashToken } from "../lib/auth.js";
+import { requireAuth, hashToken, isSysAdmin } from "../lib/auth.js";
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -122,6 +122,7 @@ router.post("/correspondence", async (req, res) => {
 
 router.get("/correspondence/:id", async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
 
   const items = await db.select().from(correspondenceTable)
     .where(and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId)))
@@ -130,6 +131,11 @@ router.get("/correspondence/:id", async (req, res) => {
   if (!items[0]) {
     res.status(404).json({ error: "Not found" });
     return;
+  }
+
+  // Tenant isolation: verify org ownership (NULL organizationId = legacy record, allow access)
+  if (!isSysAdmin(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
   }
 
   const enriched = await enrichItems(items);
@@ -227,7 +233,19 @@ router.post("/correspondence/:id/reply", async (req, res) => {
 // ─── PUT /general/correspondence/:id/read ────────────────────────────────────
 router.put("/correspondence/:id/read", async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
   const { isRead } = req.body;
+
+  // Fetch first to verify ownership before mutating
+  const [existing] = await db.select({ id: correspondenceTable.id, organizationId: correspondenceTable.organizationId })
+    .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation
+  if (!isSysAdmin(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
+
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
     .where(eq(correspondenceTable.id, id))
@@ -278,6 +296,20 @@ router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
 // ─── DELETE /general/correspondence/:id ──────────────────────────────────────
 router.delete("/correspondence/:id", requireAuth, async (req, res) => {
   const id = paramInt(req.params.id);
+  const user = req.user!;
+
+  // Fetch first to verify ownership before deleting
+  const [existing] = await db.select({ id: correspondenceTable.id, organizationId: correspondenceTable.organizationId, fromUserId: correspondenceTable.fromUserId })
+    .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation: must belong to same org, and only sender or admin can delete
+  if (!isSysAdmin(user)) {
+    if (existing.organizationId !== null && existing.organizationId !== user.organizationId) {
+      res.status(403).json({ error: "Forbidden" }); return;
+    }
+  }
+
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
   const [deleted] = await db.delete(correspondenceTable).where(eq(correspondenceTable.id, id)).returning();
