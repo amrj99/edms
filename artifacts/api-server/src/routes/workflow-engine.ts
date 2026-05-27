@@ -34,6 +34,7 @@ import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendWorkflowStageEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -218,7 +219,7 @@ router.get("/templates", async (req, res) => {
 });
 
 router.get("/templates/:id", async (req, res) => {
-  const tpl = await getTemplateWithStages(parseInt(req.params.id), orgId(req));
+  const tpl = await getTemplateWithStages(paramInt(req.params.id), orgId(req));
   if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
   res.json(tpl);
 });
@@ -255,7 +256,7 @@ router.post("/templates", requireRole("admin", "project_manager", "system_owner"
 
 router.put("/templates/:id", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { name, documentType, description, isActive } = req.body;
   try {
     const [tpl] = await db.update(wfTemplatesTable)
@@ -281,7 +282,7 @@ router.put("/templates/:id", requireRole("admin", "project_manager", "system_own
 
 router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   try {
     await db.delete(wfTemplatesTable).where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)));
     res.json({ ok: true });
@@ -295,7 +296,7 @@ router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req
 
 router.post("/templates/:id/stages", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const templateId = parseInt(req.params.id);
+  const templateId = paramInt(req.params.id);
   try {
     const [tpl] = await db.select().from(wfTemplatesTable)
       .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
@@ -347,8 +348,8 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
 
 router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const templateId = parseInt(req.params.id);
-  const stageId = parseInt(req.params.stageId);
+  const templateId = paramInt(req.params.id);
+  const stageId = paramInt(req.params.stageId);
   try {
     const [tpl] = await db.select().from(wfTemplatesTable)
       .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
@@ -393,8 +394,8 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
 
 router.delete("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const templateId = parseInt(req.params.id);
-  const stageId = parseInt(req.params.stageId);
+  const templateId = paramInt(req.params.id);
+  const stageId = paramInt(req.params.stageId);
   try {
     const [tpl] = await db.select().from(wfTemplatesTable)
       .where(and(eq(wfTemplatesTable.id, templateId), eq(wfTemplatesTable.organizationId, org))).limit(1);
@@ -477,7 +478,7 @@ router.get("/instances", async (req, res) => {
 
 router.get("/instances/:id", async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [inst] = await db.select().from(wfInstancesTable)
     .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org)))
     .limit(1);
@@ -551,7 +552,7 @@ router.post("/instances", async (req, res) => {
 
 router.post("/instances/:id/advance", async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { comment } = req.body;
 
   const [inst] = await db.select().from(wfInstancesTable)
@@ -625,7 +626,7 @@ router.post("/instances/:id/advance", async (req, res) => {
 
 router.post("/instances/:id/reject", async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { comment, action: rejectAction = "rejected" } = req.body;
 
   const [inst] = await db.select().from(wfInstancesTable)
@@ -692,7 +693,7 @@ router.post("/instances/:id/reject", async (req, res) => {
 
 router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
   const org = orgId(req);
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [orig] = await db.select().from(wfTemplatesTable)
     .where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org))).limit(1);
   if (!orig) { res.status(404).json({ error: "Template not found" }); return; }
@@ -749,7 +750,7 @@ router.get("/templates/for-type/:docType", async (req, res) => {
 
 router.get("/instances/for-document/:docId", async (req, res) => {
   const org = orgId(req);
-  const docId = parseInt(req.params.docId);
+  const docId = paramInt(req.params.docId);
   const instances = await db.select().from(wfInstancesTable)
     .where(and(eq(wfInstancesTable.documentId, docId), eq(wfInstancesTable.organizationId, org)))
     .orderBy(desc(wfInstancesTable.updatedAt));

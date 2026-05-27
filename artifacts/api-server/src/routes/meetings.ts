@@ -9,6 +9,7 @@ import { requireAuth, requireRole, isSysAdmin, isSystemOwner } from "../lib/auth
 import { createAuditLog } from "../lib/audit.js";
 import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -151,7 +152,7 @@ router.get("/action-items", async (req: Request, res: Response) => {
 
 // ─── Get meeting detail ────────────────────────────────────────────────────────
 router.get("/:id", async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
 
   const [row] = await db
     .select({
@@ -321,7 +322,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 
 // ─── Update meeting ────────────────────────────────────────────────────────────
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { title, projectId, meetingDate, duration, location, meetingLink, agenda, minutes, status } = req.body;
 
   // Fetch old state for transition detection and org verification
@@ -392,7 +393,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 
 // ─── Update attendee attendance ────────────────────────────────────────────────
 router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const attId = parseInt(req.params.attId);
+  const attId = paramInt(req.params.attId);
   const { attended } = req.body;
   const [updated] = await db.update(meetingAttendeesTable)
     .set({ attended: !!attended })
@@ -403,7 +404,7 @@ router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "doc
 
 // ─── Add / update action item ──────────────────────────────────────────────────
 router.post("/:id/action-items", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const meetingId = parseInt(req.params.id);
+  const meetingId = paramInt(req.params.id);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: "title required" });
 
@@ -468,7 +469,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
 });
 
 router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const itemId = parseInt(req.params.itemId);
+  const itemId = paramInt(req.params.itemId);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   const [item] = await db.update(meetingActionItemsTable).set({
     ...(title          !== undefined && { title: title.trim() }),
@@ -485,14 +486,14 @@ router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", 
 
 // ─── Delete action item ────────────────────────────────────────────────────────
 router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
-  const itemId = parseInt(req.params.itemId);
+  const itemId = paramInt(req.params.itemId);
   await db.delete(meetingActionItemsTable).where(eq(meetingActionItemsTable.id, itemId));
   res.json({ message: "Deleted" });
 });
 
 // ─── Delete meeting ────────────────────────────────────────────────────────────
 router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.delete(meetingsTable).where(eq(meetingsTable.id, id));
   res.json({ message: "Deleted" });
 });

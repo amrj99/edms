@@ -17,6 +17,7 @@ import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
 import { syncOrgModules } from "../lib/module-sync-service.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -290,7 +291,7 @@ router.get("/usage", async (req, res) => {
 // ─── Update Storage Config per org ────────────────────────────────────────────
 router.put("/storage-config/:orgId", async (req, res) => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
-  const orgId = parseInt(req.params.orgId);
+  const orgId = paramInt(req.params.orgId);
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
   const updateData: any = { storageQuotaMb, storagePath, updatedAt: new Date() };
@@ -744,7 +745,7 @@ router.get("/ai-quota", requireAuth, async (req, res) => {
 router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
   if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
 
-  const orgId = parseInt(req.params.orgId);
+  const orgId = paramInt(req.params.orgId);
   const { tier } = req.body as { tier: SubscriptionTier };
 
   if (!tier || !(tier in SUBSCRIPTION_TIERS)) {
@@ -788,7 +789,7 @@ router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, 
 router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
   if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
 
-  const orgId = parseInt(req.params.orgId);
+  const orgId = paramInt(req.params.orgId);
   if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });
 
   const { aiDailyLimit, aiMonthlyTokenLimit } = req.body as {
@@ -834,7 +835,7 @@ router.get("/org-plans", async (req, res) => {
 
 router.post("/organizations/:orgId/change-plan", async (req, res) => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
-  const orgId = parseInt(req.params.orgId);
+  const orgId = paramInt(req.params.orgId);
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
   const validPlanIds = ["expired", ...PLANS.map(p => p.id)];

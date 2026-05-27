@@ -8,6 +8,7 @@ import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { triggerSkillEvent } from "../lib/skill-engine.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -154,7 +155,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res) => {
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
   if (!tasks[0]) { res.status(404).json({ error: "Not Found" }); return; }
   const enriched = await enrichTasks(tasks);
@@ -162,7 +163,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 });
 
 router.put("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { title, description, status, priority, assignedToId, dueDate } = req.body;
 
   // Fetch old state to detect changes

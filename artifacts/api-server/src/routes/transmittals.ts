@@ -14,13 +14,14 @@ import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import type { Request, Response } from "express";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 // List transmittals for a project
 router.get("/", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const transmittals = await db
     .select({
       id: transmittalsTable.id,
@@ -69,8 +70,8 @@ router.get("/", async (req, res) => {
 
 // Get single transmittal with items
 router.get("/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
   const [transmittal] = await db
     .select()
     .from(transmittalsTable)
@@ -122,7 +123,7 @@ router.get("/:id", async (req, res) => {
 
 // Create transmittal
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
@@ -190,8 +191,8 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 
 // Update transmittal
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const id = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode } = req.body;
 
   const [existing] = await db.select().from(transmittalsTable)
@@ -227,7 +228,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 
 // Send transmittal
 router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id))
@@ -289,7 +290,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
 
 // Acknowledge transmittal
 router.post("/:id/acknowledge", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id))
@@ -307,8 +308,8 @@ router.post("/:id/acknowledge", async (req, res) => {
 
 // Complete review — compute rolled-up outcome, apply document statuses, create response draft
 router.post("/:id/complete-review", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
   const actor = req.user as any;
   const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
   const { reviewComment } = req.body;
@@ -462,7 +463,7 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
 
 // Get transmittal history
 router.get("/:id/history", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const rows = await db.select().from(transmittalHistoryTable)
     .where(eq(transmittalHistoryTable.transmittalId, id))
     .orderBy(desc(transmittalHistoryTable.createdAt));
@@ -492,8 +493,8 @@ function jaccardScore(a: Set<string>, b: Set<string>): number {
 }
 
 router.get("/:id/suggest-links", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const transmittalId = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const transmittalId = paramInt(req.params.id);
 
   const [transmittal] = await db.select().from(transmittalsTable).where(eq(transmittalsTable.id, transmittalId));
   if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
@@ -552,7 +553,7 @@ router.get("/:id/suggest-links", async (req, res) => {
 
 // Add document to transmittal
 router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const transmittalId = parseInt(req.params.id);
+  const transmittalId = paramInt(req.params.id);
   const { documentId, revision, copies, purpose } = req.body;
   const [item] = await db.insert(transmittalItemsTable).values({
     transmittalId, documentId, revision, copies, purpose,
@@ -562,16 +563,16 @@ router.post("/:id/items", requireRole("admin", "project_manager", "document_cont
 
 // Remove document from transmittal
 router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const itemId = parseInt(req.params.itemId);
+  const itemId = paramInt(req.params.itemId);
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
   res.json({ success: true });
 });
 
 // Set per-item review code — assignment-based: must be the designated recipient or admin+
 router.patch("/:id/items/:itemId", requireAuth, async (req, res) => {
-  const transmittalId = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
-  const itemId = parseInt(req.params.itemId);
+  const transmittalId = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const itemId = paramInt(req.params.itemId);
   const caller = req.user!;
   const { reviewCode } = req.body;
 
@@ -611,8 +612,8 @@ router.patch("/:id/items/:itemId", requireAuth, async (req, res) => {
 
 // Create / update share link
 router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const id = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
 
   // Verify the project belongs to the caller's org — prevents cross-tenant share creation
@@ -655,8 +656,8 @@ router.post("/:id/share", requireRole("admin", "project_manager", "document_cont
 
 // Upload external file and add as transmittal attachment (creates a stub doc)
 router.post("/:id/upload-attachment", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const transmittalId = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const transmittalId = paramInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   if (!fileName || !fileUrl) { res.status(400).json({ error: "fileName and fileUrl required" }); return; }
 
@@ -686,7 +687,7 @@ router.post("/:id/upload-attachment", async (req, res) => {
 
 // Revoke share link
 router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.update(transmittalsTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(eq(transmittalsTable.id, id));
@@ -698,8 +699,8 @@ router.post(
   "/:id/submit-approval",
   requireRole("admin", "project_manager", "document_controller"),
   async (req, res) => {
-    const id = parseInt(req.params.id);
-    const projectId = parseInt(req.params.projectId);
+    const id = paramInt(req.params.id);
+    const projectId = paramInt(req.params.projectId);
     const [existing] = await db.select().from(transmittalsTable)
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
     if (!existing) { res.status(404).json({ error: "Not found" }); return; }
@@ -719,8 +720,8 @@ router.post(
   "/:id/approve",
   requireAuth,
   async (req, res) => {
-    const id = parseInt(req.params.id);
-    const projectId = parseInt(req.params.projectId);
+    const id = paramInt(req.params.id);
+    const projectId = paramInt(req.params.projectId);
     const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
 
@@ -827,8 +828,8 @@ router.post(
   "/:id/reject",
   requireAuth,
   async (req, res) => {
-    const id = parseInt(req.params.id);
-    const projectId = parseInt(req.params.projectId);
+    const id = paramInt(req.params.id);
+    const projectId = paramInt(req.params.projectId);
     const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
 

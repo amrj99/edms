@@ -4,6 +4,7 @@ import { delegationsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, or, isNull, desc, gt } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -134,7 +135,7 @@ router.post("/", requireAuth, async (req, res) => {
 // ─── Revoke delegation ────────────────────────────────────────────────────────
 router.delete("/:id", requireAuth, async (req, res) => {
   const caller = req.user!;
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
 
   const [delegation] = await db.select().from(delegationsTable)
     .where(eq(delegationsTable.id, id)).limit(1);

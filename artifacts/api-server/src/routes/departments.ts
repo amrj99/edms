@@ -4,6 +4,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/db";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -75,7 +76,7 @@ router.put("/:id", async (req, res) => {
   if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const orgId = getOrgId(req);
-  const deptId = parseInt(req.params.id);
+  const deptId = paramInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -107,7 +108,7 @@ router.delete("/:id", async (req, res) => {
   if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const orgId = getOrgId(req);
-  const deptId = parseInt(req.params.id);
+  const deptId = paramInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -123,7 +124,7 @@ router.delete("/:id", async (req, res) => {
 // ─── Get members of a department ──────────────────────────────────────────────
 router.get("/:id/members", async (req, res) => {
   const orgId = getOrgId(req);
-  const deptId = parseInt(req.params.id);
+  const deptId = paramInt(req.params.id);
 
   const [dept] = await db
     .select()
@@ -155,7 +156,7 @@ router.post("/:id/members", async (req, res) => {
   if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const orgId = getOrgId(req);
-  const deptId = parseInt(req.params.id);
+  const deptId = paramInt(req.params.id);
   const { userId, isPrimary = false } = req.body;
 
   if (!userId) { res.status(400).json({ error: "userId is required" }); return; }
@@ -192,8 +193,8 @@ router.post("/:id/members", async (req, res) => {
 router.delete("/:id/members/:userId", async (req, res) => {
   if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
 
-  const deptId = parseInt(req.params.id);
-  const userId = parseInt(req.params.userId);
+  const deptId = paramInt(req.params.id);
+  const userId = paramInt(req.params.userId);
 
   await db
     .delete(userDepartmentsTable)
@@ -208,7 +209,7 @@ router.delete("/:id/members/:userId", async (req, res) => {
 // ─── Get departments for a specific user ──────────────────────────────────────
 router.get("/user/:userId", async (req, res) => {
   const orgId = getOrgId(req);
-  const targetUserId = parseInt(req.params.userId);
+  const targetUserId = paramInt(req.params.userId);
 
   const rows = await db
     .select({

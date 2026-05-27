@@ -3,12 +3,13 @@ import { db } from "@workspace/db";
 import { packagesTable, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 router.get("/", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const packages = await db
     .select({
       id: packagesTable.id,
@@ -27,7 +28,7 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const { name, code, description } = req.body;
   if (!name || !code) {
     res.status(400).json({ error: "Name and code are required" });
@@ -44,7 +45,7 @@ router.post("/", async (req, res) => {
 });
 
 router.put("/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { name, code, description } = req.body;
   const [pkg] = await db.update(packagesTable)
     .set({ name, code: code?.toUpperCase(), description, updatedAt: new Date() })
@@ -55,7 +56,7 @@ router.put("/:id", async (req, res) => {
 });
 
 router.delete("/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.delete(packagesTable).where(eq(packagesTable.id, id));
   res.json({ success: true });
 });

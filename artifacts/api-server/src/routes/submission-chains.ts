@@ -42,6 +42,7 @@ import { isAtLeast } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendEmail } from "../lib/email.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -309,7 +310,7 @@ function chainSummarySelect() {
 // ─── GET / — list chains for project ─────────────────────────────────────────
 
 router.get("/", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const { status, orgId: orgFilter } = req.query;
   const userOrgId = req.user!.organizationId;
   const role = await effectiveRole(req, projectId);
@@ -350,7 +351,7 @@ router.get("/", async (req, res) => {
 // Usage: GET /api/projects/:projectId/submission-chains/members?orgId=5
 
 router.get("/members", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
 
   if (!orgId) { res.status(400).json({ error: "orgId query parameter is required" }); return; }
@@ -382,8 +383,8 @@ router.get("/members", async (req, res) => {
 // ─── GET /:id — chain detail ──────────────────────────────────────────────────
 
 router.get("/:id", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -425,7 +426,7 @@ router.get("/:id", async (req, res) => {
 // ─── POST / — create chain ────────────────────────────────────────────────────
 
 router.post("/", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required to create a submission chain" });
@@ -506,8 +507,8 @@ router.post("/", async (req, res) => {
 // ─── PATCH /:id — update title / description ─────────────────────────────────
 
 router.patch("/:id", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -538,8 +539,8 @@ router.patch("/:id", async (req, res) => {
 // ─── DELETE /:id — delete draft chain ────────────────────────────────────────
 
 router.delete("/:id", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "admin")) {
     res.status(403).json({ error: "Admin role or above required to delete a submission chain" });
@@ -572,8 +573,8 @@ router.delete("/:id", async (req, res) => {
 // ─── POST /:id/parties — add an allowed party ────────────────────────────────
 
 router.post("/:id/parties", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -629,9 +630,9 @@ router.post("/:id/parties", async (req, res) => {
 // ─── DELETE /:id/parties/:partyId — remove an allowed party ──────────────────
 
 router.delete("/:id/parties/:partyId", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
-  const partyId = parseInt(req.params.partyId);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const partyId = paramInt(req.params.partyId);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -669,8 +670,8 @@ router.delete("/:id/parties/:partyId", async (req, res) => {
 // ─── POST /:id/documents — add a document/revision to chain ──────────────────
 
 router.post("/:id/documents", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -744,9 +745,9 @@ router.post("/:id/documents", async (req, res) => {
 // ─── DELETE /:id/documents/:chainDocId — remove document ─────────────────────
 
 router.delete("/:id/documents/:chainDocId", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
-  const chainDocId = parseInt(req.params.chainDocId);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const chainDocId = paramInt(req.params.chainDocId);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -783,8 +784,8 @@ router.delete("/:id/documents/:chainDocId", async (req, res) => {
 // ─── POST /:id/activate — draft → active ─────────────────────────────────────
 
 router.post("/:id/activate", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -842,8 +843,8 @@ router.post("/:id/activate", async (req, res) => {
 // ─── POST /:id/forward — forward to next party ───────────────────────────────
 
 router.post("/:id/forward", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1030,8 +1031,8 @@ router.post("/:id/forward", async (req, res) => {
 // ─── POST /:id/return — return to previous party ─────────────────────────────
 
 router.post("/:id/return", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1150,8 +1151,8 @@ router.post("/:id/return", async (req, res) => {
 // ─── POST /:id/resubmit — returned → active (originator resubmits) ─────────────
 
 router.post("/:id/resubmit", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1268,8 +1269,8 @@ router.post("/:id/resubmit", async (req, res) => {
 // ─── POST /:id/close — manually close ────────────────────────────────────────
 
 router.post("/:id/close", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required to close a submission chain" });
@@ -1313,8 +1314,8 @@ router.post("/:id/close", async (req, res) => {
 // The new assignee must belong to currentOrgId and have project access.
 
 router.post("/:id/reassign", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1399,8 +1400,8 @@ router.post("/:id/reassign", async (req, res) => {
 // ─── GET /:id/steps — step history ───────────────────────────────────────────
 
 router.get("/:id/steps", async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const id = parseInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 

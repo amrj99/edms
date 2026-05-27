@@ -17,6 +17,7 @@ import { requireAuth, hashToken } from "../lib/auth.js";
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -120,7 +121,7 @@ router.post("/correspondence", async (req, res) => {
 // ─── Get Single General Item ──────────────────────────────────────────────────
 
 router.get("/correspondence/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
 
   const items = await db.select().from(correspondenceTable)
     .where(and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId)))
@@ -139,7 +140,7 @@ router.get("/correspondence/:id", async (req, res) => {
 
 router.patch("/correspondence/:id/move", async (req, res) => {
   const userId = req.user!.id;
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { projectId } = req.body ?? {};
 
   if (!projectId) {
@@ -190,7 +191,7 @@ router.patch("/correspondence/:id/move", async (req, res) => {
 
 router.post("/correspondence/:id/reply", async (req, res) => {
   const userId = req.user!.id;
-  const parentId = parseInt(req.params.id);
+  const parentId = paramInt(req.params.id);
   const { subject, body = "", toUserIds = [] } = req.body ?? {};
 
   const parent = await db.select().from(correspondenceTable)
@@ -225,7 +226,7 @@ router.post("/correspondence/:id/reply", async (req, res) => {
 
 // ─── PUT /general/correspondence/:id/read ────────────────────────────────────
 router.put("/correspondence/:id/read", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { isRead } = req.body;
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
@@ -237,7 +238,7 @@ router.put("/correspondence/:id/read", async (req, res) => {
 
 // ─── GET /general/correspondence/:id/share ────────────────────────────────────
 router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [corr] = await db
     .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt })
     .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
@@ -247,7 +248,7 @@ router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
 
 // ─── POST /general/correspondence/:id/share ───────────────────────────────────
 router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
 
   // Fetch first to validate ownership before creating a share link.
   const [existing] = await db.select({ id: correspondenceTable.id, organizationId: correspondenceTable.organizationId })
@@ -276,7 +277,7 @@ router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
 
 // ─── DELETE /general/correspondence/:id ──────────────────────────────────────
 router.delete("/correspondence/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
   const [deleted] = await db.delete(correspondenceTable).where(eq(correspondenceTable.id, id)).returning();

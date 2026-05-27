@@ -6,6 +6,7 @@ import {
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { getReqOrgId } from "../lib/org-scope.js";
 import { executeSkill } from "../lib/skill-engine.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -86,7 +87,7 @@ router.post("/", requireAuth, adminOnly, async (req, res) => {
 router.put("/:id", requireAuth, adminOnly, async (req, res) => {
   try {
     const orgId   = getReqOrgId(req);
-    const skillId = parseInt(req.params.id);
+    const skillId = paramInt(req.params.id);
 
     const [existing] = await db
       .select()
@@ -123,7 +124,7 @@ router.put("/:id", requireAuth, adminOnly, async (req, res) => {
 router.delete("/:id", requireAuth, adminOnly, async (req, res) => {
   try {
     const orgId   = getReqOrgId(req);
-    const skillId = parseInt(req.params.id);
+    const skillId = paramInt(req.params.id);
 
     const [existing] = await db
       .select()
@@ -148,7 +149,7 @@ router.delete("/:id", requireAuth, adminOnly, async (req, res) => {
 router.put("/:id/toggle", requireAuth, adminOnly, async (req, res) => {
   try {
     const orgId   = getReqOrgId(req);
-    const skillId = parseInt(req.params.id);
+    const skillId = paramInt(req.params.id);
 
     const [existing] = await db
       .select()
@@ -175,7 +176,7 @@ router.put("/:id/toggle", requireAuth, adminOnly, async (req, res) => {
 router.put("/:id/run", requireAuth, adminOnly, async (req, res) => {
   try {
     const orgId   = getReqOrgId(req);
-    const skillId = parseInt(req.params.id);
+    const skillId = paramInt(req.params.id);
 
     const [existing] = await db
       .select()
@@ -199,7 +200,7 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res) => {
 router.get("/:id/executions", requireAuth, adminOnly, async (req, res) => {
   try {
     const orgId   = getReqOrgId(req);
-    const skillId = parseInt(req.params.id);
+    const skillId = paramInt(req.params.id);
     const limit   = Math.min(parseInt(req.query.limit as string) || 50, 200);
 
     const [existing] = await db

@@ -4,6 +4,7 @@ import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, u
 import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { emitToUser } from "../lib/socket.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -161,7 +162,7 @@ router.get("/", async (req, res) => {
 
 // ─── Mark single notification as read ─────────────────────────────────────────
 router.post("/:id/read", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
@@ -170,7 +171,7 @@ router.post("/:id/read", async (req, res) => {
 
 // ─── Mark single notification as unread ───────────────────────────────────────
 router.post("/:id/unread", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.update(notificationsTable)
     .set({ isRead: false, readAt: null })
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
@@ -187,7 +188,7 @@ router.post("/read-all", async (req, res) => {
 
 // ─── Delete notification ───────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.delete(notificationsTable)
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
   res.json({ success: true });

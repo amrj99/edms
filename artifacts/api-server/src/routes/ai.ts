@@ -32,6 +32,7 @@ import {
 } from "../lib/ai-service.js";
 import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
 import { detectCommandComplexity } from "../lib/ai-complexity.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -41,7 +42,7 @@ router.use(requireAuth);
 // ─── Document Analysis ───────────────────────────────────────────────────────
 
 router.post("/documents/:id/analyze", async (req, res) => {
-  const docId = parseInt(req.params.id);
+  const docId = paramInt(req.params.id);
   const force = req.query.force === "true";
   const caller = req.user!;
 
@@ -96,7 +97,7 @@ router.post("/documents/:id/analyze", async (req, res) => {
 // ─── Correspondence Analysis ─────────────────────────────────────────────────
 
 router.post("/correspondence/:id/analyze", async (req, res) => {
-  const corrId = parseInt(req.params.id);
+  const corrId = paramInt(req.params.id);
   const force = req.query.force === "true";
   const caller = req.user!;
 
@@ -923,7 +924,7 @@ router.put("/models/:id", async (req, res) => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { displayName, tierMinimum, isActive } = req.body ?? {};
   const [row] = await db.update(aiModelsTable)
     .set({ displayName, tierMinimum, isActive, updatedAt: new Date() })
@@ -937,7 +938,7 @@ router.delete("/models/:id", async (req, res) => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const [row] = await db.update(aiModelsTable)
     .set({ isActive: false, updatedAt: new Date() })
     .where(eq(aiModelsTable.id, id))

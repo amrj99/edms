@@ -7,6 +7,7 @@ import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -265,7 +266,7 @@ router.post("/", requireAuth, async (req, res) => {
 
 // ─── GET /:id ─────────────────────────────────────────────────────────────────
 router.get("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const user = req.user!;
   const results = await db.select({ project: projectsTable, orgName: organizationsTable.name })
     .from(projectsTable)
@@ -286,7 +287,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // ─── PUT /:id ─────────────────────────────────────────────────────────────────
 router.put("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
@@ -358,7 +359,7 @@ router.put("/:id", requireAuth, async (req, res) => {
 
 // ─── DELETE /:id ──────────────────────────────────────────────────────────────
 router.delete("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
@@ -372,7 +373,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
 
 // ─── GET /:id/members ─────────────────────────────────────────────────────────
 router.get("/:id/members", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const members = await db.select({
     member: projectMembersTable,
     user: usersTable,
@@ -396,7 +397,7 @@ router.get("/:id/members", requireAuth, async (req, res) => {
 });
 
 router.post("/:id/members", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { userId, role } = req.body;
 
   if (!userId || isNaN(parseInt(String(userId)))) {
@@ -443,8 +444,8 @@ router.post("/:id/members", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id/members/:userId", requireAuth, async (req, res) => {
-  const projectId = parseInt(req.params.id);
-  const userId = parseInt(req.params.userId);
+  const projectId = paramInt(req.params.id);
+  const userId = paramInt(req.params.userId);
   await db.delete(projectMembersTable).where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)));
   res.status(204).send();
 });

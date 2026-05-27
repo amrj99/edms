@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { projectDepartmentsTable, departmentsTable, projectsTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
 import { isSysAdmin } from "../lib/auth.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
@@ -12,7 +13,7 @@ const router = Router({ mergeParams: true });
 // GET  /api/projects/:projectId/departments
 // Returns all departments assigned to the project, plus all org departments for UI
 router.get("/departments", requireAuth, async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const caller = (req as any).user;
 
   const [project] = await db
@@ -42,7 +43,7 @@ router.get("/departments", requireAuth, async (req, res) => {
 
 // POST /api/projects/:projectId/departments  { departmentId }
 router.post("/departments", requireAuth, async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
 
@@ -76,8 +77,8 @@ router.post("/departments", requireAuth, async (req, res) => {
 
 // DELETE /api/projects/:projectId/departments/:departmentId
 router.delete("/departments/:departmentId", requireAuth, async (req, res) => {
-  const projectId = parseInt(req.params.projectId);
-  const departmentId = parseInt(req.params.departmentId);
+  const projectId = paramInt(req.params.projectId);
+  const departmentId = paramInt(req.params.departmentId);
 
   await db
     .delete(projectDepartmentsTable)

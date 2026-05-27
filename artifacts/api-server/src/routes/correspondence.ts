@@ -22,6 +22,7 @@ import { sendCorrespondenceDeliveryEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
@@ -542,7 +543,7 @@ router.get("/assigned-to-me", requireAuth, async (req, res) => {
 });
 
 router.get("/", requireAuth, async (req, res) => {
-  const projectId = req.params.projectId ? parseInt(req.params.projectId) : null;
+  const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   const { folder, type, scope, viewAll } = req.query;
   const caller = req.user!;
   const userId = caller.id;
@@ -620,13 +621,13 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 router.post("/", requireAuth, async (req, res) => {
-  const contextProjectId = req.params.projectId ? parseInt(req.params.projectId) : null;
+  const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   await createCorrespondence(req, res, contextProjectId);
 });
 
 router.get("/:id", requireAuth, async (req, res) => {
-  const projectId = req.params.projectId ? parseInt(req.params.projectId) : null;
-  const id = parseInt(req.params.id);
+  const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
+  const id = paramInt(req.params.id);
   const caller = req.user!;
   const userId = caller.id;
 
@@ -672,7 +673,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 // ─── Recall ───────────────────────────────────────────────────────────────────
 
 router.post("/:id/recall", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const caller = req.user!;
 
   // Fetch the correspondence to check ownership, state, and read receipt
@@ -761,7 +762,7 @@ router.post("/:id/recall", requireAuth, async (req, res) => {
 });
 
 router.put("/:id/read", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const { isRead } = req.body;
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
@@ -772,7 +773,7 @@ router.put("/:id/read", requireAuth, async (req, res) => {
 });
 
 router.put("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const caller = req.user!;
   const { subject, body, folder, status, referenceNumber } = req.body;
   const orgId = caller.organizationId;
@@ -833,8 +834,8 @@ router.put("/:id", requireAuth, async (req, res) => {
 });
 
 router.post("/:id/reply", requireAuth, async (req, res) => {
-  const contextProjectId = req.params.projectId ? parseInt(req.params.projectId) : null;
-  const parentId = parseInt(req.params.id);
+  const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
+  const parentId = paramInt(req.params.id);
   const caller = req.user!;
 
   // Only member+ can reply to correspondence
@@ -914,7 +915,7 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
 // ─── Attachments ──────────────────────────────────────────────────────────────
 
 router.post("/:id/attachments", requireAuth, async (req, res) => {
-  const corrId = parseInt(req.params.id);
+  const corrId = paramInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   const [att] = await db.insert(correspondenceAttachmentsTable).values({
     correspondenceId: corrId,
@@ -926,13 +927,13 @@ router.post("/:id/attachments", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id/attachments/:attId", requireAuth, async (req, res) => {
-  const attId = parseInt(req.params.attId);
+  const attId = paramInt(req.params.attId);
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
   res.json({ success: true });
 });
 
 router.delete("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   const caller = req.user!;
 
   // Fetch to get project context for role resolution
@@ -974,8 +975,8 @@ router.delete("/:id", requireAuth, async (req, res) => {
 // ─── Share link ───────────────────────────────────────────────────────────────
 
 router.post("/:id/share", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
-  const projectId = parseInt(req.params.projectId);
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
 
   // Verify the project belongs to the caller's org — prevents cross-tenant share
@@ -1017,7 +1018,7 @@ router.post("/:id/share", requireAuth, async (req, res) => {
 });
 
 router.delete("/:id/share", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   await db.update(correspondenceTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(eq(correspondenceTable.id, id));

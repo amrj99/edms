@@ -4,13 +4,14 @@ import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@wor
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 // ─── List project role overrides ──────────────────────────────────────────────
 router.get("/role-overrides", requireAuth, async (req, res) => {
   const caller = req.user!;
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const now = new Date();
 
   // Must be PM or admin on this project (or sysAdmin)
@@ -57,7 +58,7 @@ router.get("/role-overrides", requireAuth, async (req, res) => {
 // ─── Create project role override ─────────────────────────────────────────────
 router.post("/role-overrides", requireAuth, async (req, res) => {
   const caller = req.user!;
-  const projectId = parseInt(req.params.projectId);
+  const projectId = paramInt(req.params.projectId);
   const { userId, roleOverride, reason, expiresAt } = req.body;
 
   if (!userId || !roleOverride || !reason?.trim() || !expiresAt) {
@@ -119,8 +120,8 @@ router.post("/role-overrides", requireAuth, async (req, res) => {
 // ─── Revoke project role override ─────────────────────────────────────────────
 router.delete("/role-overrides/:overrideId", requireAuth, async (req, res) => {
   const caller = req.user!;
-  const overrideId = parseInt(req.params.overrideId);
-  const projectId = parseInt(req.params.projectId);
+  const overrideId = paramInt(req.params.overrideId);
+  const projectId = paramInt(req.params.projectId);
 
   const [override] = await db.select().from(projectRoleOverridesTable)
     .where(and(eq(projectRoleOverridesTable.id, overrideId), eq(projectRoleOverridesTable.projectId, projectId)))

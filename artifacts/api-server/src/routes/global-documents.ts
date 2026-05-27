@@ -4,6 +4,7 @@ import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTabl
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { shadowEvaluate, resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
+import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
@@ -161,7 +162,7 @@ router.get("/", requireAuth, async (req, res) => {
 
 // GET /api/documents/:id — single document (org + project-membership scoped)
 router.get("/:id", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document ID" }); return; }
 
   const user = req.user!;
@@ -276,7 +277,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 // ─── Revisions ────────────────────────────────────────────────────────────────
 
 router.get("/:id/revisions", requireAuth, async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = paramInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document id" }); return; }
 
   const revisions = await db.select({
