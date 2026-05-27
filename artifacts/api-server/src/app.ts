@@ -5,6 +5,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
+import { globalErrorHandler } from "./middlewares/error-handler.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { seedPlans } from "./lib/seed-plans.js";
@@ -150,14 +151,9 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", router);
 
 // ─── Global error handler ─────────────────────────────────────────────────────
-app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-  logger.error({ err, method: req.method, url: req.url }, "Unhandled error");
-  const status = (err as any).status ?? (err as any).statusCode ?? 500;
-  res.status(status).json({
-    error: isProd ? "Internal Server Error" : err.message,
-    ...(isProd ? {} : { stack: err.stack }),
-  });
-});
+// Must be registered after all routes. Handles AppError subclasses with typed
+// HTTP responses and structured logging. See middlewares/error-handler.ts.
+app.use(globalErrorHandler);
 
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
