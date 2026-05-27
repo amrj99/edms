@@ -6,9 +6,48 @@ on:
       - main
 
 jobs:
+  # ─── المرحلة 1: التحقق من جودة الكود ────────────────────────────────────────
+  # هذه البوابة تمنع نشر أي كود مكسور للإنتاج.
+  # لو فشلت → يتوقف كل شيء ولا يحدث أي deploy.
+  validate:
+    name: Validate Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript check — API
+        run: pnpm --filter api-server typecheck
+
+      - name: TypeScript check — Frontend
+        run: pnpm --filter edms typecheck
+
+      - name: Build — API
+        run: pnpm --filter api-server build
+
+      - name: Build — Frontend
+        run: pnpm --filter edms build
+
+  # ─── المرحلة 2: النشر على السيرفر ────────────────────────────────────────────
+  # تعمل فقط لو نجحت المرحلة الأولى كاملاً.
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    needs: validate
 
     steps:
       - name: Deploy via SSH
@@ -20,15 +59,20 @@ jobs:
           script: |
             cd /var/www/edms
 
-            echo "── [1/4] سحب آخر تحديث من GitHub ──"
+            echo "── [1/5] نسخة احتياطية قبل التحديث ──"
+            bash scripts/backup.sh
+
+            echo "── [2/5] سحب آخر تحديث من GitHub ──"
             git pull
 
-            echo "── [2/4] إعادة بناء API ──"
+            echo "── [3/5] إعادة بناء API ──"
             docker compose build --no-cache api
 
-            echo "── [3/4] إعادة تشغيل API ──"
+            echo "── [4/5] إعادة تشغيل API ──"
             docker compose up -d --force-recreate api
 
-            echo "── [4/4] التحقق من صحة النظام ──"
-            sleep 15
-            curl -sf http://localhost:8080/api/health && echo "✅ النظام يعمل" || echo "❌ النظام لا يستجيب"
+            echo "── [5/5] التحقق من صحة النظام ──"
+            sleep 20
+            curl -sf http://localhost:8080/api/health \
+              && echo "✅ النظام يعمل بشكل صحيح" \
+              || (echo "❌ النظام لا يستجيب — يرجى المراجعة" && exit 1)
