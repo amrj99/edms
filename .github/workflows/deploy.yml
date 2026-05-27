@@ -73,7 +73,13 @@ jobs:
             docker compose up -d --force-recreate api
 
             echo "── [5/5] التحقق من صحة النظام ──"
-            sleep 20
-            curl -sf http://localhost:8080/api/health \
-              && echo "✅ النظام يعمل بشكل صحيح" \
-              || (echo "❌ النظام لا يستجيب — يرجى المراجعة" && exit 1)
+            for i in $(seq 1 12); do
+              sleep 5
+              if curl -sf http://localhost:8080/api/health > /dev/null 2>&1; then
+                echo "✅ النظام يعمل بشكل صحيح (attempt $i)"
+                exit 0
+              fi
+              echo "⏳ في الانتظار... ($i/12)"
+            done
+            echo "❌ النظام لا يستجيب بعد 60 ثانية — يرجى المراجعة"
+            exit 1
