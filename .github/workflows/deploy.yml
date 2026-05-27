@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Build shared libraries (lib/db and others)
+        run: pnpm typecheck:libs
+
       - name: TypeScript check — API
         run: pnpm --filter api-server typecheck
 
