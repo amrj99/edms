@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { projectsTable, projectMembersTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
-import { eq, count, and, inArray } from "drizzle-orm";
+import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -37,14 +37,22 @@ router.get("/", requireAuth, async (req, res) => {
     ? parseInt(req.query.organizationId as string)
     : user.organizationId;
 
-  let query = db.select({
+  // Tenant isolation: always filter at the DB level — never in-memory.
+  // Non-sysOwner users MUST have an org; if somehow missing, return empty list (fail-safe).
+  if (!isSystemOwner(user) && !effectiveOrgId) {
+    res.json({ projects: [], total: 0 }); return;
+  }
+
+  const orgFilter = effectiveOrgId
+    ? eq(projectsTable.organizationId, effectiveOrgId)
+    : isNotNull(projectsTable.organizationId); // sysOwner with no org filter → all orgs
+
+  let projects = await db.select({
     project: projectsTable,
     orgName: organizationsTable.name,
-  }).from(projectsTable).leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id));
-
-  let projects = effectiveOrgId
-    ? (await query).filter(p => p.project.organizationId === effectiveOrgId)
-    : await query;
+  }).from(projectsTable)
+    .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
+    .where(orgFilter);
 
   // Non-elevated users only see projects they are explicitly assigned to.
   // Admins and system owners see all projects in the organization.

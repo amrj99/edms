@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
-import { eq, count, and, inArray } from "drizzle-orm";
+import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
@@ -60,15 +60,25 @@ router.get("/", requireAuth, async (req, res) => {
     ? requestedOrgId
     : caller.organizationId ?? undefined;
 
+  // Tenant isolation: filter at DB level — never in-memory.
+  // Non-sysOwner users without an org get an empty result (fail-safe).
+  if (!isSystemOwner(caller) && orgId === undefined) {
+    res.json({ users: [], total: 0 }); return;
+  }
+
+  const orgFilter = orgId !== undefined
+    ? eq(usersTable.organizationId, orgId)
+    : isNotNull(usersTable.organizationId); // sysOwner with no filter → all orgs
+
   const results = await db.select({
     user: usersTable,
     orgName: organizationsTable.name,
-  }).from(usersTable).leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id));
-
-  const filtered = orgId !== undefined ? results.filter(r => r.user.organizationId === orgId) : results;
+  }).from(usersTable)
+    .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
+    .where(orgFilter);
 
   res.json({
-    users: filtered.map(r => ({
+    users: results.map(r => ({
       id: r.user.id,
       email: r.user.email,
       firstName: r.user.firstName,
@@ -79,7 +89,7 @@ router.get("/", requireAuth, async (req, res) => {
       isActive: r.user.isActive,
       createdAt: r.user.createdAt,
     })),
-    total: filtered.length,
+    total: results.length,
   });
 });
 
