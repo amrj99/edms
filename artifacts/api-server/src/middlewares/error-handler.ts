@@ -14,6 +14,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger.js";
 import { AppError, TenantIsolationError, isAppError } from "../lib/errors.js";
+import { Sentry } from "../instrument.js";
 
 // ─── Response shape ───────────────────────────────────────────────────────────
 
@@ -53,8 +54,26 @@ export function globalErrorHandler(
     // Security events get special treatment
     if (err instanceof TenantIsolationError) {
       logger.warn({ ...logPayload, securityEvent: true }, "[security] Tenant isolation violation");
+      // Always report security violations to Sentry with full context
+      Sentry.withScope((scope) => {
+        scope.setTag("security_event", "tenant_isolation_violation");
+        scope.setTag("route", req.path);
+        scope.setTag("method", req.method);
+        scope.setUser({ id: String((req.user as any)?.id ?? "unknown") });
+        scope.setContext("violation", logPayload);
+        Sentry.captureException(err);
+      });
     } else if (err.statusCode >= 500) {
       logger.error(logPayload, `[error] ${err.code}: ${err.message}`);
+      // Report 5xx errors to Sentry
+      if (err.report) {
+        Sentry.withScope((scope) => {
+          scope.setTag("error_code", err.code);
+          scope.setUser({ id: String((req.user as any)?.id ?? "unknown") });
+          scope.setContext("request", { path: req.path, method: req.method, orgId: (req.user as any)?.organizationId });
+          Sentry.captureException(err);
+        });
+      }
     } else {
       logger.warn(logPayload, `[warn] ${err.code}: ${err.message}`);
     }
@@ -87,6 +106,18 @@ export function globalErrorHandler(
     orgId: (req.user as any)?.organizationId,
     requestId,
   }, "[error] Unhandled exception");
+
+  // Report all unhandled exceptions to Sentry
+  Sentry.withScope((scope) => {
+    scope.setUser({ id: String((req.user as any)?.id ?? "unknown") });
+    scope.setContext("request", {
+      path: req.path,
+      method: req.method,
+      orgId: (req.user as any)?.organizationId,
+      requestId,
+    });
+    Sentry.captureException(err);
+  });
 
   res.status(500).json({
     error: "INTERNAL_ERROR",

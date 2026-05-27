@@ -1,3 +1,6 @@
+// !! MUST be first import — Sentry instruments Node.js internals at load time
+import "./instrument.js";
+
 import { createServer } from "http";
 import app from "./app.js";
 import { initSocket } from "./lib/socket.js";
