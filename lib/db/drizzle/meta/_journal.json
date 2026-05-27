@@ -64,6 +64,13 @@
       "when": 1778248222453,
       "tag": "0008_ai_governance",
       "breakpoints": false
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779899521704,
+      "tag": "0009_busy_firebrand",
+      "breakpoints": true
     }
   ]
 }
