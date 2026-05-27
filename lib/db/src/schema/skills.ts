@@ -70,7 +70,7 @@ export const skillExecutionsTable = pgTable("skill_executions", {
 export const insertSkillDefinitionSchema = createInsertSchema(skillDefinitionsTable).omit({
   id: true, createdAt: true, updatedAt: true,
 }).extend({
-  config: z.record(z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({}),
 });
 
 export type SkillDefinition = typeof skillDefinitionsTable.$inferSelect;
