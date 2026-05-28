@@ -12,7 +12,8 @@ import {
 import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
-import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
@@ -24,8 +25,7 @@ const router = Router();
 router.use(requireAuth);
 
 // ─── System Info ──────────────────────────────────────────────────────────────
-router.get("/system-info", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.get("/system-info", requireSysOwner, async (req, res) => {
   const user = req.user!;
   const countRow = async (table: any) => {
     const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(table);
@@ -65,8 +65,7 @@ router.get("/system-info", async (req, res) => {
 });
 
 // ─── SMTP Test ────────────────────────────────────────────────────────────────
-router.post("/smtp/test", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.post("/smtp/test", requireMinRole("admin"), async (req, res) => {
   const result = await testSmtpConnection();
   res.json(result);
 });
@@ -289,8 +288,7 @@ router.get("/usage", async (req, res) => {
 });
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
-router.put("/storage-config/:orgId", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.put("/storage-config/:orgId", requireSysOwner, async (req, res) => {
   const orgId = paramInt(req.params.orgId);
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
@@ -364,8 +362,7 @@ router.get("/backup", async (req, res) => {
 });
 
 // ─── Restore validation (dry-run) ─────────────────────────────────────────────
-router.post("/restore/validate", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.post("/restore/validate", requireSysOwner, async (req, res) => {
   const { backup } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
     res.status(400).json({ error: "Invalid backup format. Expected {version, exportedAt, tables}." });
@@ -384,8 +381,7 @@ router.post("/restore/validate", async (req, res) => {
 });
 
 // ─── Restore (actual) ─────────────────────────────────────────────────────────
-router.post("/restore", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden — system owner required" }); return; }
+router.post("/restore", requireSysOwner, async (req, res) => {
 
   const { backup, confirmed } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
@@ -433,7 +429,7 @@ router.post("/restore", async (req, res) => {
 });
 
 // ─── Test Data Seed ────────────────────────────────────────────────────────────
-router.post("/seed-test-data", requireRole("admin", "system_owner"), async (req, res) => {
+router.post("/seed-test-data", requireMinRole("admin"), async (req, res) => {
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
@@ -654,7 +650,7 @@ router.get("/search/status", async (req, res) => {
   }
 });
 
-router.post("/search/reindex", requireRole("admin", "system_owner"), async (req, res) => {
+router.post("/search/reindex", requireMinRole("admin"), async (req, res) => {
   try {
     const { reindexAll } = await import("../lib/search-service.js");
     const result = await reindexAll();
@@ -681,7 +677,7 @@ router.get("/ai-classification", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/ai-classification", requireRole("admin", "system_owner"), async (req, res) => {
+router.put("/ai-classification", requireMinRole("admin"), async (req, res) => {
   try {
     const { enabled } = req.body as { enabled: boolean };
     const value = enabled ? "true" : "false";
@@ -741,9 +737,8 @@ router.get("/ai-quota", requireAuth, async (req, res) => {
 
 // ─── Subscription tier — preset AI config bundles ─────────────────────────────
 
-// PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (sysadmin only)
-router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
-  if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
+// PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (system_owner only)
+router.put("/ai-tier/:orgId", requireSysOwner, async (req, res) => {
 
   const orgId = paramInt(req.params.orgId);
   const { tier } = req.body as { tier: SubscriptionTier };
@@ -786,8 +781,7 @@ router.put("/ai-tier/:orgId", requireRole("admin", "system_owner"), async (req, 
  * Body: { aiDailyLimit?: number, aiMonthlyTokenLimit?: number }
  * Both values are optional; 0 means unlimited.
  */
-router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req, res) => {
-  if (!isSystemOwner(req.user!)) return res.status(403).json({ error: "System owner access required" });
+router.put("/ai-limits/:orgId", requireSysOwner, async (req, res) => {
 
   const orgId = paramInt(req.params.orgId);
   if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });
@@ -820,8 +814,7 @@ router.put("/ai-limits/:orgId", requireRole("admin", "system_owner"), async (req
 
 // ─── Plan Management ──────────────────────────────────────────────────────────
 
-router.get("/org-plans", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.get("/org-plans", requireSysOwner, async (req, res) => {
   const rows = await db
     .select({
       orgId: organizationsTable.id,
@@ -833,8 +826,7 @@ router.get("/org-plans", async (req, res) => {
   res.json({ plans: rows });
 });
 
-router.post("/organizations/:orgId/change-plan", async (req, res) => {
-  if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res) => {
   const orgId = paramInt(req.params.orgId);
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
@@ -860,8 +852,7 @@ router.post("/organizations/:orgId/change-plan", async (req, res) => {
 //
 // Uses raw SQL via db.execute() to avoid Drizzle's orderSelectedFields bug
 // that occurs when pgTable uses array-style index definitions with this version.
-router.get("/shadow-log", async (req, res) => {
-  if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.get("/shadow-log", requireMinRole("admin"), async (req, res) => {
   try {
     const user = req.user!;
     const divergeOnly = req.query.divergeOnly !== "false";

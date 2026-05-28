@@ -156,9 +156,28 @@ export function isSystemOwner(user: AuthUser): boolean {
  * Returns true for organization admins AND the platform system owner.
  * Use this for elevated within-org operations where both roles need access.
  * Do NOT use for cross-org operations — use isSystemOwner() there.
+ *
+ * @deprecated Prefer isOrgAdmin() + isSystemOwner() separately for clarity.
+ * isSysAdmin() remains for backward compatibility in existing callers.
  */
 export function isSysAdmin(user: AuthUser): boolean {
   return user.role === "system_owner" || user.role === "admin";
+}
+
+/**
+ * Returns true for organization-level admins ONLY (role === "admin").
+ * Does NOT include system_owner.
+ *
+ * Use this when the operation is scoped to a single org and you want to
+ * be explicit that system_owner is handled separately (e.g. via isSystemOwner()).
+ *
+ * ─── When to use which ───────────────────────────────────────────────────────
+ *   isOrgAdmin(user)    → org-scoped admin action (user management, config, etc.)
+ *   isSystemOwner(user) → cross-tenant platform action (billing, global config)
+ *   isSysAdmin(user)    → legacy: org admin OR system_owner (prefer the above pair)
+ */
+export function isOrgAdmin(user: AuthUser): boolean {
+  return user.role === "admin";
 }
 
 export function requireSysAdmin(req: Request, res: Response, next: NextFunction): void {

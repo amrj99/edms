@@ -12,6 +12,7 @@ import {
 } from "@workspace/db";
 import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
+import { hasMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { CorrespondencePermissions } from "../lib/permissions.js";
@@ -552,9 +553,18 @@ router.get("/", requireAuth, async (req, res) => {
   // Resolve effective role (respects overrides, delegations, project member roles)
   const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
 
+  // Hierarchical visibility policy:
+  //   system_owner → all orgs (handled via orgId scope)
+  //   admin        → all correspondence in org automatically (no opt-in required)
+  //   PM / DC      → all correspondence in project (opt-in via viewAll=true)
+  //   participant  → only To/CC (default mail-model)
+  const isAdminLevel = hasMinRole(caller, "admin");
+
   // viewAll=true: PM/DC opt-in to see all project correspondence (not just own To/CC)
-  // Only honoured in project context and only for eligible roles
-  const wantsViewAll = viewAll === "true" && projectId !== null && CorrespondencePermissions.hasViewAllCapability(effectiveRole);
+  // admin+ always see all correspondence in scope (no opt-in required)
+  const wantsViewAll =
+    isAdminLevel ||
+    (viewAll === "true" && projectId !== null && CorrespondencePermissions.hasViewAllCapability(effectiveRole));
 
   const baseFilter = projectId !== null
     ? and(
@@ -570,7 +580,9 @@ router.get("/", requireAuth, async (req, res) => {
       );
 
   if (wantsViewAll) {
-    // Return all correspondence in the project (PM/DC opt-in view)
+    // Return all correspondence in scope:
+    //   admin+  → automatic (org-level authority)
+    //   PM/DC   → opt-in via viewAll=true query param
     let allItems = await db.select().from(correspondenceTable)
       .where(baseFilter)
       .orderBy(desc(correspondenceTable.updatedAt));
@@ -578,7 +590,12 @@ router.get("/", requireAuth, async (req, res) => {
     if (type) allItems = allItems.filter(i => i.type === type as string);
     if (scope) allItems = allItems.filter(i => i.scope === scope as string);
     const enriched = await enrichCorrespondence(allItems);
-    res.json({ items: enriched, total: enriched.length, viewAll: true });
+    res.json({
+      items: enriched,
+      total: enriched.length,
+      viewAll: true,
+      viewAllReason: isAdminLevel ? "admin_authority" : "pm_dc_opt_in",
+    });
     return;
   }
 
