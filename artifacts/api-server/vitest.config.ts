@@ -56,6 +56,7 @@ export default defineConfig({
   resolve: {
     // Mirror the path aliases in tsconfig so imports resolve correctly in tests.
     alias: {
+      "@workspace/db/schema": path.resolve(__dirname, "../../lib/db/src/schema/index.ts"),
       "@workspace/db": path.resolve(__dirname, "../../lib/db/src/index.ts"),
       "@workspace/api-zod": path.resolve(__dirname, "../../lib/api-zod/src/index.ts"),
       "@workspace/integrations-openai-ai-server": path.resolve(
