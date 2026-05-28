@@ -33,6 +33,13 @@ jobs:
       - name: Build lib/db (generates type declarations for api-server)
         run: tsc --build lib/db
 
+      # ── Migration Journal Validation ────────────────────────────────────────
+      # Ensures every .sql file in lib/db/drizzle/ is registered in the journal.
+      # Unregistered files are silently skipped by drizzle-orm on deploy — this
+      # gate catches the gap before it reaches production.
+      - name: Validate migration journal
+        run: bash scripts/check-migration-journal.sh
+
       # TypeScript strict checks disabled temporarily — hundreds of pre-existing
       # noImplicitAny / strictNullChecks errors inherited from Replit dev environment.
       # Will be resolved progressively. Build success is the gate for now.
