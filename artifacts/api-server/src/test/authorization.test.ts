@@ -57,7 +57,7 @@ describe("requireSysOwner — system_owner only endpoints", () => {
   const sysOwnerEndpoints: Array<{ method: "get" | "post" | "put" | "delete"; path: string }> = [
     { method: "get",  path: "/api/admin/system-info" },
     { method: "get",  path: "/api/admin/org-plans" },
-    { method: "get",  path: "/api/admin/ai-tier" },
+    { method: "put",  path: "/api/admin/ai-tier/1" },
   ];
 
   describe("returns 401 with no token", () => {
@@ -203,7 +203,7 @@ describe("CRITICAL: admin cannot perform system_owner actions", () => {
       .get("/api/admin/system-info")
       .set(tokens.admin());
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("Forbidden");
+    expect(res.body.error).toBe("FORBIDDEN");
   });
 
   it("admin cannot change org plans", async () => {

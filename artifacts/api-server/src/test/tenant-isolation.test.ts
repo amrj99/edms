@@ -108,7 +108,7 @@ beforeAll(async () => {
     subject: "Internal Alpha Memo",
     type: "internal",
     fromUserId: userA.id,
-    status: "open",
+    status: "draft",
     referenceNumber: "CORR-001",
   }).returning();
 
