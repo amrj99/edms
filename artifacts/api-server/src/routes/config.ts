@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { orgConfigTable, systemSettingsTable, organizationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
+import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 
 const router = Router();
 
@@ -34,12 +35,7 @@ router.get("/organizations-public", async (_req, res) => {
   res.json({ organizations: orgs });
 });
 
-router.put("/system-settings", requireAuth, async (req, res) => {
-  const user = (req as any).user;
-  if (!isSystemOwner(user)) {
-    res.status(403).json({ error: "System owner only" });
-    return;
-  }
+router.put("/system-settings", requireAuth, requireSysOwner, async (req, res) => {
   const { registrationEnabled } = req.body ?? {};
   if (typeof registrationEnabled === "boolean") {
     const value = registrationEnabled ? "true" : "false";
@@ -74,12 +70,8 @@ router.get("/", async (req, res) => {
 // ─── AI Governance (admin / system_owner only) ────────────────────────────────
 // Enables or disables AI for an organization and sets the AI plan tier.
 // system_owner may additionally pass ?orgOverride=<id> to target any org.
-router.get("/ai-governance", async (req, res) => {
-  const user = req.user;
-  if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
-  if (user.role !== "admin" && user.role !== "system_owner") {
-    res.status(403).json({ error: "Admin only" }); return;
-  }
+router.get("/ai-governance", requireMinRole("admin"), async (req, res) => {
+  const user = req.user!;
   const orgId = user.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
 
@@ -99,12 +91,8 @@ router.get("/ai-governance", async (req, res) => {
   res.json(config);
 });
 
-router.put("/ai-governance", async (req, res) => {
-  const user = req.user;
-  if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
-  if (user.role !== "admin" && user.role !== "system_owner") {
-    res.status(403).json({ error: "Admin only" }); return;
-  }
+router.put("/ai-governance", requireMinRole("admin"), async (req, res) => {
+  const user = req.user!;
   const orgId = user.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
 
@@ -143,10 +131,9 @@ router.put("/ai-governance", async (req, res) => {
   res.json(updated);
 });
 
-router.put("/", async (req, res) => {
-  const orgId = req.user?.organizationId;
+router.put("/", requireMinRole("admin"), async (req, res) => {
+  const orgId = req.user!.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
-  if (req.user?.role !== "admin") { res.status(403).json({ error: "Admin only" }); return; }
 
   const {
     documentNumberingFormat, disciplines, documentTypes,

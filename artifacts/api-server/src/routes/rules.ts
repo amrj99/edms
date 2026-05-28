@@ -13,6 +13,7 @@ import { db } from "@workspace/db";
 import { rulesTable } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { requireMinRole } from "../middlewares/require-role.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
@@ -57,15 +58,6 @@ const actionSchema = z.discriminatedUnion("type", [
 const actionsSchema = z.array(actionSchema);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function requireAdmin(req: any, res: any, next: any) {
-  const role = req.user?.role;
-  const allowed = ["admin", "system_owner", "project_manager"];
-  if (!allowed.includes(role)) {
-    return res.status(403).json({ error: "Admin access required" });
-  }
-  next();
-}
 
 function validateConditionsAndActions(
   conditions: unknown,
@@ -135,7 +127,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 });
 
 // POST /api/rules — create rule
-router.post("/", requireAuth, requireAdmin, async (req, res) => {
+router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const orgId = req.user!.organizationId;
   if (!orgId) return res.status(400).json({ error: "No organization" });
 
@@ -181,7 +173,7 @@ router.post("/", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // PUT /api/rules/:id — update rule
-router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
+router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -231,7 +223,7 @@ router.put("/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // DELETE /api/rules/:id
-router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
+router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -244,7 +236,7 @@ router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/rules/:id/toggle — quick enable/disable
-router.patch("/:id/toggle", requireAuth, requireAdmin, async (req, res) => {
+router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -274,7 +266,7 @@ router.patch("/:id/toggle", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // POST /api/rules/:id/reset-circuit — manually reset the circuit breaker
-router.post("/:id/reset-circuit", requireAuth, requireAdmin, async (req, res) => {
+router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 

@@ -4,7 +4,33 @@
  * This is the single source of truth for what each role can do.
  * All route-level permission checks should use the helpers exported here.
  *
- * Role hierarchy (highest to lowest):
+ * ─── Authorization Entry Points ───────────────────────────────────────────────
+ *
+ * For route-level middleware (Express middleware chain), use:
+ *   middlewares/require-role.ts
+ *     • requireMinRole(minRole)      — caller rank >= minRole (preferred for most routes)
+ *     • requireExactRoles(...roles)  — caller is exactly one of the listed roles
+ *     • requireAdminOrSelf(fn)       — admin+ OR the user themselves
+ *     • requireSysOwner              — cross-tenant platform operations only
+ *     • hasMinRole(user, minRole)    — boolean helper for conditional logic inside handlers
+ *     • hasAnyRole(user, roles)      — boolean helper for multi-role conditionals
+ *
+ * For domain-level permission logic (documents, correspondence, tasks, etc.),
+ * use the Permission objects defined in THIS file:
+ *     • DocumentPermissions.canDelete(role, status)
+ *     • CorrespondencePermissions.canClose(role)
+ *     • TaskPermissions.canAssign(role)
+ *     • etc.
+ *
+ * ─── Anti-pattern to avoid ────────────────────────────────────────────────────
+ *
+ *   ❌  if (user.role === "admin" || user.role === "system_owner") { ... }
+ *   ❌  if (["admin", "project_manager"].includes(user.role)) { ... }
+ *   ✅  requireMinRole("admin")                    — in middleware chain
+ *   ✅  hasMinRole(req.user, "admin")              — inside handler body
+ *   ✅  DocumentPermissions.canDelete(role, status) — domain permission
+ *
+ * ─── Role hierarchy (highest → lowest) ───────────────────────────────────────
  *   system_owner (100) > admin (80) > project_manager (60)
  *   > document_controller (40) > reviewer (20) > member (10) > viewer (0)
  *

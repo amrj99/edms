@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
@@ -93,17 +94,12 @@ router.get("/", requireAuth, async (req, res) => {
   });
 });
 
-router.post("/", requireAuth, async (req, res) => {
+// ── P0 security fix: requireMinRole("admin") enforces that only admin+ may
+// create users. Without this gate any authenticated user (viewer, member, etc.)
+// could POST to this endpoint and create accounts with elevated roles — a
+// direct privilege escalation path.
+router.post("/", requireAuth, requireMinRole("admin"), async (req, res) => {
   const caller = req.user!;
-
-  // ── P0 security fix: role guard ────────────────────────────────────────────
-  // Only admin+ may create users. Without this check any authenticated user
-  // (viewer, member, reviewer, etc.) could POST to this endpoint and create
-  // accounts with elevated roles — a direct privilege escalation path.
-  if (!isSysAdmin(caller)) {
-    res.status(403).json({ error: "Forbidden", message: "Administrator privileges required to create users." });
-    return;
-  }
 
   const { email, password, firstName, lastName, role, organizationId } = req.body;
   if (!email || !password || !firstName || !lastName || !role) {

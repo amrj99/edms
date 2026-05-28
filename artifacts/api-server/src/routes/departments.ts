@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/db";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireMinRole } from "../middlewares/require-role.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
@@ -15,10 +16,6 @@ router.use(requireAuth);
 function getOrgId(req: any): number | null {
   if (isSysAdmin(req.user) && req.query.orgId) return parseInt(req.query.orgId as string);
   return req.user?.organizationId ?? null;
-}
-
-function isAdmin(req: any): boolean {
-  return ["system_owner", "admin"].includes(req.user?.role);
 }
 
 // ─── List departments for org ──────────────────────────────────────────────────
@@ -48,8 +45,7 @@ router.get("/", async (req, res) => {
 });
 
 // ─── Create department ─────────────────────────────────────────────────────────
-router.post("/", async (req, res) => {
-  if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.post("/", requireMinRole("admin"), async (req, res) => {
 
   const orgId = getOrgId(req);
   if (!orgId) { res.status(400).json({ error: "Organization required" }); return; }
@@ -72,8 +68,7 @@ router.post("/", async (req, res) => {
 });
 
 // ─── Update department ─────────────────────────────────────────────────────────
-router.put("/:id", async (req, res) => {
-  if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.put("/:id", requireMinRole("admin"), async (req, res) => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -104,8 +99,7 @@ router.put("/:id", async (req, res) => {
 });
 
 // ─── Delete department ─────────────────────────────────────────────────────────
-router.delete("/:id", async (req, res) => {
-  if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.delete("/:id", requireMinRole("admin"), async (req, res) => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -152,8 +146,7 @@ router.get("/:id/members", async (req, res) => {
 });
 
 // ─── Add user to department ────────────────────────────────────────────────────
-router.post("/:id/members", async (req, res) => {
-  if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.post("/:id/members", requireMinRole("admin"), async (req, res) => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -190,8 +183,7 @@ router.post("/:id/members", async (req, res) => {
 });
 
 // ─── Remove user from department ──────────────────────────────────────────────
-router.delete("/:id/members/:userId", async (req, res) => {
-  if (!isAdmin(req)) { res.status(403).json({ error: "Forbidden" }); return; }
+router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res) => {
 
   const deptId = paramInt(req.params.id);
   const userId = paramInt(req.params.userId);

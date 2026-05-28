@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { delegationsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, or, isNull, desc, gt } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
@@ -76,7 +77,7 @@ router.get("/", requireAuth, async (req, res) => {
 // ─── Create delegation ────────────────────────────────────────────────────────
 // A project manager or admin may delegate their authority to another user.
 // projectId is optional — omit for org-wide delegation.
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const caller = req.user!;
   const { toUserId, projectId, reason, expiresAt } = req.body;
 
@@ -91,12 +92,6 @@ router.post("/", requireAuth, async (req, res) => {
 
   if (toUserId === caller.id) {
     res.status(400).json({ error: "You cannot delegate to yourself" }); return;
-  }
-
-  // Only project managers and admins can create delegations
-  const ALLOWED_ROLES = ["system_owner", "admin", "project_manager"];
-  if (!ALLOWED_ROLES.includes(caller.role)) {
-    res.status(403).json({ error: "Only project managers and admins can create delegations" }); return;
   }
 
   // Verify toUser exists and is in the same org (or caller is sysAdmin)

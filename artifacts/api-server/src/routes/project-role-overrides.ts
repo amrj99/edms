@@ -3,21 +3,17 @@ import { db } from "@workspace/db";
 import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 // ─── List project role overrides ──────────────────────────────────────────────
-router.get("/role-overrides", requireAuth, async (req, res) => {
+router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const caller = req.user!;
   const projectId = paramInt(req.params.projectId);
   const now = new Date();
-
-  // Must be PM or admin on this project (or sysAdmin)
-  if (!isSysAdmin(caller) && !["admin", "project_manager"].includes(caller.role)) {
-    res.status(403).json({ error: "Only project managers and admins can view role overrides" }); return;
-  }
 
   const rows = await db
     .select({
@@ -56,18 +52,13 @@ router.get("/role-overrides", requireAuth, async (req, res) => {
 });
 
 // ─── Create project role override ─────────────────────────────────────────────
-router.post("/role-overrides", requireAuth, async (req, res) => {
+router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const caller = req.user!;
   const projectId = paramInt(req.params.projectId);
   const { userId, roleOverride, reason, expiresAt } = req.body;
 
   if (!userId || !roleOverride || !reason?.trim() || !expiresAt) {
     res.status(400).json({ error: "userId, roleOverride, reason, and expiresAt are required" }); return;
-  }
-
-  // Only PM+ can create overrides
-  if (!isSysAdmin(caller) && !["admin", "project_manager"].includes(caller.role)) {
-    res.status(403).json({ error: "Only project managers and admins can create role overrides" }); return;
   }
 
   const VALID_ROLES = ["system_owner", "admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
@@ -118,7 +109,7 @@ router.post("/role-overrides", requireAuth, async (req, res) => {
 });
 
 // ─── Revoke project role override ─────────────────────────────────────────────
-router.delete("/role-overrides/:overrideId", requireAuth, async (req, res) => {
+router.delete("/role-overrides/:overrideId", requireAuth, requireMinRole("project_manager"), async (req, res) => {
   const caller = req.user!;
   const overrideId = paramInt(req.params.overrideId);
   const projectId = paramInt(req.params.projectId);
