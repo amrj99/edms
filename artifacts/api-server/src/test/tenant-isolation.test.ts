@@ -115,7 +115,7 @@ beforeAll(async () => {
   // Insert a notification for userA (should NOT be visible to userB)
   const [notif] = await db.insert(notificationsTable).values({
     userId: userA.id,
-    type: "document_status_change",
+    type: "document_uploaded",
     title: "Alpha document updated",
     message: "DOC-001 was updated",
     projectId: projectA.id,
