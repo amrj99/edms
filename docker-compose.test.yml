@@ -1,0 +1,35 @@
+# docker-compose.test.yml
+#
+# Spins up a throwaway PostgreSQL instance for integration tests.
+# Used by CI and by developers running tests locally.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   DATABASE_URL=postgresql://edms_test:edms_test@localhost:5433/edms_test pnpm test
+#   docker compose -f docker-compose.test.yml down -v
+#
+# The test database is completely separate from the dev database:
+#   Dev  → port 5432, database "edms"
+#   Test → port 5433, database "edms_test"
+#
+# The -v flag on "down" removes the volume so each CI run starts clean.
+
+services:
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: edms_postgres_test
+    environment:
+      POSTGRES_DB: edms_test
+      POSTGRES_USER: edms_test
+      POSTGRES_PASSWORD: edms_test_password
+    ports:
+      - "5433:5432"
+    # tmpfs keeps the DB in memory — fast and auto-wiped on container stop.
+    # Remove this and add a named volume if you need persistent test data.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edms_test -d edms_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

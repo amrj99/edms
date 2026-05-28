@@ -43,12 +43,63 @@ jobs:
       - name: Build — Frontend
         run: pnpm --filter edms build
 
+  # ─── المرحلة 1b: Integration Tests ──────────────────────────────────────────
+  # Security regression suite — runs in parallel with validate.
+  # Failures here block deploy just like build failures.
+  test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres_test:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: edms_test
+          POSTGRES_USER: edms_test
+          POSTGRES_PASSWORD: edms_test_password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U edms_test -d edms_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      TEST_DATABASE_URL: postgresql://edms_test:edms_test_password@localhost:5433/edms_test
+      JWT_SECRET: ci-test-secret-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      NODE_ENV: test
+      LOG_LEVEL: silent
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build lib/db
+        run: tsc --build lib/db
+
+      - name: Run integration tests
+        run: pnpm --filter api-server test
+
   # ─── المرحلة 2: النشر على السيرفر ────────────────────────────────────────────
-  # تعمل فقط لو نجحت المرحلة الأولى كاملاً.
+  # تعمل فقط لو نجحت المرحلتان الأولى والاختبارات كاملاً.
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
-    needs: validate
+    needs: [validate, test]
 
     steps:
       - name: Deploy via SSH
