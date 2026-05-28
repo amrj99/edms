@@ -240,6 +240,17 @@ router.post("/", requireAuth, async (req, res) => {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
     return;
   }
+
+  // Tenant isolation: verify the project belongs to the caller's organization
+  if (!isSystemOwner(req.user!)) {
+    const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
+    if (projCheck.organizationId !== req.user!.organizationId) {
+      throw new TenantIsolationError({ userId: req.user!.id, userOrgId: req.user!.organizationId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
+    }
+  }
+
   const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy, direction } = req.body;
 
   if (!title?.trim()) {
@@ -876,6 +887,16 @@ router.post("/:id/approve", requireAuth, async (req, res) => {
 
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
+
+  // Tenant isolation: org-level admins may only approve documents in their own org
+  if (!isSystemOwner(caller)) {
+    const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
+    if (projCheck.organizationId !== caller.organizationId) {
+      throw new TenantIsolationError({ userId: caller.id, userOrgId: caller.organizationId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
+    }
+  }
   const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
   const reviewer = req.user as any;

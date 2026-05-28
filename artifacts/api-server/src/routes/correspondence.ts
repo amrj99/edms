@@ -24,6 +24,7 @@ import { dispatchNotification } from "../lib/notifications/index.js";
 import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router({ mergeParams: true });
 
@@ -550,6 +551,17 @@ router.get("/", requireAuth, async (req, res) => {
   const userId = caller.id;
   const orgId = caller.organizationId;
 
+  // Tenant isolation: when a projectId is supplied in the URL, verify it belongs
+  // to the caller's organization. system_owner bypasses this check.
+  if (projectId !== null && !isSystemOwner(caller)) {
+    const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
+    if (projCheck.organizationId !== orgId) {
+      throw new TenantIsolationError({ userId: caller.id, userOrgId: orgId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
+    }
+  }
+
   // Resolve effective role (respects overrides, delegations, project member roles)
   const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
 
@@ -654,6 +666,11 @@ router.get("/:id", requireAuth, async (req, res) => {
 
   const items = await db.select().from(correspondenceTable).where(filter).limit(1);
   if (!items[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation: verify the correspondence belongs to the caller's organization
+  if (!isSystemOwner(caller) && items[0].organizationId !== null && items[0].organizationId !== caller.organizationId) {
+    throw new TenantIsolationError({ userId: caller.id, userOrgId: caller.organizationId, resourceOrgId: items[0].organizationId, resource: "correspondence", resourceId: id });
+  }
 
   // Access check: caller must be sender, To, CC, or PM/DC with view-all capability
   const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
@@ -871,6 +888,13 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
     .from(correspondenceTable)
     .where(eq(correspondenceTable.id, parentId))
     .limit(1);
+
+  if (!parent[0]) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // Tenant isolation: verify the parent correspondence belongs to the caller's organization
+  if (!isSystemOwner(caller) && parent[0].organizationId !== null && parent[0].organizationId !== caller.organizationId) {
+    throw new TenantIsolationError({ userId: caller.id, userOrgId: caller.organizationId, resourceOrgId: parent[0].organizationId, resource: "correspondence", resourceId: parentId });
+  }
 
   // Derive org: caller's org first, then inherit from parent correspondence (system_owner case)
   const orgId: number | null = caller.organizationId ?? parent[0]?.organizationId ?? null;

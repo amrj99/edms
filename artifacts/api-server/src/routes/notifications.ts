@@ -163,18 +163,22 @@ router.get("/", async (req, res) => {
 // ─── Mark single notification as read ─────────────────────────────────────────
 router.post("/:id/read", async (req, res) => {
   const id = paramInt(req.params.id);
-  await db.update(notificationsTable)
+  const updated = await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+    .returning({ id: notificationsTable.id });
+  if (updated.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
 
 // ─── Mark single notification as unread ───────────────────────────────────────
 router.post("/:id/unread", async (req, res) => {
   const id = paramInt(req.params.id);
-  await db.update(notificationsTable)
+  const updated = await db.update(notificationsTable)
     .set({ isRead: false, readAt: null })
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+    .returning({ id: notificationsTable.id });
+  if (updated.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
 
@@ -189,8 +193,10 @@ router.post("/read-all", async (req, res) => {
 // ─── Delete notification ───────────────────────────────────────────────────────
 router.delete("/:id", async (req, res) => {
   const id = paramInt(req.params.id);
-  await db.delete(notificationsTable)
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)));
+  const deleted = await db.delete(notificationsTable)
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+    .returning({ id: notificationsTable.id });
+  if (deleted.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
 
