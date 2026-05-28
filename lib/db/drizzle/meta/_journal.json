@@ -71,6 +71,20 @@
       "when": 1779899521704,
       "tag": "0009_busy_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779899522704,
+      "tag": "0009_audit_immutable",
+      "breakpoints": false
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779899523704,
+      "tag": "0010_audit_schema",
+      "breakpoints": false
     }
   ]
 }
