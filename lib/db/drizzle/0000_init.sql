@@ -1,5 +1,5 @@
 CREATE TYPE "public"."organization_type" AS ENUM('client', 'consultant', 'contractor', 'subcontractor');--> statement-breakpoint
-CREATE TYPE "public"."subscription_status" AS ENUM('free', 'active', 'trialing', 'past_due', 'canceled');--> statement-breakpoint
+CREATE TYPE "public"."subscription_status" AS ENUM('free', 'active', 'trialing', 'past_due', 'canceled', 'expired');--> statement-breakpoint
 CREATE TYPE "public"."user_role" AS ENUM('system_owner', 'admin', 'project_manager', 'document_controller', 'reviewer', 'member', 'viewer');--> statement-breakpoint
 CREATE TYPE "public"."project_status" AS ENUM('active', 'on_hold', 'completed', 'cancelled');--> statement-breakpoint
 CREATE TYPE "public"."document_status" AS ENUM('draft', 'under_review', 'approved', 'approved_with_comments', 'for_revision', 'rejected', 'issued', 'superseded', 'void', 'archived', 'obsolete');--> statement-breakpoint
