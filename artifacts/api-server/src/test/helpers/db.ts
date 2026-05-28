@@ -77,23 +77,31 @@ export async function beginTestTransaction(): Promise<() => Promise<void>> {
 export async function truncateAllTables(): Promise<void> {
   const client = await getTestPool().connect();
   try {
+    // CASCADE handles FK ordering automatically.
+    // We list the root tables and let CASCADE clean up dependents.
     await client.query(`
       TRUNCATE TABLE
-        wf_instance_stage_actions,
+        audit_logs,
+        notifications,
         wf_instances,
-        wf_template_stages,
         wf_templates,
-        transmittal_review_items,
         transmittals,
-        correspondence_threads,
+        correspondence,
         document_revisions,
+        document_files,
         documents,
+        folders,
         tasks,
+        project_members,
         projects,
+        departments,
         org_config,
+        org_feature_overrides,
         refresh_tokens,
+        password_reset_tokens,
         users,
-        organizations
+        organizations,
+        plans
       RESTART IDENTITY CASCADE
     `);
   } finally {
