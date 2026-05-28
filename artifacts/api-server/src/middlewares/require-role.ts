@@ -41,6 +41,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { isAtLeast, type AppRole } from "../lib/permissions.js";
 import { ForbiddenError } from "../lib/errors.js";
+import { logger } from "../lib/logger.js";
 
 // ─── requireMinRole ────────────────────────────────────────────────────────────
 
@@ -61,6 +62,18 @@ export function requireMinRole(minRole: AppRole) {
       return;
     }
     if (!isAtLeast(user.role, minRole)) {
+      logger.warn(
+        {
+          event: "permission_denied",
+          userId: user.id,
+          userRole: user.role,
+          requiredRole: minRole,
+          method: req.method,
+          path: req.path,
+          ip: req.ip,
+        },
+        `[security] permission denied — userId=${user.id} role=${user.role} required=${minRole} ${req.method} ${req.path}`,
+      );
       next(
         new ForbiddenError(
           `Insufficient permissions — requires ${minRole} or above`,
@@ -93,6 +106,18 @@ export function requireExactRoles(...roles: string[]) {
       return;
     }
     if (!roles.includes(user.role)) {
+      logger.warn(
+        {
+          event: "permission_denied",
+          userId: user.id,
+          userRole: user.role,
+          requiredRoles: roles,
+          method: req.method,
+          path: req.path,
+          ip: req.ip,
+        },
+        `[security] permission denied — userId=${user.id} role=${user.role} required=[${roles.join(",")}] ${req.method} ${req.path}`,
+      );
       next(
         new ForbiddenError(
           `Insufficient permissions — requires one of: ${roles.join(", ")}`,
@@ -128,6 +153,18 @@ export function requireAdminOrSelf(getTargetUserId: (req: Request) => number) {
     const isSelf = user.id === targetId;
     const isAdmin = isAtLeast(user.role, "admin");
     if (!isSelf && !isAdmin) {
+      logger.warn(
+        {
+          event: "permission_denied",
+          userId: user.id,
+          userRole: user.role,
+          targetUserId: targetId,
+          method: req.method,
+          path: req.path,
+          ip: req.ip,
+        },
+        `[security] permission denied (admin-or-self) — userId=${user.id} role=${user.role} targetUserId=${targetId} ${req.method} ${req.path}`,
+      );
       next(
         new ForbiddenError(
           "You can only modify your own resources, or you need admin privileges",
@@ -157,6 +194,18 @@ export function requireSysOwner(req: Request, res: Response, next: NextFunction)
     return;
   }
   if (user.role !== "system_owner") {
+    logger.warn(
+      {
+        event: "permission_denied",
+        userId: user.id,
+        userRole: user.role,
+        requiredRole: "system_owner",
+        method: req.method,
+        path: req.path,
+        ip: req.ip,
+      },
+      `[security] permission denied — userId=${user.id} role=${user.role} required=system_owner ${req.method} ${req.path}`,
+    );
     next(
       new ForbiddenError(
         "System owner access required",
