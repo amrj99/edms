@@ -131,7 +131,7 @@ beforeAll(async () => {
     projectId: projectA.id,
     subject: "RLS Test Correspondence",
     type: "internal",
-    status: "open",
+    status: "draft",
     direction: "outgoing",
     createdById: userA.id,
     referenceNumber: "RLS-CORR-001",
@@ -141,7 +141,7 @@ beforeAll(async () => {
   const [notif] = await db.insert(notificationsTable).values({
     organizationId: orgA.id,
     userId: userA.id,
-    type: "document_submitted",
+    type: "document_uploaded",
     title: "RLS Test Notification",
     message: "Test notification for RLS verification",
     isRead: false,
