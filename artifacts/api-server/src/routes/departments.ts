@@ -5,7 +5,7 @@ import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/d
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { requireOrgScope } from "../lib/org-scope.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 
 const router = Router();
 
@@ -14,7 +14,7 @@ router.use(requireAuth);
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getOrgId(req: any): number | null {
-  if (isSysAdmin(req.user) && req.query.orgId) return parseInt(req.query.orgId as string);
+  if (isSysAdmin(req.user) && req.query.orgId) return queryIntOrNull(req.query.orgId);
   return req.user?.organizationId ?? null;
 }
 

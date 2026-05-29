@@ -8,7 +8,7 @@ import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router();
@@ -31,7 +31,7 @@ function pgErrCode(err: unknown): string | undefined {
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
   const effectiveOrgId = isSystemOwner(user) && req.query.organizationId
-    ? parseInt(req.query.organizationId as string)
+    ? queryIntOrNull(req.query.organizationId)
     : user.organizationId;
 
   // Tenant isolation: always filter at the DB level — never in-memory.

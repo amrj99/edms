@@ -18,7 +18,7 @@ import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
 import { syncOrgModules } from "../lib/module-sync-service.js";
-import {param, paramInt, paramIntOrNull, requireInt} from '../lib/params';
+import {param, paramInt, paramIntOrNull, requireInt, queryIntOr} from '../lib/params';
 
 const router = Router();
 
@@ -842,7 +842,7 @@ router.get("/shadow-log", requireMinRole("admin"), async (req, res): Promise<voi
   try {
     const user = req.user!;
     const divergeOnly = req.query.divergeOnly !== "false";
-    const limit = Math.min(parseInt(req.query.limit as string) || 200, 500);
+    const limit = Math.min(queryIntOr(req.query.limit, 200), 500);
     const needsOrgFilter = !isSystemOwner(user) && !!user.organizationId;
 
     // Build Drizzle sql`` template queries — safe parameterisation, no type-safe

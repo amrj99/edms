@@ -9,7 +9,7 @@ import { requireAuth, requireRole, isSysAdmin, isSystemOwner } from "../lib/auth
 import { createAuditLog } from "../lib/audit.js";
 import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -23,7 +23,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
   const user   = req.user!;
   const orgId  = user.organizationId;
 
-  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+  const projectId = queryIntOrNull(req.query.projectId) ?? undefined;
   const status    = req.query.status as string | undefined;
   const q         = req.query.q as string | undefined;
 
@@ -95,10 +95,10 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
 router.get("/action-items", async (req: Request, res: Response): Promise<void> => {
   const user      = req.user!;
   const orgId     = user.organizationId;
-  const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+  const projectId = queryIntOrNull(req.query.projectId) ?? undefined;
   const status    = req.query.status as string | undefined;
   const overdue   = req.query.overdue === "true";
-  const assignee  = req.query.assignee ? parseInt(req.query.assignee as string) : undefined;
+  const assignee  = queryIntOrNull(req.query.assignee) ?? undefined;
 
   // ── SQL-level org isolation ───────────────────────────────────────────────────
   // Action items are fetched via their parent meeting. We filter on

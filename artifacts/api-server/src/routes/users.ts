@@ -7,14 +7,14 @@ import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 
 const router = Router();
 
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
-  const requestedOrgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
-  const requestedProjectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+  const requestedOrgId = queryIntOrNull(req.query.organizationId) ?? undefined;
+  const requestedProjectId = queryIntOrNull(req.query.projectId) ?? undefined;
 
   // ── Project-scoped query: all members of a project (cross-org collaboration) ──
   if (requestedProjectId) {

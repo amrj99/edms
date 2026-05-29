@@ -4,7 +4,7 @@ import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, u
 import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { emitToUser } from "../lib/socket.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOr} from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -131,7 +131,7 @@ async function generateUpcomingMeetingReminders(userId: number): Promise<void> {
 // ─── GET /api/notifications ────────────────────────────────────────────────────
 router.get("/", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
+  const limit = Math.min(queryIntOr(req.query.limit, 50), 100);
   const unreadOnly = req.query.unread === "true";
   const typeFilter = req.query.type as string | undefined;
 

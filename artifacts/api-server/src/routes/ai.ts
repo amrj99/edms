@@ -32,7 +32,7 @@ import {
 } from "../lib/ai-service.js";
 import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
 import { detectCommandComplexity } from "../lib/ai-complexity.js";
-import {param, paramInt, paramIntOrNull, requireInt} from '../lib/params';
+import {param, paramInt, paramIntOrNull, requireInt, queryIntOr} from '../lib/params';
 
 const router = Router();
 
@@ -870,7 +870,7 @@ router.get("/analysis/:entityType/:entityId", async (req, res): Promise<void> =>
 // ─── AI Activity Logs ─────────────────────────────────────────────────────────
 
 router.get("/logs", async (req, res): Promise<void> => {
-  const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
+  const limit = Math.min(queryIntOr(req.query.limit, 50), 100);
   const logs = await db.select().from(aiLogsTable)
     .orderBy(aiLogsTable.createdAt)
     .limit(limit);

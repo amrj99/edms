@@ -6,7 +6,7 @@ import {
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { getReqOrgId } from "../lib/org-scope.js";
 import { executeSkill } from "../lib/skill-engine.js";
-import {param, paramInt, requireInt} from '../lib/params';
+import {param, paramInt, requireInt, queryIntOr} from '../lib/params';
 
 const router = Router();
 
@@ -177,7 +177,7 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> =
 router.get("/:id/executions", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
   const skillId = requireInt(req.params.id);
-  const limit   = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const limit   = Math.min(queryIntOr(req.query.limit, 50), 200);
 
   const [existing] = await db
     .select()

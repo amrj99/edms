@@ -59,6 +59,34 @@ export function paramIntOrNull(value: string | string[] | undefined): number | n
 }
 
 /**
+ * Parse a query parameter as an integer, returning null if absent or invalid.
+ * Use for optional numeric query params like ?projectId=, ?orgId=, ?assignee=
+ *
+ * @example
+ *   const projectId = queryIntOrNull(req.query.projectId);
+ *   // → null if missing or non-numeric, otherwise the parsed integer
+ */
+export function queryIntOrNull(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const n = parseInt(Array.isArray(value) ? value[0] : String(value), 10);
+  return isNaN(n) ? null : n;
+}
+
+/**
+ * Parse a query parameter as an integer, returning a default if absent or invalid.
+ * Use for pagination/limit params like ?limit=50
+ *
+ * @example
+ *   const limit = Math.min(queryIntOr(req.query.limit, 50), 200);
+ *   // → 50 if ?limit is missing or invalid
+ */
+export function queryIntOr(value: unknown, defaultValue: number): number {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  const n = parseInt(Array.isArray(value) ? value[0] : String(value), 10);
+  return isNaN(n) ? defaultValue : n;
+}
+
+/**
  * Parse a route parameter as an integer, throwing a 400 error if invalid.
  * Use this instead of paramInt() for any param that must be a valid integer.
  * Express 5 catches the thrown error and routes it to globalErrorHandler.

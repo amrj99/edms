@@ -42,7 +42,7 @@ import { isAtLeast } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendEmail } from "../lib/email.js";
-import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams, queryIntOrNull} from '../lib/params';
 import type { Request } from 'express';
 
 const router = Router({ mergeParams: true });
@@ -353,7 +353,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 
 router.get("/members", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
+  const orgId = queryIntOrNull(req.query.orgId);
 
   if (!orgId) { res.status(400).json({ error: "orgId query parameter is required" }); return; }
 
