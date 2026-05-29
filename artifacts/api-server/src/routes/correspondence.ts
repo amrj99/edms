@@ -343,7 +343,7 @@ async function createCorrespondence(
     await evaluateRules({
       type: "correspondence",
       orgId,
-      projectId: effectiveProjectId ?? undefined,
+      projectId: effectiveProjectId ?? 0,
       subject: corr.subject,
       senderUserId: req.user!.id,
       entityId: corr.id,
@@ -781,14 +781,11 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
   for (const r of recipients) {
     if (r.userId === caller.id) continue;
     await dispatchNotification({
-      userId: r.userId,
-      type: "correspondence_recalled",
-      title: "Correspondence Recalled",
-      message: `"${existing.referenceNumber ?? existing.subject}" has been recalled by the sender.`,
+      event: "correspondence_recalled" as any,
+      recipients: r.userId ? [{ userId: r.userId }] : [],
+      organizationId: existing.organizationId ?? undefined,
       entityType: "correspondence",
       entityId: id,
-      organizationId: existing.organizationId ?? undefined,
-      projectId: existing.projectId ?? undefined,
     }).catch(() => {});
   }
 

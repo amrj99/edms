@@ -13,7 +13,7 @@ router.get("/notifications/summary", requireAuth, async (req, res): Promise<void
   try {
     const orgProjects = await db.select({ id: projectsTable.id })
       .from(projectsTable)
-      .where(eq(projectsTable.organizationId, req.user!.organizationId));
+      .where(eq(projectsTable.organizationId, req.user!.organizationId!));
     const pids = orgProjects.map(p => p.id);
 
     if (!pids.length) {

@@ -140,7 +140,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
             assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
             assignerName: creatorName,
             taskTitle: title,
-            description,
+            taskDescription: description,
             priority,
             dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
             projectName: project?.name ?? null,

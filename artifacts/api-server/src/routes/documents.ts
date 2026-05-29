@@ -75,7 +75,8 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
 router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { name, parentId } = req.body;
-  if (!name?.trim()) return res.status(400).json({ error: "name is required" });
+  if (!name?.trim()) res.status(400).json({ error: "name is required" })
+    return;
   const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
   res.status(201).json({ ...folder, documentCount: 0 });
 });
@@ -87,12 +88,14 @@ router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>
   const update: Record<string, any> = {};
   if (name !== undefined) update.name = name.trim();
   if (parentId !== undefined) update.parentId = parentId === null ? null : parseInt(parentId);
-  if (!Object.keys(update).length) return res.status(400).json({ error: "nothing to update" });
+  if (!Object.keys(update).length) res.status(400).json({ error: "nothing to update" })
+    return;
   const [folder] = await db.update(foldersTable)
     .set(update)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)))
     .returning();
-  if (!folder) return res.status(404).json({ error: "folder not found" });
+  if (!folder) res.status(404).json({ error: "folder not found" })
+    return;
   res.json(folder);
 });
 
@@ -101,7 +104,8 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
   const projectId = paramInt(req.params.projectId);
   const [folder] = await db.select().from(foldersTable)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
-  if (!folder) return res.status(404).json({ error: "folder not found" });
+  if (!folder) res.status(404).json({ error: "folder not found" })
+    return;
   // Move child folders to parent
   await db.update(foldersTable)
     .set({ parentId: folder.parentId ?? null })
@@ -118,12 +122,14 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
 router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { sourceProjectId } = req.body;
-  if (!sourceProjectId) return res.status(400).json({ error: "sourceProjectId required" });
+  if (!sourceProjectId) res.status(400).json({ error: "sourceProjectId required" })
+    return;
   // Verify source project is in same org
   const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
   const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
   if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
-    return res.status(403).json({ error: "Source project not in same organization" });
+    res.status(403).json({ error: "Source project not in same organization" })
+    return;
   }
   const sourceFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
   // Insert in two passes: roots first, then children (BFS)
@@ -311,13 +317,14 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
       .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, resolvedDocNumber)))
       .limit(1);
     if (dup.length > 0) {
-      return res.status(409).json({
+      res.status(409).json({
         error: "Document number already exists in this project",
         code: "DUPLICATE_DOCUMENT_NUMBER",
         existingDocumentId: dup[0].id,
         existingTitle: dup[0].title,
         documentNumber: resolvedDocNumber,
-      });
+      })
+    return;
     }
   }
 
@@ -458,7 +465,8 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
 router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const number = (req.query.number as string)?.trim();
-  if (!number) return res.status(400).json({ error: "number query param required" });
+  if (!number) res.status(400).json({ error: "number query param required" })
+    return;
 
   const existing = await db.select({
     id: documentsTable.id,
@@ -472,16 +480,18 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
     .limit(1);
 
   if (existing.length > 0) {
-    return res.json({
+    res.json({
       available: false,
       existingDocumentId: existing[0].id,
       existingTitle: existing[0].title,
       existingRevision: existing[0].revision,
       existingStatus: existing[0].status,
       existingDiscipline: existing[0].discipline,
-    });
+    })
+    return;
   }
-  return res.json({ available: true });
+  res.json({ available: true })
+    return;
 });
 
 router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -668,7 +678,8 @@ router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res
     .set({ folderId: folderId ?? null, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
     .returning();
-  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (!doc) res.status(404).json({ error: "Document not found" })
+    return;
   res.json({ id: doc.id, folderId: doc.folderId });
 });
 
@@ -792,7 +803,7 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
       type:   "chain" as const,
       date:   (doc.addedAt ?? chain.createdAt as Date).toISOString(),
       title:  `Added to submission chain: ${chain.title}`,
-      status: chain.status ?? null,
+      status: chain.currentStatus ?? null,
       meta: {
         chainTitle:  chain.title,
         chainStatus: chain.status ?? null,
@@ -848,7 +859,8 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
     .where(eq(wfInstancesTable.documentId, id));
 
   if (instances.length === 0) {
-    return res.json({ history: [] });
+    res.json({ history: [] })
+    return;
   }
 
   const instanceIds = instances.map(i => i.id);
@@ -1167,7 +1179,8 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
   // Verify document belongs to project
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (!doc) res.status(404).json({ error: "Document not found" })
+    return;
 
   const files = await db.select({
     file: documentFilesTable,
@@ -1193,17 +1206,20 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (!doc) res.status(404).json({ error: "Document not found" })
+    return;
 
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;
   if (!uploadedFiles || uploadedFiles.length === 0) {
-    return res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." });
+    res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." })
+    return;
   }
 
   // Content-based safety check — catches HTML/SVG regardless of declared MIME or extension
   const contentError = validateUploadedFiles(uploadedFiles);
   if (contentError) {
-    return res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError });
+    res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError })
+    return;
   }
 
   const orgId = req.user!.organizationId ?? null;
@@ -1234,10 +1250,11 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       .where(eq(usersTable.id, req.user!.id))
       .limit(1);
     if (uploader && !uploader.emailVerifiedAt) {
-      return res.status(403).json({
+      res.status(403).json({
         error: "EMAIL_NOT_VERIFIED",
         message: "Please verify your email address before uploading files. Check your inbox for a verification link.",
-      });
+      })
+    return;
     }
   }
 
@@ -1252,10 +1269,11 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       .where(eq(organizationsTable.id, orgId))
       .limit(1);
     if (isExpiredPlan(uploadOrgCheck?.subscriptionTier) && uploadOrgCheck?.trialEndsAt !== null) {
-      return res.status(403).json({
+      res.status(403).json({
         error: "UPLOAD_BLOCKED",
         message: "File uploads are not available on the free plan. Upgrade your plan to continue.",
-      });
+      })
+    return;
     }
   }
 
@@ -1272,10 +1290,11 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
     // ── Trial expiry gate ────────────────────────────────────────────────
     if (orgStorage?.subscriptionTier === "trial" && orgStorage.trialEndsAt && new Date() > new Date(orgStorage.trialEndsAt)) {
-      return res.status(403).json({
+      res.status(403).json({
         error: "TRIAL_EXPIRED",
         message: "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
-      });
+      })
+    return;
     }
 
     const planId = await getOrgPlan(orgId);
@@ -1286,20 +1305,22 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       const oversized = uploadedFiles.filter(f => f.size / (1024 * 1024) > maxFileSizeMb);
       if (oversized.length > 0) {
         const names = oversized.map(f => f.originalname).join(", ");
-        return res.status(413).json({
+        res.status(413).json({
           error: "FILE_TOO_LARGE",
           message: `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
-        });
+        })
+    return;
       }
 
       // Storage quota enforcement
       if (orgStorage) {
         const usedMb = orgStorage.storageUsedMb ?? 0;
         if (usedMb + totalNewMb > plan.storageMb) {
-          return res.status(403).json({
+          res.status(403).json({
             error: "STORAGE_LIMIT_REACHED",
             message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
-          });
+          })
+    return;
         }
       }
     }
@@ -1365,11 +1386,13 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (!doc) res.status(404).json({ error: "Document not found" })
+    return;
 
   const [file] = await db.select().from(documentFilesTable)
     .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)));
-  if (!file) return res.status(404).json({ error: "File not found" });
+  if (!file) res.status(404).json({ error: "File not found" })
+    return;
 
   await db.delete(documentFilesTable).where(eq(documentFilesTable.id, fileId));
 

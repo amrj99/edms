@@ -27,7 +27,8 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
     .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
     .where(eq(usersTable.id, userId));
 
-  if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user) res.status(404).json({ error: "User not found" })
+    return;
 
   const [prefs] = await db
     .select()
@@ -61,7 +62,8 @@ router.put("/", async (req: Request, res: Response): Promise<void> => {
   const { firstName, lastName, email, department } = req.body;
 
   if (!firstName?.trim() || !lastName?.trim() || !email?.trim()) {
-    return res.status(400).json({ error: "Bad Request", message: "First name, last name, and email are required" });
+    res.status(400).json({ error: "Bad Request", message: "First name, last name, and email are required" })
+    return;
   }
 
   // Check email uniqueness (excluding current user)
@@ -71,7 +73,8 @@ router.put("/", async (req: Request, res: Response): Promise<void> => {
     .where(eq(usersTable.email, email.trim().toLowerCase()));
 
   if (existing.length > 0 && existing[0].id !== userId) {
-    return res.status(409).json({ error: "Conflict", message: "Email already in use by another account" });
+    res.status(409).json({ error: "Conflict", message: "Email already in use by another account" })
+    return;
   }
 
   const [updated] = await db
@@ -102,10 +105,12 @@ router.put("/password", async (req: Request, res: Response): Promise<void> => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
-    return res.status(400).json({ error: "Bad Request", message: "Current and new passwords are required" });
+    res.status(400).json({ error: "Bad Request", message: "Current and new passwords are required" })
+    return;
   }
   if (newPassword.length < 8) {
-    return res.status(400).json({ error: "Bad Request", message: "New password must be at least 8 characters" });
+    res.status(400).json({ error: "Bad Request", message: "New password must be at least 8 characters" })
+    return;
   }
 
   const [user] = await db
@@ -113,11 +118,13 @@ router.put("/password", async (req: Request, res: Response): Promise<void> => {
     .from(usersTable)
     .where(eq(usersTable.id, userId));
 
-  if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user) res.status(404).json({ error: "User not found" })
+    return;
 
   const valid = await verifyPassword(currentPassword, user.passwordHash);
   if (!valid) {
-    return res.status(401).json({ error: "Unauthorized", message: "Current password is incorrect" });
+    res.status(401).json({ error: "Unauthorized", message: "Current password is incorrect" })
+    return;
   }
 
   const newHash = await hashPassword(newPassword);
@@ -136,7 +143,8 @@ router.put("/notification-prefs", async (req: Request, res: Response): Promise<v
   const { notificationPrefs } = req.body;
 
   if (!notificationPrefs || typeof notificationPrefs !== "object") {
-    return res.status(400).json({ error: "Bad Request", message: "notificationPrefs must be an object" });
+    res.status(400).json({ error: "Bad Request", message: "notificationPrefs must be an object" })
+    return;
   }
 
   const existing = await db

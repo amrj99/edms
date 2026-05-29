@@ -130,10 +130,12 @@ router.get("/plans", (_req, res) => {
 router.get("/status", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) return res.status(400).json({ message: "No organisation context" });
+    if (!orgId) res.status(400).json({ message: "No organisation context" })
+    return;
 
     const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId));
-    if (!org) return res.status(404).json({ message: "Organisation not found" });
+    if (!org) res.status(404).json({ message: "Organisation not found" })
+    return;
 
     // Primary: read from subscriptions table
     let [sub] = await db.select().from(subscriptionsTable).where(eq(subscriptionsTable.organizationId, orgId));
@@ -220,30 +222,36 @@ router.get("/status", requireAuth, async (req, res): Promise<void> => {
 // ─── POST /api/billing/checkout ───────────────────────────────────────────────
 router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
-  if (!stripe) return res.status(503).json({ message: "Stripe is not configured. Connect Stripe to enable billing." });
+  if (!stripe) res.status(503).json({ message: "Stripe is not configured. Connect Stripe to enable billing." })
+    return;
 
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) return res.status(400).json({ message: "No organisation context" });
+    if (!orgId) res.status(400).json({ message: "No organisation context" })
+    return;
 
     const { planId, seats = 1, successUrl, cancelUrl } = req.body as {
       planId: string; seats: number; successUrl: string; cancelUrl: string;
     };
 
     const plan = PLANS.find(p => p.id === planId);
-    if (!plan) return res.status(400).json({ message: "Invalid plan" });
+    if (!plan) res.status(400).json({ message: "Invalid plan" })
+    return;
 
     if (plan.minUsers && seats < plan.minUsers) {
-      return res.status(400).json({
+      res.status(400).json({
         message: `The ${plan.name} plan requires a minimum of ${plan.minUsers} seat${plan.minUsers !== 1 ? "s" : ""}.`,
-      });
+      })
+    return;
     }
 
     const priceId = process.env[plan.stripePriceEnv];
-    if (!priceId) return res.status(503).json({ message: `Stripe price for ${plan.name} not configured` });
+    if (!priceId) res.status(503).json({ message: `Stripe price for ${plan.name} not configured` })
+    return;
 
     const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, orgId));
-    if (!org) return res.status(404).json({ message: "Organisation not found" });
+    if (!org) res.status(404).json({ message: "Organisation not found" })
+    return;
 
     const stripeData = await getOrgStripeData(orgId);
     let customerId = stripeData.customerId;
@@ -285,11 +293,13 @@ router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
 // ─── POST /api/billing/portal ─────────────────────────────────────────────────
 router.post("/portal", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
-  if (!stripe) return res.status(503).json({ message: "Stripe is not configured" });
+  if (!stripe) res.status(503).json({ message: "Stripe is not configured" })
+    return;
 
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) return res.status(400).json({ message: "No organisation context" });
+    if (!orgId) res.status(400).json({ message: "No organisation context" })
+    return;
 
     const stripeData = await getOrgStripeData(orgId);
     let customerId = stripeData.customerId;
@@ -300,7 +310,8 @@ router.post("/portal", requireAuth, async (req, res): Promise<void> => {
       customerId = sub?.stripeCustomerId ?? undefined;
     }
 
-    if (!customerId) return res.status(400).json({ message: "No Stripe customer found for this organisation" });
+    if (!customerId) res.status(400).json({ message: "No Stripe customer found for this organisation" })
+    return;
 
     const { returnUrl } = req.body as { returnUrl?: string };
     const session = await stripe.billingPortal.sessions.create({
@@ -322,7 +333,8 @@ router.post(
   (req, res, next) => { next(); },
   async (req, res): Promise<void> => {
     const stripe = getStripe();
-    if (!stripe) return res.status(503).send("Stripe not configured");
+    if (!stripe) res.status(503).send("Stripe not configured")
+    return;
 
     const sig = req.headers["stripe-signature"];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -334,7 +346,8 @@ router.post(
         : JSON.parse(req.body.toString());
     } catch (err: any) {
       logger.warn(`Webhook signature verification failed: ${err.message}`);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      res.status(400).send(`Webhook Error: ${err.message}`)
+    return;
     }
 
     try {

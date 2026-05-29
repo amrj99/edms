@@ -29,7 +29,8 @@ function isStripeConfigured(): boolean {
 router.get("/balance", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) return res.status(400).json({ message: "No organisation context" });
+    if (!orgId) res.status(400).json({ message: "No organisation context" })
+    return;
 
     const { balance, totalPurchased } = await getCreditsBalance(orgId);
 
@@ -66,12 +67,14 @@ router.get("/packs", requireAuth, (_req, res) => {
 router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) {
-    return res.status(503).json({ message: "Stripe is not configured. Contact your administrator." });
+    res.status(503).json({ message: "Stripe is not configured. Contact your administrator." })
+    return;
   }
 
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) return res.status(400).json({ message: "No organisation context" });
+    if (!orgId) res.status(400).json({ message: "No organisation context" })
+    return;
 
     const { packId, successUrl, cancelUrl } = req.body as {
       packId: string;
@@ -80,11 +83,13 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
     };
 
     const pack = AI_CREDIT_PACKS.find(p => p.id === packId);
-    if (!pack) return res.status(400).json({ message: "Invalid AI credit pack" });
+    if (!pack) res.status(400).json({ message: "Invalid AI credit pack" })
+    return;
 
     const priceId = process.env[pack.stripePriceEnv];
     if (!priceId) {
-      return res.status(503).json({ message: `Stripe price for "${pack.name}" is not configured` });
+      res.status(503).json({ message: `Stripe price for "${pack.name}" is not configured` })
+    return;
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -111,7 +116,8 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
 // Returns credit balances for all organisations. Admin / system_owner only.
 router.get("/admin/balances", requireAuth, async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
-    return res.status(403).json({ error: "Forbidden" });
+    res.status(403).json({ error: "Forbidden" })
+    return;
   }
   try {
     const orgs = await db
@@ -136,7 +142,8 @@ router.get("/admin/balances", requireAuth, async (req, res): Promise<void> => {
 // Records grantedBy (admin user ID + email) in the transaction metadata.
 router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
-    return res.status(403).json({ error: "Forbidden" });
+    res.status(403).json({ error: "Forbidden" })
+    return;
   }
 
   const { organizationId, amount, note } = req.body as {
@@ -146,15 +153,17 @@ router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
   };
 
   if (!organizationId || !amount || amount <= 0) {
-    return res.status(400).json({
+    res.status(400).json({
       message: "organizationId and a positive amount are required",
-    });
+    })
+    return;
   }
 
   if (!Number.isInteger(amount) || amount > 1_000_000) {
-    return res.status(400).json({
+    res.status(400).json({
       message: "Amount must be a whole number no greater than 1,000,000",
-    });
+    })
+    return;
   }
 
   try {
@@ -163,7 +172,8 @@ router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
       .from(organizationsTable)
       .where(eq(organizationsTable.id, organizationId));
 
-    if (!org) return res.status(404).json({ message: "Organisation not found" });
+    if (!org) res.status(404).json({ message: "Organisation not found" })
+    return;
 
     const newBalance = await grantCredits(organizationId, amount, "grant", {
       grantedBy: req.user!.id,

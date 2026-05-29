@@ -441,7 +441,8 @@ router.post("/seed-test-data", requireMinRole("admin"), async (req, res): Promis
     .limit(1);
 
   if (projs.length === 0) {
-    return res.status(400).json({ error: "No projects found. Create a project first." });
+    res.status(400).json({ error: "No projects found. Create a project first." })
+    return;
   }
   const project = projs[0];
   const pid = project.id;
@@ -723,13 +724,16 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
           quota: await getOrgAiQuota(cfg.organizationId),
         }))
       );
-      return res.json({ quotas });
+      res.json({ quotas })
+    return;
     }
 
     // Non-sysadmin: own org only
-    if (!user.organizationId) return res.status(403).json({ error: "No organization" });
+    if (!user.organizationId) res.status(403).json({ error: "No organization" })
+    return;
     const quota = await getOrgAiQuota(user.organizationId);
-    return res.json({ organizationId: user.organizationId, quota });
+    res.json({ organizationId: user.organizationId, quota })
+    return;
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -744,11 +748,12 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
   const { tier } = req.body as { tier: SubscriptionTier };
 
   if (!tier || !(tier in SUBSCRIPTION_TIERS)) {
-    return res.status(400).json({
+    res.status(400).json({
       error: "Invalid tier",
       validTiers: Object.keys(SUBSCRIPTION_TIERS),
       tiers: SUBSCRIPTION_TIERS,
-    });
+    })
+    return;
   }
 
   const preset = SUBSCRIPTION_TIERS[tier];
@@ -784,7 +789,8 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
 router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
   const orgId = paramInt(req.params.orgId);
-  if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });
+  if (isNaN(orgId)) res.status(400).json({ error: "Invalid orgId" })
+    return;
 
   const { aiDailyLimit, aiMonthlyTokenLimit } = req.body as {
     aiDailyLimit?: number;
@@ -796,7 +802,8 @@ router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void>
   if (aiMonthlyTokenLimit !== undefined) update.aiMonthlyTokenLimit = Math.max(0, Number(aiMonthlyTokenLimit));
 
   if (Object.keys(update).length === 1) {
-    return res.status(400).json({ error: "Provide at least one of: aiDailyLimit, aiMonthlyTokenLimit" });
+    res.status(400).json({ error: "Provide at least one of: aiDailyLimit, aiMonthlyTokenLimit" })
+    return;
   }
 
   const existing = await db.select().from(orgConfigTable)

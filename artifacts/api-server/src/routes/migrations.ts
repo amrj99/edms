@@ -93,7 +93,8 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.orgId ?? req.user!.organizationId;
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
   const items = await db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id));
   res.json({ job, items });
 });
@@ -102,7 +103,8 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 // Body: { projectId, files: [{ filePath, fileName, fileSize?, fileType? }] }
 router.post("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.orgId ?? req.user!.organizationId;
-  if (!orgId) return res.status(400).json({ error: "No organization context" });
+  if (!orgId) res.status(400).json({ error: "No organization context" })
+    return;
 
   const { projectId, files } = req.body as {
     projectId: number;
@@ -110,7 +112,8 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
   };
 
   if (!projectId || !Array.isArray(files) || files.length === 0) {
-    return res.status(400).json({ error: "projectId and non-empty files array required" });
+    res.status(400).json({ error: "projectId and non-empty files array required" })
+    return;
   }
 
   // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
@@ -118,12 +121,14 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
   const { plan, maxFiles } = planFromTier(planId);
 
   if (maxFiles === 0) {
-    return res.status(403).json({ error: "Migration Wizard is not available on your current plan. Upgrade to Basic or higher." });
+    res.status(403).json({ error: "Migration Wizard is not available on your current plan. Upgrade to Basic or higher." })
+    return;
   }
   if (files.length > maxFiles) {
-    return res.status(400).json({
+    res.status(400).json({
       error: `Your ${plan} plan allows up to ${maxFiles} files per import. You selected ${files.length}.`,
-    });
+    })
+    return;
   }
 
   const [job] = await db.insert(migrationJobsTable).values({
@@ -160,8 +165,10 @@ router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
-  if (job.status !== "pending") return res.status(409).json({ error: `Job is already in '${job.status}' state` });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
+  if (job.status !== "pending") res.status(409).json({ error: `Job is already in '${job.status}' state` })
+    return;
 
   // AI mode: pre-flight credit check (15 credits per file)
   if (mode === "ai" && orgId) {
@@ -171,11 +178,12 @@ router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
     const totalCost = items.length * costPerFile;
     const { balance } = await getCreditsBalance(orgId);
     if (balance < totalCost) {
-      return res.status(402).json({
+      res.status(402).json({
         error: `Insufficient AI credits for AI-powered analysis. Need ${totalCost} credits (${items.length} files × ${costPerFile}) but balance is ${balance}.`,
         creditsRequired: totalCost,
         creditsBalance: balance,
-      });
+      })
+    return;
     }
   }
 
@@ -283,7 +291,8 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res): Promise<void> =>
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
 
   const { title, code, discipline, docType, revision, docDate, issuer, skip, status, importMode } = req.body;
 
@@ -351,7 +360,8 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res): Promise<void> =>
     } : {}),
   }).where(and(eq(migrationItemsTable.id, itemId), eq(migrationItemsTable.jobId, id)))
     .returning();
-  if (!updated) return res.status(404).json({ error: "Item not found" });
+  if (!updated) res.status(404).json({ error: "Item not found" })
+    return;
   res.json(updated);
 });
 
@@ -368,7 +378,8 @@ router.post("/:id/bulk-action", requireAuth, async (req, res): Promise<void> => 
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
 
   const allItems = await db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id));
   let targets = allItems;
@@ -376,7 +387,8 @@ router.post("/:id/bulk-action", requireAuth, async (req, res): Promise<void> => 
   if (filter === "unreadable") targets = allItems.filter(i => i.confidenceLabel === "unreadable");
   if (filter === "conflicts") targets = allItems.filter(i => !!i.conflictDocumentId);
 
-  if (targets.length === 0) return res.json({ updated: 0 });
+  if (targets.length === 0) res.json({ updated: 0 })
+    return;
 
   const ids = targets.map(i => i.id);
 
@@ -392,7 +404,8 @@ router.post("/:id/bulk-action", requireAuth, async (req, res): Promise<void> => 
       await db.update(migrationItemsTable).set({ importMode: "new_revision" })
         .where(inArray(migrationItemsTable.id, conflictIds));
     }
-    return res.json({ updated: conflictIds.length });
+    res.json({ updated: conflictIds.length })
+    return;
   } else if (action === "set_new_document") {
     await db.update(migrationItemsTable).set({ importMode: "new_document" })
       .where(inArray(migrationItemsTable.id, ids));
@@ -409,7 +422,8 @@ router.put("/:id/storage", requireAuth, async (req, res): Promise<void> => {
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
 
   const [updated] = await db.update(migrationJobsTable).set({
     storageMode,
@@ -426,9 +440,11 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
 
   const [job] = await db.select().from(migrationJobsTable)
     .where(and(eq(migrationJobsTable.id, id), eq(migrationJobsTable.organizationId, orgId!)));
-  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!job) res.status(404).json({ error: "Job not found" })
+    return;
   if (job.status === "executing" || job.status === "completed") {
-    return res.status(409).json({ error: `Job is already '${job.status}'` });
+    res.status(409).json({ error: `Job is already '${job.status}'` })
+    return;
   }
 
   await db.update(migrationJobsTable).set({ status: "executing", updatedAt: new Date() })

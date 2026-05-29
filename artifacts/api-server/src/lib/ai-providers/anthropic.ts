@@ -50,7 +50,7 @@ export class AnthropicProvider implements AIProviderClient {
       throw new Error(`Anthropic API error: ${err}`);
     }
 
-    const data = await resp.json();
+    const data = await resp.json() as any;
     const content = data.content?.[0]?.text ?? "";
 
     return {

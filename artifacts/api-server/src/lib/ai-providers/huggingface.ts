@@ -54,7 +54,7 @@ export class HuggingFaceProvider implements AIProviderClient {
       throw new Error(`HuggingFace API error: ${err}`);
     }
 
-    const data = await resp.json();
+    const data = await resp.json() as any;
     const content = Array.isArray(data) ? (data[0]?.generated_text ?? "") : (data.generated_text ?? "");
 
     return { content: content.trim(), model, provider: this.name, latencyMs: Date.now() - start };

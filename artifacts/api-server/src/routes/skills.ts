@@ -17,7 +17,8 @@ const adminOnly = requireRole("admin", "system_owner");
 router.get("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId = getReqOrgId(req);
-    if (!orgId) return res.status(403).json({ error: "No organization context" });
+    if (!orgId) res.status(403).json({ error: "No organization context" })
+    return;
 
     const skills = await db
       .select()
@@ -53,12 +54,14 @@ router.get("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
 router.post("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId = getReqOrgId(req);
-    if (!orgId) return res.status(403).json({ error: "No organization context" });
+    if (!orgId) res.status(403).json({ error: "No organization context" })
+    return;
 
     const { name, description, triggerType, handlerType, config, isEnabled } = req.body;
 
     if (!name || !triggerType || !handlerType) {
-      return res.status(400).json({ error: "name, triggerType, and handlerType are required" });
+      res.status(400).json({ error: "name, triggerType, and handlerType are required" })
+    return;
     }
 
     const [skill] = await db
@@ -95,8 +98,10 @@ router.put("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
       .where(eq(skillDefinitionsTable.id, skillId))
       .limit(1);
 
-    if (!existing) return res.status(404).json({ error: "Skill not found" });
-    if (existing.organizationId !== orgId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) res.status(404).json({ error: "Skill not found" })
+    return;
+    if (existing.organizationId !== orgId) res.status(403).json({ error: "Forbidden" })
+    return;
 
     const { name, description, config, isEnabled, triggerType, handlerType } = req.body;
 
@@ -132,8 +137,10 @@ router.delete("/:id", requireAuth, adminOnly, async (req, res): Promise<void> =>
       .where(eq(skillDefinitionsTable.id, skillId))
       .limit(1);
 
-    if (!existing) return res.status(404).json({ error: "Skill not found" });
-    if (existing.organizationId !== orgId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) res.status(404).json({ error: "Skill not found" })
+    return;
+    if (existing.organizationId !== orgId) res.status(403).json({ error: "Forbidden" })
+    return;
 
     // Cascade-delete executions first
     await db.delete(skillExecutionsTable).where(eq(skillExecutionsTable.skillId, skillId));
@@ -157,8 +164,10 @@ router.put("/:id/toggle", requireAuth, adminOnly, async (req, res): Promise<void
       .where(eq(skillDefinitionsTable.id, skillId))
       .limit(1);
 
-    if (!existing) return res.status(404).json({ error: "Skill not found" });
-    if (existing.organizationId !== orgId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) res.status(404).json({ error: "Skill not found" })
+    return;
+    if (existing.organizationId !== orgId) res.status(403).json({ error: "Forbidden" })
+    return;
 
     const [updated] = await db
       .update(skillDefinitionsTable)
@@ -184,8 +193,10 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> =
       .where(eq(skillDefinitionsTable.id, skillId))
       .limit(1);
 
-    if (!existing) return res.status(404).json({ error: "Skill not found" });
-    if (existing.organizationId !== orgId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) res.status(404).json({ error: "Skill not found" })
+    return;
+    if (existing.organizationId !== orgId) res.status(403).json({ error: "Forbidden" })
+    return;
 
     // Fire-and-forget — respond immediately
     executeSkill(skillId, { triggeredByType: "manual", triggeredById: req.user!.id }).catch(() => {});
@@ -209,8 +220,10 @@ router.get("/:id/executions", requireAuth, adminOnly, async (req, res): Promise<
       .where(eq(skillDefinitionsTable.id, skillId))
       .limit(1);
 
-    if (!existing) return res.status(404).json({ error: "Skill not found" });
-    if (existing.organizationId !== orgId) return res.status(403).json({ error: "Forbidden" });
+    if (!existing) res.status(404).json({ error: "Skill not found" })
+    return;
+    if (existing.organizationId !== orgId) res.status(403).json({ error: "Forbidden" })
+    return;
 
     const executions = await db
       .select()

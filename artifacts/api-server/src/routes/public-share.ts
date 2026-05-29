@@ -7,6 +7,7 @@ import {
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { verifyPassword, hashToken } from "../lib/auth.js";
+import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
@@ -43,7 +44,7 @@ const shareTokenLimiter = rateLimit({
 
 // ─── Transmittal ──────────────────────────────────────────────────────────────
 router.get("/transmittal/:token", shareTokenLimiter, async (req, res): Promise<void> => {
-  const { token } = req.params;
+  const token = param(req.params.token);
   const { password } = req.query as Record<string, string>;
 
   const [transmittal] = await db
@@ -128,7 +129,7 @@ router.get("/transmittal/:token", shareTokenLimiter, async (req, res): Promise<v
 
 // ─── Document ─────────────────────────────────────────────────────────────────
 router.get("/document/:token", shareTokenLimiter, async (req, res): Promise<void> => {
-  const { token } = req.params;
+  const token = param(req.params.token);
   const { password } = req.query as Record<string, string>;
 
   const [doc] = await db
@@ -193,7 +194,7 @@ router.get("/document/:token", shareTokenLimiter, async (req, res): Promise<void
 
 // ─── Correspondence ───────────────────────────────────────────────────────────
 router.get("/correspondence/:token", shareTokenLimiter, async (req, res): Promise<void> => {
-  const { token } = req.params;
+  const token = param(req.params.token);
   const { password } = req.query as Record<string, string>;
 
   const [corr] = await db
@@ -256,8 +257,4 @@ router.get("/correspondence/:token", shareTokenLimiter, async (req, res): Promis
     createdAt: corr.createdAt,
     fromUser: fromUser[0] ? `${fromUser[0].firstName} ${fromUser[0].lastName}` : "Unknown",
     attachments: attachments.map(a => ({ id: a.id, fileName: a.fileName, fileUrl: a.fileUrl, fileSize: a.fileSize })),
-    expiresAt: corr.shareExpiresAt,
-  });
-});
-
-export default router;
+    expiresAt: corr.shareExp

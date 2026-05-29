@@ -256,7 +256,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
         .from(projectMembersTable)
         .where(and(eq(projectMembersTable.projectId, transmittal.projectId), eq(projectMembersTable.role, "project_manager")))
         .limit(1);
-      const assigneeId = pm?.userId ?? req.user!.id;
+      const autoAssignee = pm?.userId ?? req.user!.id;
       const [task] = await db.insert(tasksTable).values({
         title: `Review transmittal: ${transmittal.transmittalNumber}`,
         description: transmittal.subject ?? undefined,
@@ -264,7 +264,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
         status: "pending",
         projectId: transmittal.projectId,
         createdById: req.user!.id,
-        assigneeId,
+        assignedToId: autoAssignee,
         dueDate,
       }).returning();
       // Notify assignee if different from sender

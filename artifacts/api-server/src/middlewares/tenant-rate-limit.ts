@@ -100,13 +100,15 @@ const anonLimiter = rateLimit({
  */
 export async function tenantRateLimit(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.user) {
-    return anonLimiter(req, res, next);
+    anonLimiter(req, res, next);
+    return;
   }
 
   const orgId = req.user.organizationId;
   if (!orgId) {
     // system_owner spanning all orgs — no rate limit
-    return next();
+    next();
+    return;
   }
 
   const rawTier = await getOrgTier(orgId);
@@ -115,9 +117,10 @@ export async function tenantRateLimit(req: Request, res: Response, next: NextFun
 
   if (rpm === null) {
     // enterprise — unlimited
-    return next();
+    next();
+    return;
   }
 
   const limiter = limiters[tier] ?? limiters.expired;
-  return limiter(req, res, next);
+  limiter(req, res, next);
 }

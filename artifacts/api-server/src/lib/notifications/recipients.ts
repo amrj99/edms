@@ -31,7 +31,7 @@ export async function getProjectRecipientsByRole(
     .where(
       and(
         eq(projectMembersTable.projectId, projectId),
-        inArray(usersTable.role, roles),
+        inArray(usersTable.role, roles as any[]),
         eq(usersTable.isActive, true),
       ),
     );

@@ -7,6 +7,7 @@ import { db, orgConfigTable } from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
+import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
 import { shouldAuditFileAccess } from "../lib/file-access-cache.js";
 import { getEffectiveOnPremPath } from "../lib/storageConfig.js";
@@ -624,7 +625,7 @@ router.get(
   "/s3-object/:objectKey",
   requireAuthOrViewToken(req => `/api/storage/s3-object/${req.params.objectKey}`),
   async (req: Request, res: Response): Promise<void> => {
-  const rawKey = req.params.objectKey;
+  const rawKey = param(req.params.objectKey);
   const orgIdStr = req.query.orgId as string;
 
   const objectKeyDecoded = decodeURIComponent(rawKey);
@@ -719,7 +720,7 @@ router.get(
   "/r2-object/:objectKey",
   requireAuthOrViewToken(req => `/api/storage/r2-object/${req.params.objectKey}`),
   async (req: Request, res: Response): Promise<void> => {
-    const rawKey = req.params.objectKey;
+    const rawKey = param(req.params.objectKey);
     const orgIdStr = req.query.orgId as string;
 
     const objectKeyDecoded = decodeURIComponent(rawKey);
