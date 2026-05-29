@@ -34,6 +34,12 @@ jobs:
       - name: Validate migration journal
         run: bash scripts/check-migration-journal.sh
 
+      # ── TypeScript Check (non-blocking — Phase 1 of 3) ────────────────────────
+      # Phase 1: warnings only. Phase 2: fix errors. Phase 3: hard gate.
+      - name: TypeScript Check (non-blocking)
+        continue-on-error: true
+        run: pnpm --filter api-server typecheck
+
       - name: Build — API
         run: pnpm --filter api-server build
 
@@ -118,11 +124,12 @@ jobs:
             echo "── [4/4] التحقق من صحة النظام ──"
             for i in $(seq 1 12); do
               sleep 5
-              if curl -sf http://localhost:8081/api/health > /dev/null 2>&1; then
-                echo "✅ Staging يعمل بشكل صحيح (attempt $i)"
+              response=$(curl -s http://localhost:8081/api/health 2>/dev/null)
+              echo "⏳ محاولة ($i/12): $response"
+              if echo "$response" | grep -q '"status":"ok"'; then
+                echo "✅ Staging يعمل بشكل صحيح — API + Database (attempt $i)"
                 exit 0
               fi
-              echo "⏳ في الانتظار... ($i/12)"
             done
-            echo "❌ Staging لا يستجيب بعد 60 ثانية — يرجى المراجعة"
+            echo "❌ Staging لا يستجيب أو قاعدة البيانات منفصلة بعد 60 ثانية"
             exit 1

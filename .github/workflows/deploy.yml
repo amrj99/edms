@@ -40,9 +40,14 @@ jobs:
       - name: Validate migration journal
         run: bash scripts/check-migration-journal.sh
 
-      # TypeScript strict checks disabled temporarily — hundreds of pre-existing
-      # noImplicitAny / strictNullChecks errors inherited from Replit dev environment.
-      # Will be resolved progressively. Build success is the gate for now.
+      # ── TypeScript Check (non-blocking — Phase 1 of 3) ────────────────────────
+      # Runs tsc --noEmit to surface type errors in CI logs without blocking deploy.
+      # Phase 1: warnings only (continue-on-error: true)
+      # Phase 2: fix errors progressively (noImplicitAny, strictNullChecks, etc.)
+      # Phase 3: remove continue-on-error → becomes a hard gate
+      - name: TypeScript Check (non-blocking)
+        continue-on-error: true
+        run: pnpm --filter api-server typecheck
 
       - name: Build — API
         run: pnpm --filter api-server build
@@ -133,11 +138,12 @@ jobs:
             echo "── [5/5] التحقق من صحة النظام ──"
             for i in $(seq 1 12); do
               sleep 5
-              if curl -sf http://localhost:8080/api/health > /dev/null 2>&1; then
-                echo "✅ النظام يعمل بشكل صحيح (attempt $i)"
+              response=$(curl -s http://localhost:8080/api/health 2>/dev/null)
+              echo "⏳ محاولة ($i/12): $response"
+              if echo "$response" | grep -q '"status":"ok"'; then
+                echo "✅ النظام يعمل بشكل صحيح — API + Database (attempt $i)"
                 exit 0
               fi
-              echo "⏳ في الانتظار... ($i/12)"
             done
-            echo "❌ النظام لا يستجيب بعد 60 ثانية — يرجى المراجعة"
+            echo "❌ النظام لا يستجيب أو قاعدة البيانات منفصلة بعد 60 ثانية"
             exit 1
