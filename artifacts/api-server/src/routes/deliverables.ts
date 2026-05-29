@@ -49,7 +49,7 @@ router.get("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>,
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const [row] = await db.select().from(deliverablesTable)
     .where(and(eq(deliverablesTable.id, paramInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
-  if (!row) { res.status(404).json({ message: "Not found" }); return; }
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
 
@@ -57,7 +57,7 @@ router.post("/deliverables", requireAuth, async (req: Request<ProjectParams>, re
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { deliverableId, title, type, plannedDate, actualDate, status, responsible, linkedDocumentId, remarks } = req.body;
-  if (!title) { res.status(400).json({ message: "title is required" }); return; }
+  if (!title) { res.status(400).json({ error: "title is required" }); return; }
   const [row] = await db.insert(deliverablesTable).values({
     deliverableId: deliverableId || `DEL-${Date.now()}`,
     title, type,
@@ -90,7 +90,7 @@ router.put("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>,
     })
     .where(and(eq(deliverablesTable.id, id), eq(deliverablesTable.projectId, projectId)))
     .returning();
-  if (!row) { res.status(404).json({ message: "Not found" }); return; }
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
 

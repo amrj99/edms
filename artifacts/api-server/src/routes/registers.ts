@@ -46,7 +46,7 @@ router.post("/inspection-requests", requireAuth, requireRole("admin", "project_m
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { requestNumber, type, description, location, date, status, contractor, linkedCorrespondenceId, remarks, direction, partyType, reviewCode } = req.body;
-  if (!requestNumber) { res.status(400).json({ message: "requestNumber is required" }); return; }
+  if (!requestNumber) { res.status(400).json({ error: "requestNumber is required" }); return; }
   let resolvedStatus = status ?? "pending";
   if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "passed";
   else if (reviewCode === "C") resolvedStatus = "in_progress";
@@ -242,7 +242,7 @@ router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager",
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { reportNumber, type, description, location, raisedBy, status, correctiveAction, closeDate, remarks, direction, partyType, reviewCode } = req.body;
-  if (!reportNumber) { res.status(400).json({ message: "reportNumber is required" }); return; }
+  if (!reportNumber) { res.status(400).json({ error: "reportNumber is required" }); return; }
   let resolvedStatus = status ?? "open";
   if (reviewCode === "A") resolvedStatus = "closed";
   else if (reviewCode === "B") { resolvedStatus = "in_progress"; }
@@ -403,7 +403,7 @@ router.post("/noc-records", requireAuth, requireRole("admin", "project_manager",
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { nocNumber, authority, date, status, linkedDocumentId, remarks, direction, partyType } = req.body;
-  if (!nocNumber) { res.status(400).json({ message: "nocNumber is required" }); return; }
+  if (!nocNumber) { res.status(400).json({ error: "nocNumber is required" }); return; }
   const [row] = await db.insert(nocRecordsTable).values({
     nocNumber, authority,
     date: date ? new Date(date) : undefined,

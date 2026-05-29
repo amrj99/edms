@@ -419,7 +419,7 @@ router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
 
     res.json({ success: true, restored, message: "Restore completed successfully." });
   } catch (err: any) {
-    res.status(500).json({ error: "Restore failed", message: err.message });
+    res.status(500).json({ error: "Restore failed" });
   }
 });
 
@@ -656,41 +656,33 @@ router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promis
     }
     res.json({ success: true, ...result, message: `Indexed ${result.indexed} documents (${result.errors} errors).` });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: "Reindex failed" });
   }
 });
 
 // ── AI Classification toggle ──────────────────────────────────────────────────
 
 router.get("/ai-classification", requireAuth, async (req, res): Promise<void> => {
-  try {
-    const [row] = await db.select().from(systemSettingsTable)
-      .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
-    const enabled = row ? row.value !== "false" : true;
-    res.json({ enabled });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+  const [row] = await db.select().from(systemSettingsTable)
+    .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+  const enabled = row ? row.value !== "false" : true;
+  res.json({ enabled });
 });
 
 router.put("/ai-classification", requireMinRole("admin"), async (req, res): Promise<void> => {
-  try {
-    const { enabled } = req.body as { enabled: boolean };
-    const value = enabled ? "true" : "false";
-    const existing = await db.select().from(systemSettingsTable)
+  const { enabled } = req.body as { enabled: boolean };
+  const value = enabled ? "true" : "false";
+  const existing = await db.select().from(systemSettingsTable)
+    .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+  if (existing.length > 0) {
+    await db.update(systemSettingsTable)
+      .set({ value, updatedAt: new Date() })
       .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
-    if (existing.length > 0) {
-      await db.update(systemSettingsTable)
-        .set({ value, updatedAt: new Date() })
-        .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
-    } else {
-      await db.insert(systemSettingsTable)
-        .values({ key: "ai_classification_enabled", value });
-    }
-    res.json({ enabled });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  } else {
+    await db.insert(systemSettingsTable)
+      .values({ key: "ai_classification_enabled", value });
   }
+  res.json({ enabled });
 });
 
 // ─── AI Quota: per-org daily usage ─────────────────────────────────────────────
@@ -726,11 +718,7 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
     // Non-sysadmin: own org only
     if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
     const quota = await getOrgAiQuota(user.organizationId);
-    res.json({ organizationId: user.organizationId, quota })
-    return;
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+    res.json({ organizationId: user.organizationId, quota });
 });
 
 // ─── Subscription tier — preset AI config bundles ─────────────────────────────

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { search } from "../lib/search-service.js";
+import { logger } from "../lib/logger.js";
 
 const router = Router();
 
@@ -15,7 +16,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
 
   if (!q || typeof q !== "string") {
-    res.status(400).json({ error: "Bad Request", message: "q parameter is required" });
+    res.status(400).json({ error: "q parameter is required" });
     return;
   }
 
@@ -36,8 +37,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
     res.json({ ...results, query: q });
   } catch (err: any) {
-    console.error("[search] Error:", err.message);
-    res.status(500).json({ error: "Search failed", message: err.message });
+    logger.error({ err }, "[search] query failed");
+    throw err; // Express 5 → globalErrorHandler
   }
 });
 

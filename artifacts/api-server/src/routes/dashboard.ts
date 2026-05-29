@@ -8,6 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, and, count, desc, gte, lt, lte, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { logger } from "../lib/logger.js";
 
 // ─── Roles that can see all org projects in reports (no membership check) ──────
 const ELEVATED_ROLES = ["system_owner", "admin"] as const;
@@ -224,8 +225,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       unreadCorrespondence: unreadCorrItems,
     });
   } catch (err: any) {
-    console.error("[dashboard GET /]", err);
-    res.status(500).json({ error: "Failed to load dashboard", message: err?.message ?? "Unknown error" });
+    logger.error({ err }, "[dashboard GET /] failed");
+    throw err; // Express 5 → globalErrorHandler
   }
 });
 
@@ -367,8 +368,8 @@ router.get("/reports", requireAuth, async (req, res): Promise<void> => {
       },
     });
   } catch (err: any) {
-    console.error("[dashboard GET /reports]", err);
-    res.status(500).json({ error: "Failed to load reports", message: err?.message ?? "Unknown error" });
+    logger.error({ err }, "[dashboard GET /reports] failed");
+    throw err; // Express 5 → globalErrorHandler
   }
 });
 

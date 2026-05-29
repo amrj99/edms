@@ -247,12 +247,12 @@ router.post("/documents/suggest-procedure", async (req, res): Promise<void> => {
     );
     res.json(suggestion);
   } catch (err: any) {
-    const msg = err?.message || "AI service unavailable";
+    const msg = err?.message || "";
     const isCredentialError = msg.includes("API key") || msg.includes("auth") || msg.includes("401") || msg.includes("Unauthorized");
     res.status(503).json({
       error: isCredentialError
         ? "AI service is not configured. Please check your API key settings."
-        : `AI suggestion failed: ${msg}`,
+        : "AI service unavailable",
     });
   }
 });
@@ -425,7 +425,7 @@ Write a concise 2-3 sentence professional summary of what changed between these 
     res.json({ diff, summary: plainSummary, aiSummary: String(data), provider, model });
   } catch (err: any) {
     // If AI fails, still return the metadata diff
-    res.json({ diff, summary: plainSummary, aiSummary: null, aiError: err?.message ?? "AI unavailable" });
+    res.json({ diff, summary: plainSummary, aiSummary: null, aiError: "AI unavailable" });
   }
 });
 
@@ -803,7 +803,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     });
   } catch (err: any) {
     logger.error({ error: err.message, stack: err.stack }, "[AI/command] all providers failed");
-    res.status(500).json({ error: "AI service unavailable", message: err.message });
+    res.status(500).json({ error: "AI service unavailable" });
   }
 });
 

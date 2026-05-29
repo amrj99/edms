@@ -37,7 +37,7 @@ export function requireAiCredits(feature: AiFeature) {
     // ── Normal org-scoped enforcement ──────────────────────────────────────
     const orgId = req.user?.organizationId;
     if (!orgId) {
-      res.status(400).json({ message: "No organisation context" });
+      res.status(400).json({ error: "No organisation context" });
       return;
     }
 
