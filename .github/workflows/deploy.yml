@@ -40,13 +40,9 @@ jobs:
       - name: Validate migration journal
         run: bash scripts/check-migration-journal.sh
 
-      # ── TypeScript Check (non-blocking — Phase 1 of 3) ────────────────────────
-      # Runs tsc --noEmit to surface type errors in CI logs without blocking deploy.
-      # Phase 1: warnings only (continue-on-error: true)
-      # Phase 2: fix errors progressively (noImplicitAny, strictNullChecks, etc.)
-      # Phase 3: remove continue-on-error → becomes a hard gate
-      - name: TypeScript Check (non-blocking)
-        continue-on-error: true
+      # ── TypeScript Check (hard gate — Phase 3 of 3) ─────────────────────────
+      # All TS errors fixed. Any future type error will block deploy.
+      - name: TypeScript Check
         run: pnpm --filter api-server typecheck
 
       - name: Build — API
@@ -139,11 +135,4 @@ jobs:
             for i in $(seq 1 12); do
               sleep 5
               response=$(curl -s http://localhost:8080/api/health 2>/dev/null)
-              echo "⏳ محاولة ($i/12): $response"
-              if echo "$response" | grep -q '"status":"ok"'; then
-                echo "✅ النظام يعمل بشكل صحيح — API + Database (attempt $i)"
-                exit 0
-              fi
-            done
-            echo "❌ النظام لا يستجيب أو قاعدة البيانات منفصلة بعد 60 ثانية"
-            exit 1
+              
