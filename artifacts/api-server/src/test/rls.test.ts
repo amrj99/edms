@@ -74,6 +74,13 @@ async function withRlsClient<T>(
   try {
     const value = orgId === null ? "" : String(orgId);
     await client.query("SELECT set_config('app.current_org_id', $1, FALSE)", [value]);
+
+    // Debug: verify what current_setting sees on this same connection
+    const debug = await client.query(
+      "SELECT current_setting('app.current_org_id', TRUE) AS val",
+    );
+    console.log(`[rls-debug] orgId=${orgId} → current_setting='${debug.rows[0].val}'`);
+
     return await fn(client);
   } finally {
     await client.end();
