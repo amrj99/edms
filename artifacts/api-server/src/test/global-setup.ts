@@ -86,6 +86,35 @@ export async function setup(): Promise<void> {
     }
   }
 
+  // Create a non-superuser role for RLS tests.
+  // Superusers bypass RLS even with FORCE ROW LEVEL SECURITY.
+  // rls_tester is a regular role that is subject to RLS policies.
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rls_tester') THEN
+        CREATE ROLE rls_tester LOGIN PASSWORD 'rls_tester_pw';
+      END IF;
+    END $$
+  `);
+
+  // Grant rls_tester SELECT/INSERT/UPDATE/DELETE on all RLS-protected tables
+  // so the test queries can actually run (just filtered by policy).
+  for (const table of RLS_TABLES) {
+    try {
+      await client.query(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "${table}" TO rls_tester`,
+      );
+    } catch {
+      // skip tables that don't exist
+    }
+  }
+
+  // Also grant usage on the public schema and all sequences
+  // (needed for INSERT in seed helpers that run as the main user, not rls_tester)
+  await client.query(`GRANT USAGE ON SCHEMA public TO rls_tester`);
+  await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rls_tester`);
+
   await client.end();
   console.log("[test:setup] RLS policies initialised ✓\n");
 }

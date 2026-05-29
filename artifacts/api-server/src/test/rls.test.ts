@@ -61,26 +61,33 @@ const { Client } = pg;
 // Uses a single Client (not Pool) so set_config() and SELECT run on the same
 // connection — this is critical for RLS testing.
 
+/**
+ * Builds a connection URL that uses the rls_tester role instead of the
+ * superuser.  Superusers bypass RLS even with FORCE ROW LEVEL SECURITY, so
+ * we need a non-superuser connection to actually exercise the policies.
+ *
+ * global-setup.ts creates the rls_tester role and grants it SELECT on the
+ * protected tables before any test file runs.
+ */
+function rlsTesterUrl(): string {
+  const base = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+  if (!base) throw new Error("TEST_DATABASE_URL is not set");
+
+  // Replace the user:password portion with rls_tester credentials.
+  // postgresql://user:pass@host:port/db  →  postgresql://rls_tester:rls_tester_pw@host:port/db
+  return base.replace(/^(postgresql:\/\/)[^@]+(@)/, "$1rls_tester:rls_tester_pw$2");
+}
+
 async function withRlsClient<T>(
   orgId: number | null,
   fn: (client: pg.Client) => Promise<T>,
 ): Promise<T> {
-  const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!url) throw new Error("TEST_DATABASE_URL is not set");
-
-  const client = new Client({ connectionString: url });
+  const client = new Client({ connectionString: rlsTesterUrl() });
   await client.connect();
 
   try {
     const value = orgId === null ? "" : String(orgId);
     await client.query("SELECT set_config('app.current_org_id', $1, FALSE)", [value]);
-
-    // Debug: verify what current_setting sees on this same connection
-    const debug = await client.query(
-      "SELECT current_setting('app.current_org_id', TRUE) AS val",
-    );
-    console.log(`[rls-debug] orgId=${orgId} → current_setting='${debug.rows[0].val}'`);
-
     return await fn(client);
   } finally {
     await client.end();
@@ -328,10 +335,8 @@ describe("RLS — bypass resistance", () => {
   it("unset session variable (current_setting returns empty) triggers sysadmin bypass", async () => {
     // When app.current_org_id is not set at all (new connection, no set_config),
     // current_setting returns '' (with missing_ok=TRUE) → sysadmin bypass applies.
-    const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-    if (!url) throw new Error("TEST_DATABASE_URL is not set");
-
-    const client = new Client({ connectionString: url });
+    // Use rls_tester (non-superuser) so RLS policies are actually evaluated.
+    const client = new Client({ connectionString: rlsTesterUrl() });
     await client.connect();
 
     try {
