@@ -102,8 +102,6 @@ export async function applyDocumentReviewDecision({
     status: newStatus as any,
     comment: entryComment,
     createdById: reviewerId,
-    reviewDecision: decision,
-    reviewerName,
   });
 
   // Audit: record the status change with before/after for traceability
@@ -123,5 +121,4 @@ export async function applyDocumentReviewDecision({
     },
   });
 
-  return doc;
-}
+  return do

@@ -783,6 +783,7 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
     await dispatchNotification({
       event: "correspondence_recalled" as any,
       recipients: r.userId ? [{ userId: r.userId, email: "" }] : [],
+      sendEmail: async () => {},
       organizationId: existing.organizationId ?? undefined,
       entityType: "correspondence",
       entityId: id,

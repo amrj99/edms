@@ -104,7 +104,7 @@ export async function createUser(opts: CreateUserOptions) {
 
 export interface CreateProjectOptions {
   organizationId: number;
-  createdById: number;
+  createdById?: number; // ignored — projectsTable has no createdById column
   name?: string;
   code?: string;
   status?: "active" | "on_hold" | "completed" | "cancelled";
@@ -118,7 +118,6 @@ export async function createProject(opts: CreateProjectOptions) {
     .insert(projectsTable)
     .values({
       organizationId: opts.organizationId,
-      createdById: opts.createdById,
       name: opts.name ?? `Test Project ${n}`,
       code: opts.code ?? `PROJ${n.toString().padStart(3, "0")}`,
       status: opts.status ?? "active",
