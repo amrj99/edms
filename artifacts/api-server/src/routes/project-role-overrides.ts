@@ -4,10 +4,9 @@ import { db } from "@workspace/db";
 import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
-import { paramInt, type ProjectParams, type ProjectItemParams } from '../lib/params';
 import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 

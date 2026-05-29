@@ -4,9 +4,8 @@ import { db } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { projectDepartmentsTable, departmentsTable, projectsTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
-import { paramInt, type ProjectParams } from '../lib/params';
 import { isSysAdmin } from "../lib/auth.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 

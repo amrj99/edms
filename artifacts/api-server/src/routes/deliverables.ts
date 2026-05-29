@@ -3,8 +3,7 @@ import { db } from "@workspace/db";
 import { deliverablesTable, documentsTable, projectsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { paramInt, type ProjectParams, type ProjectItemParams } from '../lib/params';
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
