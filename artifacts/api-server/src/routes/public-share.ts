@@ -257,4 +257,8 @@ router.get("/correspondence/:token", shareTokenLimiter, async (req, res): Promis
     createdAt: corr.createdAt,
     fromUser: fromUser[0] ? `${fromUser[0].firstName} ${fromUser[0].lastName}` : "Unknown",
     attachments: attachments.map(a => ({ id: a.id, fileName: a.fileName, fileUrl: a.fileUrl, fileSize: a.fileSize })),
-    expiresAt: corr.shareExp
+    expiresAt: corr.shareExpiresAt,
+  });
+});
+
+export default router;
