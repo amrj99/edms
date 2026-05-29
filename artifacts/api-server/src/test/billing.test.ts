@@ -46,12 +46,12 @@ import { orgConfigTable } from "@workspace/db";
 
 // ─── Helper: build Authorization header from a DB user row ────────────────────
 
-function bearerFor(user: { id: number; organizationId: number; role: string; email: string }): Record<string, string> {
+function bearerFor(user: { id: number; organizationId: number | null; role: string; email: string }): Record<string, string> {
   const token = makeToken({
     id: user.id,
     email: user.email,
     role: user.role as any,
-    organizationId: user.organizationId,
+    organizationId: user.organizationId!,
   });
   return { Authorization: `Bearer ${token}` };
 }
@@ -98,12 +98,12 @@ interface Fixture {
   orgFullAccess: { id: number };
 
   // Users (admin role so role-checks pass — we want to test module gates only)
-  userNoCorrespondence: { id: number; organizationId: number };
-  userNoMeetings:       { id: number; organizationId: number };
-  userNoWorkflow:       { id: number; organizationId: number };
-  userNoChat:           { id: number; organizationId: number };
-  userNoRegisters:      { id: number; organizationId: number };
-  userFullAccess:       { id: number; organizationId: number };
+  userNoCorrespondence: { id: number; organizationId: number | null; role: string; email: string };
+  userNoMeetings:       { id: number; organizationId: number | null; role: string; email: string };
+  userNoWorkflow:       { id: number; organizationId: number | null; role: string; email: string };
+  userNoChat:           { id: number; organizationId: number | null; role: string; email: string };
+  userNoRegisters:      { id: number; organizationId: number | null; role: string; email: string };
+  userFullAccess:       { id: number; organizationId: number | null; role: string; email: string };
 
   // A project for the full-access org (needed for project-scoped routes)
   projectFull: { id: number };
@@ -159,7 +159,7 @@ afterAll(async () => {
 
 describe("Module gate — correspondence", () => {
   it("blocks GET /correspondence when module is disabled → 403 MODULE_DISABLED", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/correspondence")
       .set(bearerFor(fx.userNoCorrespondence));
 
@@ -171,7 +171,7 @@ describe("Module gate — correspondence", () => {
   it("blocks GET /projects/:id/correspondence when module is disabled → 403", async () => {
     const project = await createProject({ organizationId: fx.orgNoCorrespondence.id });
 
-    const res = await api
+    const res = await api()
       .get(`/api/projects/${project.id}/correspondence`)
       .set(bearerFor(fx.userNoCorrespondence));
 
@@ -180,7 +180,7 @@ describe("Module gate — correspondence", () => {
   });
 
   it("allows GET /correspondence when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/correspondence")
       .set(bearerFor(fx.userFullAccess));
 
@@ -190,7 +190,7 @@ describe("Module gate — correspondence", () => {
   });
 
   it("allows GET /projects/:id/correspondence when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get(`/api/projects/${fx.projectFull.id}/correspondence`)
       .set(bearerFor(fx.userFullAccess));
 
@@ -202,7 +202,7 @@ describe("Module gate — correspondence", () => {
 
 describe("Module gate — meetings", () => {
   it("blocks GET /meetings when module is disabled → 403 MODULE_DISABLED", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/meetings")
       .set(bearerFor(fx.userNoMeetings));
 
@@ -212,7 +212,7 @@ describe("Module gate — meetings", () => {
   });
 
   it("blocks POST /meetings when module is disabled → 403", async () => {
-    const res = await api
+    const res = await api()
       .post("/api/meetings")
       .set(bearerFor(fx.userNoMeetings))
       .send({ title: "Test Meeting", projectId: 1, scheduledAt: new Date().toISOString() });
@@ -222,7 +222,7 @@ describe("Module gate — meetings", () => {
   });
 
   it("allows GET /meetings when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/meetings")
       .set(bearerFor(fx.userFullAccess));
 
@@ -235,7 +235,7 @@ describe("Module gate — meetings", () => {
 
 describe("Module gate — workflow_engine", () => {
   it("blocks GET /workflow-engine/templates when module is disabled → 403 MODULE_DISABLED", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/workflow-engine/templates")
       .set(bearerFor(fx.userNoWorkflow));
 
@@ -245,7 +245,7 @@ describe("Module gate — workflow_engine", () => {
   });
 
   it("blocks POST /workflow-engine/templates when module is disabled → 403", async () => {
-    const res = await api
+    const res = await api()
       .post("/api/workflow-engine/templates")
       .set(bearerFor(fx.userNoWorkflow))
       .send({ name: "Test Workflow", description: "blocked" });
@@ -255,7 +255,7 @@ describe("Module gate — workflow_engine", () => {
   });
 
   it("allows GET /workflow-engine/templates when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/workflow-engine/templates")
       .set(bearerFor(fx.userFullAccess));
 
@@ -268,7 +268,7 @@ describe("Module gate — workflow_engine", () => {
 
 describe("Module gate — chat (regression)", () => {
   it("blocks GET /chat when module is disabled → 403 MODULE_DISABLED", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/chat")
       .set(bearerFor(fx.userNoChat));
 
@@ -278,7 +278,7 @@ describe("Module gate — chat (regression)", () => {
   });
 
   it("allows GET /chat when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get("/api/chat")
       .set(bearerFor(fx.userFullAccess));
 
@@ -290,7 +290,7 @@ describe("Module gate — chat (regression)", () => {
 
 describe("Module gate — registers (regression)", () => {
   it("blocks project-scoped registers route when module is disabled → 403 MODULE_DISABLED", async () => {
-    const res = await api
+    const res = await api()
       .get(`/api/projects/${fx.projectNoRegisters.id}/registers`)
       .set(bearerFor(fx.userNoRegisters));
 
@@ -300,7 +300,7 @@ describe("Module gate — registers (regression)", () => {
   });
 
   it("allows project-scoped registers route when module is enabled → not 403", async () => {
-    const res = await api
+    const res = await api()
       .get(`/api/projects/${fx.projectFull.id}/registers`)
       .set(bearerFor(fx.userFullAccess));
 
@@ -314,7 +314,7 @@ describe("Module gate — unauthenticated passthrough", () => {
   it("unauthenticated request to disabled module → 401 (not 403 MODULE_DISABLED)", async () => {
     // requireModule passes through when no JWT is present.
     // requireAuth in the sub-router then returns 401.
-    const res = await api.get("/api/correspondence");
+    const res = await api().get("/api/correspondence");
 
     expect(res.status).toBe(401);
     expect(res.body.error).not.toBe("MODULE_DISABLED");
