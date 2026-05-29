@@ -57,3 +57,21 @@ export function paramIntOrNull(value: string | string[] | undefined): number | n
   const n = parseInt(Array.isArray(value) ? value[0] : value, 10);
   return isNaN(n) ? null : n;
 }
+
+/**
+ * Parse a route parameter as an integer, throwing a 400 error if invalid.
+ * Use this instead of paramInt() for any param that must be a valid integer.
+ * Express 5 catches the thrown error and routes it to globalErrorHandler.
+ *
+ * @example
+ *   const id = requireInt(req.params.id, "id");
+ *   // → 400 { error: "Invalid parameter: id" } if not a valid integer
+ */
+export function requireInt(value: string | string[], name = "id"): number {
+  const n = parseInt(Array.isArray(value) ? value[0] : value, 10);
+  if (isNaN(n)) {
+    const err = Object.assign(new Error(`Invalid parameter: ${name}`), { status: 400 });
+    throw err;
+  }
+  return n;
+}

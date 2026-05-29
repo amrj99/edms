@@ -18,7 +18,7 @@ import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
 import { syncOrgModules } from "../lib/module-sync-service.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, requireInt } from '../lib/params';
 
 const router = Router();
 
@@ -284,7 +284,7 @@ router.get("/usage", async (req, res): Promise<void> => {
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
 router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<void> => {
-  const orgId = paramInt(req.params.orgId);
+  const orgId = requireInt(req.params.orgId, "orgId");
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
   const updateData: any = { storageQuotaMb, storagePath, updatedAt: new Date() };
@@ -725,7 +725,7 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
 // PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (system_owner only)
 router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
-  const orgId = paramInt(req.params.orgId);
+  const orgId = requireInt(req.params.orgId, "orgId");
   const { tier } = req.body as { tier: SubscriptionTier };
 
   if (!tier || !(tier in SUBSCRIPTION_TIERS)) {
@@ -769,8 +769,7 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
  */
 router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
-  const orgId = paramInt(req.params.orgId);
-  if (isNaN(orgId)) { res.status(400).json({ error: "Invalid orgId" }); return; }
+  const orgId = requireInt(req.params.orgId, "orgId");
 
   const { aiDailyLimit, aiMonthlyTokenLimit } = req.body as {
     aiDailyLimit?: number;
@@ -814,7 +813,7 @@ router.get("/org-plans", requireSysOwner, async (req, res): Promise<void> => {
 });
 
 router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res): Promise<void> => {
-  const orgId = paramInt(req.params.orgId);
+  const orgId = requireInt(req.params.orgId, "orgId");
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
   const validPlanIds = ["expired", ...PLANS.map(p => p.id)];
