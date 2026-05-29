@@ -161,21 +161,29 @@ export function getPlanByTier(tier: string | null | undefined): PlanConfig | nul
 }
 
 export type OrgModuleFlags = {
-  dashboard: boolean;
-  deliverables: boolean;
-  registers: boolean;
-  notifications: boolean;
-  chat: boolean;
+  dashboard:       boolean;
+  deliverables:    boolean;
+  registers:       boolean;
+  notifications:   boolean;
+  chat:            boolean;
+  // ── Commercial modules added in Phase 4 ──────────────────────────────────────
+  // correspondence  — transmit/receive formal project correspondence
+  // meetings        — meeting minutes + action items
+  // workflow_engine — approval workflows, stages, and templates (governance layer)
+  correspondence:  boolean;
+  meetings:        boolean;
+  workflow_engine: boolean;
 };
 
 export function getDefaultModulesForPlan(planId: string): OrgModuleFlags {
   const map: Record<string, OrgModuleFlags> = {
-    expired:      { dashboard: true, deliverables: false, registers: false, notifications: true, chat: false },
-    trial:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
-    starter:      { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: false },
-    basic:        { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
-    professional: { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
-    enterprise:   { dashboard: true, deliverables: true,  registers: true,  notifications: true, chat: true  },
+    //                     dash   deliv  regs   notif  chat   corr   meet   wflow
+    expired:      { dashboard: true,  deliverables: false, registers: false, notifications: true,  chat: false, correspondence: false, meetings: false, workflow_engine: false },
+    trial:        { dashboard: true,  deliverables: true,  registers: true,  notifications: true,  chat: true,  correspondence: true,  meetings: true,  workflow_engine: true  },
+    starter:      { dashboard: true,  deliverables: true,  registers: true,  notifications: true,  chat: false, correspondence: true,  meetings: false, workflow_engine: false },
+    basic:        { dashboard: true,  deliverables: true,  registers: true,  notifications: true,  chat: true,  correspondence: true,  meetings: true,  workflow_engine: false },
+    professional: { dashboard: true,  deliverables: true,  registers: true,  notifications: true,  chat: true,  correspondence: true,  meetings: true,  workflow_engine: true  },
+    enterprise:   { dashboard: true,  deliverables: true,  registers: true,  notifications: true,  chat: true,  correspondence: true,  meetings: true,  workflow_engine: true  },
   };
   return map[normalizePlanId(planId)] ?? map.expired;
 }

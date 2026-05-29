@@ -33,7 +33,16 @@ import { eq } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { verifyToken } from "../lib/auth.js";
 
-export type ModuleKey = "dashboard" | "deliverables" | "registers" | "notifications" | "chat";
+export type ModuleKey =
+  | "dashboard"
+  | "deliverables"
+  | "registers"
+  | "notifications"
+  | "chat"
+  // ── Phase 4 commercial modules ────────────────────────────────────────────────
+  | "correspondence"
+  | "meetings"
+  | "workflow_engine";
 
 // ─── JWT-based orgId resolution ───────────────────────────────────────────────
 
