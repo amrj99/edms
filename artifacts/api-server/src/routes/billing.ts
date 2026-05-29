@@ -128,7 +128,6 @@ router.get("/plans", (_req, res) => {
 
 // ─── GET /api/billing/status ──────────────────────────────────────────────────
 router.get("/status", requireAuth, async (req, res): Promise<void> => {
-  try {
     const orgId = req.user!.organizationId;
     if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
@@ -211,10 +210,6 @@ router.get("/status", requireAuth, async (req, res): Promise<void> => {
       trialEndsAt: org.trialEndsAt?.toISOString() ?? null,
       storageWarningLevel,
     });
-  } catch (err) {
-    logger.error(err, "billing status error");
-    res.status(500).json({ message: "Internal server error" });
-  }
 });
 
 // ─── POST /api/billing/checkout ───────────────────────────────────────────────
@@ -222,7 +217,6 @@ router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) { res.status(503).json({ message: "Stripe is not configured. Connect Stripe to enable billing." }); return; }
 
-  try {
     const orgId = req.user!.organizationId;
     if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
@@ -277,10 +271,6 @@ router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
     });
 
     res.json({ url: session.url, sessionId: session.id });
-  } catch (err: any) {
-    logger.error(err, "billing checkout error");
-    res.status(500).json({ message: err.message ?? "Checkout failed" });
-  }
 });
 
 // ─── POST /api/billing/portal ─────────────────────────────────────────────────
@@ -288,7 +278,6 @@ router.post("/portal", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) { res.status(503).json({ message: "Stripe is not configured" }); return; }
 
-  try {
     const orgId = req.user!.organizationId;
     if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
@@ -310,10 +299,6 @@ router.post("/portal", requireAuth, async (req, res): Promise<void> => {
     });
 
     res.json({ url: session.url });
-  } catch (err: any) {
-    logger.error(err, "billing portal error");
-    res.status(500).json({ message: err.message ?? "Portal failed" });
-  }
 });
 
 // ─── POST /api/billing/webhook ────────────────────────────────────────────────
@@ -339,8 +324,7 @@ router.post(
     return;
     }
 
-    try {
-      switch (event.type) {
+    switch (event.type) {
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
           const orgId = parseInt(session.metadata?.orgId ?? "0");
@@ -502,11 +486,7 @@ router.post(
           logger.debug({ type: event.type }, "Unhandled Stripe webhook event");
       }
 
-      res.json({ received: true });
-    } catch (err) {
-      logger.error(err, "Webhook handler error");
-      res.status(500).json({ message: "Webhook processing failed" });
-    }
+    res.json({ received: true });
   }
 );
 

@@ -72,74 +72,69 @@ router.post("/smtp/test", requireMinRole("admin"), async (req, res): Promise<voi
 
 // ─── Storage Usage ─────────────────────────────────────────────────────────────
 router.get("/storage-usage", async (req, res): Promise<void> => {
-  try {
-    const user = req.user!;
+  const user = req.user!;
 
-    // Determine which orgs this user may see:
-    //   system_owner (no org required) → all orgs
-    //   admin                          → their org only
-    let orgs: any[] = [];
-    if (isSystemOwner(user)) {
-      orgs = await db.select().from(organizationsTable);
-    } else if (user.organizationId) {
-      orgs = await db
-        .select()
-        .from(organizationsTable)
-        .where(eq(organizationsTable.id, user.organizationId));
-    }
-
-    if (orgs.length === 0) {
-      res.json({ usage: [] });
-      return;
-    }
-
-    const orgIds = orgs.map(o => o.id);
-
-    const usageRows = await db
-      .select({
-        orgId: projectsTable.organizationId,
-        totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
-        docCount: sql<number>`count(${documentsTable.id})::int`,
-      })
-      .from(documentsTable)
-      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-      .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
-      .groupBy(projectsTable.organizationId);
-
-    const configs = await db
+  // Determine which orgs this user may see:
+  //   system_owner (no org required) → all orgs
+  //   admin                          → their org only
+  let orgs: any[] = [];
+  if (isSystemOwner(user)) {
+    orgs = await db.select().from(organizationsTable);
+  } else if (user.organizationId) {
+    orgs = await db
       .select()
-      .from(orgConfigTable)
-      .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
-    const configMap = new Map(configs.map(c => [c.organizationId, c]));
-
-    const result = orgs.map(org => {
-      const usage = usageRows.find(r => r.orgId === org.id);
-      const config = configMap.get(org.id);
-      const usedBytes = Number(usage?.totalBytes ?? 0);
-      const quotaMb = config?.storageQuotaMb ?? 10240;
-      const usedMb = Math.round(usedBytes / 1024 / 1024 * 100) / 100;
-      return {
-        orgId: org.id,
-        orgName: org.name,
-        usedMb,
-        usedBytes,
-        quotaMb,
-        docCount: usage?.docCount ?? 0,
-        percentUsed: quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0,
-        storagePath: config?.storagePath ?? null,
-        storageType: config?.storageType ?? (process.env.DEFAULT_STORAGE_TYPE ?? "s3"),
-        s3Endpoint: config?.s3Endpoint ?? null,
-        s3Bucket: config?.s3Bucket ?? null,
-        s3Region: config?.s3Region ?? null,
-        s3AccessKey: config?.s3AccessKey ? "***configured***" : null,
-      };
-    });
-
-    res.json({ usage: result });
-  } catch (err) {
-    console.error("[storage-usage]", err);
-    res.status(500).json({ error: "Failed to fetch storage usage" });
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, user.organizationId));
   }
+
+  if (orgs.length === 0) {
+    res.json({ usage: [] });
+    return;
+  }
+
+  const orgIds = orgs.map(o => o.id);
+
+  const usageRows = await db
+    .select({
+      orgId: projectsTable.organizationId,
+      totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
+      docCount: sql<number>`count(${documentsTable.id})::int`,
+    })
+    .from(documentsTable)
+    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+    .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
+    .groupBy(projectsTable.organizationId);
+
+  const configs = await db
+    .select()
+    .from(orgConfigTable)
+    .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
+  const configMap = new Map(configs.map(c => [c.organizationId, c]));
+
+  const result = orgs.map(org => {
+    const usage = usageRows.find(r => r.orgId === org.id);
+    const config = configMap.get(org.id);
+    const usedBytes = Number(usage?.totalBytes ?? 0);
+    const quotaMb = config?.storageQuotaMb ?? 10240;
+    const usedMb = Math.round(usedBytes / 1024 / 1024 * 100) / 100;
+    return {
+      orgId: org.id,
+      orgName: org.name,
+      usedMb,
+      usedBytes,
+      quotaMb,
+      docCount: usage?.docCount ?? 0,
+      percentUsed: quotaMb > 0 ? Math.min(100, Math.round((usedMb / quotaMb) * 100)) : 0,
+      storagePath: config?.storagePath ?? null,
+      storageType: config?.storageType ?? (process.env.DEFAULT_STORAGE_TYPE ?? "s3"),
+      s3Endpoint: config?.s3Endpoint ?? null,
+      s3Bucket: config?.s3Bucket ?? null,
+      s3Region: config?.s3Region ?? null,
+      s3AccessKey: config?.s3AccessKey ? "***configured***" : null,
+    };
+  });
+
+  res.json({ usage: result });
 });
 
 // ─── Usage Monitoring Dashboard ────────────────────────────────────────────────

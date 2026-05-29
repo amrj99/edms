@@ -27,29 +27,24 @@ function isStripeConfigured(): boolean {
 
 // ─── GET /api/ai-credits/balance ──────────────────────────────────────────────
 router.get("/balance", requireAuth, async (req, res): Promise<void> => {
-  try {
-    const orgId = req.user!.organizationId;
-    if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
+  const orgId = req.user!.organizationId;
+  if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
-    const { balance, totalPurchased } = await getCreditsBalance(orgId);
+  const { balance, totalPurchased } = await getCreditsBalance(orgId);
 
-    const recentTransactions = await db
-      .select()
-      .from(aiCreditTransactionsTable)
-      .where(eq(aiCreditTransactionsTable.organizationId, orgId))
-      .orderBy(desc(aiCreditTransactionsTable.createdAt))
-      .limit(20);
+  const recentTransactions = await db
+    .select()
+    .from(aiCreditTransactionsTable)
+    .where(eq(aiCreditTransactionsTable.organizationId, orgId))
+    .orderBy(desc(aiCreditTransactionsTable.createdAt))
+    .limit(20);
 
-    res.json({
-      balance,
-      totalPurchased,
-      featureCosts: AI_FEATURE_COSTS,
-      recentTransactions,
-    });
-  } catch (err) {
-    logger.error(err, "ai-credits balance error");
-    res.status(500).json({ message: "Internal server error" });
-  }
+  res.json({
+    balance,
+    totalPurchased,
+    featureCosts: AI_FEATURE_COSTS,
+    recentTransactions,
+  });
 });
 
 // ─── GET /api/ai-credits/packs ────────────────────────────────────────────────
@@ -70,7 +65,6 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  try {
     const orgId = req.user!.organizationId;
     if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
@@ -103,10 +97,6 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
     });
 
     res.json({ url: session.url, sessionId: session.id });
-  } catch (err: any) {
-    logger.error(err, "ai-credits purchase error");
-    res.status(500).json({ message: err.message ?? "Purchase failed" });
-  }
 });
 
 // ─── GET /api/ai-credits/admin/balances ───────────────────────────────────────
@@ -116,22 +106,18 @@ router.get("/admin/balances", requireAuth, async (req, res): Promise<void> => {
     res.status(403).json({ error: "Forbidden" })
     return;
   }
-  try {
-    const orgs = await db
-      .select({
-        id: organizationsTable.id,
-        name: organizationsTable.name,
-        balance: organizationsTable.aiCreditsBalance,
-        totalPurchased: organizationsTable.aiCreditsTotalPurchased,
-      })
-      .from(organizationsTable)
-      .orderBy(organizationsTable.name);
 
-    res.json({ organizations: orgs });
-  } catch (err) {
-    logger.error(err, "ai-credits admin/balances error");
-    res.status(500).json({ message: "Internal server error" });
-  }
+  const orgs = await db
+    .select({
+      id: organizationsTable.id,
+      name: organizationsTable.name,
+      balance: organizationsTable.aiCreditsBalance,
+      totalPurchased: organizationsTable.aiCreditsTotalPurchased,
+    })
+    .from(organizationsTable)
+    .orderBy(organizationsTable.name);
+
+  res.json({ organizations: orgs });
 });
 
 // ─── POST /api/ai-credits/admin/grant ─────────────────────────────────────────
@@ -163,31 +149,26 @@ router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  try {
-    const [org] = await db
-      .select({ id: organizationsTable.id, name: organizationsTable.name })
-      .from(organizationsTable)
-      .where(eq(organizationsTable.id, organizationId));
+  const [org] = await db
+    .select({ id: organizationsTable.id, name: organizationsTable.name })
+    .from(organizationsTable)
+    .where(eq(organizationsTable.id, organizationId));
 
-    if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
+  if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
 
-    const newBalance = await grantCredits(organizationId, amount, "grant", {
-      grantedBy: req.user!.id,
-      grantedByEmail: req.user!.email,
-      note: note?.trim() ?? null,
-      manual: true,
-    });
+  const newBalance = await grantCredits(organizationId, amount, "grant", {
+    grantedBy: req.user!.id,
+    grantedByEmail: req.user!.email,
+    note: note?.trim() ?? null,
+    manual: true,
+  });
 
-    logger.info(
-      { adminId: req.user!.id, adminEmail: req.user!.email, orgId: organizationId, orgName: org.name, amount, note },
-      "AI credits manually granted by admin",
-    );
+  logger.info(
+    { adminId: req.user!.id, adminEmail: req.user!.email, orgId: organizationId, orgName: org.name, amount, note },
+    "AI credits manually granted by admin",
+  );
 
-    res.json({ newBalance, organizationId, organizationName: org.name, amount });
-  } catch (err) {
-    logger.error(err, "ai-credits admin/grant error");
-    res.status(500).json({ message: "Internal server error" });
-  }
+  res.json({ newBalance, organizationId, organizationName: org.name, amount });
 });
 
 export default router;
