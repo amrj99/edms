@@ -9,6 +9,7 @@ import {
 import { eq, and, count, desc, gte, lt, lte, inArray, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
+import { paramIntOrNull } from "../lib/params.js";
 
 // ─── Roles that can see all org projects in reports (no membership check) ──────
 const ELEVATED_ROLES = ["system_owner", "admin"] as const;
@@ -86,7 +87,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   try {
     const userId = req.user!.id;
     const orgId = req.user!.organizationId;
-    const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+    const projectId = paramIntOrNull(req.query.projectId as string | undefined) ?? undefined;
 
     let orgProjectIds: number[] | undefined;
     if (!projectId && orgId) {
@@ -235,7 +236,7 @@ router.get("/reports", requireAuth, async (req, res): Promise<void> => {
   try {
     const user      = req.user!;
     const orgId     = user.organizationId;
-    const requestedProjectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
+    const requestedProjectId = paramIntOrNull(req.query.projectId as string | undefined) ?? undefined;
 
     // Resolve project IDs the user is actually allowed to see.
     // For admins/system_owners this is all org projects; for others it is their
