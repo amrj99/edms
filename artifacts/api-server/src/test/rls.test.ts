@@ -133,7 +133,7 @@ beforeAll(async () => {
     type: "internal",
     status: "draft",
     direction: "outgoing",
-    createdById: userA.id,
+    fromUserId: userA.id,
     referenceNumber: "RLS-CORR-001",
   }).returning({ id: correspondenceTable.id });
 
