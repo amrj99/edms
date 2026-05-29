@@ -135,4 +135,11 @@ jobs:
             for i in $(seq 1 12); do
               sleep 5
               response=$(curl -s http://localhost:8080/api/health 2>/dev/null)
-              
+              echo "⏳ محاولة ($i/12): $response"
+              if echo "$response" | grep -q '"status":"ok"'; then
+                echo "✅ النظام يعمل بشكل صحيح — API + Database (attempt $i)"
+                exit 0
+              fi
+            done
+            echo "❌ النظام لا يستجيب أو قاعدة البيانات منفصلة بعد 60 ثانية"
+            exit 1
