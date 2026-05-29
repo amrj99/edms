@@ -13,7 +13,8 @@
 // as {} by default when no explicit route string is parsed at compile time).
 
 /** Params for routers mounted at /projects/:projectId/... */
-export interface ProjectParams extends Record<string, string | string[]> {
+export interface ProjectParams {
+  [key: string]: string;
   projectId: string;
 }
 
