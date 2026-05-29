@@ -9,7 +9,7 @@ import { requireAuth, isSysAdmin } from "../lib/auth.js";
 
 const router = Router();
 
-router.get("/events", requireAuth, async (req, res) => {
+router.get("/events", requireAuth, async (req, res): Promise<void> => {
   const { start, end } = req.query;
 
   const now = new Date();

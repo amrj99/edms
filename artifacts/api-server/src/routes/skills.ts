@@ -14,7 +14,7 @@ const router = Router();
 const adminOnly = requireRole("admin", "system_owner");
 
 // ─── GET /api/skills — list org skills with last execution status ─────────────
-router.get("/", requireAuth, adminOnly, async (req, res) => {
+router.get("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId = getReqOrgId(req);
     if (!orgId) return res.status(403).json({ error: "No organization context" });
@@ -50,7 +50,7 @@ router.get("/", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── POST /api/skills — create skill ─────────────────────────────────────────
-router.post("/", requireAuth, adminOnly, async (req, res) => {
+router.post("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId = getReqOrgId(req);
     if (!orgId) return res.status(403).json({ error: "No organization context" });
@@ -84,7 +84,7 @@ router.post("/", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── PUT /api/skills/:id — update config / settings ──────────────────────────
-router.put("/:id", requireAuth, adminOnly, async (req, res) => {
+router.put("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId   = getReqOrgId(req);
     const skillId = paramInt(req.params.id);
@@ -121,7 +121,7 @@ router.put("/:id", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── DELETE /api/skills/:id ───────────────────────────────────────────────────
-router.delete("/:id", requireAuth, adminOnly, async (req, res) => {
+router.delete("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId   = getReqOrgId(req);
     const skillId = paramInt(req.params.id);
@@ -146,7 +146,7 @@ router.delete("/:id", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── PUT /api/skills/:id/toggle — enable / disable ───────────────────────────
-router.put("/:id/toggle", requireAuth, adminOnly, async (req, res) => {
+router.put("/:id/toggle", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId   = getReqOrgId(req);
     const skillId = paramInt(req.params.id);
@@ -173,7 +173,7 @@ router.put("/:id/toggle", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── PUT /api/skills/:id/run — manual execution ──────────────────────────────
-router.put("/:id/run", requireAuth, adminOnly, async (req, res) => {
+router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId   = getReqOrgId(req);
     const skillId = paramInt(req.params.id);
@@ -197,7 +197,7 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res) => {
 });
 
 // ─── GET /api/skills/:id/executions — execution history ──────────────────────
-router.get("/:id/executions", requireAuth, adminOnly, async (req, res) => {
+router.get("/:id/executions", requireAuth, adminOnly, async (req, res): Promise<void> => {
   try {
     const orgId   = getReqOrgId(req);
     const skillId = paramInt(req.params.id);

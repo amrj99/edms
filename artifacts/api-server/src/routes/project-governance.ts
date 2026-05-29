@@ -17,7 +17,7 @@ const router = Router({ mergeParams: true });
 
 const GOV_ROLES = ["system_owner", "admin", "project_manager", "document_controller"] as const;
 
-router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req: Request<ProjectParams>, res) => {
+router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
 
@@ -244,3 +244,4 @@ router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (r
 });
 
 export default router;
+                                          

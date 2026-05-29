@@ -9,7 +9,7 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", async (req, res) => {
+router.get("/", async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
     const search = (req.query.q as string | undefined)?.trim();
@@ -43,7 +43,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", requireRole("document_controller", "project_manager", "admin", "system_owner"), async (req, res) => {
+router.post("/", requireRole("document_controller", "project_manager", "admin", "system_owner"), async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
     const { name, email, company, jobTitle, phone } = req.body;
@@ -72,7 +72,7 @@ router.post("/", requireRole("document_controller", "project_manager", "admin", 
   }
 });
 
-router.put("/:id", requireRole("document_controller", "project_manager", "admin", "system_owner"), async (req, res) => {
+router.put("/:id", requireRole("document_controller", "project_manager", "admin", "system_owner"), async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
     const id = paramInt(req.params.id);
@@ -111,7 +111,7 @@ router.put("/:id", requireRole("document_controller", "project_manager", "admin"
   }
 });
 
-router.delete("/:id", requireRole("admin", "system_owner"), async (req, res) => {
+router.delete("/:id", requireRole("admin", "system_owner"), async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
     const id = paramInt(req.params.id);

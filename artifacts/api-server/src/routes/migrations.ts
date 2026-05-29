@@ -79,7 +79,7 @@ async function runConflictDetection(jobId: number, projectId: number) {
 }
 
 // ── GET /api/migrations — list jobs for current org ──────────────────────────
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.orgId ?? req.user!.organizationId;
   const jobs = await db.select().from(migrationJobsTable)
     .where(eq(migrationJobsTable.organizationId, orgId!))
@@ -88,7 +88,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // ── GET /api/migrations/:id — single job + items ─────────────────────────────
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
   const [job] = await db.select().from(migrationJobsTable)
@@ -100,7 +100,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // ── POST /api/migrations — create a new job ───────────────────────────────────
 // Body: { projectId, files: [{ filePath, fileName, fileSize?, fileType? }] }
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.orgId ?? req.user!.organizationId;
   if (!orgId) return res.status(400).json({ error: "No organization context" });
 
@@ -153,7 +153,7 @@ router.post("/", requireAuth, async (req, res) => {
 // Body: { mode?: "standard" | "ai" }
 // - standard (default): filename/path heuristics only — free, confidence 40-55
 // - ai: reads file content via AI — costs 15 credits per file, confidence 85+
-router.post("/:id/analyze", requireAuth, async (req, res) => {
+router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
   const mode: "standard" | "ai" = req.body?.mode === "ai" ? "ai" : "standard";
@@ -276,7 +276,7 @@ router.post("/:id/analyze", requireAuth, async (req, res) => {
 });
 
 // ── PUT /api/migrations/:id/items/:itemId — user override a single item ──────
-router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
+router.put("/:id/items/:itemId", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const itemId = paramInt(req.params.itemId);
   const orgId = req.orgId ?? req.user!.organizationId;
@@ -358,7 +358,7 @@ router.put("/:id/items/:itemId", requireAuth, async (req, res) => {
 // ── POST /api/migrations/:id/bulk-action ─────────────────────────────────────
 // action: "confirm" | "skip" | "set_revision" | "set_new_document"
 // filter: "high" | "all" | "unreadable" | "conflicts"
-router.post("/:id/bulk-action", requireAuth, async (req, res) => {
+router.post("/:id/bulk-action", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
   const { action, filter } = req.body as {
@@ -402,7 +402,7 @@ router.post("/:id/bulk-action", requireAuth, async (req, res) => {
 });
 
 // ── PUT /api/migrations/:id/storage — set storage choice ─────────────────────
-router.put("/:id/storage", requireAuth, async (req, res) => {
+router.put("/:id/storage", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
   const { storageMode, baseUrl } = req.body;
@@ -420,7 +420,7 @@ router.put("/:id/storage", requireAuth, async (req, res) => {
 });
 
 // ── POST /api/migrations/:id/execute — import all confirmed items ─────────────
-router.post("/:id/execute", requireAuth, async (req, res) => {
+router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId ?? req.user!.organizationId;
 

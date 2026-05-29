@@ -55,7 +55,7 @@ async function canAccessProject(
 }
 
 // Folders
-router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const caller = req.user!;
   const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
@@ -72,7 +72,7 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res) => 
   res.json({ folders: folders.map(f => ({ ...f, documentCount: countMap.get(f.id) ?? 0 })) });
 });
 
-router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { name, parentId } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "name is required" });
@@ -80,7 +80,7 @@ router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res) =>
   res.status(201).json({ ...folder, documentCount: 0 });
 });
 
-router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const folderId = paramInt(req.params.folderId);
   const projectId = paramInt(req.params.projectId);
   const { name, parentId } = req.body;
@@ -96,7 +96,7 @@ router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>
   res.json(folder);
 });
 
-router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const folderId = paramInt(req.params.folderId);
   const projectId = paramInt(req.params.projectId);
   const [folder] = await db.select().from(foldersTable)
@@ -115,7 +115,7 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
 });
 
 // POST /folders/copy-from — copy folder tree from another project in same org
-router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { sourceProjectId } = req.body;
   if (!sourceProjectId) return res.status(400).json({ error: "sourceProjectId required" });
@@ -154,7 +154,7 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
 });
 
 // Documents
-router.get("/", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const caller = req.user!;
   const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
@@ -235,7 +235,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res) => {
   });
 });
 
-router.post("/", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   if (!req.body || typeof req.body !== "object") {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
@@ -455,7 +455,7 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res) => {
 });
 
 // GET /check-number?number=X — check if a document number already exists in this project
-router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const number = (req.query.number as string)?.trim();
   if (!number) return res.status(400).json({ error: "number query param required" });
@@ -484,7 +484,7 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
   return res.json({ available: true });
 });
 
-router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -541,7 +541,7 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   });
 });
 
-router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -612,7 +612,7 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
 // Only sysAdmin can hard-delete these, and must provide a mandatory reason.
 const LIFECYCLE_LOCKED_STATUSES = new Set(["approved", "approved_with_comments", "issued", "archived", "obsolete", "superseded"]);
 
-router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -660,7 +660,7 @@ router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
 });
 
 // PATCH /:id/folder — move document to a different folder (or root)
-router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const { folderId } = req.body;  // null = move to root
@@ -672,7 +672,7 @@ router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res
   res.json({ id: doc.id, folderId: doc.folderId });
 });
 
-router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
 
@@ -712,7 +712,7 @@ router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, re
 // Returns revisions + transmittals + submission chains merged and sorted by date.
 // Shape is stable and extensible: adding correspondence later requires only
 // appending another typed block to the merge array, with no frontend shape change.
-router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const docId   = paramInt(req.params.id);
   const projectId = parseInt(req.params.projectId ?? "0");
 
@@ -839,7 +839,7 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   res.json({ events, total: events.length });
 });
 
-router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
 
   // Look up workflow instances for this document, then their transitions
@@ -875,7 +875,7 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
   });
 });
 
-router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
   // Direct approve is an admin override only — normal approvals go through the Workflow Engine
   if (!isSysAdmin(caller)) {
@@ -952,7 +952,7 @@ router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res
   res.json({ ...doc });
 });
 
-router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
   // Direct reject is an admin override only — normal rejections go through the Workflow Engine
   if (!isSysAdmin(caller)) {
@@ -1023,7 +1023,7 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
   res.json({ ...doc });
 });
 
-router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const { reviewerIds, comment } = req.body;
@@ -1105,7 +1105,7 @@ router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams
 });
 
 // ─── Share link ───────────────────────────────────────────────────────────────
-router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const { expiresInDays, password } = req.body;
@@ -1148,7 +1148,7 @@ router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res) 
   });
 });
 
-router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   await db.update(documentsTable)
@@ -1160,7 +1160,7 @@ router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res
 // ─── Document Files (one-to-many attachments) ─────────────────────────────────
 
 // GET /api/projects/:projectId/documents/:id/files
-router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const docId = paramInt(req.params.id);
 
@@ -1187,7 +1187,7 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res) =
 // POST /api/projects/:projectId/documents/:id/files — add files to a document
 // Accepts multipart/form-data with field "files" (one or many).
 // Optional form fields: documentId (ignored, taken from URL), metadata (JSON string).
-router.post("/:id/files", requireAuth, upload.array("files"), async (req: Request<ProjectParams>, res) => {
+router.post("/:id/files", requireAuth, upload.array("files"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const docId = paramInt(req.params.id);
 
@@ -1358,7 +1358,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 });
 
 // DELETE /api/projects/:projectId/documents/:id/files/:fileId
-router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const docId = paramInt(req.params.id);
   const fileId = paramInt(req.params.fileId);
@@ -1399,7 +1399,7 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
 
 // ─── Lifecycle transitions: archive and obsolete ──────────────────────────────
 
-router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -1441,7 +1441,7 @@ router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, re
   res.json(updated);
 });
 
-router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -1486,7 +1486,7 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
 // ─── Document Departments (Phase B — data layer, no enforcement) ──────────────
 
 // GET  /api/projects/:projectId/documents/:id/departments
-router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const rows = await db
     .select({
@@ -1502,7 +1502,7 @@ router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, 
 });
 
 // POST /api/projects/:projectId/documents/:id/departments  { departmentId }
-router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const { departmentId } = req.body;
@@ -1536,7 +1536,7 @@ router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>,
 });
 
 // DELETE /api/projects/:projectId/documents/:id/departments/:departmentId
-router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res) => {
+router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const departmentId = paramInt(req.params.departmentId);
   await db

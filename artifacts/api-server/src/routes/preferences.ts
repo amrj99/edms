@@ -6,13 +6,13 @@ import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
 
-router.get("/preferences", requireAuth, async (req, res) => {
+router.get("/preferences", requireAuth, async (req, res): Promise<void> => {
   const [row] = await db.select().from(userPreferencesTable)
     .where(eq(userPreferencesTable.userId, req.user!.id));
   res.json(row ?? { userId: req.user!.id, dashboardWidgets: null, dashboardLayout: null, savedFilters: null, columnPrefs: null });
 });
 
-router.put("/preferences", requireAuth, async (req, res) => {
+router.put("/preferences", requireAuth, async (req, res): Promise<void> => {
   const { dashboardWidgets, dashboardLayout, savedFilters, columnPrefs, notificationPrefs } = req.body;
   const existing = await db.select().from(userPreferencesTable)
     .where(eq(userPreferencesTable.userId, req.user!.id));

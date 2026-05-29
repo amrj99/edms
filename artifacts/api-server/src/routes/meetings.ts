@@ -19,7 +19,7 @@ function fmtRef(id: number): string {
 }
 
 // ─── List meetings ─────────────────────────────────────────────────────────────
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", async (req: Request, res: Response): Promise<void> => {
   const user   = req.user!;
   const orgId  = user.organizationId;
 
@@ -92,7 +92,7 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // ─── Cross-project action items list ──────────────────────────────────────────
-router.get("/action-items", async (req: Request, res: Response) => {
+router.get("/action-items", async (req: Request, res: Response): Promise<void> => {
   const user      = req.user!;
   const orgId     = user.organizationId;
   const projectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
@@ -151,7 +151,7 @@ router.get("/action-items", async (req: Request, res: Response) => {
 });
 
 // ─── Get meeting detail ────────────────────────────────────────────────────────
-router.get("/:id", async (req: Request, res: Response) => {
+router.get("/:id", async (req: Request, res: Response): Promise<void> => {
   const id = paramInt(req.params.id);
 
   const [row] = await db
@@ -217,7 +217,7 @@ router.get("/:id", async (req: Request, res: Response) => {
 });
 
 // ─── Create meeting ────────────────────────────────────────────────────────────
-router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const { title, projectId, meetingDate, duration, location, meetingLink, agenda, status, attendees } = req.body;
 
   if (!title?.trim() || !meetingDate) {
@@ -321,7 +321,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 });
 
 // ─── Update meeting ────────────────────────────────────────────────────────────
-router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const id = paramInt(req.params.id);
   const { title, projectId, meetingDate, duration, location, meetingLink, agenda, minutes, status } = req.body;
 
@@ -392,7 +392,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 });
 
 // ─── Update attendee attendance ────────────────────────────────────────────────
-router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const attId = paramInt(req.params.attId);
   const { attended } = req.body;
   const [updated] = await db.update(meetingAttendeesTable)
@@ -403,7 +403,7 @@ router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "doc
 });
 
 // ─── Add / update action item ──────────────────────────────────────────────────
-router.post("/:id/action-items", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.post("/:id/action-items", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const meetingId = paramInt(req.params.id);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   if (!title?.trim()) return res.status(400).json({ error: "title required" });
@@ -468,7 +468,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
   res.status(201).json({ actionItem: item });
 });
 
-router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const itemId = paramInt(req.params.itemId);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
   const [item] = await db.update(meetingActionItemsTable).set({
@@ -485,14 +485,14 @@ router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", 
 });
 
 // ─── Delete action item ────────────────────────────────────────────────────────
-router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response) => {
+router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const itemId = paramInt(req.params.itemId);
   await db.delete(meetingActionItemsTable).where(eq(meetingActionItemsTable.id, itemId));
   res.json({ message: "Deleted" });
 });
 
 // ─── Delete meeting ────────────────────────────────────────────────────────────
-router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response) => {
+router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response): Promise<void> => {
   const id = paramInt(req.params.id);
   await db.delete(meetingsTable).where(eq(meetingsTable.id, id));
   res.json({ message: "Deleted" });

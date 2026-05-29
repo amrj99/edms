@@ -19,7 +19,7 @@ function getOrgId(req: any): number | null {
 }
 
 // ─── List departments for org ──────────────────────────────────────────────────
-router.get("/", async (req, res) => {
+router.get("/", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   if (!orgId) { res.status(400).json({ error: "Organization required" }); return; }
 
@@ -45,7 +45,7 @@ router.get("/", async (req, res) => {
 });
 
 // ─── Create department ─────────────────────────────────────────────────────────
-router.post("/", requireMinRole("admin"), async (req, res) => {
+router.post("/", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
   if (!orgId) { res.status(400).json({ error: "Organization required" }); return; }
@@ -68,7 +68,7 @@ router.post("/", requireMinRole("admin"), async (req, res) => {
 });
 
 // ─── Update department ─────────────────────────────────────────────────────────
-router.put("/:id", requireMinRole("admin"), async (req, res) => {
+router.put("/:id", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -99,7 +99,7 @@ router.put("/:id", requireMinRole("admin"), async (req, res) => {
 });
 
 // ─── Delete department ─────────────────────────────────────────────────────────
-router.delete("/:id", requireMinRole("admin"), async (req, res) => {
+router.delete("/:id", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -116,7 +116,7 @@ router.delete("/:id", requireMinRole("admin"), async (req, res) => {
 });
 
 // ─── Get members of a department ──────────────────────────────────────────────
-router.get("/:id/members", async (req, res) => {
+router.get("/:id/members", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
 
@@ -146,7 +146,7 @@ router.get("/:id/members", async (req, res) => {
 });
 
 // ─── Add user to department ────────────────────────────────────────────────────
-router.post("/:id/members", requireMinRole("admin"), async (req, res) => {
+router.post("/:id/members", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
   const deptId = paramInt(req.params.id);
@@ -183,7 +183,7 @@ router.post("/:id/members", requireMinRole("admin"), async (req, res) => {
 });
 
 // ─── Remove user from department ──────────────────────────────────────────────
-router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res) => {
+router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const deptId = paramInt(req.params.id);
   const userId = paramInt(req.params.userId);
@@ -199,7 +199,7 @@ router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res) 
 });
 
 // ─── Get departments for a specific user ──────────────────────────────────────
-router.get("/user/:userId", async (req, res) => {
+router.get("/user/:userId", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const targetUserId = paramInt(req.params.userId);
 

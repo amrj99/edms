@@ -9,7 +9,7 @@ import { requireAuth } from "../lib/auth.js";
 
 const router = Router();
 
-router.get("/notifications/summary", requireAuth, async (req, res) => {
+router.get("/notifications/summary", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgProjects = await db.select({ id: projectsTable.id })
       .from(projectsTable)

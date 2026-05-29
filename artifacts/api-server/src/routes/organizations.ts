@@ -10,7 +10,7 @@ import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
   if (isSystemOwner(user)) {
@@ -41,7 +41,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // Cross-org stats for system_owner dashboard widget
-router.get("/cross-org-stats", requireAuth, async (req, res) => {
+router.get("/cross-org-stats", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
@@ -88,7 +88,7 @@ router.get("/cross-org-stats", requireAuth, async (req, res) => {
   res.json({ stats });
 });
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;
   if (!name || !type) {
@@ -130,7 +130,7 @@ router.post("/", requireAuth, async (req, res) => {
   res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
 });
 
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
@@ -142,7 +142,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   res.json({ ...orgs[0], userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
 });
 
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
@@ -168,7 +168,7 @@ router.put("/:id", requireAuth, async (req, res) => {
   res.json({ ...org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
 });
 
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const id = paramInt(req.params.id);
   await db.delete(organizationsTable).where(eq(organizationsTable.id, id));

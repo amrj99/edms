@@ -8,7 +8,7 @@ const router = Router();
 router.use(requireAuth);
 
 // ─── GET /api/profile ──────────────────────────────────────────────────────────
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
 
   const [user] = await db
@@ -56,7 +56,7 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // ─── PUT /api/profile ──────────────────────────────────────────────────────────
-router.put("/", async (req: Request, res: Response) => {
+router.put("/", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { firstName, lastName, email, department } = req.body;
 
@@ -97,7 +97,7 @@ router.put("/", async (req: Request, res: Response) => {
 });
 
 // ─── PUT /api/profile/password ────────────────────────────────────────────────
-router.put("/password", async (req: Request, res: Response) => {
+router.put("/password", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { currentPassword, newPassword } = req.body;
 
@@ -131,7 +131,7 @@ router.put("/password", async (req: Request, res: Response) => {
 });
 
 // ─── PUT /api/profile/notification-prefs ─────────────────────────────────────
-router.put("/notification-prefs", async (req: Request, res: Response) => {
+router.put("/notification-prefs", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
   const { notificationPrefs } = req.body;
 

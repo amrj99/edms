@@ -43,7 +43,7 @@ async function getAllowedProjectIds(userId: number, organizationId: number, sysA
 
 // GET /api/documents — documents visible to the authenticated user
 // Scoped to: user's org AND projects the user is a member of (sys_owner bypasses)
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { projectId, discipline, documentType, status, source, issuedBy, search, page, limit, dateFrom, dateTo, projectName } = req.query;
   const lim = Math.min(parseInt(limit as string || "100"), 500);
   const pg = Math.max(1, parseInt(page as string || "1"));
@@ -161,7 +161,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // GET /api/documents/:id — single document (org + project-membership scoped)
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document ID" }); return; }
 
@@ -276,7 +276,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // ─── Revisions ────────────────────────────────────────────────────────────────
 
-router.get("/:id/revisions", requireAuth, async (req, res) => {
+router.get("/:id/revisions", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document id" }); return; }
 

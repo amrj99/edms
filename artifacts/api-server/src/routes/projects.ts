@@ -28,7 +28,7 @@ function pgErrCode(err: unknown): string | undefined {
 
 
 // ─── GET / ────────────────────────────────────────────────────────────────────
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
   const effectiveOrgId = isSystemOwner(user) && req.query.organizationId
     ? parseInt(req.query.organizationId as string)
@@ -86,7 +86,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // ─── POST / ───────────────────────────────────────────────────────────────────
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
   const { name, code, description, status, startDate, endDate } = req.body;
   const organizationId = isSystemOwner(user) && req.body.organizationId
@@ -270,7 +270,7 @@ router.post("/", requireAuth, async (req, res) => {
 });
 
 // ─── GET /:id ─────────────────────────────────────────────────────────────────
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const results = await db.select({ project: projectsTable, orgName: organizationsTable.name })
@@ -291,7 +291,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 });
 
 // ─── PUT /:id ─────────────────────────────────────────────────────────────────
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
@@ -363,7 +363,7 @@ router.put("/:id", requireAuth, async (req, res) => {
 });
 
 // ─── DELETE /:id ──────────────────────────────────────────────────────────────
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
@@ -377,7 +377,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
 });
 
 // ─── GET /:id/members ─────────────────────────────────────────────────────────
-router.get("/:id/members", requireAuth, async (req, res) => {
+router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
 
@@ -418,7 +418,7 @@ router.get("/:id/members", requireAuth, async (req, res) => {
   });
 });
 
-router.post("/:id/members", requireAuth, async (req, res) => {
+router.post("/:id/members", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
   const { userId, role } = req.body;
@@ -476,7 +476,7 @@ router.post("/:id/members", requireAuth, async (req, res) => {
   }
 });
 
-router.delete("/:id/members/:userId", requireAuth, async (req, res) => {
+router.delete("/:id/members/:userId", requireAuth, async (req, res): Promise<void> => {
   const projectId = paramInt(req.params.id);
   const userId = paramInt(req.params.userId);
   await db.delete(projectMembersTable).where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)));

@@ -242,7 +242,7 @@ router.get("/view-token", requireAuth, (req: Request, res: Response) => {
  * POST /uploads/request-url
  * Org-aware: routes to S3 (default), on-prem, or cloud based on org config.
  */
-router.post("/uploads/request-url", requireAuth, async (req: Request, res: Response) => {
+router.post("/uploads/request-url", requireAuth, async (req: Request, res: Response): Promise<void> => {
   const { name, size, contentType, projectId, fileType } = req.body ?? {};
   if (!name || typeof name !== "string") {
     res.status(400).json({ error: "Missing required field: name" });
@@ -312,7 +312,7 @@ router.put(
     });
     req.on("error", (err) => next(err));
   },
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     const { orgId, projectId, fileType, filename } = req.params;
     const targetOrgId = parseInt(orgId);
 
@@ -382,7 +382,7 @@ router.put(
  * GET /public-objects/*
  * Serve public assets — no auth required (logos, etc.)
  */
-router.get("/public-objects/*filePath", async (req: Request, res: Response) => {
+router.get("/public-objects/*filePath", async (req: Request, res: Response): Promise<void> => {
   try {
     const raw = req.params.filePath;
     const filePath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -417,7 +417,7 @@ router.get(
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
     return `/api/storage/objects/${wildcardPath}`;
   }),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       const raw = req.params.path;
       const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -487,7 +487,7 @@ router.get(
 router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
   requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     const { orgId, projectId, fileType, filename } = req.params;
     const targetOrgId = parseInt(orgId);
 
@@ -623,7 +623,7 @@ router.get(
 router.get(
   "/s3-object/:objectKey",
   requireAuthOrViewToken(req => `/api/storage/s3-object/${req.params.objectKey}`),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
   const rawKey = req.params.objectKey;
   const orgIdStr = req.query.orgId as string;
 
@@ -718,7 +718,7 @@ router.get(
 router.get(
   "/r2-object/:objectKey",
   requireAuthOrViewToken(req => `/api/storage/r2-object/${req.params.objectKey}`),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     const rawKey = req.params.objectKey;
     const orgIdStr = req.query.orgId as string;
 

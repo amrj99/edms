@@ -12,7 +12,7 @@ const router = Router();
 // ─── List delegations ─────────────────────────────────────────────────────────
 // Returns delegations where the caller is either the grantor (fromUser)
 // or the delegate (toUser), within their own org.
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
   const now = new Date();
   const { scope } = req.query; // "active" | "all"
@@ -77,7 +77,7 @@ router.get("/", requireAuth, async (req, res) => {
 // ─── Create delegation ────────────────────────────────────────────────────────
 // A project manager or admin may delegate their authority to another user.
 // projectId is optional — omit for org-wide delegation.
-router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const caller = req.user!;
   const { toUserId, projectId, reason, expiresAt } = req.body;
 
@@ -128,7 +128,7 @@ router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res
 });
 
 // ─── Revoke delegation ────────────────────────────────────────────────────────
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
   const id = paramInt(req.params.id);
 

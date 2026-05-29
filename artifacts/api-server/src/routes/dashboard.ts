@@ -81,7 +81,7 @@ async function resolveAccessibleProjectIds(
 
 const router = Router();
 
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   try {
     const userId = req.user!.id;
     const orgId = req.user!.organizationId;
@@ -230,7 +230,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // ─── Reports Summary endpoint ──────────────────────────────────────────────────
-router.get("/reports", requireAuth, async (req, res) => {
+router.get("/reports", requireAuth, async (req, res): Promise<void> => {
   try {
     const user      = req.user!;
     const orgId     = user.organizationId;

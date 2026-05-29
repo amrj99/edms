@@ -25,7 +25,7 @@ const router = Router();
 router.use(requireAuth);
 
 // ─── System Info ──────────────────────────────────────────────────────────────
-router.get("/system-info", requireSysOwner, async (req, res) => {
+router.get("/system-info", requireSysOwner, async (req, res): Promise<void> => {
   const user = req.user!;
   const countRow = async (table: any) => {
     const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(table);
@@ -65,13 +65,13 @@ router.get("/system-info", requireSysOwner, async (req, res) => {
 });
 
 // ─── SMTP Test ────────────────────────────────────────────────────────────────
-router.post("/smtp/test", requireMinRole("admin"), async (req, res) => {
+router.post("/smtp/test", requireMinRole("admin"), async (req, res): Promise<void> => {
   const result = await testSmtpConnection();
   res.json(result);
 });
 
 // ─── Storage Usage ─────────────────────────────────────────────────────────────
-router.get("/storage-usage", async (req, res) => {
+router.get("/storage-usage", async (req, res): Promise<void> => {
   try {
     const user = req.user!;
 
@@ -143,7 +143,7 @@ router.get("/storage-usage", async (req, res) => {
 });
 
 // ─── Usage Monitoring Dashboard ────────────────────────────────────────────────
-router.get("/usage", async (req, res) => {
+router.get("/usage", async (req, res): Promise<void> => {
   const user = req.user!;
 
   let orgs: any[] = [];
@@ -288,7 +288,7 @@ router.get("/usage", async (req, res) => {
 });
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
-router.put("/storage-config/:orgId", requireSysOwner, async (req, res) => {
+router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<void> => {
   const orgId = paramInt(req.params.orgId);
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
@@ -312,7 +312,7 @@ router.put("/storage-config/:orgId", requireSysOwner, async (req, res) => {
 });
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
-router.get("/backup", async (req, res) => {
+router.get("/backup", async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
 
@@ -362,7 +362,7 @@ router.get("/backup", async (req, res) => {
 });
 
 // ─── Restore validation (dry-run) ─────────────────────────────────────────────
-router.post("/restore/validate", requireSysOwner, async (req, res) => {
+router.post("/restore/validate", requireSysOwner, async (req, res): Promise<void> => {
   const { backup } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
     res.status(400).json({ error: "Invalid backup format. Expected {version, exportedAt, tables}." });
@@ -381,7 +381,7 @@ router.post("/restore/validate", requireSysOwner, async (req, res) => {
 });
 
 // ─── Restore (actual) ─────────────────────────────────────────────────────────
-router.post("/restore", requireSysOwner, async (req, res) => {
+router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
 
   const { backup, confirmed } = req.body ?? {};
   if (!backup || !backup.version || !backup.tables) {
@@ -429,7 +429,7 @@ router.post("/restore", requireSysOwner, async (req, res) => {
 });
 
 // ─── Test Data Seed ────────────────────────────────────────────────────────────
-router.post("/seed-test-data", requireMinRole("admin"), async (req, res) => {
+router.post("/seed-test-data", requireMinRole("admin"), async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
@@ -618,7 +618,7 @@ router.post("/seed-test-data", requireMinRole("admin"), async (req, res) => {
 });
 
 // ─── Search / Elasticsearch ────────────────────────────────────────────────────
-router.get("/search/status", async (req, res) => {
+router.get("/search/status", async (req, res): Promise<void> => {
   const esUrl = process.env.ELASTICSEARCH_URL;
   if (!esUrl) {
     res.json({
@@ -650,7 +650,7 @@ router.get("/search/status", async (req, res) => {
   }
 });
 
-router.post("/search/reindex", requireMinRole("admin"), async (req, res) => {
+router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promise<void> => {
   try {
     const { reindexAll } = await import("../lib/search-service.js");
     const result = await reindexAll();
@@ -666,7 +666,7 @@ router.post("/search/reindex", requireMinRole("admin"), async (req, res) => {
 
 // ── AI Classification toggle ──────────────────────────────────────────────────
 
-router.get("/ai-classification", requireAuth, async (req, res) => {
+router.get("/ai-classification", requireAuth, async (req, res): Promise<void> => {
   try {
     const [row] = await db.select().from(systemSettingsTable)
       .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
@@ -677,7 +677,7 @@ router.get("/ai-classification", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/ai-classification", requireMinRole("admin"), async (req, res) => {
+router.put("/ai-classification", requireMinRole("admin"), async (req, res): Promise<void> => {
   try {
     const { enabled } = req.body as { enabled: boolean };
     const value = enabled ? "true" : "false";
@@ -700,7 +700,7 @@ router.put("/ai-classification", requireMinRole("admin"), async (req, res) => {
 // ─── AI Quota: per-org daily usage ─────────────────────────────────────────────
 
 // GET /api/admin/ai-quota — sysadmin: quota for all orgs; org admin: own org only
-router.get("/ai-quota", requireAuth, async (req, res) => {
+router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
   try {
     const user = req.user!;
 
@@ -738,7 +738,7 @@ router.get("/ai-quota", requireAuth, async (req, res) => {
 // ─── Subscription tier — preset AI config bundles ─────────────────────────────
 
 // PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (system_owner only)
-router.put("/ai-tier/:orgId", requireSysOwner, async (req, res) => {
+router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
   const orgId = paramInt(req.params.orgId);
   const { tier } = req.body as { tier: SubscriptionTier };
@@ -781,7 +781,7 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res) => {
  * Body: { aiDailyLimit?: number, aiMonthlyTokenLimit?: number }
  * Both values are optional; 0 means unlimited.
  */
-router.put("/ai-limits/:orgId", requireSysOwner, async (req, res) => {
+router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
   const orgId = paramInt(req.params.orgId);
   if (isNaN(orgId)) return res.status(400).json({ error: "Invalid orgId" });
@@ -814,7 +814,7 @@ router.put("/ai-limits/:orgId", requireSysOwner, async (req, res) => {
 
 // ─── Plan Management ──────────────────────────────────────────────────────────
 
-router.get("/org-plans", requireSysOwner, async (req, res) => {
+router.get("/org-plans", requireSysOwner, async (req, res): Promise<void> => {
   const rows = await db
     .select({
       orgId: organizationsTable.id,
@@ -826,7 +826,7 @@ router.get("/org-plans", requireSysOwner, async (req, res) => {
   res.json({ plans: rows });
 });
 
-router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res) => {
+router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res): Promise<void> => {
   const orgId = paramInt(req.params.orgId);
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
@@ -852,7 +852,7 @@ router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, re
 //
 // Uses raw SQL via db.execute() to avoid Drizzle's orderSelectedFields bug
 // that occurs when pgTable uses array-style index definitions with this version.
-router.get("/shadow-log", requireMinRole("admin"), async (req, res) => {
+router.get("/shadow-log", requireMinRole("admin"), async (req, res): Promise<void> => {
   try {
     const user = req.user!;
     const divergeOnly = req.query.divergeOnly !== "false";

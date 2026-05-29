@@ -11,7 +11,7 @@ import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
   const requestedOrgId = req.query.organizationId ? parseInt(req.query.organizationId as string) : undefined;
   const requestedProjectId = req.query.projectId ? parseInt(req.query.projectId as string) : undefined;
@@ -98,7 +98,7 @@ router.get("/", requireAuth, async (req, res) => {
 // create users. Without this gate any authenticated user (viewer, member, etc.)
 // could POST to this endpoint and create accounts with elevated roles — a
 // direct privilege escalation path.
-router.post("/", requireAuth, requireMinRole("admin"), async (req, res) => {
+router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise<void> => {
   const caller = req.user!;
 
   const { email, password, firstName, lastName, role, organizationId } = req.body;
@@ -176,7 +176,7 @@ router.post("/", requireAuth, requireMinRole("admin"), async (req, res) => {
   });
 });
 
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
 
@@ -250,7 +250,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   });
 });
 
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
   const isSelf = caller.id === id;
@@ -317,7 +317,7 @@ router.put("/:id", requireAuth, async (req, res) => {
   res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, department: user.department, isActive: user.isActive, createdAt: user.createdAt });
 });
 
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
 
   // ── Role guard ─────────────────────────────────────────────────────────────
@@ -399,7 +399,7 @@ router.delete("/:id", requireAuth, async (req, res) => {
   res.status(204).send();
 });
 
-router.post("/:id/reset-password", requireAuth, async (req, res) => {
+router.post("/:id/reset-password", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
   const id = paramInt(req.params.id);
   const isSelf = caller.id === id;

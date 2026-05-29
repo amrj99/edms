@@ -107,7 +107,7 @@ const ACTIVE_RULE_LIMIT = 100;
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // GET /api/rules — list all rules for the user's org
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) return res.json({ rules: [] });
   const rules = await db.select().from(rulesTable)
@@ -117,7 +117,7 @@ router.get("/", requireAuth, async (req, res) => {
 });
 
 // GET /api/rules/:id
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
   const [rule] = await db.select().from(rulesTable)
@@ -127,7 +127,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 });
 
 // POST /api/rules — create rule
-router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) return res.status(400).json({ error: "No organization" });
 
@@ -173,7 +173,7 @@ router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res
 });
 
 // PUT /api/rules/:id — update rule
-router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -223,7 +223,7 @@ router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, r
 });
 
 // DELETE /api/rules/:id
-router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -236,7 +236,7 @@ router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req
 });
 
 // PATCH /api/rules/:id/toggle — quick enable/disable
-router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 
@@ -266,7 +266,7 @@ router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), asyn
 });
 
 // POST /api/rules/:id/reset-circuit — manually reset the circuit breaker
-router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = paramInt(req.params.id);
 

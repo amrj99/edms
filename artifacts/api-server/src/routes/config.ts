@@ -16,13 +16,13 @@ async function getSystemSetting(key: string): Promise<string> {
   return row?.value ?? SYSTEM_DEFAULTS[key] ?? "true";
 }
 
-router.get("/system-settings", async (_req, res) => {
+router.get("/system-settings", async (_req, res): Promise<void> => {
   const registrationEnabled = await getSystemSetting("registrationEnabled");
   res.json({ registrationEnabled: registrationEnabled === "true" });
 });
 
 // Public: list organizations for the registration form (only when registration is enabled)
-router.get("/organizations-public", async (_req, res) => {
+router.get("/organizations-public", async (_req, res): Promise<void> => {
   const registrationEnabled = await getSystemSetting("registrationEnabled");
   if (registrationEnabled !== "true") {
     res.json({ organizations: [] });
@@ -35,7 +35,7 @@ router.get("/organizations-public", async (_req, res) => {
   res.json({ organizations: orgs });
 });
 
-router.put("/system-settings", requireAuth, requireSysOwner, async (req, res) => {
+router.put("/system-settings", requireAuth, requireSysOwner, async (req, res): Promise<void> => {
   const { registrationEnabled } = req.body ?? {};
   if (typeof registrationEnabled === "boolean") {
     const value = registrationEnabled ? "true" : "false";
@@ -53,7 +53,7 @@ router.put("/system-settings", requireAuth, requireSysOwner, async (req, res) =>
 
 router.use(requireAuth);
 
-router.get("/", async (req, res) => {
+router.get("/", async (req, res): Promise<void> => {
   const orgId = req.user?.organizationId;
   if (!orgId) {
     res.json(getDefaultConfig());
@@ -70,7 +70,7 @@ router.get("/", async (req, res) => {
 // ─── AI Governance (admin / system_owner only) ────────────────────────────────
 // Enables or disables AI for an organization and sets the AI plan tier.
 // system_owner may additionally pass ?orgOverride=<id> to target any org.
-router.get("/ai-governance", requireMinRole("admin"), async (req, res) => {
+router.get("/ai-governance", requireMinRole("admin"), async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
@@ -91,7 +91,7 @@ router.get("/ai-governance", requireMinRole("admin"), async (req, res) => {
   res.json(config);
 });
 
-router.put("/ai-governance", requireMinRole("admin"), async (req, res) => {
+router.put("/ai-governance", requireMinRole("admin"), async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
@@ -131,7 +131,7 @@ router.put("/ai-governance", requireMinRole("admin"), async (req, res) => {
   res.json(updated);
 });
 
-router.put("/", requireMinRole("admin"), async (req, res) => {
+router.put("/", requireMinRole("admin"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
 
@@ -171,7 +171,7 @@ router.put("/", requireMinRole("admin"), async (req, res) => {
   }
 });
 
-router.get("/public", async (_req, res) => {
+router.get("/public", async (_req, res): Promise<void> => {
   const configs = await db.select({
     systemName: orgConfigTable.systemName,
     logoUrl: orgConfigTable.logoUrl,

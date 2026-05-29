@@ -42,7 +42,7 @@ const shareTokenLimiter = rateLimit({
 });
 
 // ─── Transmittal ──────────────────────────────────────────────────────────────
-router.get("/transmittal/:token", shareTokenLimiter, async (req, res) => {
+router.get("/transmittal/:token", shareTokenLimiter, async (req, res): Promise<void> => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 
@@ -127,7 +127,7 @@ router.get("/transmittal/:token", shareTokenLimiter, async (req, res) => {
 });
 
 // ─── Document ─────────────────────────────────────────────────────────────────
-router.get("/document/:token", shareTokenLimiter, async (req, res) => {
+router.get("/document/:token", shareTokenLimiter, async (req, res): Promise<void> => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 
@@ -192,7 +192,7 @@ router.get("/document/:token", shareTokenLimiter, async (req, res) => {
 });
 
 // ─── Correspondence ───────────────────────────────────────────────────────────
-router.get("/correspondence/:token", shareTokenLimiter, async (req, res) => {
+router.get("/correspondence/:token", shareTokenLimiter, async (req, res): Promise<void> => {
   const { token } = req.params;
   const { password } = req.query as Record<string, string>;
 

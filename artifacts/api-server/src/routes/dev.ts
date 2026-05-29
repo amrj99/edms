@@ -50,7 +50,7 @@ async function getPlaceholderUrls() {
 }
 
 // ─── POST /api/dev/seed-full ───────────────────────────────────────────────────
-router.post("/seed-full", async (req, res) => {
+router.post("/seed-full", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   try {
@@ -557,7 +557,7 @@ router.post("/seed-full", async (req, res) => {
 });
 
 // ─── POST /api/dev/clear-seed ─────────────────────────────────────────────────
-router.post("/clear-seed", async (req, res) => {
+router.post("/clear-seed", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   try {
@@ -610,7 +610,7 @@ router.post("/clear-seed", async (req, res) => {
 // ─── POST /api/dev/seed-linked-scenario ────────────────────────────────────────
 // Creates one fully-linked end-to-end demo scenario:
 //   Project → Document → Transmittal → Correspondence (chain) → Meeting → Action Items
-router.post("/seed-linked-scenario", async (req, res) => {
+router.post("/seed-linked-scenario", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   try {

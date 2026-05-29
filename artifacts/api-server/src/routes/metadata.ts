@@ -8,7 +8,7 @@ import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router();
 
-router.get("/", requireAuth, requireOrgScope, async (req, res) => {
+router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
   const orgId = req.orgId;
   const fields = await db
     .select()
@@ -25,7 +25,7 @@ router.get("/", requireAuth, requireOrgScope, async (req, res) => {
   res.json({ fields });
 });
 
-router.post("/", requireAuth, requireOrgScope, async (req, res) => {
+router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
   const { name, label, fieldType, options, required, appliesTo } = req.body;
   if (!name || !label || !fieldType) {
     res.status(400).json({ error: "Bad Request", message: "name, label, fieldType required" });
@@ -47,7 +47,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res) => {
   res.status(201).json(field);
 });
 
-router.delete("/:id", requireAuth, requireOrgScope, async (req, res) => {
+router.delete("/:id", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const orgId = req.orgId;
   const where = orgId

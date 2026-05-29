@@ -129,7 +129,7 @@ async function generateUpcomingMeetingReminders(userId: number): Promise<void> {
 }
 
 // ─── GET /api/notifications ────────────────────────────────────────────────────
-router.get("/", async (req, res) => {
+router.get("/", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
   const unreadOnly = req.query.unread === "true";
@@ -161,7 +161,7 @@ router.get("/", async (req, res) => {
 });
 
 // ─── Mark single notification as read ─────────────────────────────────────────
-router.post("/:id/read", async (req, res) => {
+router.post("/:id/read", async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const updated = await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
@@ -172,7 +172,7 @@ router.post("/:id/read", async (req, res) => {
 });
 
 // ─── Mark single notification as unread ───────────────────────────────────────
-router.post("/:id/unread", async (req, res) => {
+router.post("/:id/unread", async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const updated = await db.update(notificationsTable)
     .set({ isRead: false, readAt: null })
@@ -183,7 +183,7 @@ router.post("/:id/unread", async (req, res) => {
 });
 
 // ─── Mark all notifications as read ───────────────────────────────────────────
-router.post("/read-all", async (req, res) => {
+router.post("/read-all", async (req, res): Promise<void> => {
   await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
     .where(and(eq(notificationsTable.userId, req.user!.id), eq(notificationsTable.isRead, false)));
@@ -191,23 +191,9 @@ router.post("/read-all", async (req, res) => {
 });
 
 // ─── Delete notification ───────────────────────────────────────────────────────
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const deleted = await db.delete(notificationsTable)
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
     .returning({ id: notificationsTable.id });
-  if (deleted.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ success: true });
-});
-
-// ─── Push subscription (VAPID) ────────────────────────────────────────────────
-router.post("/push-subscribe", async (req, res) => {
-  const { subscription } = req.body;
-  if (!subscription?.endpoint) {
-    res.status(400).json({ error: "Invalid subscription object" });
-    return;
-  }
-  res.json({ success: true, ready: false, message: "Push infrastructure ready — configure VAPID keys to enable delivery." });
-});
-
-export default router;
+  if (deleted.length === 0)

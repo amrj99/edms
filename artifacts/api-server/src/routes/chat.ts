@@ -62,7 +62,7 @@ async function enrichMessages(messages: typeof chatMessagesTable.$inferSelect[],
 }
 
 // ─── GET /api/chat/groups ──────────────────────────────────────────────────────
-router.get("/groups", async (req, res) => {
+router.get("/groups", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId = req.user!.organizationId;
 
@@ -136,7 +136,7 @@ router.get("/groups", async (req, res) => {
 });
 
 // ─── POST /api/chat/groups ─────────────────────────────────────────────────────
-router.post("/groups", async (req, res) => {
+router.post("/groups", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId = req.user!.organizationId;
   const { name, description, type = "general", projectId, department, memberIds = [] } = req.body;
@@ -171,7 +171,7 @@ router.post("/groups", async (req, res) => {
 });
 
 // ─── GET /api/chat/groups/:id ──────────────────────────────────────────────────
-router.get("/groups/:id", async (req, res) => {
+router.get("/groups/:id", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -208,7 +208,7 @@ router.get("/groups/:id", async (req, res) => {
 });
 
 // ─── PUT /api/chat/groups/:id ──────────────────────────────────────────────────
-router.put("/groups/:id", async (req, res) => {
+router.put("/groups/:id", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -228,7 +228,7 @@ router.put("/groups/:id", async (req, res) => {
 });
 
 // ─── DELETE /api/chat/groups/:id ───────────────────────────────────────────────
-router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manager", "document_controller"), async (req, res) => {
+router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manager", "document_controller"), async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -243,7 +243,7 @@ router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manag
 });
 
 // ─── GET /api/chat/groups/:id/members ─────────────────────────────────────────
-router.get("/groups/:id/members", async (req, res) => {
+router.get("/groups/:id/members", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -268,7 +268,7 @@ router.get("/groups/:id/members", async (req, res) => {
 });
 
 // ─── POST /api/chat/groups/:id/members ────────────────────────────────────────
-router.post("/groups/:id/members", async (req, res) => {
+router.post("/groups/:id/members", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -298,7 +298,7 @@ router.post("/groups/:id/members", async (req, res) => {
 });
 
 // ─── DELETE /api/chat/groups/:id/members/:userId ───────────────────────────────
-router.delete("/groups/:id/members/:memberId", async (req, res) => {
+router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> => {
   const currentUserId = req.user!.id;
   const groupId = paramInt(req.params.id);
   const targetUserId = paramInt(req.params.memberId);
@@ -312,7 +312,7 @@ router.delete("/groups/:id/members/:memberId", async (req, res) => {
 });
 
 // ─── GET /api/chat/groups/:id/messages ────────────────────────────────────────
-router.get("/groups/:id/messages", async (req, res) => {
+router.get("/groups/:id/messages", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -349,7 +349,7 @@ router.get("/groups/:id/messages", async (req, res) => {
 });
 
 // ─── POST /api/chat/groups/:id/messages ───────────────────────────────────────
-router.post("/groups/:id/messages", async (req, res) => {
+router.post("/groups/:id/messages", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId = req.user!.organizationId!;
   const groupId = paramInt(req.params.id);
@@ -433,7 +433,7 @@ router.post("/groups/:id/messages", async (req, res) => {
 });
 
 // ─── DELETE /api/chat/groups/:id/messages/:msgId ───────────────────────────────
-router.delete("/groups/:id/messages/:msgId", async (req, res) => {
+router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   const msgId = paramInt(req.params.msgId);
@@ -450,7 +450,7 @@ router.delete("/groups/:id/messages/:msgId", async (req, res) => {
 });
 
 // ─── POST /api/chat/groups/:id/messages/:msgId/read ───────────────────────────
-router.post("/groups/:id/messages/:msgId/read", async (req, res) => {
+router.post("/groups/:id/messages/:msgId/read", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const msgId = paramInt(req.params.msgId);
 
@@ -466,7 +466,7 @@ router.post("/groups/:id/messages/:msgId/read", async (req, res) => {
 });
 
 // ─── POST /api/chat/groups/:id/read-all ───────────────────────────────────────
-router.post("/groups/:id/read-all", async (req, res) => {
+router.post("/groups/:id/read-all", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const groupId = paramInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -492,7 +492,7 @@ router.post("/groups/:id/read-all", async (req, res) => {
 });
 
 // ─── GET /api/chat/unread ──────────────────────────────────────────────────────
-router.get("/unread", async (req, res) => {
+router.get("/unread", async (req, res): Promise<void> => {
   const userId = req.user!.id;
 
   const memberships = await db
@@ -521,7 +521,7 @@ router.get("/unread", async (req, res) => {
 });
 
 // ─── GET /api/chat/users ─── list org users to add to groups ─────────────────
-router.get("/users", async (req, res) => {
+router.get("/users", async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId!;
   const rawUsers = await db
     .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })

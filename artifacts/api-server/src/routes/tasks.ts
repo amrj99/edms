@@ -43,7 +43,7 @@ async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[], callerOrgI
   }));
 }
 
-router.get("/", requireAuth, requireOrgScope, async (req, res) => {
+router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
   const user = req.user!;
   const { projectId, status, assignedToMe } = req.query;
 
@@ -92,7 +92,7 @@ router.get("/", requireAuth, requireOrgScope, async (req, res) => {
   res.json({ tasks: enriched, total: enriched.length });
 });
 
-router.post("/", requireAuth, requireOrgScope, async (req, res) => {
+router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
   const { title, description, priority, assignedToId, projectId, dueDate } = req.body;
   const effectiveAssignedToId = assignedToId || req.user!.id;
   const [task] = await db.insert(tasksTable).values({
@@ -155,7 +155,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res) => {
   res.status(201).json(enriched[0]);
 });
 
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
@@ -196,7 +196,7 @@ router.get("/:id", requireAuth, async (req, res) => {
   res.json(enriched[0]);
 });
 
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const { title, description, status, priority, assignedToId, dueDate } = req.body;

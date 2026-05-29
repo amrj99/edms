@@ -204,7 +204,7 @@ async function notifyStageReached(inst: typeof wfInstancesTable.$inferSelect, st
 // TEMPLATES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get("/templates", async (req, res) => {
+router.get("/templates", async (req, res): Promise<void> => {
   const org = orgId(req);
   const templates = await db.select().from(wfTemplatesTable)
     .where(eq(wfTemplatesTable.organizationId, org))
@@ -218,13 +218,13 @@ router.get("/templates", async (req, res) => {
   res.json({ templates: enriched });
 });
 
-router.get("/templates/:id", async (req, res) => {
+router.get("/templates/:id", async (req, res): Promise<void> => {
   const tpl = await getTemplateWithStages(paramInt(req.params.id), orgId(req));
   if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
   res.json(tpl);
 });
 
-router.post("/templates", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.post("/templates", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const { name, documentType, description } = req.body;
   if (!name || !documentType) { res.status(400).json({ error: "name and documentType are required" }); return; }
@@ -254,7 +254,7 @@ router.post("/templates", requireRole("admin", "project_manager", "system_owner"
   }
 });
 
-router.put("/templates/:id", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.put("/templates/:id", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   const { name, documentType, description, isActive } = req.body;
@@ -280,7 +280,7 @@ router.put("/templates/:id", requireRole("admin", "project_manager", "system_own
   }
 });
 
-router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req, res) => {
+router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   try {
@@ -294,7 +294,7 @@ router.delete("/templates/:id", requireRole("admin", "system_owner"), async (req
 
 // ─── Stages ───────────────────────────────────────────────────────────────────
 
-router.post("/templates/:id/stages", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.post("/templates/:id/stages", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const templateId = paramInt(req.params.id);
   try {
@@ -346,7 +346,7 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
   }
 });
 
-router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const templateId = paramInt(req.params.id);
   const stageId = paramInt(req.params.stageId);
@@ -392,7 +392,7 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
   }
 });
 
-router.delete("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.delete("/templates/:id/stages/:stageId", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const templateId = paramInt(req.params.id);
   const stageId = paramInt(req.params.stageId);
@@ -411,7 +411,7 @@ router.delete("/templates/:id/stages/:stageId", requireRole("admin", "project_ma
 
 // ─── Seed Invoice Template ────────────────────────────────────────────────────
 
-router.post("/seed-invoice", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.post("/seed-invoice", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
 
   // Idempotent: check if an Invoice template already exists for this org
@@ -455,7 +455,7 @@ router.post("/seed-invoice", requireRole("admin", "project_manager", "system_own
 // INSTANCES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get("/instances", async (req, res) => {
+router.get("/instances", async (req, res): Promise<void> => {
   const org = orgId(req);
   const { docType, status, projectId, stageId } = req.query;
 
@@ -476,7 +476,7 @@ router.get("/instances", async (req, res) => {
   res.json({ instances: filtered, total: filtered.length });
 });
 
-router.get("/instances/:id", async (req, res) => {
+router.get("/instances/:id", async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   const [inst] = await db.select().from(wfInstancesTable)
@@ -486,7 +486,7 @@ router.get("/instances/:id", async (req, res) => {
   res.json(await enrichInstance(inst));
 });
 
-router.post("/instances", async (req, res) => {
+router.post("/instances", async (req, res): Promise<void> => {
   const org = orgId(req);
   const { documentId, templateId, projectId } = req.body;
   if (!documentId || !templateId) { res.status(400).json({ error: "documentId and templateId are required" }); return; }
@@ -550,7 +550,7 @@ router.post("/instances", async (req, res) => {
 
 // ─── Advance to next stage ────────────────────────────────────────────────────
 
-router.post("/instances/:id/advance", async (req, res) => {
+router.post("/instances/:id/advance", async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   const { comment } = req.body;
@@ -624,7 +624,7 @@ router.post("/instances/:id/advance", async (req, res) => {
 
 // ─── Reject (cancel or send back) ────────────────────────────────────────────
 
-router.post("/instances/:id/reject", async (req, res) => {
+router.post("/instances/:id/reject", async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   const { comment, action: rejectAction = "rejected" } = req.body;
@@ -691,7 +691,7 @@ router.post("/instances/:id/reject", async (req, res) => {
 
 // ─── Duplicate template ───────────────────────────────────────────────────────
 
-router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = paramInt(req.params.id);
   const [orig] = await db.select().from(wfTemplatesTable)
@@ -730,7 +730,7 @@ router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", 
 
 // ─── Get template(s) for a document type ─────────────────────────────────────
 
-router.get("/templates/for-type/:docType", async (req, res) => {
+router.get("/templates/for-type/:docType", async (req, res): Promise<void> => {
   const org = orgId(req);
   const { docType } = req.params;
   // Case-insensitive match against documentType
@@ -748,7 +748,7 @@ router.get("/templates/for-type/:docType", async (req, res) => {
 
 // ─── Get instances for a specific document ───────────────────────────────────
 
-router.get("/instances/for-document/:docId", async (req, res) => {
+router.get("/instances/for-document/:docId", async (req, res): Promise<void> => {
   const org = orgId(req);
   const docId = paramInt(req.params.docId);
   const instances = await db.select().from(wfInstancesTable)
@@ -760,7 +760,7 @@ router.get("/instances/for-document/:docId", async (req, res) => {
 
 // ─── Seed Default Templates ───────────────────────────────────────────────────
 
-router.post("/seed-defaults", requireRole("admin", "project_manager", "system_owner"), async (req, res) => {
+router.post("/seed-defaults", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   if (!org) {
     res.status(400).json({ error: "No organization context. Pass ?orgOverride=<id> as system_owner." });

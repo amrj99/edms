@@ -128,7 +128,7 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
   };
 }
 
-router.post("/login", async (req, res) => {
+router.post("/login", async (req, res): Promise<void> => {
   const body = req.body ?? {};
   const { email, password, rememberMe } = body;
   if (!email || !password) {
@@ -216,7 +216,7 @@ router.post("/login", async (req, res) => {
   });
 });
 
-router.post("/register", async (req, res) => {
+router.post("/register", async (req, res): Promise<void> => {
   const { email, password, firstName, lastName } = req.body ?? {};
 
   const [regSetting] = await db.select().from(systemSettingsTable)
@@ -284,7 +284,7 @@ router.post("/register", async (req, res) => {
   });
 });
 
-router.get("/me", requireAuth, async (req, res) => {
+router.get("/me", requireAuth, async (req, res): Promise<void> => {
   const users = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
   const user = users[0];
   if (!user) {
@@ -303,7 +303,7 @@ router.get("/me", requireAuth, async (req, res) => {
 
 // ── Terms acceptance ──────────────────────────────────────────────────────────
 
-router.post("/accept-terms", requireAuth, async (req, res) => {
+router.post("/accept-terms", requireAuth, async (req, res): Promise<void> => {
   const { version = "1.0" } = req.body ?? {};
   const ip = (req as any).realIp ?? req.ip ?? "unknown";
   const [updated] = await db.update(usersTable)
@@ -315,7 +315,7 @@ router.post("/accept-terms", requireAuth, async (req, res) => {
 });
 
 // Admin endpoint — force all org users to re-accept terms
-router.post("/require-terms-reacceptance", requireAuth, async (req, res) => {
+router.post("/require-terms-reacceptance", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
   if (!["system_owner", "admin"].includes(user.role)) {
     res.status(403).json({ error: "Forbidden" });
@@ -334,7 +334,7 @@ router.post("/require-terms-reacceptance", requireAuth, async (req, res) => {
   res.json({ message: `${affected.length} users will be prompted to re-accept terms.` });
 });
 
-router.post("/refresh-token", async (req, res) => {
+router.post("/refresh-token", async (req, res): Promise<void> => {
   const { refreshToken } = req.body ?? {};
   if (!refreshToken) {
     res.status(400).json({ error: "Bad Request", message: "Refresh token is required" });
@@ -396,7 +396,7 @@ router.post("/refresh-token", async (req, res) => {
   res.json({ token: newAccessToken, refreshToken: newRefreshToken });
 });
 
-router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
+router.post("/forgot-password", forgotPasswordLimiter, async (req, res): Promise<void> => {
   const { email } = req.body ?? {};
   if (!email) {
     res.status(400).json({ error: "Bad Request", message: "Email is required" });
@@ -434,7 +434,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
   });
 });
 
-router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
+router.post("/reset-password", resetPasswordLimiter, async (req, res): Promise<void> => {
   const { token, password } = req.body ?? {};
   if (!token || !password) {
     res.status(400).json({ error: "Bad Request", message: "Token and new password are required" });
@@ -519,7 +519,7 @@ const registerOrgLimiter = rateLimit({
 // ─── Self-service org registration ────────────────────────────────────────────
 // Public endpoint — no auth required.
 // Creates a trial org (14 days) + initial admin user. Grants 1 000 AI credits.
-router.post("/register-org", registerOrgLimiter, async (req, res) => {
+router.post("/register-org", registerOrgLimiter, async (req, res): Promise<void> => {
   const { orgName, adminFirstName, adminLastName, adminEmail, adminPassword } = req.body ?? {};
 
   if (!orgName || !adminEmail || !adminPassword || !adminFirstName || !adminLastName) {
@@ -627,7 +627,7 @@ router.post("/register-org", registerOrgLimiter, async (req, res) => {
 
 // ─── Email verification ────────────────────────────────────────────────────────
 // GET /api/auth/verify-email?token=<hex>
-router.get("/verify-email", async (req, res) => {
+router.get("/verify-email", async (req, res): Promise<void> => {
   const { token } = req.query;
   if (!token || typeof token !== "string") {
     res.status(400).json({ error: "Bad Request", message: "token is required" });
@@ -688,7 +688,7 @@ router.get("/verify-email", async (req, res) => {
 //
 // The frontend clears localStorage immediately on click — this call is
 // fire-and-forget from the client's perspective.
-router.post("/logout", requireAuth, async (req, res) => {
+router.post("/logout", requireAuth, async (req, res): Promise<void> => {
   const { refreshToken } = req.body ?? {};
   const ip = req.ip;
 

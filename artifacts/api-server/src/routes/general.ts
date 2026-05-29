@@ -45,7 +45,7 @@ async function enrichItems(items: (typeof correspondenceTable.$inferSelect)[]) {
 
 // ─── List General Inbox ───────────────────────────────────────────────────────
 
-router.get("/correspondence", async (req, res) => {
+router.get("/correspondence", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const { folder = "inbox", type } = req.query;
 
@@ -76,7 +76,7 @@ router.get("/correspondence", async (req, res) => {
 
 // ─── Create General Correspondence ───────────────────────────────────────────
 
-router.post("/correspondence", async (req, res) => {
+router.post("/correspondence", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const {
     subject, type = "internal", body = "", toUserIds = [],
@@ -121,7 +121,7 @@ router.post("/correspondence", async (req, res) => {
 
 // ─── Get Single General Item ──────────────────────────────────────────────────
 
-router.get("/correspondence/:id", async (req, res) => {
+router.get("/correspondence/:id", async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
 
@@ -150,7 +150,7 @@ router.get("/correspondence/:id", async (req, res) => {
 
 // ─── Move to Project ──────────────────────────────────────────────────────────
 
-router.patch("/correspondence/:id/move", async (req, res) => {
+router.patch("/correspondence/:id/move", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const id = paramInt(req.params.id);
   const { projectId } = req.body ?? {};
@@ -201,7 +201,7 @@ router.patch("/correspondence/:id/move", async (req, res) => {
 
 // ─── Reply in General Section ─────────────────────────────────────────────────
 
-router.post("/correspondence/:id/reply", async (req, res) => {
+router.post("/correspondence/:id/reply", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const parentId = paramInt(req.params.id);
   const { subject, body = "", toUserIds = [] } = req.body ?? {};
@@ -237,7 +237,7 @@ router.post("/correspondence/:id/reply", async (req, res) => {
 });
 
 // ─── PUT /general/correspondence/:id/read ────────────────────────────────────
-router.put("/correspondence/:id/read", async (req, res) => {
+router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
   const { isRead } = req.body;
@@ -266,7 +266,7 @@ router.put("/correspondence/:id/read", async (req, res) => {
 });
 
 // ─── GET /general/correspondence/:id/share ────────────────────────────────────
-router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
+router.get("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const [corr] = await db
     .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt })
@@ -276,7 +276,7 @@ router.get("/correspondence/:id/share", requireAuth, async (req, res) => {
 });
 
 // ─── POST /general/correspondence/:id/share ───────────────────────────────────
-router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
+router.post("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
 
   // Fetch first to validate ownership before creating a share link.
@@ -305,7 +305,7 @@ router.post("/correspondence/:id/share", requireAuth, async (req, res) => {
 });
 
 // ─── DELETE /general/correspondence/:id ──────────────────────────────────────
-router.delete("/correspondence/:id", requireAuth, async (req, res) => {
+router.delete("/correspondence/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const user = req.user!;
 
@@ -333,7 +333,7 @@ router.delete("/correspondence/:id", requireAuth, async (req, res) => {
 
 // ─── List user's projects (for move-to-project selector) ─────────────────────
 
-router.get("/my-projects", async (req, res) => {
+router.get("/my-projects", async (req, res): Promise<void> => {
   const userId = req.user!.id;
 
   const memberships = await db.select({

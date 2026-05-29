@@ -41,7 +41,7 @@ router.use(requireAuth);
 
 // ─── Document Analysis ───────────────────────────────────────────────────────
 
-router.post("/documents/:id/analyze", async (req, res) => {
+router.post("/documents/:id/analyze", async (req, res): Promise<void> => {
   const docId = paramInt(req.params.id);
   const force = req.query.force === "true";
   const caller = req.user!;
@@ -96,7 +96,7 @@ router.post("/documents/:id/analyze", async (req, res) => {
 
 // ─── Correspondence Analysis ─────────────────────────────────────────────────
 
-router.post("/correspondence/:id/analyze", async (req, res) => {
+router.post("/correspondence/:id/analyze", async (req, res): Promise<void> => {
   const corrId = paramInt(req.params.id);
   const force = req.query.force === "true";
   const caller = req.user!;
@@ -140,7 +140,7 @@ router.post("/correspondence/:id/analyze", async (req, res) => {
 
 // ─── Task Prioritization ─────────────────────────────────────────────────────
 
-router.post("/tasks/prioritize", async (req, res) => {
+router.post("/tasks/prioritize", async (req, res): Promise<void> => {
   const { taskIds, projectId } = req.body ?? {};
   const caller = req.user!;
 
@@ -186,7 +186,7 @@ router.post("/tasks/prioritize", async (req, res) => {
 
 // ─── AI Document Procedure Suggestion ────────────────────────────────────────
 
-router.post("/documents/suggest-procedure", async (req, res) => {
+router.post("/documents/suggest-procedure", async (req, res): Promise<void> => {
   const {
     projectId, projectCode, projectName, discipline, documentType, partialTitle,
     existingNumbers, organizationName,
@@ -259,7 +259,7 @@ router.post("/documents/suggest-procedure", async (req, res) => {
 
 // ─── Natural Language Search ─────────────────────────────────────────────────
 
-router.post("/search/natural", async (req, res) => {
+router.post("/search/natural", async (req, res): Promise<void> => {
   const { query } = req.body ?? {};
 
   if (!query?.trim()) {
@@ -292,7 +292,7 @@ router.post("/search/natural", async (req, res) => {
 
 // ─── Document Control Validation ─────────────────────────────────────────────
 
-router.post("/validate-documents", async (req, res) => {
+router.post("/validate-documents", async (req, res): Promise<void> => {
   const { projectId, documents = [] } = req.body ?? {};
   const issues: any[] = [];
 
@@ -358,7 +358,7 @@ router.post("/validate-documents", async (req, res) => {
 
 // ─── Compare Revisions (metadata diff + optional AI narrative) ───────────────
 
-router.post("/compare-revisions", async (req, res) => {
+router.post("/compare-revisions", async (req, res): Promise<void> => {
   const { document: docTitle, revisionA, revisionB, withAI } = req.body ?? {};
   if (!revisionA || !revisionB) {
     res.status(400).json({ error: "revisionA and revisionB are required" });
@@ -436,7 +436,7 @@ Write a concise 2-3 sentence professional summary of what changed between these 
  * Aggregated AI insights for the organisation's documents.
  * All heavy computation is done in SQL; no AI calls are made here.
  */
-router.get("/insights", async (req, res) => {
+router.get("/insights", async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
 
   // 1. Total documents in the org
@@ -544,7 +544,7 @@ router.get("/insights", async (req, res) => {
 
 // ─── AI Settings ─────────────────────────────────────────────────────────────
 
-router.get("/settings", async (req, res) => {
+router.get("/settings", async (req, res): Promise<void> => {
   const { organizationId } = req.user!;
   const settings = await getAiSettings(organizationId);
 
@@ -557,7 +557,7 @@ router.get("/settings", async (req, res) => {
   res.json(result);
 });
 
-router.put("/settings", async (req, res) => {
+router.put("/settings", async (req, res): Promise<void> => {
   const { organizationId } = req.user!;
   const settings = req.body ?? {};
 
@@ -581,7 +581,7 @@ router.put("/settings", async (req, res) => {
 //   4. Execute with automatic failsafe fallback (premium fail → free, no deduction)
 //   5. Respond with _ai transparency metadata on every response
 //
-router.post("/command", async (req, res) => {
+router.post("/command", async (req, res): Promise<void> => {
   const { command, projectId, advanced = false, bypassGate = false } = req.body;
   if (!command?.trim()) {
     res.status(400).json({ error: "command is required" });
@@ -809,12 +809,12 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
 // ─── AI Provider Configuration ────────────────────────────────────────────────
 
-router.get("/provider", async (req, res) => {
+router.get("/provider", async (req, res): Promise<void> => {
   const [config, status] = await Promise.all([getAIProviderConfig(), Promise.resolve(getProviderStatus())]);
   res.json({ ...config, providerStatus: status });
 });
 
-router.put("/provider", async (req, res) => {
+router.put("/provider", async (req, res): Promise<void> => {
   const user = req.user!;
   if (!isSystemOwner(user)) {
     res.status(403).json({ error: "System owner only" });
@@ -845,7 +845,7 @@ router.put("/provider", async (req, res) => {
  *   analysisType — filter to a specific analysis type (e.g. "analyze")
  *   latestOnly   — if "true", return only the most recent isLatest=true row per type
  */
-router.get("/analysis/:entityType/:entityId", async (req, res) => {
+router.get("/analysis/:entityType/:entityId", async (req, res): Promise<void> => {
   const { entityType, entityId: entityIdStr } = req.params;
   const entityId = parseInt(entityIdStr);
   const { analysisType, latestOnly } = req.query;
@@ -869,7 +869,7 @@ router.get("/analysis/:entityType/:entityId", async (req, res) => {
 
 // ─── AI Activity Logs ─────────────────────────────────────────────────────────
 
-router.get("/logs", async (req, res) => {
+router.get("/logs", async (req, res): Promise<void> => {
   const limit = Math.min(parseInt(req.query.limit as string || "50"), 100);
   const logs = await db.select().from(aiLogsTable)
     .orderBy(aiLogsTable.createdAt)
@@ -879,7 +879,7 @@ router.get("/logs", async (req, res) => {
 
 // ─── AI Models (admin catalogue) ──────────────────────────────────────────────
 
-router.get("/models", async (req, res) => {
+router.get("/models", async (req, res): Promise<void> => {
   const { listProviders, getModelsForProvider } = await import("../lib/ai-providers/index.js");
   const providers = listProviders();
 
@@ -899,7 +899,7 @@ router.get("/models", async (req, res) => {
   res.json({ providers: result, dbModels: dbRows });
 });
 
-router.post("/models", async (req, res) => {
+router.post("/models", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }
@@ -920,7 +920,7 @@ router.post("/models", async (req, res) => {
   res.status(201).json(row);
 });
 
-router.put("/models/:id", async (req, res) => {
+router.put("/models/:id", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }
@@ -934,7 +934,7 @@ router.put("/models/:id", async (req, res) => {
   res.json(row);
 });
 
-router.delete("/models/:id", async (req, res) => {
+router.delete("/models/:id", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }
@@ -949,7 +949,7 @@ router.delete("/models/:id", async (req, res) => {
 
 // ─── Privacy Mode ─────────────────────────────────────────────────────────────
 
-router.get("/privacy-mode", async (req, res) => {
+router.get("/privacy-mode", async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) {
     res.json({ aiPrivacyMode: false }); return;
@@ -959,7 +959,7 @@ router.get("/privacy-mode", async (req, res) => {
   res.json({ aiPrivacyMode: cfg?.aiPrivacyMode ?? false });
 });
 
-router.put("/privacy-mode", async (req, res) => {
+router.put("/privacy-mode", async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     res.status(403).json({ error: "System admins only" }); return;
   }

@@ -10,7 +10,7 @@ const router = Router();
  * Tenant-isolated: results are scoped to the caller's organization.
  * system_owner with no org sees all organizations (cross-tenant).
  */
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { q, projectId, type, discipline, status } = req.query;
   const caller = req.user!;
 

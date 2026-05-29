@@ -68,7 +68,7 @@ function parseOrgIdParam(raw: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-router.get("/", async (req, res) => {
+router.get("/", async (req, res): Promise<void> => {
   const role = req.user?.role;
   const isSysOwner = role === "system_owner";
 
@@ -94,7 +94,7 @@ router.get("/", async (req, res) => {
   res.json({ modules });
 });
 
-router.put("/", requireRole("admin", "system_owner"), async (req, res) => {
+router.put("/", requireRole("admin", "system_owner"), async (req, res): Promise<void> => {
   const role = req.user?.role;
   const isSysOwner = role === "system_owner";
 

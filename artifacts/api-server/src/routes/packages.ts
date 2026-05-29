@@ -10,7 +10,7 @@ import type { Request, Response } from "express";
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-router.get("/", async (req: Request<ProjectParams>, res) => {
+router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const packages = await db
     .select({
@@ -29,7 +29,7 @@ router.get("/", async (req: Request<ProjectParams>, res) => {
   res.json(packages);
 });
 
-router.post("/", async (req: Request<ProjectParams>, res) => {
+router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { name, code, description } = req.body;
   if (!name || !code) {
@@ -46,7 +46,7 @@ router.post("/", async (req: Request<ProjectParams>, res) => {
   res.status(201).json(pkg);
 });
 
-router.put("/:id", async (req: Request<ProjectItemParams>, res) => {
+router.put("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const user = req.user!;
@@ -76,7 +76,7 @@ router.put("/:id", async (req: Request<ProjectItemParams>, res) => {
   res.json(pkg);
 });
 
-router.delete("/:id", async (req: Request<ProjectItemParams>, res) => {
+router.delete("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const user = req.user!;
@@ -91,13 +91,4 @@ router.delete("/:id", async (req: Request<ProjectItemParams>, res) => {
         userId: user.id, userOrgId: user.organizationId,
         attemptedResourceType: "package", attemptedResourceId: id,
         packageProjectId: projectId,
-        projectOrgId: project?.organizationId,
-      });
-    }
-  }
-
-  await db.delete(packagesTable).where(and(eq(packagesTable.id, id), eq(packagesTable.projectId, projectId)));
-  res.json({ success: true });
-});
-
-export default router;
+        projectOrgId: project?.organizat

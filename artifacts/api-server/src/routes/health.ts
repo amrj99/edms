@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-router.get("/health", async (_req, res) => {
+router.get("/health", async (_req, res): Promise<void> => {
   const start = Date.now();
   try {
     await db.execute(sql`SELECT 1`);

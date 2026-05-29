@@ -26,7 +26,7 @@ function isStripeConfigured(): boolean {
 }
 
 // ─── GET /api/ai-credits/balance ──────────────────────────────────────────────
-router.get("/balance", requireAuth, async (req, res) => {
+router.get("/balance", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId;
     if (!orgId) return res.status(400).json({ message: "No organisation context" });
@@ -63,7 +63,7 @@ router.get("/packs", requireAuth, (_req, res) => {
 
 // ─── POST /api/ai-credits/purchase ────────────────────────────────────────────
 // Creates a Stripe Checkout session in one-time payment mode (not subscription).
-router.post("/purchase", requireAuth, async (req, res) => {
+router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) {
     return res.status(503).json({ message: "Stripe is not configured. Contact your administrator." });
@@ -109,7 +109,7 @@ router.post("/purchase", requireAuth, async (req, res) => {
 
 // ─── GET /api/ai-credits/admin/balances ───────────────────────────────────────
 // Returns credit balances for all organisations. Admin / system_owner only.
-router.get("/admin/balances", requireAuth, async (req, res) => {
+router.get("/admin/balances", requireAuth, async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     return res.status(403).json({ error: "Forbidden" });
   }
@@ -134,7 +134,7 @@ router.get("/admin/balances", requireAuth, async (req, res) => {
 // ─── POST /api/ai-credits/admin/grant ─────────────────────────────────────────
 // Manually grants AI credits to an organisation. Admin / system_owner only.
 // Records grantedBy (admin user ID + email) in the transaction metadata.
-router.post("/admin/grant", requireAuth, async (req, res) => {
+router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
   if (!isSysAdmin(req.user!)) {
     return res.status(403).json({ error: "Forbidden" });
   }

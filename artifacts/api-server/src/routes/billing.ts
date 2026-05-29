@@ -127,7 +127,7 @@ router.get("/plans", (_req, res) => {
 });
 
 // ─── GET /api/billing/status ──────────────────────────────────────────────────
-router.get("/status", requireAuth, async (req, res) => {
+router.get("/status", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId;
     if (!orgId) return res.status(400).json({ message: "No organisation context" });
@@ -218,7 +218,7 @@ router.get("/status", requireAuth, async (req, res) => {
 });
 
 // ─── POST /api/billing/checkout ───────────────────────────────────────────────
-router.post("/checkout", requireAuth, async (req, res) => {
+router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: "Stripe is not configured. Connect Stripe to enable billing." });
 
@@ -283,7 +283,7 @@ router.post("/checkout", requireAuth, async (req, res) => {
 });
 
 // ─── POST /api/billing/portal ─────────────────────────────────────────────────
-router.post("/portal", requireAuth, async (req, res) => {
+router.post("/portal", requireAuth, async (req, res): Promise<void> => {
   const stripe = getStripe();
   if (!stripe) return res.status(503).json({ message: "Stripe is not configured" });
 
@@ -320,7 +320,7 @@ router.post("/portal", requireAuth, async (req, res) => {
 router.post(
   "/webhook",
   (req, res, next) => { next(); },
-  async (req, res) => {
+  async (req, res): Promise<void> => {
     const stripe = getStripe();
     if (!stripe) return res.status(503).send("Stripe not configured");
 

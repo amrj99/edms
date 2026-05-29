@@ -70,7 +70,7 @@ function buildWhere(conditions: SQL<unknown>[]): SQL<unknown> | undefined {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res): Promise<void> => {
   const lim = Math.min(parseInt(qstr(req.query.limit) ?? "50"), 200);
   const pg  = Math.max(1, parseInt(qstr(req.query.page) ?? "1"));
   const offset = (pg - 1) * lim;
@@ -154,7 +154,7 @@ router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
 
 // ─── Excel export ─────────────────────────────────────────────────────────────
 
-router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req, res): Promise<void> => {
   const projectId  = qstr(req.query.projectId);
   const entityType = qstr(req.query.entityType);
   const action     = qstr(req.query.action);
@@ -232,7 +232,7 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
 
 // ─── CSV export (legacy) ──────────────────────────────────────────────────────
 
-router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res) => {
+router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res): Promise<void> => {
   const projectId  = qstr(req.query.projectId);
   const entityType = qstr(req.query.entityType);
   const action     = qstr(req.query.action);
