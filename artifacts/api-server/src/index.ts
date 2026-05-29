@@ -13,6 +13,50 @@ import { seedAISettings } from "./lib/seed-ai-settings.js";
 
 const rawPort = process.env["PORT"];
 
+// ── Graceful shutdown ──────────────────────────────────────────────────────────
+// Called on SIGTERM (Docker/pm2 stop) and SIGINT (Ctrl-C in dev).
+// 1. Stop accepting new connections.
+// 2. Wait for in-flight requests to finish (10-second hard deadline).
+// 3. Close the DB pool so Postgres connections are released cleanly.
+// 4. Exit 0 — anything that throws falls through to exit 1.
+async function shutdown(signal: string): Promise<void> {
+  logger.info({ signal }, "Shutdown signal received — draining connections");
+
+  // Prevent duplicate handling
+  process.off("SIGTERM", onSigterm);
+  process.off("SIGINT", onSigint);
+
+  const deadline = setTimeout(() => {
+    logger.error("Graceful shutdown timed out — forcing exit");
+    process.exit(1);
+  }, 10_000);
+  deadline.unref(); // don't keep the event loop alive just for the timeout
+
+  try {
+    // Stop accepting new HTTP/WebSocket connections
+    await new Promise<void>((resolve, reject) =>
+      server.close(err => (err ? reject(err) : resolve())),
+    );
+    logger.info("HTTP server closed");
+
+    // Release Postgres connection pool
+    const { db } = await import("@workspace/db");
+    if (typeof (db as any).$client?.end === "function") {
+      await (db as any).$client.end();
+      logger.info("Database pool closed");
+    }
+  } catch (err) {
+    logger.error({ err }, "Error during shutdown");
+  } finally {
+    clearTimeout(deadline);
+    logger.info("Shutdown complete");
+    process.exit(0);
+  }
+}
+
+function onSigterm() { shutdown("SIGTERM").catch(() => process.exit(1)); }
+function onSigint()  { shutdown("SIGINT").catch(() => process.exit(1)); }
+
 // ── Runtime environment validation ────────────────────────────────────────────
 // Critical secrets — always fail-fast if missing (no dev/prod distinction).
 // Optional vars — warn only, never crash.
@@ -87,6 +131,11 @@ server.listen(port, (err?: Error) => {
     process.exit(1);
   }
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
+
+  // Register graceful-shutdown handlers after the server is up
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT",  onSigint);
+
   startNotificationScheduler();
   startTrialDowngradeScheduler();
   // Seed AI routing defaults into system_settings (ON CONFLICT DO NOTHING — safe every boot).
