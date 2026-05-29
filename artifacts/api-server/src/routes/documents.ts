@@ -123,8 +123,7 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
   const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
   const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
   if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
-    res.status(403).json({ error: "Source project not in same organization" })
-    return;
+    res.status(403).json({ error: "Source project not in same organization" }); return;
   }
   const sourceFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
   // Insert in two passes: roots first, then children (BFS)
@@ -318,8 +317,7 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
         existingDocumentId: dup[0].id,
         existingTitle: dup[0].title,
         documentNumber: resolvedDocNumber,
-      })
-    return;
+      }); return;
     }
   }
 
@@ -481,11 +479,9 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
       existingRevision: existing[0].revision,
       existingStatus: existing[0].status,
       existingDiscipline: existing[0].discipline,
-    })
-    return;
+    }); return;
   }
-  res.json({ available: true })
-    return;
+  res.json({ available: true }); return;
 });
 
 router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -799,7 +795,7 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
       status: chain.currentStatus ?? null,
       meta: {
         chainTitle:  chain.title,
-        chainStatus: chain.status ?? null,
+        chainStatus: chain.currentStatus ?? null,
         chainRef:    (chain as any).referenceNumber ?? null,
       },
       href: `/projects/${chain.projectId}/submission-chains`,
@@ -852,8 +848,7 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
     .where(eq(wfInstancesTable.documentId, id));
 
   if (instances.length === 0) {
-    res.json({ history: [] })
-    return;
+    res.json({ history: [] }); return;
   }
 
   const instanceIds = instances.map(i => i.id);
@@ -1202,15 +1197,13 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;
   if (!uploadedFiles || uploadedFiles.length === 0) {
-    res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." })
-    return;
+    res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." }); return;
   }
 
   // Content-based safety check — catches HTML/SVG regardless of declared MIME or extension
   const contentError = validateUploadedFiles(uploadedFiles);
   if (contentError) {
-    res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError })
-    return;
+    res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError }); return;
   }
 
   const orgId = req.user!.organizationId ?? null;
@@ -1244,8 +1237,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       res.status(403).json({
         error: "EMAIL_NOT_VERIFIED",
         message: "Please verify your email address before uploading files. Check your inbox for a verification link.",
-      })
-    return;
+      }); return;
     }
   }
 
@@ -1263,8 +1255,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       res.status(403).json({
         error: "UPLOAD_BLOCKED",
         message: "File uploads are not available on the free plan. Upgrade your plan to continue.",
-      })
-    return;
+      }); return;
     }
   }
 
@@ -1284,8 +1275,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       res.status(403).json({
         error: "TRIAL_EXPIRED",
         message: "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
-      })
-    return;
+      }); return;
     }
 
     const planId = await getOrgPlan(orgId);
@@ -1299,8 +1289,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
         res.status(413).json({
           error: "FILE_TOO_LARGE",
           message: `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
-        })
-    return;
+        }); return;
       }
 
       // Storage quota enforcement
@@ -1310,8 +1299,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
           res.status(403).json({
             error: "STORAGE_LIMIT_REACHED",
             message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
-          })
-    return;
+          }); return;
         }
       }
     }
@@ -1560,4 +1548,4 @@ router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request
   res.json({ ok: true });
 });
 
-export default r
+export default router;

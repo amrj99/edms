@@ -177,8 +177,7 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
 
   // Org isolation check
   if (!isSysAdmin(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
-    res.status(403).json({ error: "Forbidden" })
-    return;
+    res.status(403).json({ error: "Forbidden" }); return;
   }
 
   const attendees = await db
@@ -222,13 +221,11 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
   const { title, projectId, meetingDate, duration, location, meetingLink, agenda, status, attendees } = req.body;
 
   if (!title?.trim() || !meetingDate) {
-    res.status(400).json({ error: "Bad Request", message: "Title and meeting date are required" })
-    return;
+    res.status(400).json({ error: "Bad Request", message: "Title and meeting date are required" }); return;
   }
 
   if (!projectId) {
-    res.status(400).json({ error: "Bad Request", message: "A project must be selected for every meeting" })
-    return;
+    res.status(400).json({ error: "Bad Request", message: "A project must be selected for every meeting" }); return;
   }
 
   const count = await db.select({ id: meetingsTable.id }).from(meetingsTable);
@@ -276,11 +273,11 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
   if (attendees?.length) {
     const userAttendees = (attendees as any[]).filter(a => a.userId && a.userId !== req.user!.id);
     if (userAttendees.length > 0) {
-      const [organizer] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
-      const organizerName = organizer ? `${organizer.firstName} ${organizer.lastName}`.trim() : "Someone";
-      const meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
       try {
+        const [organizer] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable).where(eq(usersTable.id, req.user!.id));
+        const organizerName = organizer ? `${organizer.firstName} ${organizer.lastName}`.trim() : "Someone";
+        const meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
         await db.insert(notificationsTable).values(
           userAttendees.map((a: any) => ({
             userId: a.userId as number,
@@ -334,8 +331,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 
   if (!before) { res.status(404).json({ error: "Meeting not found" }); return; }
   if (!isSysAdmin(req.user!) && before.organizationId !== null && before.organizationId !== req.user!.organizationId) {
-    res.status(403).json({ error: "Forbidden" })
-    return;
+    res.status(403).json({ error: "Forbidden" }); return;
   }
 
   const [meeting] = await db.update(meetingsTable).set({
@@ -417,8 +413,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
     .from(meetingsTable).where(eq(meetingsTable.id, meetingId)).limit(1);
   if (!parentMeeting) { res.status(404).json({ error: "Meeting not found" }); return; }
   if (!isSysAdmin(req.user!) && parentMeeting.organizationId !== null && parentMeeting.organizationId !== req.user!.organizationId) {
-    res.status(403).json({ error: "Forbidden" })
-    return;
+    res.status(403).json({ error: "Forbidden" }); return;
   }
 
   const [item] = await db.insert(meetingActionItemsTable).values({
@@ -500,4 +495,7 @@ router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager
 router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response): Promise<void> => {
   const id = paramInt(req.params.id);
   await db.delete(meetingsTable).where(eq(meetingsTable.id, id));
-  re
+  res.json({ message: "Deleted" });
+});
+
+export default router;
