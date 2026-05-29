@@ -91,4 +91,13 @@ router.delete("/:id", async (req: Request<ProjectItemParams>, res): Promise<void
         userId: user.id, userOrgId: user.organizationId,
         attemptedResourceType: "package", attemptedResourceId: id,
         packageProjectId: projectId,
-        projectOrgId: project?.organizat
+        projectOrgId: project?.organizationId,
+      });
+    }
+  }
+
+  await db.delete(packagesTable).where(and(eq(packagesTable.id, id), eq(packagesTable.projectId, projectId)));
+  res.json({ success: true });
+});
+
+export default router;

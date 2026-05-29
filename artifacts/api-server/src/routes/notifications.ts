@@ -196,4 +196,18 @@ router.delete("/:id", async (req, res): Promise<void> => {
   const deleted = await db.delete(notificationsTable)
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
     .returning({ id: notificationsTable.id });
-  if (deleted.length === 0)
+  if (deleted.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
+  res.json({ success: true });
+});
+
+// ─── Push subscription (VAPID) ────────────────────────────────────────────────
+router.post("/push-subscribe", async (req, res): Promise<void> => {
+  const { subscription } = req.body;
+  if (!subscription?.endpoint) {
+    res.status(400).json({ error: "Invalid subscription object" });
+    return;
+  }
+  res.json({ success: true, ready: false, message: "Push infrastructure ready — configure VAPID keys to enable delivery." });
+});
+
+export default router;

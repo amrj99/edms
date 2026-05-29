@@ -244,4 +244,3 @@ router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (r
 });
 
 export default router;
-                                          
