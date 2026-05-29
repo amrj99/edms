@@ -1,8 +1,10 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { db } from "@workspace/db";
 import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { paramInt, type ProjectParams, type ProjectItemParams } from '../lib/params';
 import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { param, paramInt, paramIntOrNull } from '../lib/params';
@@ -10,7 +12,7 @@ import { param, paramInt, paramIntOrNull } from '../lib/params';
 const router = Router({ mergeParams: true });
 
 // ─── List project role overrides ──────────────────────────────────────────────
-router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res) => {
   const caller = req.user!;
   const projectId = paramInt(req.params.projectId);
   const now = new Date();
@@ -52,7 +54,7 @@ router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), as
 });
 
 // ─── Create project role override ─────────────────────────────────────────────
-router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res) => {
   const caller = req.user!;
   const projectId = paramInt(req.params.projectId);
   const { userId, roleOverride, reason, expiresAt } = req.body;
@@ -109,7 +111,7 @@ router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), a
 });
 
 // ─── Revoke project role override ─────────────────────────────────────────────
-router.delete("/role-overrides/:overrideId", requireAuth, requireMinRole("project_manager"), async (req, res) => {
+router.delete("/role-overrides/:overrideId", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res) => {
   const caller = req.user!;
   const overrideId = paramInt(req.params.overrideId);
   const projectId = paramInt(req.params.projectId);

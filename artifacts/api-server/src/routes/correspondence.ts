@@ -23,7 +23,8 @@ import { sendCorrespondenceDeliveryEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import type { Request } from 'express';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router({ mergeParams: true });
@@ -528,7 +529,7 @@ async function createCorrespondence(
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // ─── Correspondence items assigned to me (Task To) ────────────────────────────
-router.get("/assigned-to-me", requireAuth, async (req, res) => {
+router.get("/assigned-to-me", requireAuth, async (req: Request<ProjectParams>, res) => {
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
@@ -544,7 +545,7 @@ router.get("/assigned-to-me", requireAuth, async (req, res) => {
   res.json({ items: enriched, total: enriched.length });
 });
 
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   const { folder, type, scope, viewAll } = req.query;
   const caller = req.user!;
@@ -649,12 +650,12 @@ router.get("/", requireAuth, async (req, res) => {
   res.json({ items: enriched, total: enriched.length, viewAll: false });
 });
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", requireAuth, async (req: Request<ProjectParams>, res) => {
   const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   await createCorrespondence(req, res, contextProjectId);
 });
 
-router.get("/:id", requireAuth, async (req, res) => {
+router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   const id = paramInt(req.params.id);
   const caller = req.user!;
@@ -706,7 +707,7 @@ router.get("/:id", requireAuth, async (req, res) => {
 
 // ─── Recall ───────────────────────────────────────────────────────────────────
 
-router.post("/:id/recall", requireAuth, async (req, res) => {
+router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res) => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
 
@@ -795,7 +796,7 @@ router.post("/:id/recall", requireAuth, async (req, res) => {
   res.json(enriched[0]);
 });
 
-router.put("/:id/read", requireAuth, async (req, res) => {
+router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res) => {
   const id = paramInt(req.params.id);
   const { isRead } = req.body;
   const [corr] = await db.update(correspondenceTable)
@@ -806,7 +807,7 @@ router.put("/:id/read", requireAuth, async (req, res) => {
   res.json({ id: corr.id, isRead: corr.isRead });
 });
 
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
   const { subject, body, folder, status, referenceNumber } = req.body;
@@ -867,7 +868,7 @@ router.put("/:id", requireAuth, async (req, res) => {
   res.json(enriched[0]);
 });
 
-router.post("/:id/reply", requireAuth, async (req, res) => {
+router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res) => {
   const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
   const parentId = paramInt(req.params.id);
   const caller = req.user!;
@@ -955,7 +956,7 @@ router.post("/:id/reply", requireAuth, async (req, res) => {
 
 // ─── Attachments ──────────────────────────────────────────────────────────────
 
-router.post("/:id/attachments", requireAuth, async (req, res) => {
+router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>, res) => {
   const corrId = paramInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   const [att] = await db.insert(correspondenceAttachmentsTable).values({
@@ -967,13 +968,13 @@ router.post("/:id/attachments", requireAuth, async (req, res) => {
   res.status(201).json(att);
 });
 
-router.delete("/:id/attachments/:attId", requireAuth, async (req, res) => {
+router.delete("/:id/attachments/:attId", requireAuth, async (req: Request<ProjectParams>, res) => {
   const attId = paramInt(req.params.attId);
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
   res.json({ success: true });
 });
 
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const id = paramInt(req.params.id);
   const caller = req.user!;
 
@@ -1003,67 +1004,4 @@ router.delete("/:id", requireAuth, async (req, res) => {
     userId: caller.id,
     organizationId: caller.organizationId,
     action: "delete",
-    entityType: "correspondence",
-    entityId: id,
-    entityTitle: existing.referenceNumber ?? existing.subject,
-    projectId: existing.projectId ?? undefined,
-    details: { deletedBy: caller.id },
-  });
-
-  res.json({ success: true });
-});
-
-// ─── Share link ───────────────────────────────────────────────────────────────
-
-router.post("/:id/share", requireAuth, async (req, res) => {
-  const id = paramInt(req.params.id);
-  const projectId = paramInt(req.params.projectId);
-  const { expiresInDays, password } = req.body;
-
-  // Verify the project belongs to the caller's org — prevents cross-tenant share
-  // creation when the correspondence's own organizationId is NULL (legacy data).
-  const [project] = await db.select({ id: projectsTable.id })
-    .from(projectsTable)
-    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
-    .limit(1);
-  if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
-  const token = crypto.randomBytes(32).toString("hex");
-  const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
-  const expiresAt = new Date(Date.now() + days * 86400000);
-  const passwordHash = password ? await hashPassword(password) : null;
-
-  const [corr] = await db.update(correspondenceTable)
-    .set({
-      shareToken: hashToken(token),
-      shareExpiresAt: expiresAt,
-      sharePasswordHash: passwordHash ?? undefined,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
-    .returning({ id: correspondenceTable.id, shareExpiresAt: correspondenceTable.shareExpiresAt });
-
-  if (!corr) { res.status(404).json({ error: "Not found" }); return; }
-
-  await createAuditLog({
-    userId: req.user!.id, action: "share", entityType: "correspondence",
-    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
-  });
-
-  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
-  res.json({
-    shareUrl: `${baseUrl}/shared/correspondence/${token}`,
-    shareToken: token,
-    expiresAt,
-  });
-});
-
-router.delete("/:id/share", requireAuth, async (req, res) => {
-  const id = paramInt(req.params.id);
-  await db.update(correspondenceTable)
-    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(eq(correspondenceTable.id, id));
-  res.json({ success: true });
-});
-
-export default router;
+    entityTyp

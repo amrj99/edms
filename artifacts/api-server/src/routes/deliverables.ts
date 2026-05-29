@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { deliverablesTable, documentsTable, projectsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { paramInt, type ProjectParams, type ProjectItemParams } from '../lib/params';
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
@@ -24,7 +25,7 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
   return true;
 }
 
-router.get("/deliverables", requireAuth, async (req, res) => {
+router.get("/deliverables", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const rows = await db.select({
@@ -44,7 +45,7 @@ router.get("/deliverables", requireAuth, async (req, res) => {
   });
 });
 
-router.get("/deliverables/:id", requireAuth, async (req, res) => {
+router.get("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const [row] = await db.select().from(deliverablesTable)
@@ -53,7 +54,7 @@ router.get("/deliverables/:id", requireAuth, async (req, res) => {
   res.json(row);
 });
 
-router.post("/deliverables", requireAuth, async (req, res) => {
+router.post("/deliverables", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { deliverableId, title, type, plannedDate, actualDate, status, responsible, linkedDocumentId, remarks } = req.body;
@@ -73,7 +74,7 @@ router.post("/deliverables", requireAuth, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.put("/deliverables/:id", requireAuth, async (req, res) => {
+router.put("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
@@ -94,7 +95,7 @@ router.put("/deliverables/:id", requireAuth, async (req, res) => {
   res.json(row);
 });
 
-router.delete("/deliverables/:id", requireAuth, async (req, res) => {
+router.delete("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   await db.delete(deliverablesTable).where(and(eq(deliverablesTable.id, paramInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));

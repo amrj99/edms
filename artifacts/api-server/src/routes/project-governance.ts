@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { db } from "@workspace/db";
 import {
   correspondenceTable,
@@ -10,13 +11,14 @@ import {
 } from "@workspace/db";
 import { eq, and, lt, count, sql, ne, isNotNull, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { paramInt, type ProjectParams } from '../lib/params';
 import { param, paramInt, paramIntOrNull } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 const GOV_ROLES = ["system_owner", "admin", "project_manager", "document_controller"] as const;
 
-router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req, res) => {
+router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
 
