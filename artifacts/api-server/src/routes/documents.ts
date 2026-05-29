@@ -1477,4 +1477,75 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
     entityId: id,
     entityTitle: `${doc.documentNumber} — ${doc.title}`,
     projectId,
-    details: { reason: reason.trim(), pr
+    details: { reason: reason.trim(), previousStatus: doc.status, supersededByDocumentId: supersededByDocumentId ?? null },
+  });
+
+  res.json(updated);
+});
+
+// ─── Document Departments (Phase B — data layer, no enforcement) ──────────────
+
+// GET  /api/projects/:projectId/documents/:id/departments
+router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res) => {
+  const id = paramInt(req.params.id);
+  const rows = await db
+    .select({
+      id:           departmentsTable.id,
+      code:         departmentsTable.code,
+      name:         departmentsTable.name,
+      assignedAt:   documentDepartmentsTable.assignedAt,
+    })
+    .from(documentDepartmentsTable)
+    .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
+    .where(eq(documentDepartmentsTable.documentId, id));
+  res.json(rows);
+});
+
+// POST /api/projects/:projectId/documents/:id/departments  { departmentId }
+router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res) => {
+  const id = paramInt(req.params.id);
+  const projectId = paramInt(req.params.projectId);
+  const { departmentId } = req.body;
+  if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
+
+  // Multi-tenant guard: department must belong to the same org as the project
+  const [project] = await db
+    .select({ organizationId: projectsTable.organizationId })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId))
+    .limit(1);
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  const [dept] = await db
+    .select({ organizationId: departmentsTable.organizationId })
+    .from(departmentsTable)
+    .where(eq(departmentsTable.id, parseInt(departmentId)))
+    .limit(1);
+  if (!dept) { res.status(404).json({ error: "Department not found" }); return; }
+
+  if (dept.organizationId !== project.organizationId) {
+    res.status(403).json({ error: "Department does not belong to this document's organization" }); return;
+  }
+
+  const [row] = await db
+    .insert(documentDepartmentsTable)
+    .values({ documentId: id, departmentId: parseInt(departmentId) })
+    .onConflictDoNothing()
+    .returning();
+  res.status(201).json(row ?? { ok: true });
+});
+
+// DELETE /api/projects/:projectId/documents/:id/departments/:departmentId
+router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res) => {
+  const id = paramInt(req.params.id);
+  const departmentId = paramInt(req.params.departmentId);
+  await db
+    .delete(documentDepartmentsTable)
+    .where(and(
+      eq(documentDepartmentsTable.documentId, id),
+      eq(documentDepartmentsTable.departmentId, departmentId),
+    ));
+  res.json({ ok: true });
+});
+
+export default router;
