@@ -689,36 +689,35 @@ router.put("/ai-classification", requireMinRole("admin"), async (req, res): Prom
 
 // GET /api/admin/ai-quota — sysadmin: quota for all orgs; org admin: own org only
 router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
-  try {
-    const user = req.user!;
+  const user = req.user!;
 
-    if (isSysAdmin(user)) {
-      // Return quota summary for every org that has an org_config row
-      const configs = await db
-        .select({
-          organizationId: orgConfigTable.organizationId,
-          subscriptionTier: orgConfigTable.subscriptionTier,
-          aiProvider: orgConfigTable.aiProvider,
-          aiModel: orgConfigTable.aiModel,
-          aiDailyLimit: orgConfigTable.aiDailyLimit,
-        })
-        .from(orgConfigTable);
+  if (isSysAdmin(user)) {
+    // Return quota summary for every org that has an org_config row
+    const configs = await db
+      .select({
+        organizationId: orgConfigTable.organizationId,
+        subscriptionTier: orgConfigTable.subscriptionTier,
+        aiProvider: orgConfigTable.aiProvider,
+        aiModel: orgConfigTable.aiModel,
+        aiDailyLimit: orgConfigTable.aiDailyLimit,
+      })
+      .from(orgConfigTable);
 
-      const quotas = await Promise.all(
-        configs.map(async (cfg) => ({
-          organizationId: cfg.organizationId,
-          subscriptionTier: cfg.subscriptionTier,
-          quota: await getOrgAiQuota(cfg.organizationId),
-        }))
-      );
-      res.json({ quotas })
+    const quotas = await Promise.all(
+      configs.map(async (cfg) => ({
+        organizationId: cfg.organizationId,
+        subscriptionTier: cfg.subscriptionTier,
+        quota: await getOrgAiQuota(cfg.organizationId),
+      }))
+    );
+    res.json({ quotas });
     return;
-    }
+  }
 
-    // Non-sysadmin: own org only
-    if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
-    const quota = await getOrgAiQuota(user.organizationId);
-    res.json({ organizationId: user.organizationId, quota });
+  // Non-sysadmin: own org only
+  if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
+  const quota = await getOrgAiQuota(user.organizationId);
+  res.json({ organizationId: user.organizationId, quota });
 });
 
 // ─── Subscription tier — preset AI config bundles ─────────────────────────────
