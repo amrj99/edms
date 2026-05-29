@@ -974,4 +974,7 @@ router.put("/privacy-mode", async (req, res): Promise<void> => {
   await db.update(orgConfigTable)
     .set({ aiPrivacyMode, updatedAt: new Date() })
     .where(eq(orgConfigTable.organizationId, orgId));
-  res.json({ ai
+  res.json({ aiPrivacyMode });
+});
+
+export default router;
