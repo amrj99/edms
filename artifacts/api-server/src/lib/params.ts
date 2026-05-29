@@ -7,6 +7,21 @@
  * satisfied without scattering casts throughout every route file.
  */
 
+// ─── Shared param types for nested routers ────────────────────────────────────
+// Routers mounted under /projects/:projectId must declare these types so
+// TypeScript knows req.params.projectId is available (Express 5 types req.params
+// as {} by default when no explicit route string is parsed at compile time).
+
+/** Params for routers mounted at /projects/:projectId/... */
+export interface ProjectParams extends Record<string, string | string[]> {
+  projectId: string;
+}
+
+/** Params for routers mounted at /projects/:projectId/.../:id */
+export interface ProjectItemParams extends ProjectParams {
+  id: string;
+}
+
 /**
  * Return the first (or only) value of a route parameter.
  * Use for string params like slugs, tokens, or any non-numeric id.

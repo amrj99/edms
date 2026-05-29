@@ -42,7 +42,8 @@ import { isAtLeast } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendEmail } from "../lib/email.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import type { Request } from 'express';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -309,7 +310,7 @@ function chainSummarySelect() {
 
 // ─── GET / — list chains for project ─────────────────────────────────────────
 
-router.get("/", async (req, res) => {
+router.get("/", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const { status, orgId: orgFilter } = req.query;
   const userOrgId = req.user!.organizationId;
@@ -350,7 +351,7 @@ router.get("/", async (req, res) => {
 // ─── GET /members — project members in a given org (for user pickers) ─────────
 // Usage: GET /api/projects/:projectId/submission-chains/members?orgId=5
 
-router.get("/members", async (req, res) => {
+router.get("/members", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
 
@@ -382,7 +383,7 @@ router.get("/members", async (req, res) => {
 
 // ─── GET /:id — chain detail ──────────────────────────────────────────────────
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -425,7 +426,7 @@ router.get("/:id", async (req, res) => {
 
 // ─── POST / — create chain ────────────────────────────────────────────────────
 
-router.post("/", async (req, res) => {
+router.post("/", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
@@ -506,7 +507,7 @@ router.post("/", async (req, res) => {
 
 // ─── PATCH /:id — update title / description ─────────────────────────────────
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -538,7 +539,7 @@ router.patch("/:id", async (req, res) => {
 
 // ─── DELETE /:id — delete draft chain ────────────────────────────────────────
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -572,7 +573,7 @@ router.delete("/:id", async (req, res) => {
 
 // ─── POST /:id/parties — add an allowed party ────────────────────────────────
 
-router.post("/:id/parties", async (req, res) => {
+router.post("/:id/parties", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -629,7 +630,7 @@ router.post("/:id/parties", async (req, res) => {
 
 // ─── DELETE /:id/parties/:partyId — remove an allowed party ──────────────────
 
-router.delete("/:id/parties/:partyId", async (req, res) => {
+router.delete("/:id/parties/:partyId", async (req: Request<ProjectItemParams & { partyId: string }>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const partyId = paramInt(req.params.partyId);
@@ -669,7 +670,7 @@ router.delete("/:id/parties/:partyId", async (req, res) => {
 
 // ─── POST /:id/documents — add a document/revision to chain ──────────────────
 
-router.post("/:id/documents", async (req, res) => {
+router.post("/:id/documents", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -744,7 +745,7 @@ router.post("/:id/documents", async (req, res) => {
 
 // ─── DELETE /:id/documents/:chainDocId — remove document ─────────────────────
 
-router.delete("/:id/documents/:chainDocId", async (req, res) => {
+router.delete("/:id/documents/:chainDocId", async (req: Request<ProjectItemParams & { chainDocId: string }>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const chainDocId = paramInt(req.params.chainDocId);
@@ -783,7 +784,7 @@ router.delete("/:id/documents/:chainDocId", async (req, res) => {
 
 // ─── POST /:id/activate — draft → active ─────────────────────────────────────
 
-router.post("/:id/activate", async (req, res) => {
+router.post("/:id/activate", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -842,7 +843,7 @@ router.post("/:id/activate", async (req, res) => {
 
 // ─── POST /:id/forward — forward to next party ───────────────────────────────
 
-router.post("/:id/forward", async (req, res) => {
+router.post("/:id/forward", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -1030,7 +1031,7 @@ router.post("/:id/forward", async (req, res) => {
 
 // ─── POST /:id/return — return to previous party ─────────────────────────────
 
-router.post("/:id/return", async (req, res) => {
+router.post("/:id/return", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -1150,7 +1151,7 @@ router.post("/:id/return", async (req, res) => {
 
 // ─── POST /:id/resubmit — returned → active (originator resubmits) ─────────────
 
-router.post("/:id/resubmit", async (req, res) => {
+router.post("/:id/resubmit", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -1268,7 +1269,7 @@ router.post("/:id/resubmit", async (req, res) => {
 
 // ─── POST /:id/close — manually close ────────────────────────────────────────
 
-router.post("/:id/close", async (req, res) => {
+router.post("/:id/close", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -1313,7 +1314,7 @@ router.post("/:id/close", async (req, res) => {
 // Permission: DC+ or PM within currentOrgId.
 // The new assignee must belong to currentOrgId and have project access.
 
-router.post("/:id/reassign", async (req, res) => {
+router.post("/:id/reassign", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);
@@ -1399,7 +1400,7 @@ router.post("/:id/reassign", async (req, res) => {
 
 // ─── GET /:id/steps — step history ───────────────────────────────────────────
 
-router.get("/:id/steps", async (req, res) => {
+router.get("/:id/steps", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const id = paramInt(req.params.id);
   const role = await effectiveRole(req, projectId);

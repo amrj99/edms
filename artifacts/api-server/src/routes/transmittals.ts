@@ -14,13 +14,13 @@ import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import type { Request, Response } from "express";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 // List transmittals for a project
-router.get("/", async (req, res) => {
+router.get("/", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const transmittals = await db
     .select({
@@ -69,7 +69,7 @@ router.get("/", async (req, res) => {
 });
 
 // Get single transmittal with items
-router.get("/:id", async (req, res) => {
+router.get("/:id", async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const [transmittal] = await db
@@ -122,7 +122,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // Create transmittal
-router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
@@ -190,7 +190,7 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 });
 
 // Update transmittal
-router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode } = req.body;
@@ -227,7 +227,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 });
 
 // Send transmittal
-router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
@@ -289,7 +289,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
 });
 
 // Acknowledge transmittal
-router.post("/:id/acknowledge", async (req, res) => {
+router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
@@ -307,7 +307,7 @@ router.post("/:id/acknowledge", async (req, res) => {
 });
 
 // Complete review — compute rolled-up outcome, apply document statuses, create response draft
-router.post("/:id/complete-review", requireAuth, async (req, res) => {
+router.post("/:id/complete-review", requireAuth, async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const actor = req.user as any;
@@ -462,7 +462,7 @@ router.post("/:id/complete-review", requireAuth, async (req, res) => {
 });
 
 // Get transmittal history
-router.get("/:id/history", async (req, res) => {
+router.get("/:id/history", async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const rows = await db.select().from(transmittalHistoryTable)
     .where(eq(transmittalHistoryTable.transmittalId, id))
@@ -492,7 +492,7 @@ function jaccardScore(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
-router.get("/:id/suggest-links", async (req, res) => {
+router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const transmittalId = paramInt(req.params.id);
 
@@ -552,7 +552,7 @@ router.get("/:id/suggest-links", async (req, res) => {
 });
 
 // Add document to transmittal
-router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res) => {
   const transmittalId = paramInt(req.params.id);
   const { documentId, revision, copies, purpose } = req.body;
   const [item] = await db.insert(transmittalItemsTable).values({
@@ -562,14 +562,14 @@ router.post("/:id/items", requireRole("admin", "project_manager", "document_cont
 });
 
 // Remove document from transmittal
-router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams & { itemId: string }>, res) => {
   const itemId = paramInt(req.params.itemId);
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
   res.json({ success: true });
 });
 
 // Set per-item review code — assignment-based: must be the designated recipient or admin+
-router.patch("/:id/items/:itemId", requireAuth, async (req, res) => {
+router.patch("/:id/items/:itemId", requireAuth, async (req: Request<ProjectItemParams & { itemId: string }>, res) => {
   const transmittalId = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const itemId = paramInt(req.params.itemId);
@@ -611,7 +611,7 @@ router.patch("/:id/items/:itemId", requireAuth, async (req, res) => {
 });
 
 // Create / update share link
-router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
@@ -655,7 +655,7 @@ router.post("/:id/share", requireRole("admin", "project_manager", "document_cont
 });
 
 // Upload external file and add as transmittal attachment (creates a stub doc)
-router.post("/:id/upload-attachment", async (req, res) => {
+router.post("/:id/upload-attachment", async (req: Request<ProjectItemParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const transmittalId = paramInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
@@ -686,7 +686,7 @@ router.post("/:id/upload-attachment", async (req, res) => {
 });
 
 // Revoke share link
-router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req, res) => {
+router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   await db.update(transmittalsTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
@@ -698,7 +698,7 @@ router.delete("/:id/share", requireRole("admin", "project_manager", "document_co
 router.post(
   "/:id/submit-approval",
   requireRole("admin", "project_manager", "document_controller"),
-  async (req, res) => {
+  async (req: Request<ProjectItemParams>, res) => {
     const id = paramInt(req.params.id);
     const projectId = paramInt(req.params.projectId);
     const [existing] = await db.select().from(transmittalsTable)
@@ -719,7 +719,7 @@ router.post(
 router.post(
   "/:id/approve",
   requireAuth,
-  async (req, res) => {
+  async (req: Request<ProjectItemParams>, res) => {
     const id = paramInt(req.params.id);
     const projectId = paramInt(req.params.projectId);
     const caller = req.user!;
@@ -827,7 +827,7 @@ router.post(
 router.post(
   "/:id/reject",
   requireAuth,
-  async (req, res) => {
+  async (req: Request<ProjectItemParams>, res) => {
     const id = paramInt(req.params.id);
     const projectId = paramInt(req.params.projectId);
     const caller = req.user!;

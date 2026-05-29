@@ -3,13 +3,14 @@ import { db } from "@workspace/db";
 import { packagesTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
+import type { Request, Response } from "express";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-router.get("/", async (req, res) => {
+router.get("/", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const packages = await db
     .select({
@@ -28,7 +29,7 @@ router.get("/", async (req, res) => {
   res.json(packages);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", async (req: Request<ProjectParams>, res) => {
   const projectId = paramInt(req.params.projectId);
   const { name, code, description } = req.body;
   if (!name || !code) {
@@ -45,7 +46,7 @@ router.post("/", async (req, res) => {
   res.status(201).json(pkg);
 });
 
-router.put("/:id", async (req, res) => {
+router.put("/:id", async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const user = req.user!;
@@ -75,7 +76,7 @@ router.put("/:id", async (req, res) => {
   res.json(pkg);
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", async (req: Request<ProjectItemParams>, res) => {
   const id = paramInt(req.params.id);
   const projectId = paramInt(req.params.projectId);
   const user = req.user!;
