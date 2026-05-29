@@ -839,4 +839,9 @@ router.get("/storage-types", requireAuth, (_req: Request, res: Response) => {
           recommended: false,
         }]
       : []),
- 
+  ];
+
+  res.json({ types });
+});
+
+export default router;
