@@ -138,10 +138,10 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
   res.json({
     actionItems: filtered.map(r => ({
       ...r.item,
-      meetingTitle: r.meeting.title,
-      meetingRef: r.meeting.referenceNumber,
-      meetingId: r.meeting.id,
-      projectId: r.meeting.projectId,
+      meetingTitle: r.meeting?.title,
+      meetingRef: r.meeting?.referenceNumber,
+      meetingId: r.meeting?.id,
+      projectId: r.meeting?.projectId,
       projectName: r.project?.name,
       projectCode: r.project?.code,
       assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
@@ -273,11 +273,13 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
   if (attendees?.length) {
     const userAttendees = (attendees as any[]).filter(a => a.userId && a.userId !== req.user!.id);
     if (userAttendees.length > 0) {
+      let organizerName = "Someone";
+      let meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
       try {
         const [organizer] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
           .from(usersTable).where(eq(usersTable.id, req.user!.id));
-        const organizerName = organizer ? `${organizer.firstName} ${organizer.lastName}`.trim() : "Someone";
-        const meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+        organizerName = organizer ? `${organizer.firstName} ${organizer.lastName}`.trim() : "Someone";
+        meetDate = new Date(meetingDate).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
         await db.insert(notificationsTable).values(
           userAttendees.map((a: any) => ({
             userId: a.userId as number,

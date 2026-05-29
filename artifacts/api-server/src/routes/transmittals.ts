@@ -268,9 +268,9 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
         dueDate,
       }).returning();
       // Notify assignee if different from sender
-      if (assigneeId !== req.user!.id) {
+      if (autoAssignee !== req.user!.id) {
         await db.insert(notificationsTable).values({
-          userId: assigneeId,
+          userId: autoAssignee,
           type: "task_assigned",
           title: "Review task assigned",
           message: `Please review transmittal ${transmittal.transmittalNumber}: ${transmittal.subject}`,
@@ -890,4 +890,4 @@ router.post(
   }
 );
 
-export default router;
+expor

@@ -99,7 +99,7 @@ export async function applyDocumentReviewDecision({
   await db.insert(documentRevisionsTable).values({
     documentId,
     revision: doc.revision,
-    status: newStatus,
+    status: newStatus as any,
     comment: entryComment,
     createdById: reviewerId,
     reviewDecision: decision,

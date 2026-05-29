@@ -288,6 +288,7 @@ router.get("/reports", requireAuth, async (req, res): Promise<void> => {
 
     const filteredItems = allActionItems.filter(r => {
       if (projectIds.length === 0) return false;
+      if (!r.meeting) return false;
       return r.meeting.projectId ? projectIds.includes(r.meeting.projectId) : false;
     });
 
@@ -295,8 +296,8 @@ router.get("/reports", requireAuth, async (req, res): Promise<void> => {
       r.item.dueDate && r.item.dueDate < now && r.item.status !== "done"
     ).map(r => ({
       ...r.item,
-      meetingTitle: r.meeting.title,
-      meetingRef: r.meeting.referenceNumber,
+      meetingTitle: r.meeting?.title,
+      meetingRef: r.meeting?.referenceNumber,
       assignedToName: r.assignedTo ? `${r.assignedTo.firstName} ${r.assignedTo.lastName}` : r.item.assignedToName,
     }));
 

@@ -510,7 +510,7 @@ const registerOrgLimiter = rateLimit({
   max: 3,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: ipKeyGenerator,
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
   handler: (_req, res) => {
     res.status(429).json({ error: "Too Many Requests", message: "Too many sign-up attempts from this IP. Please try again in an hour." });
   },

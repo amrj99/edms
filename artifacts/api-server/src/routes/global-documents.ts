@@ -52,7 +52,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
   const allowedProjectIds = await getAllowedProjectIds(
     user.id,
-    user.organizationId,
+    user.organizationId ?? 0,
     isSysAdmin(user),
   );
 

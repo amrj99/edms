@@ -782,7 +782,7 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
     if (r.userId === caller.id) continue;
     await dispatchNotification({
       event: "correspondence_recalled" as any,
-      recipients: r.userId ? [{ userId: r.userId }] : [],
+      recipients: r.userId ? [{ userId: r.userId, email: "" }] : [],
       organizationId: existing.organizationId ?? undefined,
       entityType: "correspondence",
       entityId: id,

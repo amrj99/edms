@@ -644,8 +644,8 @@ router.post("/seed-linked-scenario", async (req, res): Promise<void> => {
 
     // 2. Project Member
     await db.insert(projectMembersTable).values([
-      { projectId: project.id, userId: adminUser.id, role: "project_manager" },
-      ...(secondUser.id !== adminUser.id ? [{ projectId: project.id, userId: secondUser.id, role: "document_controller" }] : []),
+      { projectId: project.id, userId: adminUser.id, role: "project_manager" as const },
+      ...(secondUser.id !== adminUser.id ? [{ projectId: project.id, userId: secondUser.id, role: "document_controller" as const }] : []),
     ]);
 
     // 3. Document

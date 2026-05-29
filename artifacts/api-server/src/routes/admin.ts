@@ -351,9 +351,9 @@ router.get("/backup", async (req, res): Promise<void> => {
     },
   };
 
-  backup.tables.meta = {
-    counts: Object.fromEntries(Object.entries(backup.tables).filter(([k]) => Array.isArray(backup.tables[k])).map(([k, v]) => [k, (v as any[]).length])),
-  } as any;
+  (backup.tables as any).meta = {
+    counts: Object.fromEntries(Object.entries(backup.tables).filter(([k, v]) => Array.isArray(v)).map(([k, v]) => [k, (v as any[]).length])),
+  };
 
   const filename = `edms-backup-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.json`;
   res.setHeader("Content-Type", "application/json");
@@ -837,7 +837,7 @@ router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, re
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
   const validPlanIds = ["expired", ...PLANS.map(p => p.id)];
   if (!validPlanIds.includes(planId)) { res.status(400).json({ error: "Invalid planId" }); return; }
-  const [org] = await db.select({ id: organizationsTable.id }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+  const [org] = await db.select({ id: organizationsTable.id, name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
   if (!org) { res.status(404).json({ error: "Organization not found" }); return; }
   await db.insert(subscriptionsTable)
     .values({ organizationId: orgId, planId, status: "active" })
@@ -845,7 +845,7 @@ router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, re
       target: subscriptionsTable.organizationId,
       set: { planId, status: "active", updatedAt: new Date() },
     });
-  await syncOrgModules(orgId);
+  await syncOrgModules(orgId, org.name);
   res.json({ ok: true, orgId, planId });
 });
 

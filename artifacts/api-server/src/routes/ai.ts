@@ -84,7 +84,7 @@ router.post("/documents/:id/analyze", async (req, res): Promise<void> => {
     }
   }
 
-  const analysis = await analyzeDocument(doc, caller.id, force, caller.organizationId);
+  const analysis = await analyzeDocument({ ...doc, documentType: doc.documentType ?? "" }, caller.id, force, caller.organizationId);
 
   // Deduct credits after a successful (non-cached) analysis
   if (caller.organizationId) {

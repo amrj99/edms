@@ -104,6 +104,7 @@ async function seedWorkflowDefaults() {
   // Build a map: orgId → first admin/owner user id (fallback to any user)
   const creatorByOrg = new Map<number, number>();
   for (const u of adminUsers) {
+    if (u.orgId === null) continue;
     const existing = creatorByOrg.get(u.orgId);
     if (!existing || ["system_owner", "admin"].includes(u.role)) {
       creatorByOrg.set(u.orgId, u.id);

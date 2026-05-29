@@ -107,7 +107,7 @@ export interface CreateProjectOptions {
   createdById: number;
   name?: string;
   code?: string;
-  status?: "active" | "on_hold" | "completed" | "archived";
+  status?: "active" | "on_hold" | "completed" | "cancelled";
 }
 
 export async function createProject(opts: CreateProjectOptions) {

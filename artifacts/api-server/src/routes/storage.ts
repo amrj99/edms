@@ -314,7 +314,10 @@ router.put(
     req.on("error", (err) => next(err));
   },
   async (req: Request, res: Response): Promise<void> => {
-    const { orgId, projectId, fileType, filename } = req.params;
+    const orgId = param(req.params.orgId);
+    const projectId = param(req.params.projectId);
+    const fileType = param(req.params.fileType);
+    const filename = param(req.params.filename);
     const targetOrgId = parseInt(orgId);
 
     // ── Ownership check ─────────────────────────────────────────────────────
@@ -489,7 +492,10 @@ router.get(
   "/onpremise/:orgId/:projectId/:fileType/:filename",
   requireAuthOrViewToken(req => `/api/storage/onpremise/${req.params.orgId}/${req.params.projectId}/${req.params.fileType}/${req.params.filename}`),
   async (req: Request, res: Response): Promise<void> => {
-    const { orgId, projectId, fileType, filename } = req.params;
+    const orgId = param(req.params.orgId);
+    const projectId = param(req.params.projectId);
+    const fileType = param(req.params.fileType);
+    const filename = param(req.params.filename);
     const targetOrgId = parseInt(orgId);
 
     // ── Ownership check ───────────────────────────────────────────────────────
@@ -833,9 +839,4 @@ router.get("/storage-types", requireAuth, (_req: Request, res: Response) => {
           recommended: false,
         }]
       : []),
-  ];
-
-  res.json({ types });
-});
-
-export default router;
+ 

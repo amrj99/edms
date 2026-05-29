@@ -179,7 +179,7 @@ router.get("/status", requireAuth, async (req, res): Promise<void> => {
           seatsCount: seats,
         });
       } catch (e) {
-        logger.warn("Failed to retrieve Stripe subscription", e);
+        logger.warn({ err: e }, "Failed to retrieve Stripe subscription");
       }
     }
 
@@ -247,7 +247,7 @@ router.post("/checkout", requireAuth, async (req, res): Promise<void> => {
     if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
 
     const stripeData = await getOrgStripeData(orgId);
-    let customerId = stripeData.customerId;
+    let customerId: string | undefined = stripeData.customerId;
 
     if (!customerId) {
       const [existingSub] = await db.select({ stripeCustomerId: subscriptionsTable.stripeCustomerId })
@@ -293,7 +293,7 @@ router.post("/portal", requireAuth, async (req, res): Promise<void> => {
     if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
     const stripeData = await getOrgStripeData(orgId);
-    let customerId = stripeData.customerId;
+    let customerId: string | undefined = stripeData.customerId;
 
     if (!customerId) {
       const [sub] = await db.select({ stripeCustomerId: subscriptionsTable.stripeCustomerId })
