@@ -75,8 +75,7 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
 router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { name, parentId } = req.body;
-  if (!name?.trim()) res.status(400).json({ error: "name is required" })
-    return;
+  if (!name?.trim()) { res.status(400).json({ error: "name is required" }); return; }
   const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
   res.status(201).json({ ...folder, documentCount: 0 });
 });
@@ -88,14 +87,12 @@ router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>
   const update: Record<string, any> = {};
   if (name !== undefined) update.name = name.trim();
   if (parentId !== undefined) update.parentId = parentId === null ? null : parseInt(parentId);
-  if (!Object.keys(update).length) res.status(400).json({ error: "nothing to update" })
-    return;
+  if (!Object.keys(update).length) { res.status(400).json({ error: "nothing to update" }); return; }
   const [folder] = await db.update(foldersTable)
     .set(update)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)))
     .returning();
-  if (!folder) res.status(404).json({ error: "folder not found" })
-    return;
+  if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
   res.json(folder);
 });
 
@@ -104,8 +101,7 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
   const projectId = paramInt(req.params.projectId);
   const [folder] = await db.select().from(foldersTable)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
-  if (!folder) res.status(404).json({ error: "folder not found" })
-    return;
+  if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
   // Move child folders to parent
   await db.update(foldersTable)
     .set({ parentId: folder.parentId ?? null })
@@ -122,8 +118,7 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
 router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const { sourceProjectId } = req.body;
-  if (!sourceProjectId) res.status(400).json({ error: "sourceProjectId required" })
-    return;
+  if (!sourceProjectId) { res.status(400).json({ error: "sourceProjectId required" }); return; }
   // Verify source project is in same org
   const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
   const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
@@ -465,8 +460,7 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
 router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = paramInt(req.params.projectId);
   const number = (req.query.number as string)?.trim();
-  if (!number) res.status(400).json({ error: "number query param required" })
-    return;
+  if (!number) { res.status(400).json({ error: "number query param required" }); return; }
 
   const existing = await db.select({
     id: documentsTable.id,
@@ -678,8 +672,7 @@ router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res
     .set({ folderId: folderId ?? null, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
     .returning();
-  if (!doc) res.status(404).json({ error: "Document not found" })
-    return;
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
   res.json({ id: doc.id, folderId: doc.folderId });
 });
 
@@ -1179,8 +1172,7 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
   // Verify document belongs to project
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) res.status(404).json({ error: "Document not found" })
-    return;
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
   const files = await db.select({
     file: documentFilesTable,
@@ -1206,8 +1198,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) res.status(404).json({ error: "Document not found" })
-    return;
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;
   if (!uploadedFiles || uploadedFiles.length === 0) {
@@ -1386,13 +1377,11 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) res.status(404).json({ error: "Document not found" })
-    return;
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
   const [file] = await db.select().from(documentFilesTable)
     .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)));
-  if (!file) res.status(404).json({ error: "File not found" })
-    return;
+  if (!file) { res.status(404).json({ error: "File not found" }); return; }
 
   await db.delete(documentFilesTable).where(eq(documentFilesTable.id, fileId));
 
@@ -1571,4 +1560,4 @@ router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request
   res.json({ ok: true });
 });
 
-export default router;
+export default r

@@ -729,8 +729,7 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
     }
 
     // Non-sysadmin: own org only
-    if (!user.organizationId) res.status(403).json({ error: "No organization" })
-    return;
+    if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
     const quota = await getOrgAiQuota(user.organizationId);
     res.json({ organizationId: user.organizationId, quota })
     return;
@@ -789,8 +788,7 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
 router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void> => {
 
   const orgId = paramInt(req.params.orgId);
-  if (isNaN(orgId)) res.status(400).json({ error: "Invalid orgId" })
-    return;
+  if (isNaN(orgId)) { res.status(400).json({ error: "Invalid orgId" }); return; }
 
   const { aiDailyLimit, aiMonthlyTokenLimit } = req.body as {
     aiDailyLimit?: number;

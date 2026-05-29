@@ -173,8 +173,7 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
     .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
     .where(eq(meetingsTable.id, id));
 
-  if (!row) res.status(404).json({ error: "Meeting not found" })
-    return;
+  if (!row) { res.status(404).json({ error: "Meeting not found" }); return; }
 
   // Org isolation check
   if (!isSysAdmin(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
@@ -333,8 +332,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   const [before] = await db.select({ status: meetingsTable.status, minutes: meetingsTable.minutes, organizationId: meetingsTable.organizationId })
     .from(meetingsTable).where(eq(meetingsTable.id, id));
 
-  if (!before) res.status(404).json({ error: "Meeting not found" })
-    return;
+  if (!before) { res.status(404).json({ error: "Meeting not found" }); return; }
   if (!isSysAdmin(req.user!) && before.organizationId !== null && before.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden" })
     return;
@@ -353,8 +351,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
     updatedAt: new Date(),
   }).where(eq(meetingsTable.id, id)).returning();
 
-  if (!meeting) res.status(404).json({ error: "Meeting not found" })
-    return;
+  if (!meeting) { res.status(404).json({ error: "Meeting not found" }); return; }
 
   // Auto-parse action items from minutes when meeting is first marked completed
   const becomingCompleted = status === "completed" && before?.status !== "completed";
@@ -413,14 +410,12 @@ router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "doc
 router.post("/:id/action-items", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const meetingId = paramInt(req.params.id);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
-  if (!title?.trim()) res.status(400).json({ error: "title required" })
-    return;
+  if (!title?.trim()) { res.status(400).json({ error: "title required" }); return; }
 
   // Verify parent meeting belongs to user's org
   const [parentMeeting] = await db.select({ organizationId: meetingsTable.organizationId })
     .from(meetingsTable).where(eq(meetingsTable.id, meetingId)).limit(1);
-  if (!parentMeeting) res.status(404).json({ error: "Meeting not found" })
-    return;
+  if (!parentMeeting) { res.status(404).json({ error: "Meeting not found" }); return; }
   if (!isSysAdmin(req.user!) && parentMeeting.organizationId !== null && parentMeeting.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden" })
     return;
@@ -505,7 +500,4 @@ router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager
 router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response): Promise<void> => {
   const id = paramInt(req.params.id);
   await db.delete(meetingsTable).where(eq(meetingsTable.id, id));
-  res.json({ message: "Deleted" });
-});
-
-export default router;
+  re

@@ -27,8 +27,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
     .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
     .where(eq(usersTable.id, userId));
 
-  if (!user) res.status(404).json({ error: "User not found" })
-    return;
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
   const [prefs] = await db
     .select()
@@ -118,8 +117,7 @@ router.put("/password", async (req: Request, res: Response): Promise<void> => {
     .from(usersTable)
     .where(eq(usersTable.id, userId));
 
-  if (!user) res.status(404).json({ error: "User not found" })
-    return;
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
   const valid = await verifyPassword(currentPassword, user.passwordHash);
   if (!valid) {

@@ -29,8 +29,7 @@ function isStripeConfigured(): boolean {
 router.get("/balance", requireAuth, async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) res.status(400).json({ message: "No organisation context" })
-    return;
+    if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
     const { balance, totalPurchased } = await getCreditsBalance(orgId);
 
@@ -73,8 +72,7 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
 
   try {
     const orgId = req.user!.organizationId;
-    if (!orgId) res.status(400).json({ message: "No organisation context" })
-    return;
+    if (!orgId) { res.status(400).json({ message: "No organisation context" }); return; }
 
     const { packId, successUrl, cancelUrl } = req.body as {
       packId: string;
@@ -83,8 +81,7 @@ router.post("/purchase", requireAuth, async (req, res): Promise<void> => {
     };
 
     const pack = AI_CREDIT_PACKS.find(p => p.id === packId);
-    if (!pack) res.status(400).json({ message: "Invalid AI credit pack" })
-    return;
+    if (!pack) { res.status(400).json({ message: "Invalid AI credit pack" }); return; }
 
     const priceId = process.env[pack.stripePriceEnv];
     if (!priceId) {
@@ -172,8 +169,7 @@ router.post("/admin/grant", requireAuth, async (req, res): Promise<void> => {
       .from(organizationsTable)
       .where(eq(organizationsTable.id, organizationId));
 
-    if (!org) res.status(404).json({ message: "Organisation not found" })
-    return;
+    if (!org) { res.status(404).json({ message: "Organisation not found" }); return; }
 
     const newBalance = await grantCredits(organizationId, amount, "grant", {
       grantedBy: req.user!.id,

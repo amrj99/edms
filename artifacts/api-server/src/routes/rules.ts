@@ -109,8 +109,7 @@ const ACTIVE_RULE_LIMIT = 100;
 // GET /api/rules — list all rules for the user's org
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  if (!orgId) res.json({ rules: [] })
-    return;
+  if (!orgId) { res.json({ rules: [] }); return; }
   const rules = await db.select().from(rulesTable)
     .where(eq(rulesTable.organizationId, orgId))
     .orderBy(asc(rulesTable.priority), asc(rulesTable.id));
@@ -123,28 +122,24 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = paramInt(req.params.id);
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!rule) res.status(404).json({ error: "Rule not found" })
-    return;
+  if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
   res.json(rule);
 });
 
 // POST /api/rules — create rule
 router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  if (!orgId) res.status(400).json({ error: "No organization" })
-    return;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
 
   const {
     name, description, priority, isEnabled, appliesTo, conditions, actions,
   } = req.body;
 
-  if (!name?.trim()) res.status(400).json({ error: "name is required" })
-    return;
+  if (!name?.trim()) { res.status(400).json({ error: "name is required" }); return; }
 
   // Validate conditions + actions structure
   const validation = validateConditionsAndActions(conditions, actions);
-  if (!validation.ok) res.status(400).json({ error: validation.error })
-    return;
+  if (!validation.ok) { res.status(400).json({ error: validation.error }); return; }
 
   // Enforce max 100 active rules per org
   const willBeActive = isEnabled !== false; // default true
@@ -185,8 +180,7 @@ router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, r
 
   const [existing] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!existing) res.status(404).json({ error: "Rule not found" })
-    return;
+  if (!existing) { res.status(404).json({ error: "Rule not found" }); return; }
 
   const {
     name, description, priority, isEnabled, appliesTo, conditions, actions,
@@ -194,8 +188,7 @@ router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, r
 
   // Validate conditions + actions structure
   const validation = validateConditionsAndActions(conditions, actions);
-  if (!validation.ok) res.status(400).json({ error: validation.error })
-    return;
+  if (!validation.ok) { res.status(400).json({ error: validation.error }); return; }
 
   // Enforce max 100 active rules when enabling a currently-disabled rule
   const becomingActive = isEnabled === true && !existing.isEnabled;
@@ -238,8 +231,7 @@ router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req
 
   const [existing] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!existing) res.status(404).json({ error: "Rule not found" })
-    return;
+  if (!existing) { res.status(404).json({ error: "Rule not found" }); return; }
 
   await db.delete(rulesTable).where(eq(rulesTable.id, id));
   res.status(204).end();
@@ -252,8 +244,7 @@ router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), asyn
 
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!rule) res.status(404).json({ error: "Rule not found" })
-    return;
+  if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
 
   // Enforce limit when re-enabling a rule
   if (!rule.isEnabled) {
@@ -284,8 +275,7 @@ router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager")
 
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!rule) res.status(404).json({ error: "Rule not found" })
-    return;
+  if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
 
   const [updated] = await db.update(rulesTable)
     .set({
