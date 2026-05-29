@@ -3,7 +3,7 @@ import { db, externalContactsTable } from "@workspace/db";
 import { eq, and, ilike, or } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -75,7 +75,7 @@ router.post("/", requireRole("document_controller", "project_manager", "admin", 
 router.put("/:id", requireRole("document_controller", "project_manager", "admin", "system_owner"), async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
-    const id = paramInt(req.params.id);
+    const id = requireInt(req.params.id);
     const { name, email, company, jobTitle, phone } = req.body;
 
     if (!name?.trim() || !email?.trim()) {
@@ -114,7 +114,7 @@ router.put("/:id", requireRole("document_controller", "project_manager", "admin"
 router.delete("/:id", requireRole("admin", "system_owner"), async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
-    const id = paramInt(req.params.id);
+    const id = requireInt(req.params.id);
 
     await db
       .delete(externalContactsTable)

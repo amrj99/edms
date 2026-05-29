@@ -42,7 +42,7 @@ import { isAtLeast } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendEmail } from "../lib/email.js";
-import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import type { Request } from 'express';
 
 const router = Router({ mergeParams: true });
@@ -311,7 +311,7 @@ function chainSummarySelect() {
 // ─── GET / — list chains for project ─────────────────────────────────────────
 
 router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const { status, orgId: orgFilter } = req.query;
   const userOrgId = req.user!.organizationId;
   const role = await effectiveRole(req, projectId);
@@ -352,7 +352,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 // Usage: GET /api/projects/:projectId/submission-chains/members?orgId=5
 
 router.get("/members", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const orgId = req.query.orgId ? parseInt(req.query.orgId as string) : null;
 
   if (!orgId) { res.status(400).json({ error: "orgId query parameter is required" }); return; }
@@ -384,8 +384,8 @@ router.get("/members", async (req: Request<ProjectParams>, res): Promise<void> =
 // ─── GET /:id — chain detail ──────────────────────────────────────────────────
 
 router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -427,7 +427,7 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
 // ─── POST / — create chain ────────────────────────────────────────────────────
 
 router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required to create a submission chain" });
@@ -508,8 +508,8 @@ router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 // ─── PATCH /:id — update title / description ─────────────────────────────────
 
 router.patch("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -540,8 +540,8 @@ router.patch("/:id", async (req: Request<ProjectItemParams>, res): Promise<void>
 // ─── DELETE /:id — delete draft chain ────────────────────────────────────────
 
 router.delete("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "admin")) {
     res.status(403).json({ error: "Admin role or above required to delete a submission chain" });
@@ -574,8 +574,8 @@ router.delete("/:id", async (req: Request<ProjectItemParams>, res): Promise<void
 // ─── POST /:id/parties — add an allowed party ────────────────────────────────
 
 router.post("/:id/parties", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -631,9 +631,9 @@ router.post("/:id/parties", async (req: Request<ProjectItemParams>, res): Promis
 // ─── DELETE /:id/parties/:partyId — remove an allowed party ──────────────────
 
 router.delete("/:id/parties/:partyId", async (req: Request<ProjectItemParams & { partyId: string }>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
-  const partyId = paramInt(req.params.partyId);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const partyId = requireInt(req.params.partyId);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required" });
@@ -671,8 +671,8 @@ router.delete("/:id/parties/:partyId", async (req: Request<ProjectItemParams & {
 // ─── POST /:id/documents — add a document/revision to chain ──────────────────
 
 router.post("/:id/documents", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -746,9 +746,9 @@ router.post("/:id/documents", async (req: Request<ProjectItemParams>, res): Prom
 // ─── DELETE /:id/documents/:chainDocId — remove document ─────────────────────
 
 router.delete("/:id/documents/:chainDocId", async (req: Request<ProjectItemParams & { chainDocId: string }>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
-  const chainDocId = paramInt(req.params.chainDocId);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const chainDocId = requireInt(req.params.chainDocId);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -785,8 +785,8 @@ router.delete("/:id/documents/:chainDocId", async (req: Request<ProjectItemParam
 // ─── POST /:id/activate — draft → active ─────────────────────────────────────
 
 router.post("/:id/activate", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -844,8 +844,8 @@ router.post("/:id/activate", async (req: Request<ProjectItemParams>, res): Promi
 // ─── POST /:id/forward — forward to next party ───────────────────────────────
 
 router.post("/:id/forward", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1032,8 +1032,8 @@ router.post("/:id/forward", async (req: Request<ProjectItemParams>, res): Promis
 // ─── POST /:id/return — return to previous party ─────────────────────────────
 
 router.post("/:id/return", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1152,8 +1152,8 @@ router.post("/:id/return", async (req: Request<ProjectItemParams>, res): Promise
 // ─── POST /:id/resubmit — returned → active (originator resubmits) ─────────────
 
 router.post("/:id/resubmit", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1270,8 +1270,8 @@ router.post("/:id/resubmit", async (req: Request<ProjectItemParams>, res): Promi
 // ─── POST /:id/close — manually close ────────────────────────────────────────
 
 router.post("/:id/close", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   if (!isAtLeast(role, "project_manager")) {
     res.status(403).json({ error: "Project Manager role or above required to close a submission chain" });
@@ -1315,8 +1315,8 @@ router.post("/:id/close", async (req: Request<ProjectItemParams>, res): Promise<
 // The new assignee must belong to currentOrgId and have project access.
 
 router.post("/:id/reassign", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 
@@ -1401,8 +1401,8 @@ router.post("/:id/reassign", async (req: Request<ProjectItemParams>, res): Promi
 // ─── GET /:id/steps — step history ───────────────────────────────────────────
 
 router.get("/:id/steps", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const role = await effectiveRole(req, projectId);
   const userOrgId = req.user!.organizationId;
 

@@ -11,14 +11,14 @@ import {
 } from "@workspace/db";
 import { eq, and, lt, count, sql, ne, isNotNull, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
-import { param, paramInt, paramIntOrNull, type ProjectParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams} from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 const GOV_ROLES = ["system_owner", "admin", "project_manager", "document_controller"] as const;
 
 router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
 
   const now = new Date();

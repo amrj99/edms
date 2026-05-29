@@ -4,7 +4,7 @@ import { metadataFieldsTable } from "@workspace/db";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -48,7 +48,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
 });
 
 router.delete("/:id", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const orgId = req.orgId;
   const where = orgId
     ? and(eq(metadataFieldsTable.id, id), eq(metadataFieldsTable.organizationId, orgId))

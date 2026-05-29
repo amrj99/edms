@@ -14,7 +14,7 @@ import { rulesTable } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -119,7 +119,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 // GET /api/rules/:id
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
   if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
@@ -176,7 +176,7 @@ router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res
 // PUT /api/rules/:id — update rule
 router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   const [existing] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
@@ -227,7 +227,7 @@ router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, r
 // DELETE /api/rules/:id
 router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   const [existing] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
@@ -240,7 +240,7 @@ router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req
 // PATCH /api/rules/:id/toggle — quick enable/disable
 router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
@@ -271,7 +271,7 @@ router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), asyn
 // POST /api/rules/:id/reset-circuit — manually reset the circuit breaker
 router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   const [rule] = await db.select().from(rulesTable)
     .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));

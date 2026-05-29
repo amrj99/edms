@@ -6,7 +6,7 @@ import {
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { getReqOrgId } from "../lib/org-scope.js";
 import { executeSkill } from "../lib/skill-engine.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -79,7 +79,7 @@ router.post("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
 // ─── PUT /api/skills/:id — update config / settings ──────────────────────────
 router.put("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
-  const skillId = paramInt(req.params.id);
+  const skillId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -112,7 +112,7 @@ router.put("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
 // ─── DELETE /api/skills/:id ───────────────────────────────────────────────────
 router.delete("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
-  const skillId = paramInt(req.params.id);
+  const skillId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -133,7 +133,7 @@ router.delete("/:id", requireAuth, adminOnly, async (req, res): Promise<void> =>
 // ─── PUT /api/skills/:id/toggle — enable / disable ───────────────────────────
 router.put("/:id/toggle", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
-  const skillId = paramInt(req.params.id);
+  const skillId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -156,7 +156,7 @@ router.put("/:id/toggle", requireAuth, adminOnly, async (req, res): Promise<void
 // ─── PUT /api/skills/:id/run — manual execution ──────────────────────────────
 router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
-  const skillId = paramInt(req.params.id);
+  const skillId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -176,7 +176,7 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> =
 // ─── GET /api/skills/:id/executions — execution history ──────────────────────
 router.get("/:id/executions", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
-  const skillId = paramInt(req.params.id);
+  const skillId = requireInt(req.params.id);
   const limit   = Math.min(parseInt(req.query.limit as string) || 50, 200);
 
   const [existing] = await db

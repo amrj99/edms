@@ -24,7 +24,7 @@ import { dispatchNotification } from "../lib/notifications/index.js";
 import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
 import type { Request } from 'express';
-import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router({ mergeParams: true });
@@ -546,7 +546,7 @@ router.get("/assigned-to-me", requireAuth, async (req: Request<ProjectParams>, r
 });
 
 router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
+  const projectId = req.params.projectId ? requireInt(req.params.projectId) : null;
   const { folder, type, scope, viewAll } = req.query;
   const caller = req.user!;
   const userId = caller.id;
@@ -651,13 +651,13 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 });
 
 router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
+  const contextProjectId = req.params.projectId ? requireInt(req.params.projectId) : null;
   await createCorrespondence(req, res, contextProjectId);
 });
 
 router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = req.params.projectId ? paramInt(req.params.projectId) : null;
-  const id = paramInt(req.params.id);
+  const projectId = req.params.projectId ? requireInt(req.params.projectId) : null;
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const userId = caller.id;
 
@@ -708,7 +708,7 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 // ─── Recall ───────────────────────────────────────────────────────────────────
 
 router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
 
   // Fetch the correspondence to check ownership, state, and read receipt
@@ -795,7 +795,7 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
 });
 
 router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const { isRead } = req.body;
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
@@ -806,7 +806,7 @@ router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): P
 });
 
 router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { subject, body, folder, status, referenceNumber } = req.body;
   const orgId = caller.organizationId;
@@ -867,8 +867,8 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 });
 
 router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const contextProjectId = req.params.projectId ? paramInt(req.params.projectId) : null;
-  const parentId = paramInt(req.params.id);
+  const contextProjectId = req.params.projectId ? requireInt(req.params.projectId) : null;
+  const parentId = requireInt(req.params.id);
   const caller = req.user!;
 
   // Only member+ can reply to correspondence
@@ -955,7 +955,7 @@ router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res):
 // ─── Attachments ──────────────────────────────────────────────────────────────
 
 router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const corrId = paramInt(req.params.id);
+  const corrId = requireInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   const [att] = await db.insert(correspondenceAttachmentsTable).values({
     correspondenceId: corrId,
@@ -967,13 +967,13 @@ router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>,
 });
 
 router.delete("/:id/attachments/:attId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const attId = paramInt(req.params.attId);
+  const attId = requireInt(req.params.attId);
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
   res.json({ success: true });
 });
 
 router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
 
   // Fetch to get project context for role resolution
@@ -1015,8 +1015,8 @@ router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Pro
 // ─── Share link ───────────────────────────────────────────────────────────────
 
 router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
-  const projectId = paramInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
 
   // Verify the project belongs to the caller's org — prevents cross-tenant share
@@ -1058,7 +1058,7 @@ router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res):
 });
 
 router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   await db.update(correspondenceTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(eq(correspondenceTable.id, id));

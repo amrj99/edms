@@ -7,7 +7,7 @@ import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -177,7 +177,7 @@ router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
 
   const users = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
@@ -251,7 +251,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.put("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const isSelf = caller.id === id;
 
@@ -326,7 +326,7 @@ router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   // Prevent self-deletion — an admin deleting their own account could leave an
   // org with no admin, and the action cannot be undone.
@@ -401,7 +401,7 @@ router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
 
 router.post("/:id/reset-password", requireAuth, async (req, res): Promise<void> => {
   const caller = req.user!;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const isSelf = caller.id === id;
 
   // Only sysAdmins can reset other users' passwords; users may reset their own

@@ -5,7 +5,7 @@ import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/d
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { requireOrgScope } from "../lib/org-scope.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -71,7 +71,7 @@ router.post("/", requireMinRole("admin"), async (req, res): Promise<void> => {
 router.put("/:id", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
-  const deptId = paramInt(req.params.id);
+  const deptId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -102,7 +102,7 @@ router.put("/:id", requireMinRole("admin"), async (req, res): Promise<void> => {
 router.delete("/:id", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
-  const deptId = paramInt(req.params.id);
+  const deptId = requireInt(req.params.id);
 
   const [existing] = await db
     .select()
@@ -118,7 +118,7 @@ router.delete("/:id", requireMinRole("admin"), async (req, res): Promise<void> =
 // ─── Get members of a department ──────────────────────────────────────────────
 router.get("/:id/members", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
-  const deptId = paramInt(req.params.id);
+  const deptId = requireInt(req.params.id);
 
   const [dept] = await db
     .select()
@@ -149,7 +149,7 @@ router.get("/:id/members", async (req, res): Promise<void> => {
 router.post("/:id/members", requireMinRole("admin"), async (req, res): Promise<void> => {
 
   const orgId = getOrgId(req);
-  const deptId = paramInt(req.params.id);
+  const deptId = requireInt(req.params.id);
   const { userId, isPrimary = false } = req.body;
 
   if (!userId) { res.status(400).json({ error: "userId is required" }); return; }
@@ -185,8 +185,8 @@ router.post("/:id/members", requireMinRole("admin"), async (req, res): Promise<v
 // ─── Remove user from department ──────────────────────────────────────────────
 router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res): Promise<void> => {
 
-  const deptId = paramInt(req.params.id);
-  const userId = paramInt(req.params.userId);
+  const deptId = requireInt(req.params.id);
+  const userId = requireInt(req.params.userId);
 
   await db
     .delete(userDepartmentsTable)
@@ -201,7 +201,7 @@ router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res):
 // ─── Get departments for a specific user ──────────────────────────────────────
 router.get("/user/:userId", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
-  const targetUserId = paramInt(req.params.userId);
+  const targetUserId = requireInt(req.params.userId);
 
   const rows = await db
     .select({

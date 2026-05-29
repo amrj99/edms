@@ -6,7 +6,7 @@ import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { grantCredits, INITIAL_FREE_CREDITS } from "../lib/ai-credits.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -131,7 +131,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
@@ -143,7 +143,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.put("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
@@ -170,7 +170,7 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
 
 router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
   res.status(204).send();
 });

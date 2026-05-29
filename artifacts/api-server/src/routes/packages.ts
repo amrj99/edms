@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { packagesTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
-import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 import type { Request, Response } from "express";
 
@@ -11,7 +11,7 @@ const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const packages = await db
     .select({
       id: packagesTable.id,
@@ -30,7 +30,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 });
 
 router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const { name, code, description } = req.body;
   if (!name || !code) {
     res.status(400).json({ error: "Name and code are required" });
@@ -47,8 +47,8 @@ router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 });
 
 router.put("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
-  const projectId = paramInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const user = req.user!;
   const { name, code, description } = req.body;
 
@@ -77,8 +77,8 @@ router.put("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
 });
 
 router.delete("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
-  const projectId = paramInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const user = req.user!;
 
   // Tenant isolation: verify project belongs to the user's org before deleting.

@@ -18,7 +18,7 @@ import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
 import { testSmtpConnection } from "../lib/email.js";
 import { syncOrgModules } from "../lib/module-sync-service.js";
-import { param, paramInt, paramIntOrNull, requireInt } from '../lib/params';
+import {param, paramInt, paramIntOrNull, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -914,3 +914,4 @@ router.get("/shadow-log", requireMinRole("admin"), async (req, res): Promise<voi
 });
 
 export default router;
+                          

@@ -4,7 +4,7 @@ import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, u
 import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
 import { emitToUser } from "../lib/socket.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -162,7 +162,7 @@ router.get("/", async (req, res): Promise<void> => {
 
 // ─── Mark single notification as read ─────────────────────────────────────────
 router.post("/:id/read", async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const updated = await db.update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
@@ -173,7 +173,7 @@ router.post("/:id/read", async (req, res): Promise<void> => {
 
 // ─── Mark single notification as unread ───────────────────────────────────────
 router.post("/:id/unread", async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const updated = await db.update(notificationsTable)
     .set({ isRead: false, readAt: null })
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
@@ -192,7 +192,7 @@ router.post("/read-all", async (req, res): Promise<void> => {
 
 // ─── Delete notification ───────────────────────────────────────────────────────
 router.delete("/:id", async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const deleted = await db.delete(notificationsTable)
     .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
     .returning({ id: notificationsTable.id });

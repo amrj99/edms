@@ -8,7 +8,7 @@ import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { triggerSkillEvent } from "../lib/skill-engine.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router();
@@ -156,7 +156,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
   if (!tasks[0]) { res.status(404).json({ error: "Not Found" }); return; }
@@ -197,7 +197,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.put("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const { title, description, status, priority, assignedToId, dueDate } = req.body;
 

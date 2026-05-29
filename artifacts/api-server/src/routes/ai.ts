@@ -32,7 +32,7 @@ import {
 } from "../lib/ai-service.js";
 import { deductCredits, getCreditsBalance, AI_FEATURE_COSTS } from "../lib/ai-credits.js";
 import { detectCommandComplexity } from "../lib/ai-complexity.js";
-import { param, paramInt, paramIntOrNull, requireInt } from '../lib/params';
+import {param, paramInt, paramIntOrNull, requireInt} from '../lib/params';
 
 const router = Router();
 
@@ -974,7 +974,4 @@ router.put("/privacy-mode", async (req, res): Promise<void> => {
   await db.update(orgConfigTable)
     .set({ aiPrivacyMode, updatedAt: new Date() })
     .where(eq(orgConfigTable.organizationId, orgId));
-  res.json({ aiPrivacyMode });
-});
-
-export default router;
+  res.json({ ai

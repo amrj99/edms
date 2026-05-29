@@ -13,7 +13,7 @@ import {
 import { eq, and, inArray, sql, desc, gt, or, ilike, isNull, ne } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -173,7 +173,7 @@ router.post("/groups", async (req, res): Promise<void> => {
 // ─── GET /api/chat/groups/:id ──────────────────────────────────────────────────
 router.get("/groups/:id", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   if (!(await isMember(groupId, userId))) {
@@ -210,7 +210,7 @@ router.get("/groups/:id", async (req, res): Promise<void> => {
 // ─── PUT /api/chat/groups/:id ──────────────────────────────────────────────────
 router.put("/groups/:id", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const role = req.user!.role;
@@ -230,7 +230,7 @@ router.put("/groups/:id", async (req, res): Promise<void> => {
 // ─── DELETE /api/chat/groups/:id ───────────────────────────────────────────────
 router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manager", "document_controller"), async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const role = req.user!.role;
@@ -245,7 +245,7 @@ router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manag
 // ─── GET /api/chat/groups/:id/members ─────────────────────────────────────────
 router.get("/groups/:id/members", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
@@ -270,7 +270,7 @@ router.get("/groups/:id/members", async (req, res): Promise<void> => {
 // ─── POST /api/chat/groups/:id/members ────────────────────────────────────────
 router.post("/groups/:id/members", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   const role = req.user!.role;
@@ -300,8 +300,8 @@ router.post("/groups/:id/members", async (req, res): Promise<void> => {
 // ─── DELETE /api/chat/groups/:id/members/:userId ───────────────────────────────
 router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> => {
   const currentUserId = req.user!.id;
-  const groupId = paramInt(req.params.id);
-  const targetUserId = paramInt(req.params.memberId);
+  const groupId = requireInt(req.params.id);
+  const targetUserId = requireInt(req.params.memberId);
 
   const role = req.user!.role;
   const canManage = currentUserId === targetUserId || (await isGroupAdmin(groupId, currentUserId)) || role === "admin" || role === "system_owner";
@@ -314,7 +314,7 @@ router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> =
 // ─── GET /api/chat/groups/:id/messages ────────────────────────────────────────
 router.get("/groups/:id/messages", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
@@ -352,7 +352,7 @@ router.get("/groups/:id/messages", async (req, res): Promise<void> => {
 router.post("/groups/:id/messages", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId = req.user!.organizationId!;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
@@ -435,8 +435,8 @@ router.post("/groups/:id/messages", async (req, res): Promise<void> => {
 // ─── DELETE /api/chat/groups/:id/messages/:msgId ───────────────────────────────
 router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
-  const msgId = paramInt(req.params.msgId);
+  const groupId = requireInt(req.params.id);
+  const msgId = requireInt(req.params.msgId);
 
   const [msg] = await db.select().from(chatMessagesTable).where(eq(chatMessagesTable.id, msgId));
   if (!msg) { res.status(404).json({ error: "Message not found" }); return; }
@@ -452,7 +452,7 @@ router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => 
 // ─── POST /api/chat/groups/:id/messages/:msgId/read ───────────────────────────
 router.post("/groups/:id/messages/:msgId/read", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const msgId = paramInt(req.params.msgId);
+  const msgId = requireInt(req.params.msgId);
 
   const [existing] = await db
     .select({ id: chatMessageReadsTable.id })
@@ -468,7 +468,7 @@ router.post("/groups/:id/messages/:msgId/read", async (req, res): Promise<void> 
 // ─── POST /api/chat/groups/:id/read-all ───────────────────────────────────────
 router.post("/groups/:id/read-all", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const groupId = paramInt(req.params.id);
+  const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
   if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }

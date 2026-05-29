@@ -6,14 +6,14 @@ import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
-import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 // ─── List project role overrides ──────────────────────────────────────────────
 router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const now = new Date();
 
   const rows = await db
@@ -55,7 +55,7 @@ router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), as
 // ─── Create project role override ─────────────────────────────────────────────
 router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const { userId, roleOverride, reason, expiresAt } = req.body;
 
   if (!userId || !roleOverride || !reason?.trim() || !expiresAt) {
@@ -112,8 +112,8 @@ router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), a
 // ─── Revoke project role override ─────────────────────────────────────────────
 router.delete("/role-overrides/:overrideId", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
-  const overrideId = paramInt(req.params.overrideId);
-  const projectId = paramInt(req.params.projectId);
+  const overrideId = requireInt(req.params.overrideId);
+  const projectId = requireInt(req.params.projectId);
 
   const [override] = await db.select().from(projectRoleOverridesTable)
     .where(and(eq(projectRoleOverridesTable.id, overrideId), eq(projectRoleOverridesTable.projectId, projectId)))

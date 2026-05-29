@@ -8,7 +8,7 @@ import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
 const router = Router();
@@ -271,7 +271,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 
 // ─── GET /:id ─────────────────────────────────────────────────────────────────
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const results = await db.select({ project: projectsTable, orgName: organizationsTable.name })
     .from(projectsTable)
@@ -292,7 +292,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 
 // ─── PUT /:id ─────────────────────────────────────────────────────────────────
 router.put("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
@@ -364,7 +364,7 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
 
 // ─── DELETE /:id ──────────────────────────────────────────────────────────────
 router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
@@ -378,7 +378,7 @@ router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
 
 // ─── GET /:id/members ─────────────────────────────────────────────────────────
 router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
 
   // Tenant isolation: verify project belongs to the user's org
@@ -419,7 +419,7 @@ router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.post("/:id/members", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { userId, role } = req.body;
 
@@ -477,8 +477,8 @@ router.post("/:id/members", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.delete("/:id/members/:userId", requireAuth, async (req, res): Promise<void> => {
-  const projectId = paramInt(req.params.id);
-  const userId = paramInt(req.params.userId);
+  const projectId = requireInt(req.params.id);
+  const userId = requireInt(req.params.userId);
   await db.delete(projectMembersTable).where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)));
   res.status(204).send();
 });

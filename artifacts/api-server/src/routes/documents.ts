@@ -24,7 +24,7 @@ import { uploadBuffer } from "../lib/orgStorage.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 import type { Request } from 'express';
-import { param, paramInt, paramIntOrNull, type ProjectParams, type ProjectItemParams } from '../lib/params';
+import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 
 const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
 
@@ -56,7 +56,7 @@ async function canAccessProject(
 
 // Folders
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
   const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
   if (!allowed) {
@@ -73,7 +73,7 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
 });
 
 router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const { name, parentId } = req.body;
   if (!name?.trim()) { res.status(400).json({ error: "name is required" }); return; }
   const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
@@ -81,8 +81,8 @@ router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): P
 });
 
 router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const folderId = paramInt(req.params.folderId);
-  const projectId = paramInt(req.params.projectId);
+  const folderId = requireInt(req.params.folderId);
+  const projectId = requireInt(req.params.projectId);
   const { name, parentId } = req.body;
   const update: Record<string, any> = {};
   if (name !== undefined) update.name = name.trim();
@@ -97,8 +97,8 @@ router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>
 });
 
 router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const folderId = paramInt(req.params.folderId);
-  const projectId = paramInt(req.params.projectId);
+  const folderId = requireInt(req.params.folderId);
+  const projectId = requireInt(req.params.projectId);
   const [folder] = await db.select().from(foldersTable)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
   if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
@@ -116,7 +116,7 @@ router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectPara
 
 // POST /folders/copy-from — copy folder tree from another project in same org
 router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const { sourceProjectId } = req.body;
   if (!sourceProjectId) { res.status(400).json({ error: "sourceProjectId required" }); return; }
   // Verify source project is in same org
@@ -155,7 +155,7 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
 
 // Documents
 router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
   const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
   if (!projectAccessAllowed) {
@@ -236,7 +236,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 });
 
 router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   if (!req.body || typeof req.body !== "object") {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
     return;
@@ -456,7 +456,7 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
 
 // GET /check-number?number=X — check if a document number already exists in this project
 router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
+  const projectId = requireInt(req.params.projectId);
   const number = (req.query.number as string)?.trim();
   if (!number) { res.status(400).json({ error: "number query param required" }); return; }
 
@@ -485,8 +485,8 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
 });
 
 router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
     caller.id, caller.organizationId, projectId, isSystemOwner(caller),
@@ -542,8 +542,8 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 });
 
 router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
 
   const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy, direction } = req.body;
@@ -613,8 +613,8 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 const LIFECYCLE_LOCKED_STATUSES = new Set(["approved", "approved_with_comments", "issued", "archived", "obsolete", "superseded"]);
 
 router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { reason } = req.body ?? {};
 
@@ -661,8 +661,8 @@ router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Pro
 
 // PATCH /:id/folder — move document to a different folder (or root)
 router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const { folderId } = req.body;  // null = move to root
   const [doc] = await db.update(documentsTable)
     .set({ folderId: folderId ?? null, updatedAt: new Date() })
@@ -673,7 +673,7 @@ router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res
 });
 
 router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
 
   // Tenant isolation: verify the document belongs to the user's org before returning revisions
@@ -713,7 +713,7 @@ router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, re
 // Shape is stable and extensible: adding correspondence later requires only
 // appending another typed block to the merge array, with no frontend shape change.
 router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const docId   = paramInt(req.params.id);
+  const docId   = requireInt(req.params.id);
   const projectId = parseInt(req.params.projectId ?? "0");
 
   // 1 ── Revisions ───────────────────────────────────────────────────────────
@@ -840,7 +840,7 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
 });
 
 router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   // Look up workflow instances for this document, then their transitions
   const instances = await db.select({ id: wfInstancesTable.id })
@@ -886,8 +886,8 @@ router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res
     res.status(400).json({ error: "A comment is required for admin override approvals" }); return;
   }
 
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
 
   // Tenant isolation: org-level admins may only approve documents in their own org
   if (!isSystemOwner(caller)) {
@@ -963,8 +963,8 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
     res.status(400).json({ error: "A comment is required for admin override actions" }); return;
   }
 
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const decision: ReviewDecision =
     (rawDecision === "rejected" || rawDecision === "for_revision")
       ? rawDecision
@@ -1024,8 +1024,8 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
 });
 
 router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const { reviewerIds, comment } = req.body;
 
   // Update document status
@@ -1106,8 +1106,8 @@ router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams
 
 // ─── Share link ───────────────────────────────────────────────────────────────
 router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const { expiresInDays, password } = req.body;
 
   // Verify the project belongs to the caller's org — prevents cross-tenant share
@@ -1149,8 +1149,8 @@ router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res):
 });
 
 router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   await db.update(documentsTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
     .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
@@ -1161,8 +1161,8 @@ router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res
 
 // GET /api/projects/:projectId/documents/:id/files
 router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const docId = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const docId = requireInt(req.params.id);
 
   // Verify document belongs to project
   const [doc] = await db.select().from(documentsTable)
@@ -1188,8 +1188,8 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
 // Accepts multipart/form-data with field "files" (one or many).
 // Optional form fields: documentId (ignored, taken from URL), metadata (JSON string).
 router.post("/:id/files", requireAuth, upload.array("files"), async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const docId = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const docId = requireInt(req.params.id);
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
@@ -1359,9 +1359,9 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
 // DELETE /api/projects/:projectId/documents/:id/files/:fileId
 router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const docId = paramInt(req.params.id);
-  const fileId = paramInt(req.params.fileId);
+  const projectId = requireInt(req.params.projectId);
+  const docId = requireInt(req.params.id);
+  const fileId = requireInt(req.params.fileId);
 
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
@@ -1400,8 +1400,8 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
 // ─── Lifecycle transitions: archive and obsolete ──────────────────────────────
 
 router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { reason } = req.body ?? {};
 
@@ -1442,8 +1442,8 @@ router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, re
 });
 
 router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const projectId = paramInt(req.params.projectId);
-  const id = paramInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const id = requireInt(req.params.id);
   const caller = req.user!;
   const { reason, supersededByDocumentId } = req.body ?? {};
 
@@ -1487,7 +1487,7 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
 
 // GET  /api/projects/:projectId/documents/:id/departments
 router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const rows = await db
     .select({
       id:           departmentsTable.id,
@@ -1503,8 +1503,8 @@ router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, 
 
 // POST /api/projects/:projectId/documents/:id/departments  { departmentId }
 router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
-  const projectId = paramInt(req.params.projectId);
+  const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
 
@@ -1537,8 +1537,8 @@ router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>,
 
 // DELETE /api/projects/:projectId/documents/:id/departments/:departmentId
 router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
-  const id = paramInt(req.params.id);
-  const departmentId = paramInt(req.params.departmentId);
+  const id = requireInt(req.params.id);
+  const departmentId = requireInt(req.params.departmentId);
   await db
     .delete(documentDepartmentsTable)
     .where(and(

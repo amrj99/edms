@@ -18,7 +18,7 @@ import { TenantIsolationError } from '../lib/errors.js';
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
-import { param, paramInt, paramIntOrNull } from '../lib/params';
+import {param, paramInt, requireInt} from '../lib/params';
 
 const router = Router();
 router.use(requireAuth);
@@ -122,7 +122,7 @@ router.post("/correspondence", async (req, res): Promise<void> => {
 // ─── Get Single General Item ──────────────────────────────────────────────────
 
 router.get("/correspondence/:id", async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
 
   const items = await db.select().from(correspondenceTable)
@@ -152,7 +152,7 @@ router.get("/correspondence/:id", async (req, res): Promise<void> => {
 
 router.patch("/correspondence/:id/move", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const { projectId } = req.body ?? {};
 
   if (!projectId) {
@@ -203,7 +203,7 @@ router.patch("/correspondence/:id/move", async (req, res): Promise<void> => {
 
 router.post("/correspondence/:id/reply", async (req, res): Promise<void> => {
   const userId = req.user!.id;
-  const parentId = paramInt(req.params.id);
+  const parentId = requireInt(req.params.id);
   const { subject, body = "", toUserIds = [] } = req.body ?? {};
 
   const parent = await db.select().from(correspondenceTable)
@@ -238,7 +238,7 @@ router.post("/correspondence/:id/reply", async (req, res): Promise<void> => {
 
 // ─── PUT /general/correspondence/:id/read ────────────────────────────────────
 router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
   const { isRead } = req.body;
 
@@ -267,7 +267,7 @@ router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
 
 // ─── GET /general/correspondence/:id/share ────────────────────────────────────
 router.get("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const [corr] = await db
     .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt })
     .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
@@ -277,7 +277,7 @@ router.get("/correspondence/:id/share", requireAuth, async (req, res): Promise<v
 
 // ─── POST /general/correspondence/:id/share ───────────────────────────────────
 router.post("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
 
   // Fetch first to validate ownership before creating a share link.
   const [existing] = await db.select({ id: correspondenceTable.id, organizationId: correspondenceTable.organizationId })
@@ -306,7 +306,7 @@ router.post("/correspondence/:id/share", requireAuth, async (req, res): Promise<
 
 // ─── DELETE /general/correspondence/:id ──────────────────────────────────────
 router.delete("/correspondence/:id", requireAuth, async (req, res): Promise<void> => {
-  const id = paramInt(req.params.id);
+  const id = requireInt(req.params.id);
   const user = req.user!;
 
   // Fetch first to verify ownership before deleting
