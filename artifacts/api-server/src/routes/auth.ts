@@ -84,6 +84,34 @@ function clearLoginAttempts(ip: string): void {
   loginAttempts.delete(ip);
 }
 
+// 10 login attempts per 15 minutes per IP — brute force protection
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too many login attempts. Please wait 15 minutes before trying again.",
+    });
+  },
+});
+
+// 5 registration attempts per hour per IP — prevent account farming
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator((req as any).realIp ?? req.ip ?? "unknown"),
+  handler: (_req, res) => {
+    res.status(429).json({
+      error: "Too many registration attempts. Please wait 1 hour before trying again.",
+    });
+  },
+});
+
 const forgotPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 3,
@@ -128,7 +156,7 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
   };
 }
 
-router.post("/login", async (req, res): Promise<void> => {
+router.post("/login", loginLimiter, async (req, res): Promise<void> => {
   const body = req.body ?? {};
   const { email, password, rememberMe } = body;
   if (!email || !password) {
@@ -216,7 +244,7 @@ router.post("/login", async (req, res): Promise<void> => {
   });
 });
 
-router.post("/register", async (req, res): Promise<void> => {
+router.post("/register", registerLimiter, async (req, res): Promise<void> => {
   const { email, password, firstName, lastName } = req.body ?? {};
 
   const [regSetting] = await db.select().from(systemSettingsTable)
