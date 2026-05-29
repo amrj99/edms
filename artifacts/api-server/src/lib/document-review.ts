@@ -96,13 +96,15 @@ export async function applyDocumentReviewDecision({
       ? `${decisionText} — ${comment}`
       : decisionText;
 
-  await db.insert(documentRevisionsTable).values({
+  await db.insert(documentRevisionsTable).values(({
     documentId,
     revision: doc.revision,
     status: newStatus as any,
     comment: entryComment,
     createdById: reviewerId,
-  });
+    reviewDecision: decision,
+    reviewerName,
+  }) as any);
 
   // Audit: record the status change with before/after for traceability
   await createAuditLog({
@@ -121,4 +123,5 @@ export async function applyDocumentReviewDecision({
     },
   });
 
-  return do
+  return doc;
+}
