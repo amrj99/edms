@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { AITaskInsights } from "@/components/ai/AITaskInsights";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -24,13 +23,6 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-interface AIPriorityInsight {
-  taskId: number;
-  aiPriority: "low" | "medium" | "high" | "urgent";
-  aiScore: number;
-  reasoning: string;
-  isBottleneck: boolean;
-}
 
 type SortKey = "dueDate" | "priority" | "status" | "title" | "projectName";
 type SortDir = "asc" | "desc";
@@ -92,8 +84,6 @@ export default function Tasks() {
   });
   const corrTasks: any[] = corrTasksData?.items ?? [];
 
-  const [showAI, setShowAI] = useState(false);
-  const [aiInsights, setAiInsights] = useState<Record<number, AIPriorityInsight>>({});
   const [sortKey, setSortKey] = useState<SortKey>("dueDate");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -144,7 +134,6 @@ export default function Tasks() {
   };
 
   const tasks = data?.tasks ?? [];
-  const taskIds = tasks.map(t => t.id);
 
   const filtered = useMemo(() => {
     if (statusFilter === "all") return tasks;
@@ -200,21 +189,9 @@ export default function Tasks() {
             <Plus className="h-4 w-4" />
             {t("addTask")}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5 border-primary/30 text-primary hover:bg-primary/5"
-            onClick={() => setShowAI(v => !v)}
-          >
-            <Brain className="h-4 w-4" />
-            {showAI ? t("hideInsights") : t("aiInsights")}
-          </Button>
         </div>
       </div>
 
-      {showAI && (
-        <AITaskInsights taskIds={taskIds} onPriorityChange={(id, insight) => setAiInsights(p => ({ ...p, [id]: insight }))} />
-      )}
 
       {/* Status tabs + sort bar */}
       <div className="flex items-center gap-2 border-b pb-4 flex-wrap gap-y-2">
@@ -274,7 +251,6 @@ export default function Tasks() {
       ) : (
         <div className="grid gap-4">
           {sorted.map(task => {
-            const aiInsight = aiInsights[task.id];
             return (
               <Card key={task.id} className="hover:shadow-md transition-shadow">
                 <CardContent className="p-5 flex items-center gap-4">
@@ -289,20 +265,10 @@ export default function Tasks() {
                         </span>
                       )}
                       <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
-                      {aiInsight?.isBottleneck && (
-                        <Badge className="text-[10px] bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300">
-                          {t("taskBottleneck")}
-                        </Badge>
-                      )}
                     </div>
                     <h3 className="text-base font-semibold text-foreground truncate">{task.title}</h3>
                     {task.description && (
                       <p className="text-sm text-muted-foreground truncate mt-0.5">{task.description}</p>
-                    )}
-                    {aiInsight?.reasoning && (
-                      <p className="text-xs text-primary mt-1 flex items-center gap-1">
-                        <Brain className="h-3 w-3" /> {aiInsight.reasoning}
-                      </p>
                     )}
                   </div>
                   <div className="flex flex-col items-end gap-2 shrink-0">
@@ -323,16 +289,6 @@ export default function Tasks() {
                     <Badge variant="outline" className={cn("capitalize text-[10px]", PRIORITY_COLORS[task.priority])}>
                       {task.priority}
                     </Badge>
-                    {aiInsight && (
-                      <Badge className={cn("text-[10px] capitalize", {
-                        "bg-red-100 text-red-800":    aiInsight.aiPriority === "urgent",
-                        "bg-orange-100 text-orange-800": aiInsight.aiPriority === "high",
-                        "bg-yellow-100 text-yellow-800": aiInsight.aiPriority === "medium",
-                        "bg-green-100 text-green-800":   aiInsight.aiPriority === "low",
-                      })}>
-                        AI: {aiInsight.aiPriority}
-                      </Badge>
-                    )}
                     {task.dueDate && (
                       <div className="flex items-center text-xs font-medium text-orange-600 dark:text-orange-400">
                         <Clock className="mr-1 h-3 w-3" />

@@ -27,7 +27,7 @@ import Tasks from "@/pages/tasks";
 import Search from "@/pages/search";
 import Users from "@/pages/users";
 import Settings from "@/pages/settings";
-import AISettings from "@/pages/ai-settings";
+
 import General from "@/pages/general";
 import Config from "@/pages/config";
 import Reports from "@/pages/reports";
@@ -44,10 +44,10 @@ import ReportsDashboard from "@/pages/reports-dashboard";
 import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
 import MigrationWizard from "@/pages/migration-wizard";
-import BillingPage from "@/pages/billing";
+
 import WorkflowEnginePage from "@/pages/workflow-engine";
 import PendingOrg from "@/pages/pending-org";
-import AIInsightsPage from "@/pages/ai-insights";
+
 import DelegationsPage from "@/pages/delegations";
 
 const queryClient = new QueryClient({
@@ -153,9 +153,7 @@ function Router() {
       <Route path="/settings">
         <ProtectedRoute component={Settings} />
       </Route>
-      <Route path="/ai-settings">
-        <ProtectedRoute component={AISettings} />
-      </Route>
+
       <Route path="/general">
         <ProtectedRoute component={General} />
       </Route>
@@ -168,9 +166,7 @@ function Router() {
       <Route path="/admin">
         <ProtectedRoute component={Admin} />
       </Route>
-      <Route path="/billing">
-        <ProtectedRoute component={BillingPage} />
-      </Route>
+
       <Route path="/workflow-engine">
         <ProtectedRoute component={WorkflowEnginePage} />
       </Route>
@@ -210,9 +206,7 @@ function Router() {
       <Route path="/migration-wizard">
         <ProtectedRoute component={MigrationWizard} />
       </Route>
-      <Route path="/ai-insights">
-        <ProtectedRoute component={AIInsightsPage} />
-      </Route>
+
       <Route path="/delegations">
         <ProtectedRoute component={DelegationsPage} />
       </Route>

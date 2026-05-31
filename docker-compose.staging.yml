@@ -1,0 +1,108 @@
+# =============================================================================
+# docker-compose.staging.yml
+# =============================================================================
+# Staging environment — isolated from production.
+#
+# Key differences from docker-compose.yml:
+#   - Container names:  edms_staging_*
+#   - Network:          edms_staging_net  (no cross-traffic with production)
+#   - Volumes:          postgres_staging_data, uploads_staging_data
+#   - Postgres DB:      edms_staging
+#   - API port:         8081 (production uses 8080)
+#   - Frontend ports:   none — traffic goes through Nginx on the host directly
+#   - POSTGRES_PASSWORD read from STAGING_POSTGRES_PASSWORD in .env
+#
+# Usage:
+#   docker compose -f docker-compose.staging.yml up -d
+#   docker compose -f docker-compose.staging.yml logs api --tail=100 -f
+#   docker compose -f docker-compose.staging.yml down
+#
+# =============================================================================
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: edms_staging_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: edms_staging
+      POSTGRES_USER: edms
+      POSTGRES_PASSWORD: ${STAGING_POSTGRES_PASSWORD}
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    # Internal only — no host port mapping.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U edms -d edms_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - edms_staging_net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    container_name: edms_staging_api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-}
+      FROM_NAME: ${FROM_NAME:-ArcScale EDMS (Staging)}
+      APP_URL: ${APP_URL:-}
+      DEFAULT_STORAGE_TYPE: ${DEFAULT_STORAGE_TYPE:-onpremise}
+      DEFAULT_STORAGE_PATH: ${DEFAULT_STORAGE_PATH:-/app/uploads}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-1024}
+    volumes:
+      - uploads_staging_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - edms_staging_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+      args:
+        BUILD_TIME: ${BUILD_TIME:-}
+        GIT_HASH: ${GIT_HASH:-}
+    container_name: edms_staging_frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:80"
+    volumes:
+      - ./nginx.staging.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    networks:
+      - edms_staging_net
+
+volumes:
+  postgres_staging_data:
+  uploads_staging_data:
+
+networks:
+  edms_staging_net:
+    driver: bridge
