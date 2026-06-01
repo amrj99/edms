@@ -31,7 +31,7 @@ services:
     volumes:
       - uploads_data_company:/app/uploads
     networks:
-      - edms_edms-internal
+      - edms_default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/health || exit 1"]
       interval: 30s
@@ -53,11 +53,11 @@ services:
     depends_on:
       - api
     networks:
-      - edms_edms-internal
+      - edms_default
 
 volumes:
   uploads_data_company:
 
 networks:
-  edms_edms-internal:
+  edms_default:
     external: true
