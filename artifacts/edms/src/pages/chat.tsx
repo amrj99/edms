@@ -25,7 +25,6 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { format, isToday, isYesterday } from "date-fns";
-import { ModuleDisabledView } from "@/components/ModuleDisabledView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -642,7 +641,7 @@ export default function ChatPage() {
   const hasOrg = !!(user as any)?.organizationId;
 
   if (!modules.chat || (isGroupsError && (groupsError as any)?.code === "MODULE_DISABLED")) {
-    return <ModuleDisabledView />;
+    return null;
   }
 
   // ─── Render ────────────────────────────────────────────────────────────────
