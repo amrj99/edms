@@ -2,12 +2,14 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
-import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, generateSecureToken, hashToken } from "../lib/auth.js";
 import { validatePasswordPolicy } from "../lib/security-settings.js";
 import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
+import { sendOnboardingEmail, APP_URL } from "../lib/email.js";
+import { passwordResetTokensTable } from "@workspace/db";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 
 const router = Router();
@@ -102,34 +104,24 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise<void> => {
   const caller = req.user!;
 
-  const { email, password, firstName, lastName, role, organizationId } = req.body;
-  if (!email || !password || !firstName || !lastName || !role) {
-    res.status(400).json({ error: "Bad Request", message: "All fields required" });
+  // ── Onboarding flow: password is not required from admin.
+  // A secure onboarding token is generated and emailed to the user.
+  const { email, firstName, lastName, role, organizationId } = req.body;
+  if (!email || !firstName || !lastName || !role) {
+    res.status(400).json({ error: "Bad Request", message: "email, firstName, lastName and role are required" });
     return;
   }
 
   // ── Role assignment guard ──────────────────────────────────────────────────
-  // system_owner is a platform-level role — it must never be assignable via
-  // the API. It can only be set directly in the database.
-  // Non-system_owner callers (org admins) may only assign org-level roles.
   const ORG_ASSIGNABLE_ROLES = ["admin", "project_manager", "document_controller", "reviewer", "member", "viewer"];
   if (!ORG_ASSIGNABLE_ROLES.includes(role)) {
     res.status(400).json({ error: "Bad Request", message: `Role "${role}" is not assignable via this endpoint.` });
     return;
   }
 
-  const pwErr = await validatePasswordPolicy(password);
-  if (pwErr) {
-    res.status(400).json({ error: "Bad Request", message: pwErr });
-    return;
-  }
-
   // Enforce per-plan user limit.
-  // system_owner is a platform-level actor and must never be blocked by tenant
-  // plan quotas — they manage all orgs, including expired ones.
   const targetOrgId = organizationId ? parseInt(String(organizationId)) : caller.organizationId;
   if (targetOrgId && !isSystemOwner(caller)) {
-    // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
     const planId = await getOrgPlan(targetOrgId);
     const plan = PLANS.find(p => p.id === planId);
     if (plan && plan.maxUsers !== null) {
@@ -149,20 +141,45 @@ router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise
   }
 
   // Only system_owner may create users in a different organization.
-  // Admins and all other callers are restricted to their own org.
   const resolvedOrgId = isSystemOwner(caller)
     ? (organizationId ? parseInt(String(organizationId)) : null)
     : (caller.organizationId ?? null);
 
+  // Create user with a random temporary password hash (never exposed).
+  // The real password is set by the user via the onboarding link.
+  const tempPassword = generateSecureToken(); // random, never sent to anyone
   const [user] = await db.insert(usersTable).values({
     email: email.toLowerCase(),
-    passwordHash: await hashPassword(password),
+    passwordHash: await hashPassword(tempPassword),
     firstName,
     lastName,
     role,
     organizationId: resolvedOrgId,
     isActive: true,
+    mustChangePassword: true,
   }).returning();
+
+  // Generate onboarding token (48h TTL) — reuses password_reset_tokens table.
+  const onboardingToken = generateSecureToken();
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+  await db.insert(passwordResetTokensTable).values({
+    userId: user.id,
+    organizationId: resolvedOrgId,
+    token: hashToken(onboardingToken),
+    expiresAt,
+  });
+
+  // Resolve org name for email
+  let orgName = "ArcScale EDMS";
+  if (resolvedOrgId) {
+    const [org] = await db.select({ name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, resolvedOrgId)).limit(1);
+    if (org) orgName = org.name;
+  }
+
+  // Send onboarding email — fire and forget
+  const setPasswordUrl = `${APP_URL}/set-password?token=${onboardingToken}`;
+  sendOnboardingEmail({ to: user.email, firstName: user.firstName, organizationName: orgName, setPasswordUrl }).catch(() => {});
+
   await createAuditLog({
     userId: caller.id,
     organizationId: resolvedOrgId ?? undefined,
@@ -170,11 +187,12 @@ router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise
     entityType: "user",
     entityId: user.id,
     entityTitle: `${user.firstName} ${user.lastName}`,
-    details: { role: user.role, createdByRole: caller.role },
+    details: { role: user.role, createdByRole: caller.role, onboardingEmailSent: true },
   });
   res.status(201).json({
     id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
-    role: user.role, organizationId: user.organizationId, isActive: user.isActive, createdAt: user.createdAt,
+    role: user.role, organizationId: user.organizationId, isActive: user.isActive,
+    mustChangePassword: user.mustChangePassword, createdAt: user.createdAt,
   });
 });
 

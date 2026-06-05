@@ -27,6 +27,7 @@ export const usersTable = pgTable("users", {
   acceptedTermsAt: timestamp("accepted_terms_at"),
   acceptedTermsVersion: text("accepted_terms_version"),
   passwordChangedAt: timestamp("password_changed_at"),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   emailVerifiedAt: timestamp("email_verified_at"),
   emailVerificationToken: text("email_verification_token"),
   emailVerificationTokenExpiresAt: timestamp("email_verification_token_expires_at"),

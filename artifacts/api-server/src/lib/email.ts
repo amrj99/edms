@@ -153,6 +153,28 @@ export async function sendPasswordResetEmail(opts: {
   return sendEmail(opts.to, "Reset your ArcScale EDMS password", html);
 }
 
+// ─── Onboarding Invitation ────────────────────────────────────────────────────
+export async function sendOnboardingEmail(opts: {
+  to: string;
+  firstName: string;
+  organizationName: string;
+  setPasswordUrl: string;
+}) {
+  const html = baseLayout(`
+    <h2>Welcome to ArcScale EDMS</h2>
+    <p>Hi ${opts.firstName},</p>
+    <p>Your account has been created for <strong>${opts.organizationName}</strong>. To get started, please set your password by clicking the button below.</p>
+    <a class="btn" href="${opts.setPasswordUrl}">Set Your Password →</a>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Organization</span><span class="value">${opts.organizationName}</span></div>
+      <div class="info-row"><span class="label">Email</span><span class="value">${opts.to}</span></div>
+    </div>
+    <p style="color:#6b7280;font-size:13px;">This link expires in 48 hours. If you were not expecting this invitation, please ignore this email.</p>
+  `, "Welcome to ArcScale EDMS");
+
+  return sendEmail(opts.to, `Your ArcScale EDMS account is ready — set your password`, html);
+}
+
 // ─── Review Submitted ─────────────────────────────────────────────────────────
 export async function sendReviewSubmittedEmail(opts: {
   to: string[];

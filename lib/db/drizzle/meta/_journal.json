@@ -85,6 +85,13 @@
       "when": 1779899523704,
       "tag": "0010_audit_schema",
       "breakpoints": false
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1749168000000,
+      "tag": "0011_must_change_password",
+      "breakpoints": false
     }
   ]
 }

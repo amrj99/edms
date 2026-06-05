@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
-import { AuthProvider } from "@/lib/auth";
+import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { I18nProvider, useI18n } from "@/lib/i18n";
@@ -19,6 +19,7 @@ import Register from "@/pages/register";
 import VerifyEmail from "@/pages/verify-email";
 import ForgotPassword from "@/pages/forgot-password";
 import ResetPassword from "@/pages/reset-password";
+import SetPassword from "@/pages/set-password";
 import Dashboard from "@/pages/dashboard";
 import Organizations from "@/pages/organizations";
 import Projects from "@/pages/projects";
@@ -105,6 +106,16 @@ function ModuleGuard({ moduleKey, component: Component }: { moduleKey: keyof Org
 }
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+
+  // If the account requires a password change, redirect to set-password.
+  // This is a soft guard — Backend enforcement via requirePasswordUpdated()
+  // middleware is a separate future improvement.
+  if (user?.mustChangePassword) {
+    return <Redirect to="/set-password" />;
+  }
+
   return (
     <AppLayout>
       <Component />
@@ -126,6 +137,7 @@ function Router() {
       <Route path="/verify-email" component={VerifyEmail} />
       <Route path="/forgot-password" component={ForgotPassword} />
       <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/set-password" component={SetPassword} />
       <Route path="/pending-org" component={PendingOrg} />
 
       {/* Protected Routes wrapped in AppLayout */}
@@ -252,3 +264,4 @@ function App() {
 }
 
 export default App;
+                                                                                                                                                                                                                                                              

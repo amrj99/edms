@@ -157,6 +157,7 @@ function buildUserResponse(user: typeof usersTable.$inferSelect, orgName?: strin
     createdAt: user.createdAt,
     acceptedTermsAt: user.acceptedTermsAt,
     acceptedTermsVersion: user.acceptedTermsVersion,
+    mustChangePassword: user.mustChangePassword ?? false,
   };
 }
 
@@ -538,6 +539,67 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res): Promise<v
   });
 
   res.json({ message: "Password has been reset successfully. You can now log in with your new password." });
+});
+
+// ─── Set Password (onboarding) ────────────────────────────────────────────────
+// Used by admin-created users to set their password via the onboarding token.
+// Identical flow to reset-password but also clears mustChangePassword.
+router.post("/set-password", resetPasswordLimiter, async (req, res): Promise<void> => {
+  const { token, password } = req.body ?? {};
+  if (!token || !password) {
+    res.status(400).json({ error: "Bad Request", message: "Token and password are required" });
+    return;
+  }
+
+  const pwErr = await validatePasswordPolicy(password);
+  if (pwErr) {
+    res.status(400).json({ error: "Bad Request", message: pwErr });
+    return;
+  }
+
+  // Atomic single-use claim — same as reset-password
+  const [claimedToken] = await db.update(passwordResetTokensTable)
+    .set({ usedAt: new Date() })
+    .where(and(
+      eq(passwordResetTokensTable.token, hashToken(token)),
+      gt(passwordResetTokensTable.expiresAt, new Date()),
+      isNull(passwordResetTokensTable.usedAt),
+    ))
+    .returning();
+
+  if (!claimedToken) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid or expired invitation link. Please ask your administrator to resend the invitation." });
+    return;
+  }
+
+  const [tokenOwner] = await db.select().from(usersTable).where(eq(usersTable.id, claimedToken.userId)).limit(1);
+  if (!tokenOwner) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid invitation token." });
+    return;
+  }
+
+  const now = new Date();
+  await db.update(usersTable)
+    .set({
+      passwordHash: await hashPassword(password),
+      passwordChangedAt: now,
+      mustChangePassword: false,
+      updatedAt: now,
+    })
+    .where(eq(usersTable.id, claimedToken.userId));
+
+  createAuditLog({
+    userId: tokenOwner.id,
+    organizationId: tokenOwner.organizationId ?? undefined,
+    action: "onboarding_complete",
+    entityType: "user",
+    entityId: tokenOwner.id,
+    entityTitle: tokenOwner.email,
+    details: { reason: "onboarding_set_password" },
+    ipAddress: req.ip,
+  });
+
+  res.json({ message: "Password set successfully. You can now log in." });
 });
 
 // ─── Register-org rate limiter ────────────────────────────────────────────────
