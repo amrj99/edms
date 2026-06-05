@@ -375,6 +375,23 @@ export default function Admin() {
     onError: (e: any) => toast({ title: e.message || "Failed to change plan", variant: "destructive" }),
   });
 
+  const toggleAi = useMutation({
+    mutationFn: async ({ orgId, enabled }: { orgId: number; enabled: boolean }) => {
+      const r = await fetch(`/api/admin/organizations/${orgId}/ai-toggle`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Failed"); }
+      return r.json();
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["organizations"] });
+      toast({ title: `AI ${data.aiEnabled ? "enabled" : "disabled"} for organization` });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to toggle AI", variant: "destructive" }),
+  });
+
   const addCorrType = () => {
     if (!newCorrType.name.trim()) return;
     const entry = { ...newCorrType, id: newCorrType.name.toLowerCase().replace(/\s+/g, "_") };
@@ -567,12 +584,13 @@ export default function Admin() {
                     <TableHead className="text-xs text-center">{t("orgMembers")}</TableHead>
                     <TableHead className="text-xs">{t("orgContactEmail")}</TableHead>
                     <TableHead className="text-xs">Plan</TableHead>
+                    <TableHead className="text-xs text-center">AI</TableHead>
                     <TableHead className="text-xs text-right">{t("orgActions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {orgs.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground text-sm">{t("noOrgsFound")}</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8} className="py-10 text-center text-muted-foreground text-sm">{t("noOrgsFound")}</TableCell></TableRow>
                   ) : orgs.map((org: any) => (
                     <TableRow key={org.id}>
                       <TableCell className="font-medium text-sm">{org.name}</TableCell>
@@ -591,6 +609,26 @@ export default function Admin() {
                         ) : (
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ${planBadgeClass(orgPlanMap[org.id] ?? "free")}`}>
                             {orgPlanMap[org.id] ?? "—"}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {isSysOwner ? (
+                          <button
+                            onClick={() => toggleAi.mutate({ orgId: org.id, enabled: !org.aiEnabled })}
+                            disabled={toggleAi.isPending}
+                            title={org.aiEnabled ? "Disable AI" : "Enable AI"}
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                              org.aiEnabled
+                                ? "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400 hover:bg-green-200"
+                                : "bg-muted text-muted-foreground hover:bg-muted/80"
+                            }`}
+                          >
+                            {org.aiEnabled ? "ON" : "OFF"}
+                          </button>
+                        ) : (
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${org.aiEnabled ? "bg-green-100 text-green-700" : "bg-muted text-muted-foreground"}`}>
+                            {org.aiEnabled ? "ON" : "OFF"}
                           </span>
                         )}
                       </TableCell>
@@ -3279,4 +3317,3 @@ function ModulesTab({ orgs, isSysOwner }: { orgs: any[]; isSysOwner: boolean }) 
     </TabsContent>
   );
 }
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
