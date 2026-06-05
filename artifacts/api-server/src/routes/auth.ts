@@ -517,7 +517,7 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res): Promise<v
   const now = new Date();
 
   await db.update(usersTable)
-    .set({ passwordHash, passwordChangedAt: now, updatedAt: now })
+    .set({ passwordHash, passwordChangedAt: now, mustChangePassword: false, updatedAt: now })
     .where(eq(usersTable.id, claimedToken.userId));
 
   // Token already marked used atomically above — no second UPDATE needed.
