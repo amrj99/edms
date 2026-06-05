@@ -31,7 +31,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
-import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 
 interface CorrespondenceItem {
   id: number;
@@ -78,7 +77,6 @@ export default function General() {
   const [myProjects, setMyProjects] = useState<Project[]>([]);
   const [moveTarget, setMoveTarget] = useState<string>("");
   const [isMoving, setIsMoving] = useState(false);
-  const [showAI, setShowAI] = useState(false);
 
   // Compose state
   const [composeSubject, setComposeSubject] = useState("");
@@ -298,15 +296,6 @@ export default function General() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-primary"
-                onClick={() => setShowAI(!showAI)}
-                title="AI Analyze"
-              >
-                <Brain className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
                 className="h-7 w-7"
                 onClick={() => setSelected(null)}
               >
@@ -344,14 +333,6 @@ export default function General() {
               </div>
             )}
 
-            {/* AI Insights */}
-            {showAI && (
-              <AIInsightsPanel
-                entityId={selected.id}
-                entityType="correspondence"
-                entityTitle={selected.subject}
-              />
-            )}
           </div>
 
           {/* Actions */}

@@ -15,7 +15,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AISearchBar } from "@/components/ai/AISearchBar";
 
 interface SearchParams {
   q: string;
@@ -36,7 +35,7 @@ const RESULT_TYPES = ["all", "documents", "correspondence", "transmittals"];
 
 export default function Search() {
   const [searchParams, setSearchParams] = useState<SearchParams>({ q: "" });
-  const [mode, setMode] = useState<"ai" | "keyword">("ai");
+  const [mode, setMode] = useState<"keyword">("keyword");
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({ type: "all", status: "", discipline: "", projectId: "", dateFrom: "", dateTo: "" });
   const inputRef = useRef<HTMLInputElement>(null);
@@ -99,39 +98,20 @@ export default function Search() {
         <h1 className="text-4xl font-display font-bold tracking-tight mb-2">Search</h1>
         <p className="text-muted-foreground mb-5">Search across all documents, correspondence, transmittals and metadata.</p>
 
-        <div className="flex justify-center mb-5">
-          <Tabs value={mode} onValueChange={(v) => setMode(v as "ai" | "keyword")}>
-            <TabsList>
-              <TabsTrigger value="ai" className="gap-1.5">
-                <Sparkles className="h-3.5 w-3.5" /> AI Search
-              </TabsTrigger>
-              <TabsTrigger value="keyword" className="gap-1.5">
-                <SearchIcon className="h-3.5 w-3.5" /> Keyword
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </div>
-
-        {mode === "ai" ? (
-          <div className="max-w-2xl mx-auto">
-            <AISearchBar onSearch={handleAISearch} />
+        <form onSubmit={handleKeywordSearch} className="flex max-w-2xl mx-auto gap-2">
+          <div className="relative flex-1">
+            <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+            <input
+              ref={inputRef}
+              defaultValue={searchParams.q}
+              placeholder="Search by document number, title, correspondence subject..."
+              className="h-14 w-full pl-12 text-lg rounded-xl border border-input bg-background px-3 py-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
           </div>
-        ) : (
-          <form onSubmit={handleKeywordSearch} className="flex max-w-2xl mx-auto gap-2">
-            <div className="relative flex-1">
-              <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-              <input
-                ref={inputRef}
-                defaultValue={searchParams.q}
-                placeholder="Search by document number, title, correspondence subject..."
-                className="h-14 w-full pl-12 text-lg rounded-xl border border-input bg-background px-3 py-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </div>
-            <button type="submit" className="h-14 px-8 rounded-xl text-base font-semibold bg-primary text-primary-foreground hover:bg-primary/90">
-              Search
-            </button>
-          </form>
-        )}
+          <button type="submit" className="h-14 px-8 rounded-xl text-base font-semibold bg-primary text-primary-foreground hover:bg-primary/90">
+            Search
+          </button>
+        </form>
 
         {/* Filter toggle */}
         <div className="flex justify-center mt-3">

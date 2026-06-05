@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import { TermsGate } from "@/components/legal/TermsGate";
 import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
 import { useRealtime } from "@/hooks/use-realtime";
-import { AICommandAssistant } from "@/components/AICommandAssistant";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -38,9 +37,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/lib/i18n";
 import { useModules } from "@/hooks/use-modules";
 import { useAiAccess } from "@/hooks/use-ai-access";
-import { StorageBanner } from "@/components/StorageBanner";
-import { TrialExpiredBanner } from "@/components/TrialExpiredBanner";
-import { PlanRestrictionModal } from "@/components/PlanRestrictionModal";
 
 // ─── Recent Projects helpers ──────────────────────────────────────────────────
 const RECENT_KEY = "edms_recent_projects";
@@ -400,7 +396,6 @@ export function AppSidebar() {
       title: t("navReports"), url: "/reports-dashboard", icon: TrendingUp,
       ...(modules.registers ? { children: [{ title: t("navRegisters"), url: "/reports", icon: BarChart3 }] } : {}),
     },
-    ...(aiAccess.aiEnabled ? [{ title: t("aiInsights"), url: "/ai-insights", icon: Brain }] : []),
     ...(modules.chat ? [{ title: t("navChat"), url: "/chat", icon: MessageSquare }] : []),
     ...(canSeeActivityLog ? [{ title: t("navActivityLog"), url: "/activity-log", icon: ClipboardCheck }] : []),
     { title: t("navSearch"), url: "/search", icon: Search },
@@ -412,8 +407,6 @@ export function AppSidebar() {
     { title: t("navUsersRoles"), url: "/users", icon: Users },
     { title: t("navConfig"), url: "/config", icon: SlidersHorizontal },
     { title: t("navAdmin"), url: "/admin", icon: ShieldCheck },
-    { title: "Billing", url: "/billing", icon: CreditCard },
-    { title: t("navAISettings"), url: "/ai-settings", icon: Brain },
   ];
 
   return (
@@ -973,11 +966,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
             <div className="flex-1 min-w-0" />
             <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-              {aiAccess.aiEnabled && (
-                <div className="hidden md:block">
-                  <AICommandAssistant />
-                </div>
-              )}
               {user?.organizationName && !activeOrgId && (
                 <div className="hidden lg:flex flex-col items-end max-w-[160px] shrink-0">
                   <span className="text-[10px] text-muted-foreground/70 leading-none">Organization</span>
@@ -990,9 +978,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
               {modules.notifications && <NotificationBell />}
             </div>
           </header>
-          <TrialExpiredBanner />
-          <StorageBanner />
-          <PlanRestrictionModal />
           <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-7xl">
               <TermsGate>

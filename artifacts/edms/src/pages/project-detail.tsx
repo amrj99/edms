@@ -15,7 +15,6 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
-import { UploadWithAIDialog, type AIUploadResult } from "@/components/upload-with-ai-dialog";
 import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
@@ -29,7 +28,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AIInsightsPanel } from "@/components/ai/AIInsightsPanel";
 import { useColumnVisibility, type ColumnDef } from "@/hooks/useColumnVisibility";
 import { ColumnVisibilityMenu } from "@/components/ui/column-visibility-menu";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
@@ -40,7 +38,6 @@ import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOver
 import { GovernanceDashboardTab } from "@/components/governance/GovernanceDashboardTab";
 import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
 import { RoleMatrix } from "@/components/governance/RoleMatrix";
-import { SubmissionChainsTab } from "@/components/submission-chains/SubmissionChainsTab";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -160,7 +157,6 @@ export default function ProjectDetail() {
     { value: "documents", icon: FileText, label: "Documents" },
     { value: "review", icon: ClipboardCheck, label: "Review" },
     { value: "transmittals", icon: Send, label: "Transmittals" },
-    { value: "submission-chains", icon: GitMerge, label: "Submission Chains" },
     { value: "correspondence", icon: Mail, label: "Correspondence" },
     { value: "packages", icon: Package, label: "Packages" },
     { value: "tasks", icon: CheckSquare, label: "Tasks" },
@@ -202,22 +198,13 @@ export default function ProjectDetail() {
 
         <div className="mt-6">
           <TabsContent value="documents">
-            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} onSwitchToChains={() => setActiveTab("submission-chains")} />
+            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} />
           </TabsContent>
           <TabsContent value="review">
             <ReviewTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="transmittals">
             <TransmittalsTab projectId={projectId} projectName={project.name} projectCode={project.code} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
-          </TabsContent>
-          <TabsContent value="submission-chains">
-            <SubmissionChainsTab
-              projectId={projectId}
-              isAtLeastPM={isAtLeastPM}
-              onOpenDocument={(docId) => {
-                setActiveTab("documents");
-              }}
-            />
           </TabsContent>
           <TabsContent value="correspondence">
             <CorrespondenceTab projectId={projectId} />
@@ -298,7 +285,7 @@ const DOC_COLUMNS: ColumnDef[] = [
 ];
 const DOC_PINNED = ["docNum", "title"];
 
-function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal, onSwitchToChains }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void; onSwitchToChains?: () => void }) {
+function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -309,7 +296,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading, refetch: refetchDocs } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [isAIUploadOpen, setIsAIUploadOpen] = useState(false);
   const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const createDoc = useCreateDocument();
@@ -319,7 +305,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
   // View mode: list or folder
   const [viewMode, setViewMode] = useState<"list" | "folder">("list");
   const [folderViewFolderId, setFolderViewFolderId] = useState<number | null>(null);
-  const [aiDoc, setAiDoc] = useState<any>(null);
   const [compareDoc, setCompareDoc] = useState<any>(null);
   const [docPreview, setDocPreview] = useState<any>(null);
   const [previewAttachment, setPreviewAttachment] = useState<{ fileUrl: string; fileName: string; fileType?: string | null } | null>(null);
@@ -435,39 +420,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     if (failedCount < uploads.length) setIsUploadOpen(false);
   };
 
-  const handleAIUploadSuccess = async (result: AIUploadResult) => {
-    try {
-      await createDoc.mutateAsync({
-        projectId,
-        data: {
-          documentNumber: result.docNumber || `DOC-${Date.now()}`,
-          title: result.title || result.fileName.replace(/\.[^.]+$/, ""),
-          revision: result.revision || "01",
-          status: (result.status as any) || "draft",
-          discipline: result.discipline || undefined,
-          documentType: result.docType || "general",
-          source: result.source || undefined,
-          issuedBy: result.issuedBy || undefined,
-          fileUrl: result.fileUrl,
-          fileName: result.fileName,
-          fileSize: result.fileSize,
-        } as any,
-      });
-      toast({ title: "Document saved successfully" });
-      setIsAIUploadOpen(false);
-    } catch (err: any) {
-      const msg: string = err?.message ?? "";
-      if (msg.includes("409") || msg.toLowerCase().includes("already exists")) {
-        toast({
-          title: "Document number already exists",
-          description: `"${result.docNumber}" is already used in this project. Change the document number, or use Upload New Revision for the existing document.`,
-          variant: "destructive",
-        });
-      } else {
-        toast({ title: "Failed to save document", description: msg || "An unexpected error occurred.", variant: "destructive" });
-      }
-    }
-  };
 
   // ── Department queries for edit dialog (Phase B) ─────────────────────────
   const { data: orgDeptsRaw } = useQuery({
@@ -877,16 +829,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             <FolderMinus className="h-3.5 w-3.5" /> Import Existing
           </Button>
           {perms.canCreateDocument && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-9 gap-1.5 border-primary/40 text-primary hover:bg-primary/5"
-              onClick={() => setIsAIUploadOpen(true)}
-            >
-              <Sparkles className="h-3.5 w-3.5" /> Upload with AI
-            </Button>
-          )}
-          {perms.canCreateDocument && (
             <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
               <Upload className="h-3.5 w-3.5" /> Bulk Upload
             </Button>
@@ -905,23 +847,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
             }}
             onUploadRevision={doc => {
               setIsUploadOpen(false);
-              setNewRevDoc(doc);
-            }}
-          />
-          <UploadWithAIDialog
-            open={isAIUploadOpen}
-            onOpenChange={setIsAIUploadOpen}
-            projectId={projectId}
-            projectCode={projectCode}
-            projectName={projectName}
-            onSuccess={handleAIUploadSuccess}
-            onOpenDocument={id => {
-              setIsAIUploadOpen(false);
-              const doc = (allDocs as any[]).find(d => d.id === id);
-              if (doc) setDocPreview(doc);
-            }}
-            onUploadRevision={doc => {
-              setIsAIUploadOpen(false);
               setNewRevDoc(doc);
             }}
           />
@@ -1137,17 +1062,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                     <FilePlus2 className="h-3.5 w-3.5" /> Upload New Revision
                   </Button>
                 )}
-                {onSwitchToChains && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 gap-1.5 shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:text-blue-300"
-                    title="Go to Submission Chains to add this document to a chain"
-                    onClick={onSwitchToChains}
-                  >
-                    <Send className="h-3.5 w-3.5" /> Add to Chain
-                  </Button>
-                )}
               </div>
             );
           }
@@ -1288,9 +1202,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                   {isDocColVis("updatedAt") && <TableCell className="text-sm text-muted-foreground">{format(new Date(doc.updatedAt), "MMM d, yyyy")}</TableCell>}
                   <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:bg-primary/10" title="AI Analyze" onClick={() => setAiDoc(doc)}>
-                        <Sparkles className="h-4 w-4" />
-                      </Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8" title="Compare revisions" onClick={() => setCompareDoc(doc)}>
                         <GitCompare className="h-4 w-4" />
                       </Button>
@@ -1964,12 +1875,6 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
         </div>
       )}
 
-      <Sheet open={!!aiDoc} onOpenChange={(open) => !open && setAiDoc(null)}>
-        <SheetContent className="w-[420px] sm:max-w-[420px] overflow-y-auto">
-          <SheetHeader className="mb-4"><SheetTitle className="text-base">Document AI Analysis</SheetTitle></SheetHeader>
-          {aiDoc && <AIInsightsPanel entityId={aiDoc.id} entityType="document" entityTitle={`${aiDoc.documentNumber} — ${aiDoc.title}`} />}
-        </SheetContent>
-      </Sheet>
 
       {/* Compare Revisions Dialog */}
       {compareDoc && (

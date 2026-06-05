@@ -4,7 +4,7 @@ import { setRlsContext } from "../middlewares/rls-context.js";
 import { tenantRateLimit } from "../middlewares/tenant-rate-limit.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
-import aiRouter from "./ai.js";
+
 import generalRouter from "./general.js";
 import organizationsRouter from "./organizations.js";
 import usersRouter from "./users.js";
@@ -16,13 +16,13 @@ import metadataRouter from "./metadata.js";
 import dashboardRouter from "./dashboard.js";
 import searchRouter from "./search.js";
 import auditLogsRouter from "./audit-logs.js";
-import packagesRouter from "./packages.js";
+
 import transmittalsRouter from "./transmittals.js";
 import notificationsRouter from "./notifications.js";
 import configRouter from "./config.js";
 import storageRouter from "./storage.js";
 import adminRouter from "./admin.js";
-import publicShareRouter from "./public-share.js";
+
 import globalDocumentsRouter from "./global-documents.js";
 import registersRouter from "./registers.js";
 import deliverablesRouter from "./deliverables.js";
@@ -37,18 +37,17 @@ import calendarRouter from "./calendar.js";
 import rulesRouter from "./rules.js";
 import skillsRouter from "./skills.js";
 import migrationsRouter from "./migrations.js";
-import billingRouter from "./billing.js";
-import aiCreditsRouter from "./ai-credits.js";
+
 import workflowEngineRouter from "./workflow-engine.js";
 import delegationsRouter from "./delegations.js";
 import projectRoleOverridesRouter from "./project-role-overrides.js";
 import projectGovernanceRouter from "./project-governance.js";
-import submissionChainsRouter from "./submission-chains.js";
+
 import departmentsRouter from "./departments.js";
 import projectDepartmentsRouter from "./project-departments.js";
 import externalContactsRouter from "./external-contacts.js";
 import { requireModule } from "../middlewares/require-module.js";
-import { requireAiEnabled } from "../middlewares/require-ai-enabled.js";
+
 import { requireOrg } from "../middlewares/require-org.js";
 import { shadowPlanMiddleware } from "../middlewares/shadow-plan-middleware.js";
 import { verifyToken, type AuthUser } from "../lib/auth.js";
@@ -58,7 +57,6 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
-router.use("/public/share", publicShareRouter);
 
 // ── JWT pre-parse: lightweight, non-authoritative context population ───────────
 // Purpose: populate req.user early so every subsequent global middleware
@@ -159,7 +157,7 @@ router.use("/projects", projectsRouter);
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
 router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
-router.use("/projects/:projectId/packages", packagesRouter);
+
 router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
 router.use("/projects/:projectId", projectDepartmentsRouter);
 router.use("/tasks", tasksRouter);
@@ -167,7 +165,7 @@ router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/search", searchRouter);
 router.use("/audit-logs", auditLogsRouter);
-router.use("/ai", requireAiEnabled(), aiRouter);
+
 router.use("/general", generalRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
@@ -189,13 +187,12 @@ router.use("/", notificationSummaryRouter);
 router.use("/rules", rulesRouter);
 router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
-router.use("/billing", billingRouter);
-router.use("/ai-credits", aiCreditsRouter);
+
 router.use("/workflow-engine", requireModule("workflow_engine"), workflowEngineRouter);
 router.use("/delegations", delegationsRouter);
 router.use("/projects/:projectId", projectRoleOverridesRouter);
 router.use("/projects/:projectId", projectGovernanceRouter);
-router.use("/projects/:projectId/submission-chains", submissionChainsRouter);
+
 router.use("/departments", departmentsRouter);
 router.use("/external-contacts", externalContactsRouter);
 

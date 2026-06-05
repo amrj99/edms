@@ -11,7 +11,6 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { AIProcedurePanel } from "@/components/ai/AIProcedurePanel";
 
 const DOC_TYPES = ["general","drawing","specification","report","certificate","calculation","procedure","manual","datasheet","schedule","correspondence","other"];
 const SOURCES = ["internal","external","client","contractor","consultant","supplier"];
@@ -129,7 +128,6 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
   const [isUploading, setIsUploading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [docNumberChecks, setDocNumberChecks] = useState<Record<string, DocNumberCheck>>({});
-  const [aiPanelOpen, setAiPanelOpen] = useState<Record<string, boolean>>({});
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const anyUploading = isUploading || files.some(f => f.uploadStatus === "uploading");
@@ -400,24 +398,6 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {entry.uploadStatus === "pending" && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className={cn(
-                          "h-7 px-2.5 text-xs gap-1.5 font-medium",
-                          aiPanelOpen[entry.id]
-                            ? "border-primary/60 text-primary bg-primary/5"
-                            : "border-primary/30 text-primary hover:bg-primary/5 hover:border-primary/60"
-                        )}
-                        onClick={() => setAiPanelOpen(prev => ({ ...prev, [entry.id]: !prev[entry.id] }))}
-                        title="Get AI suggestions for document number, discipline and revision"
-                      >
-                        <Sparkles className="h-3 w-3" />
-                        {aiPanelOpen[entry.id] ? "Hide AI" : "AI Suggest"}
-                      </Button>
-                    )}
                     {files.length > 1 && entry.uploadStatus === "pending" && (
                       <Button
                         type="button"
@@ -651,25 +631,6 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                         </Select>
                       </div>
                     </div>
-                    {aiPanelOpen[entry.id] && (
-                      <AIProcedurePanel
-                        projectId={projectId}
-                        projectCode={projectCode}
-                        projectName={projectName}
-                        discipline={entry.meta.discipline}
-                        documentType={entry.meta.docType}
-                        partialTitle={entry.meta.title}
-                        onApply={(suggestion) => {
-                          updateMeta(entry.id, {
-                            ...(suggestion.documentNumber ? { docNumber: suggestion.documentNumber } : {}),
-                            ...(suggestion.discipline ? { discipline: suggestion.discipline } : {}),
-                            ...(suggestion.documentType ? { docType: suggestion.documentType } : {}),
-                            ...(suggestion.revision ? { revision: suggestion.revision } : {}),
-                            ...(suggestion.title ? { title: suggestion.title } : {}),
-                          });
-                        }}
-                      />
-                    )}
                     {!entry.meta.title.trim() && (
                       <p className="text-xs text-destructive">Title is required.</p>
                     )}
