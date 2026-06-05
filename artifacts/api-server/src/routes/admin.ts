@@ -303,6 +303,16 @@ router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<
   } else {
     await db.update(orgConfigTable).set(updateData).where(eq(orgConfigTable.organizationId, orgId));
   }
+  await createAuditLog({
+    userId:         req.user!.id,
+    organizationId: orgId,
+    action:         "storage_config_updated",
+    entityType:     "organization",
+    entityId:       orgId,
+    actorRole:      "system_owner",
+    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+    details:        { storageType: storageType ?? null, storageQuotaMb: storageQuotaMb ?? null },
+  });
   res.json({ success: true });
 });
 
@@ -424,7 +434,8 @@ router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
 });
 
 // ─── Test Data Seed ────────────────────────────────────────────────────────────
-router.post("/seed-test-data", requireMinRole("admin"), async (req, res): Promise<void> => {
+// system_owner only — prevents org admins from seeding test data in production.
+router.post("/seed-test-data", requireSysOwner, async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
@@ -755,7 +766,16 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
   } else {
     await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
   }
-
+  await createAuditLog({
+    userId:         req.user!.id,
+    organizationId: orgId,
+    action:         "ai_tier_changed",
+    entityType:     "organization",
+    entityId:       orgId,
+    actorRole:      "system_owner",
+    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+    details:        { tier, applied: preset },
+  });
   res.json({ organizationId: orgId, tier, applied: preset });
 });
 
@@ -795,6 +815,16 @@ router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void>
   }
 
   const quota = await getOrgAiQuota(orgId);
+  await createAuditLog({
+    userId:         req.user!.id,
+    organizationId: orgId,
+    action:         "ai_limits_changed",
+    entityType:     "organization",
+    entityId:       orgId,
+    actorRole:      "system_owner",
+    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+    details:        { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit },
+  });
   res.json({ organizationId: orgId, limits: { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit } });
 });
 
@@ -827,6 +857,17 @@ router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, re
       set: { planId, status: "active", updatedAt: new Date() },
     });
   await syncOrgModules(orgId, org.name);
+  await createAuditLog({
+    userId:         req.user!.id,
+    organizationId: orgId,
+    action:         "plan_changed",
+    entityType:     "organization",
+    entityId:       orgId,
+    entityTitle:    org.name,
+    actorRole:      "system_owner",
+    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+    details:        { planId },
+  });
   res.json({ ok: true, orgId, planId });
 });
 

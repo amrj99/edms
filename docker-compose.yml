@@ -40,8 +40,10 @@ services:
       # container using the dev default password. In production, set DATABASE_URL
       # in your .env file — that value always takes precedence over this fallback.
       DATABASE_URL: ${DATABASE_URL:-postgresql://edms:edms_dev_password@postgres:5432/edms}
-      JWT_SECRET: ${JWT_SECRET:-edms-secret-key-change-in-production}
-      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-edms-refresh-key-change-in-production}
+      # ⚠️ REQUIRED — no fallback. Generate with: openssl rand -base64 64
+      # If JWT_SECRET is missing the API container will refuse to start.
+      JWT_SECRET: ${JWT_SECRET}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       # ── AI (OpenRouter) ─────────────────────────────────────────────────────
       # Required for Document AI Analysis. Get a free key at openrouter.ai/keys

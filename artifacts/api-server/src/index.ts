@@ -10,6 +10,7 @@ import { startTrialDowngradeScheduler } from "./lib/trial-downgrade-scheduler.js
 import { validateStorageAtStartup } from "./lib/storageConfig.js";
 import { logAIConfigAtStartup } from "./lib/ai-core.js";
 import { seedAISettings } from "./lib/seed-ai-settings.js";
+import { seedSecuritySettings } from "./lib/seed-security-settings.js";
 
 const rawPort = process.env["PORT"];
 
@@ -141,6 +142,7 @@ server.listen(port, (err?: Error) => {
   // Seed AI routing defaults into system_settings (ON CONFLICT DO NOTHING — safe every boot).
   // Look for "[seed-ai-settings] AI routing defaults seeded" in your logs.
   seedAISettings().catch(() => {});
+  seedSecuritySettings().catch(() => {});
   // Log resolved AI config AFTER seeding so the log reflects the DB values.
   // Look for "[AI] ═══ startup config resolved ═══" in your logs.
   logAIConfigAtStartup().catch(() => {});

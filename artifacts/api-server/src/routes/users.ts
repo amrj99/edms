@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { validatePasswordPolicy } from "../lib/security-settings.js";
 import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { PLANS } from "../lib/plans.js";
@@ -117,8 +118,9 @@ router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise
     return;
   }
 
-  if (password.length < 8) {
-    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters." });
+  const pwErr = await validatePasswordPolicy(password);
+  if (pwErr) {
+    res.status(400).json({ error: "Bad Request", message: pwErr });
     return;
   }
 

@@ -10,11 +10,15 @@ import {
   verifyPassword,
   generateSecureToken,
   hashToken,
-  getRefreshTokenExpiryDate,
-  getRememberMeExpiry,
   verifyToken,
   requireAuth,
 } from "../lib/auth.js";
+import {
+  getAccessTokenExpirySeconds,
+  getRefreshTokenExpiryDate,
+  getRememberMeExpiryDate,
+  validatePasswordPolicy,
+} from "../lib/security-settings.js";
 import { sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerificationEmail, APP_URL } from "../lib/email.js";
 import { createAuditLog } from "../lib/audit.js";
 import { grantCredits } from "../lib/ai-credits.js";
@@ -222,16 +226,19 @@ router.post("/login", loginLimiter, async (req, res): Promise<void> => {
     orgName = orgs[0]?.name;
   }
 
-  const tokenExpiry = rememberMe ? getRememberMeExpiry() : undefined;
-  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, tokenExpiry);
+  // Access token always uses the configured expiry — never extended by Remember Me.
+  // Remember Me only extends the refresh token (session) lifetime.
+  const accessTokenExpiry = await getAccessTokenExpirySeconds();
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, accessTokenExpiry);
 
   // Generate refresh token — store SHA-256 hash in DB, return plaintext to client
   const refreshToken = generateSecureToken();
+  const refreshExpiry = rememberMe ? await getRememberMeExpiryDate() : await getRefreshTokenExpiryDate();
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
     token: hashToken(refreshToken),
-    expiresAt: getRefreshTokenExpiryDate(),
+    expiresAt: refreshExpiry,
   });
 
   clearLoginAttempts(ip);
@@ -264,8 +271,9 @@ router.post("/register", registerLimiter, async (req, res): Promise<void> => {
     return;
   }
 
-  if (password.length < 8) {
-    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+  const pwErrorReg = await validatePasswordPolicy(password);
+  if (pwErrorReg) {
+    res.status(400).json({ error: "Bad Request", message: pwErrorReg });
     return;
   }
 
@@ -287,14 +295,14 @@ router.post("/register", registerLimiter, async (req, res): Promise<void> => {
     isActive: true,
   }).returning();
 
-  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: false });
+  const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: false }, await getAccessTokenExpirySeconds());
 
   const refreshToken = generateSecureToken();
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
     token: hashToken(refreshToken),
-    expiresAt: getRefreshTokenExpiryDate(),
+    expiresAt: await getRefreshTokenExpiryDate(),
   });
 
   // Welcome email — fire and forget
@@ -400,14 +408,14 @@ router.post("/refresh-token", async (req, res): Promise<void> => {
     .set({ revokedAt: new Date() })
     .where(eq(refreshTokensTable.id, tokenRecord.id));
 
-  const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false });
+  const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, await getAccessTokenExpirySeconds());
   const newRefreshToken = generateSecureToken();
 
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
     token: hashToken(newRefreshToken),
-    expiresAt: getRefreshTokenExpiryDate(),
+    expiresAt: await getRefreshTokenExpiryDate(),
   });
 
   createAuditLog({
@@ -469,8 +477,9 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res): Promise<v
     return;
   }
 
-  if (password.length < 8) {
-    res.status(400).json({ error: "Bad Request", message: "Password must be at least 8 characters" });
+  const pwErrorReset = await validatePasswordPolicy(password);
+  if (pwErrorReset) {
+    res.status(400).json({ error: "Bad Request", message: pwErrorReset });
     return;
   }
 
