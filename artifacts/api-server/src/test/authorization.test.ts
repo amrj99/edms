@@ -58,6 +58,7 @@ describe("requireSysOwner — system_owner only endpoints", () => {
     { method: "get",  path: "/api/admin/system-info" },
     { method: "get",  path: "/api/admin/org-plans" },
     { method: "put",  path: "/api/admin/ai-tier/1" },
+    { method: "post", path: "/api/admin/seed-test-data" },
   ];
 
   describe("returns 401 with no token", () => {
@@ -103,7 +104,6 @@ describe("requireMinRole(admin) — admin+ endpoints", () => {
     { method: "post",   path: "/api/admin/smtp/test" },
     { method: "post",   path: "/api/admin/search/reindex" },
     { method: "put",    path: "/api/admin/ai-classification" },
-    { method: "post",   path: "/api/admin/seed-test-data" },
   ];
 
   describe("returns 401 with no token", () => {
