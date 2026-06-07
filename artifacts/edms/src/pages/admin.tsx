@@ -1552,55 +1552,75 @@ export default function Admin() {
 
         {/* AI Config */}
         <TabsContent value="ai" className="mt-4 space-y-4">
+          <AiGovernanceTab />
+
+          {/* ─── قيد الإنشاء: وحدات الذكاء الاصطناعي التفصيلية ─────────────────
+              هذه الوحدات لا تزال في طور البناء — لا يوجد backend يدعمها بعد.
+              معروضة هنا كمرجع بصري لما سيتم بناؤه لاحقاً.
+              راجع: ARCHITECTURE_STATE.md § AI Module Toggles
+          ─────────────────────────────────────────────────────────────────────── */}
           <div className="grid md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Brain className="h-4 w-4" />AI Module Settings</CardTitle></CardHeader>
+            <Card className="opacity-60 border-dashed">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Brain className="h-4 w-4" />
+                  وحدات الذكاء الاصطناعي
+                  <Badge variant="outline" className="text-[10px] ml-auto">قيد الإنشاء</Badge>
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  هذه الوحدات غير مفعّلة حالياً — ستُربط بالـ backend في مرحلة قادمة.
+                </CardDescription>
+              </CardHeader>
               <CardContent className="space-y-4">
                 {[
-                  { key: "documentAnalysis", label: "Document Analysis", desc: "Auto-classify and summarize uploaded documents" },
-                  { key: "correspondenceAnalysis", label: "Correspondence Analysis", desc: "Categorize and score incoming correspondence" },
-                  { key: "taskPrioritization", label: "Task Prioritization", desc: "AI-driven priority scores and bottleneck detection" },
-                  { key: "naturalLanguageSearch", label: "Natural Language Search", desc: "Parse plain English queries into EDMS filters" },
-                  { key: "documentProcedure", label: "Document Numbering", desc: "AI-assisted document classification during upload" },
-                  { key: "docControlValidation", label: "Document Control Validation", desc: "AI checks for numbering compliance, missing metadata, and duplicates" },
+                  { key: "documentAnalysis",      label: "تحليل المستندات",           desc: "تصنيف المستندات تلقائياً عند الرفع" },
+                  { key: "correspondenceAnalysis", label: "تحليل المراسلات",           desc: "تصنيف وتقييم المراسلات الواردة" },
+                  { key: "taskPrioritization",     label: "تحديد أولويات المهام",      desc: "اقتراح أولويات ذكية للمهام" },
+                  { key: "naturalLanguageSearch",  label: "البحث بالنص الطبيعي",       desc: "تحويل الأسئلة العادية إلى فلاتر بحث" },
+                  { key: "documentProcedure",      label: "مساعدة ترقيم المستندات",    desc: "اقتراح رقم المستند عند الرفع" },
+                  { key: "docControlValidation",   label: "التحقق من التحكم الوثائقي", desc: "فحص الامتثال والبيانات الناقصة" },
                 ].map(({ key, label, desc }) => (
                   <div key={key} className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium">{label}</p>
                       <p className="text-xs text-muted-foreground">{desc}</p>
                     </div>
-                    <Switch defaultChecked={true} />
+                    <Switch disabled defaultChecked={false} />
                   </div>
                 ))}
               </CardContent>
             </Card>
-            <Card>
-              <CardHeader><CardTitle className="text-base">AI Model Configuration</CardTitle></CardHeader>
+
+            <Card className="opacity-60 border-dashed">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  اختيار نموذج الذكاء الاصطناعي
+                  <Badge variant="outline" className="text-[10px] ml-auto">قيد الإنشاء</Badge>
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  اختيار النماذج لكل نوع مهمة — سيُربط بالمزودين الفعليين (Cloudflare / OpenRouter).
+                </CardDescription>
+              </CardHeader>
               <CardContent className="space-y-3">
                 <div>
-                  <Label>Fast Model (document/corr. analysis)</Label>
-                  <Select defaultValue="gpt-5-mini">
+                  <Label className="text-muted-foreground">النموذج السريع (تحليل المستندات والمراسلات)</Label>
+                  <Select disabled defaultValue="cf-llama">
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="gpt-5-mini">gpt-5-mini (fast)</SelectItem>
-                      <SelectItem value="gpt-5">gpt-5 (balanced)</SelectItem>
-                      <SelectItem value="gpt-5.2">gpt-5.2 (smart)</SelectItem>
+                      <SelectItem value="cf-llama">Llama 3.1 8B — Cloudflare (مجاني)</SelectItem>
+                      <SelectItem value="claude-sonnet">Claude 3.5 Sonnet — OpenRouter (مدفوع)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>Smart Model (reasoning tasks)</Label>
-                  <Select defaultValue="gpt-5.2">
+                  <Label className="text-muted-foreground">النموذج الذكي (المهام المعقدة)</Label>
+                  <Select disabled defaultValue="claude-sonnet">
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="gpt-5">gpt-5 (balanced)</SelectItem>
-                      <SelectItem value="gpt-5.2">gpt-5.2 (smart)</SelectItem>
+                      <SelectItem value="claude-sonnet">Claude 3.5 Sonnet — OpenRouter (مدفوع)</SelectItem>
+                      <SelectItem value="cf-llama">Llama 3.1 8B — Cloudflare (مجاني)</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-                <div>
-                  <Label>Cache Duration (minutes)</Label>
-                  <Input type="number" defaultValue={60} min={0} className="mt-1" />
                 </div>
               </CardContent>
             </Card>
@@ -1617,35 +1637,7 @@ export default function Admin() {
 
         {/* Security */}
         <TabsContent value="security" className="mt-4 space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><Key className="h-4 w-4" />Security Settings</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div><Label>Session Timeout (minutes)</Label><Input type="number" defaultValue={60} className="mt-1" /></div>
-              <div><Label>Password Minimum Length</Label><Input type="number" defaultValue={8} className="mt-1" /></div>
-              <div className="flex items-center justify-between"><Label>Require Strong Passwords</Label><Switch defaultChecked={true} /></div>
-              <div className="flex items-center justify-between"><Label>Enable 2FA</Label><Switch defaultChecked={false} /></div>
-              <div className="flex items-center justify-between"><Label>Audit All Actions</Label><Switch defaultChecked={true} /></div>
-              <div>
-                <Label>Allowed IP Ranges (CIDR, one per line)</Label>
-                <textarea className="mt-1 w-full rounded-md border bg-background p-2 text-sm font-mono min-h-[80px]" placeholder="0.0.0.0/0 (allow all)" />
-              </div>
-              <div>
-                <Label>JWT Expiry</Label>
-                <Select defaultValue="24h">
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1h">1 hour</SelectItem>
-                    <SelectItem value="8h">8 hours</SelectItem>
-                    <SelectItem value="24h">24 hours</SelectItem>
-                    <SelectItem value="7d">7 days</SelectItem>
-                    <SelectItem value="30d">30 days</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
+          <SecuritySettingsTab />
         </TabsContent>
 
         {/* Audit Log */}
@@ -1672,6 +1664,378 @@ export default function Admin() {
         <ShadowLogTab />
 
       </Tabs>
+    </div>
+  );
+}
+
+// ─── Security Settings Tab ───────────────────────────────────────────────────
+// Reads/writes real backend fields via GET|PUT /api/config/security-settings
+// Restricted to system_owner only (enforced server-side).
+function SecuritySettingsTab() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["security-settings"],
+    queryFn: async () => {
+      const r = await fetch("/api/config/security-settings");
+      if (!r.ok) throw new Error("Failed to load security settings");
+      return r.json() as Promise<{
+        passwordMinLength: number;
+        accessTokenExpiryMinutes: number;
+        sessionTimeoutMinutes: number;
+        auditAllActions: boolean;
+      }>;
+    },
+  });
+
+  const [passwordMinLength, setPasswordMinLength] = useState<string>("");
+  const [accessTokenExpiry, setAccessTokenExpiry] = useState<string>("");
+  const [sessionTimeout, setSessionTimeout] = useState<string>("");
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!data) return;
+    setPasswordMinLength(String(data.passwordMinLength));
+    setAccessTokenExpiry(String(data.accessTokenExpiryMinutes));
+    setSessionTimeout(String(data.sessionTimeoutMinutes));
+    setDirty(false);
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, number> = {};
+      const pl = parseInt(passwordMinLength, 10);
+      const at = parseInt(accessTokenExpiry, 10);
+      const st = parseInt(sessionTimeout, 10);
+      if (Number.isFinite(pl)) body.passwordMinLength = pl;
+      if (Number.isFinite(at)) body.accessTokenExpiryMinutes = at;
+      if (Number.isFinite(st)) body.sessionTimeoutMinutes = st;
+      const r = await fetch("/api/config/security-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message || "Save failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["security-settings"] });
+      setDirty(false);
+      toast({ title: "Security settings saved" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to save", variant: "destructive" }),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span className="text-sm">Loading security settings…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Key className="h-4 w-4" />Security Settings
+          </CardTitle>
+          <CardDescription>
+            System-wide security policy. Changes apply to all users immediately.
+            Only system owners can modify these settings.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+
+          {/* Password Minimum Length */}
+          <div className="space-y-1.5">
+            <Label>الحد الأدنى لطول كلمة المرور</Label>
+            <p className="text-xs text-muted-foreground">
+              يُطبَّق عند إنشاء كلمة مرور جديدة أو تغييرها. الحد المسموح: 8 – 128 حرفاً.
+            </p>
+            <Input
+              type="number"
+              min={8}
+              max={128}
+              value={passwordMinLength}
+              onChange={(e) => { setPasswordMinLength(e.target.value); setDirty(true); }}
+              className="w-32"
+            />
+          </div>
+
+          <Separator />
+
+          {/* Access Token Expiry */}
+          <div className="space-y-1.5">
+            <Label>انتهاء صلاحية رمز الدخول (بالدقائق)</Label>
+            <p className="text-xs text-muted-foreground">
+              مدة صلاحية رمز الجلسة القصيرة. بعد انتهائها يُجدَّد تلقائياً طالما الجلسة نشطة.
+              الحد المسموح: 5 – 120 دقيقة.
+            </p>
+            <Input
+              type="number"
+              min={5}
+              max={120}
+              value={accessTokenExpiry}
+              onChange={(e) => { setAccessTokenExpiry(e.target.value); setDirty(true); }}
+              className="w-32"
+            />
+          </div>
+
+          <Separator />
+
+          {/* Session Timeout */}
+          <div className="space-y-1.5">
+            <Label>مهلة انتهاء الجلسة (بالدقائق)</Label>
+            <p className="text-xs text-muted-foreground">
+              المدة التي يبقى فيها المستخدم مسجلاً دون نشاط قبل طلب إعادة الدخول.
+              الحد المسموح: 30 دقيقة – 30 يوماً (43200 دقيقة).
+            </p>
+            <Input
+              type="number"
+              min={30}
+              max={43200}
+              value={sessionTimeout}
+              onChange={(e) => { setSessionTimeout(e.target.value); setDirty(true); }}
+              className="w-40"
+            />
+          </div>
+
+          <Separator />
+
+          {/* Audit All Actions — informational, always on */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">تسجيل جميع الإجراءات (Audit Log)</p>
+              <p className="text-xs text-muted-foreground">
+                مفعّل دائماً ولا يمكن تعطيله. يُسجَّل كل تغيير في النظام مع هوية المستخدم والوقت والعنوان.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <span className="text-sm font-medium text-green-600">مفعّل دائماً</span>
+            </div>
+          </div>
+
+        </CardContent>
+      </Card>
+
+      {/* Save button */}
+      <div className="flex justify-end">
+        <Button
+          onClick={() => save.mutate()}
+          disabled={!dirty || save.isPending}
+          className="gap-2"
+        >
+          {save.isPending
+            ? <><Loader2 className="h-4 w-4 animate-spin" />جارٍ الحفظ…</>
+            : <><Save className="h-4 w-4" />حفظ إعدادات الأمان</>
+          }
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Governance Tab ───────────────────────────────────────────────────────
+// Reads/writes real backend fields: aiEnabled, aiPlan, aiPrivacyMode, aiMonthlyLimit
+// Endpoint: GET|PUT /api/config/ai-governance  (requireMinRole "admin")
+function AiGovernanceTab() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["ai-governance"],
+    queryFn: async () => {
+      const r = await fetch("/api/config/ai-governance");
+      if (!r.ok) throw new Error("Failed to load AI settings");
+      return r.json() as Promise<{
+        aiEnabled: boolean;
+        aiPlan: string;
+        aiMonthlyLimit: number | null;
+        aiPrivacyMode: boolean;
+      }>;
+    },
+  });
+
+  const [localEnabled, setLocalEnabled] = useState<boolean>(false);
+  const [localPlan, setLocalPlan] = useState<string>("basic");
+  const [localPrivacy, setLocalPrivacy] = useState<boolean>(false);
+  const [localMonthlyLimit, setLocalMonthlyLimit] = useState<string>("");
+  const [dirty, setDirty] = useState(false);
+
+  // Sync local state when data arrives
+  useEffect(() => {
+    if (!data) return;
+    setLocalEnabled(data.aiEnabled ?? false);
+    setLocalPlan(data.aiPlan ?? "basic");
+    setLocalPrivacy(data.aiPrivacyMode ?? false);
+    setLocalMonthlyLimit(data.aiMonthlyLimit != null ? String(data.aiMonthlyLimit) : "");
+    setDirty(false);
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, unknown> = {
+        aiEnabled: localEnabled,
+        aiPlan: localPlan,
+        aiPrivacyMode: localPrivacy,
+      };
+      const parsed = parseInt(localMonthlyLimit, 10);
+      if (localMonthlyLimit !== "" && !isNaN(parsed)) {
+        body.aiMonthlyLimit = parsed;
+      }
+      const r = await fetch("/api/config/ai-governance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error || "Save failed"); }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-governance"] });
+      setDirty(false);
+      toast({ title: "AI settings saved" });
+    },
+    onError: (e: any) => toast({ title: e.message || "Failed to save", variant: "destructive" }),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span className="text-sm">Loading AI settings…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Brain className="h-4 w-4" />AI Settings
+          </CardTitle>
+          <CardDescription>
+            Configure AI availability and behaviour for this organization.
+            Changes take effect immediately after saving.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+
+          {/* aiEnabled */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Enable AI</p>
+              <p className="text-xs text-muted-foreground">
+                Master switch — turns AI on or off for the entire organization.
+              </p>
+            </div>
+            <Switch
+              checked={localEnabled}
+              onCheckedChange={(v) => { setLocalEnabled(v); setDirty(true); }}
+            />
+          </div>
+
+          <Separator />
+
+          {/* aiPlan */}
+          <div className="space-y-1.5">
+            <Label>AI Plan</Label>
+            <p className="text-xs text-muted-foreground mb-1">
+              Controls routing and quality tier.{" "}
+              <span className="font-medium">disabled</span> overrides the master switch.
+            </p>
+            <Select
+              value={localPlan}
+              onValueChange={(v) => {
+                setLocalPlan(v);
+                if (v === "disabled") setLocalEnabled(false);
+                else if (!localEnabled) setLocalEnabled(true);
+                setDirty(true);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="disabled">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-gray-400 inline-block" />
+                    Disabled — AI off
+                  </span>
+                </SelectItem>
+                <SelectItem value="basic">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-blue-400 inline-block" />
+                    Basic — Cloudflare Workers AI (free tier)
+                  </span>
+                </SelectItem>
+                <SelectItem value="premium">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-purple-500 inline-block" />
+                    Premium — OpenRouter / Claude (paid)
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator />
+
+          {/* aiPrivacyMode */}
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Privacy Mode</p>
+              <p className="text-xs text-muted-foreground">
+                When enabled, document content is not sent to external AI providers.
+                AI features that require external models will be unavailable.
+              </p>
+            </div>
+            <Switch
+              checked={localPrivacy}
+              onCheckedChange={(v) => { setLocalPrivacy(v); setDirty(true); }}
+            />
+          </div>
+
+          <Separator />
+
+          {/* aiMonthlyLimit */}
+          <div className="space-y-1.5">
+            <Label>Monthly AI Request Limit</Label>
+            <p className="text-xs text-muted-foreground mb-1">
+              Maximum AI calls per month for this organization. Leave empty for no limit.
+            </p>
+            <Input
+              type="number"
+              min={0}
+              placeholder="No limit"
+              value={localMonthlyLimit}
+              onChange={(e) => { setLocalMonthlyLimit(e.target.value); setDirty(true); }}
+              className="w-48"
+            />
+          </div>
+
+        </CardContent>
+      </Card>
+
+      {/* Save button */}
+      <div className="flex justify-end">
+        <Button
+          onClick={() => save.mutate()}
+          disabled={!dirty || save.isPending}
+          className="gap-2"
+        >
+          {save.isPending
+            ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</>
+            : <><Save className="h-4 w-4" />Save AI Settings</>
+          }
+        </Button>
+      </div>
     </div>
   );
 }

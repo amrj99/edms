@@ -4,6 +4,7 @@ import { orgConfigTable, systemSettingsTable, organizationsTable } from "@worksp
 import { eq } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
+import { createAuditLog } from "../lib/audit.js";
 
 const router = Router();
 
@@ -49,6 +50,120 @@ router.put("/system-settings", requireAuth, requireSysOwner, async (req, res): P
     }
   }
   res.json({ registrationEnabled: (await getSystemSetting("registrationEnabled")) === "true" });
+});
+
+// ─── Security Settings (system_owner only) ───────────────────────────────────
+// Reads and writes the three configurable security policy values stored in
+// system_settings. Hard limits are enforced by security-settings.ts at read
+// time — a value outside the allowed range is clamped, never rejected.
+//
+// Keys managed here:
+//   password_min_length         — integer, 8–128,   default 12
+//   access_token_expiry_minutes — integer, 5–120,   default 30
+//   session_timeout_minutes     — integer, 30–43200, default 480
+
+const SECURITY_POLICY_KEYS = [
+  "password_min_length",
+  "access_token_expiry_minutes",
+  "session_timeout_minutes",
+] as const;
+
+type SecurityPolicyKey = typeof SECURITY_POLICY_KEYS[number];
+
+const SECURITY_POLICY_META: Record<SecurityPolicyKey, { default: number; min: number; max: number }> = {
+  password_min_length:         { default: 12,  min: 8,  max: 128   },
+  access_token_expiry_minutes: { default: 30,  min: 5,  max: 120   },
+  session_timeout_minutes:     { default: 480, min: 30, max: 43200 },
+};
+
+async function readSecurityPolicySetting(key: SecurityPolicyKey): Promise<number> {
+  const [row] = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+  const meta = SECURITY_POLICY_META[key];
+  if (!row) return meta.default;
+  const parsed = parseInt(row.value, 10);
+  if (!Number.isFinite(parsed)) return meta.default;
+  return Math.min(meta.max, Math.max(meta.min, parsed));
+}
+
+async function writeSecurityPolicySetting(key: SecurityPolicyKey, raw: number): Promise<number> {
+  const meta = SECURITY_POLICY_META[key];
+  const value = String(Math.min(meta.max, Math.max(meta.min, raw)));
+  const existing = await db.select().from(systemSettingsTable).where(eq(systemSettingsTable.key, key));
+  if (existing.length > 0) {
+    await db.update(systemSettingsTable)
+      .set({ value, updatedAt: new Date() })
+      .where(eq(systemSettingsTable.key, key));
+  } else {
+    await db.insert(systemSettingsTable).values({ key, value });
+  }
+  return parseInt(value, 10);
+}
+
+router.get("/security-settings", requireAuth, requireSysOwner, async (_req, res): Promise<void> => {
+  const [passwordMinLength, accessTokenExpiryMinutes, sessionTimeoutMinutes] = await Promise.all([
+    readSecurityPolicySetting("password_min_length"),
+    readSecurityPolicySetting("access_token_expiry_minutes"),
+    readSecurityPolicySetting("session_timeout_minutes"),
+  ]);
+  res.json({
+    passwordMinLength,
+    accessTokenExpiryMinutes,
+    sessionTimeoutMinutes,
+    // Informational only — audit logging is always active and cannot be disabled.
+    auditAllActions: true,
+  });
+});
+
+router.put("/security-settings", requireAuth, requireSysOwner, async (req, res): Promise<void> => {
+  const { passwordMinLength, accessTokenExpiryMinutes, sessionTimeoutMinutes } = req.body ?? {};
+
+  const updates: Partial<Record<SecurityPolicyKey, number>> = {};
+
+  if (typeof passwordMinLength === "number" && Number.isFinite(passwordMinLength)) {
+    updates.password_min_length = passwordMinLength;
+  }
+  if (typeof accessTokenExpiryMinutes === "number" && Number.isFinite(accessTokenExpiryMinutes)) {
+    updates.access_token_expiry_minutes = accessTokenExpiryMinutes;
+  }
+  if (typeof sessionTimeoutMinutes === "number" && Number.isFinite(sessionTimeoutMinutes)) {
+    updates.session_timeout_minutes = sessionTimeoutMinutes;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "Bad Request", message: "No valid security settings provided." });
+    return;
+  }
+
+  const saved: Record<string, number> = {};
+  for (const [key, val] of Object.entries(updates) as [SecurityPolicyKey, number][]) {
+    saved[key] = await writeSecurityPolicySetting(key, val);
+  }
+
+  await createAuditLog({
+    userId: req.user!.id,
+    organizationId: req.user!.organizationId ?? undefined,
+    action: "security_settings_changed",
+    entityType: "system",
+    entityId: 0,
+    entityTitle: "Security Settings",
+    actorRole: "system_owner",
+    ipAddress: (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+    details: { changes: saved },
+  });
+
+  // Return the full current state after saving
+  const [pl, at, st] = await Promise.all([
+    readSecurityPolicySetting("password_min_length"),
+    readSecurityPolicySetting("access_token_expiry_minutes"),
+    readSecurityPolicySetting("session_timeout_minutes"),
+  ]);
+
+  res.json({
+    passwordMinLength: pl,
+    accessTokenExpiryMinutes: at,
+    sessionTimeoutMinutes: st,
+    auditAllActions: true,
+  });
 });
 
 router.use(requireAuth);
