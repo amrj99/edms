@@ -49,3 +49,4 @@ export const pool = new Pool(parsePostgresUrl(process.env.DATABASE_URL));
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
+export * from "./document-type-utils";

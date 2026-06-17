@@ -63,6 +63,8 @@ interface WfInstance {
   currentStageRole?: string;
   currentStageSla?: number | null;
   currentStageReminderDays?: number | null;
+  currentStageResponsibleUserId?: number | null;
+  canAct?: boolean;
   stagesTotal: number;
   stagesCurrent: number;
   stageDueAt?: string | null;
@@ -436,7 +438,8 @@ export function DocumentWorkflowPanel({
   const queryClient = useQueryClient();
   const [actionLoading, setActionLoading] = useState(false);
 
-  const canAct = ["admin", "project_manager", "document_controller", "system_owner"].includes(user?.role ?? "");
+  // Whether the user may start a new workflow cycle (separate from per-instance advance/reject permission)
+  const canManageWorkflow = ["admin", "project_manager", "document_controller", "system_owner"].includes(user?.role ?? "");
 
   const key = ["wf-instances-doc", documentId];
 
@@ -493,7 +496,7 @@ export function DocumentWorkflowPanel({
         ) : activeInstance ? (
           <ActiveWorkflowWidget
             instance={activeInstance}
-            canAct={canAct}
+            canAct={activeInstance.canAct ?? false}
             onAction={handleAction}
             loading={actionLoading}
           />
@@ -505,7 +508,7 @@ export function DocumentWorkflowPanel({
               onAction={handleAction}
               loading={false}
             />
-            {canAct && documentType && (
+            {canManageWorkflow && documentType && (
               <div className="border-t pt-3">
                 <p className="text-xs text-muted-foreground mb-3">Start a new workflow cycle for this document:</p>
                 <StartWorkflowWidget
@@ -517,7 +520,7 @@ export function DocumentWorkflowPanel({
             )}
           </div>
         ) : (
-          canAct && documentType ? (
+          canManageWorkflow && documentType ? (
             <StartWorkflowWidget
               documentId={documentId}
               documentType={documentType}

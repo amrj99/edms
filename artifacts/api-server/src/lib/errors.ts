@@ -90,6 +90,17 @@ export class QuotaExceededError extends AppError {
   }
 }
 
+/**
+ * Thrown when no usable storage provider (per-org S3/R2/on-premise/cloud) could
+ * be resolved for an organization. Distinct from a generic 500 so the client
+ * (and operators) get a clear, actionable signal instead of an opaque crash.
+ */
+export class StorageNotConfiguredError extends AppError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, 503, "STORAGE_NOT_CONFIGURED", { context, report: true });
+  }
+}
+
 // ─── Security Errors (always logged as security events) ──────────────────────
 
 /**

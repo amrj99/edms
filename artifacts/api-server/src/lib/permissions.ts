@@ -398,3 +398,53 @@ export function checkAssignmentBasedPermission(
   if (isAssigned && isAtLeast(role, minimumRoleForAssignment)) return "assigned";
   return null;
 }
+
+// ─── Workflow stage permission check helper ────────────────────────────────
+
+/**
+ * True if `value` is one of the recognized AppRole keys.
+ *
+ * `wf_template_stages.responsible_role` must always be a valid AppRole so it
+ * can be compared against a caller's effective role via isAtLeast(). Free-text
+ * department labels (e.g. "Finance", "GM") are not valid here.
+ */
+export function isValidAppRole(value: unknown): value is AppRole {
+  return typeof value === "string" && (ALL_ROLES as readonly string[]).includes(value);
+}
+
+/**
+ * Marker type for why a workflow advance/reject was permitted:
+ *  - "assigned_user"  — caller is wf_template_stages.responsibleUserId for the current stage
+ *  - "assigned_role"  — caller's effective role >= wf_template_stages.responsibleRole
+ *  - "admin_override" — admin/system_owner bypassed stage assignment (must be audit-logged)
+ */
+export type WorkflowStagePermissionBasis = "assigned_user" | "assigned_role" | "admin_override";
+
+/**
+ * Determines whether a user may advance/reject a workflow instance currently
+ * sitting at `stage`.
+ *
+ * Order matters: a direct assignment match (user or role) is checked first so
+ * that an admin who happens to also be the assigned approver is not logged as
+ * an "override". Only when neither assignment matches does admin/system_owner
+ * fall through as an override (which the caller must audit-log).
+ *
+ * A stage with neither responsibleUserId nor responsibleRole set (or a null
+ * stage) can only be acted on via admin override.
+ *
+ * @returns null if denied, otherwise the basis for the permission grant
+ */
+export function checkWorkflowStagePermission(
+  effectiveRole: string,
+  userId: number,
+  stage: { responsibleUserId: number | null; responsibleRole: string | null } | null | undefined,
+): WorkflowStagePermissionBasis | null {
+  if (stage?.responsibleUserId != null && stage.responsibleUserId === userId) {
+    return "assigned_user";
+  }
+  if (stage?.responsibleRole && isAtLeast(effectiveRole, stage.responsibleRole as AppRole)) {
+    return "assigned_role";
+  }
+  if (isAtLeast(effectiveRole, "admin")) return "admin_override";
+  return null;
+}

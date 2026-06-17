@@ -16,6 +16,7 @@ import { DocumentWorkflowPanel } from "@/components/workflow/DocumentWorkflowPan
 import { DocumentAiTab } from "@/components/documents/DocumentAiTab";
 import { DocumentRevisionsTab } from "@/components/documents/DocumentRevisionsTab";
 import { DocumentActivityTab } from "@/components/documents/DocumentActivityTab";
+import { MetadataFieldsForm } from "@/components/metadata-fields-form";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -84,6 +85,18 @@ export default function DocumentDetailPage() {
     },
     enabled: !!id,
   });
+
+  const { data: documentTypesRaw } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: async () => {
+      const r = await fetch("/api/document-types", { credentials: "include" });
+      return r.ok ? r.json() : [];
+    },
+  });
+  const normalizedDocType = doc?.documentType ? doc.documentType.trim().toUpperCase().replace(/\s+/g, "_") : null;
+  const resolvedDocumentTypeId: number | null = Array.isArray(documentTypesRaw) && normalizedDocType
+    ? documentTypesRaw.find((dt: any) => dt.code === normalizedDocType)?.id ?? null
+    : null;
 
   const isAdminOrPm = user?.role && ["system_owner", "admin", "project_manager"].includes(user.role);
   const isSysAdmin = user?.role && ["system_owner", "admin"].includes(user.role);
@@ -328,6 +341,21 @@ export default function DocumentDetailPage() {
                         <Badge key={dept.id} variant="outline" className="font-mono text-xs">{dept.code}</Badge>
                       ))}
                     </div>
+                  </div>
+                </>
+              )}
+
+              {resolvedDocumentTypeId != null && (
+                <>
+                  <Separator />
+                  <div>
+                    <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Metadata</h3>
+                    <MetadataFieldsForm
+                      documentTypeId={resolvedDocumentTypeId}
+                      value={doc.metadata ?? {}}
+                      onChange={() => {}}
+                      readOnly
+                    />
                   </div>
                 </>
               )}

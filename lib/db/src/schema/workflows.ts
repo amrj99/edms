@@ -1,8 +1,9 @@
-import { pgTable, serial, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, boolean, index } from "drizzle-orm/pg-core";
 import { documentsTable } from "./documents";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { organizationsTable } from "./organizations";
+import { documentTypesTable } from "./document-types";
 
 // ─── Configurable Workflow Engine ─────────────────────────────────────────────
 
@@ -16,17 +17,25 @@ export const wfTemplatesTable = pgTable("wf_templates", {
   id: serial("id").primaryKey(),
   organizationId: integer("organization_id").references(() => organizationsTable.id).notNull(),
   name: text("name").notNull(),
+  // Legacy free-text document type, kept for backward-compatible case-insensitive
+  // matching. New templates derive this from documentTypeId's code.
   documentType: text("document_type").notNull(),
+  // Preferred link to document_types. Nullable for pre-existing templates that
+  // have not yet been associated with a registry entry.
+  documentTypeId: integer("document_type_id").references(() => documentTypesTable.id),
   description: text("description"),
   isActive: boolean("is_active").notNull().default(true),
   createdById: integer("created_by_id").references(() => usersTable.id).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_wf_templates_document_type_id").on(t.documentTypeId),
+]);
 
 /**
  * wf_template_stages — ordered stages within a template.
- * responsibleRole is a free-text display label (e.g. "Finance", "GM").
+ * responsibleRole, if set, must be a valid AppRole (see lib/permissions.ts) —
+ * it is compared against the caller's effective role to authorize advance/reject.
  * responsibleUserId is an optional specific user who owns this stage.
  * isTerminal=true means completing this stage closes the workflow as completed.
  */

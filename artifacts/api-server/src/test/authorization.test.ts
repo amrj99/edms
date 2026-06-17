@@ -59,6 +59,7 @@ describe("requireSysOwner — system_owner only endpoints", () => {
     { method: "get",  path: "/api/admin/org-plans" },
     { method: "put",  path: "/api/admin/ai-tier/1" },
     { method: "post", path: "/api/admin/seed-test-data" },
+    { method: "get",  path: "/api/admin/backup" },
   ];
 
   describe("returns 401 with no token", () => {
@@ -228,6 +229,51 @@ describe("CRITICAL: admin cannot perform system_owner actions", () => {
       .set(tokens.admin())
       .send({});
     expect(res.status).toBe(403);
+  });
+
+  it("admin cannot export the backup", async () => {
+    const res = await api()
+      .get("/api/admin/backup")
+      .set(tokens.admin());
+    expect(res.status).toBe(403);
+  });
+});
+
+// ─── H1: GET /api/admin/backup — system_owner only ───────────────────────────
+//
+// Previously this endpoint only required requireAuth — ANY authenticated user
+// (including viewer) could export a full data dump of their organization
+// (users, projects, documents, correspondence, transmittals, tasks). It is now
+// gated the same way as POST /api/admin/restore (requireSysOwner).
+
+describe("H1: GET /api/admin/backup — system_owner only", () => {
+  it("viewer cannot access the backup endpoint", async () => {
+    const res = await api()
+      .get("/api/admin/backup")
+      .set(tokens.viewer());
+    expect(res.status).toBe(403);
+  });
+
+  it("member cannot access the backup endpoint", async () => {
+    const res = await api()
+      .get("/api/admin/backup")
+      .set(tokens.member());
+    expect(res.status).toBe(403);
+  });
+
+  it("admin cannot access the backup endpoint", async () => {
+    const res = await api()
+      .get("/api/admin/backup")
+      .set(tokens.admin());
+    expect(res.status).toBe(403);
+  });
+
+  it("system_owner can access the backup endpoint", async () => {
+    const res = await api()
+      .get("/api/admin/backup")
+      .set(tokens.systemOwner());
+    expect(res.status).toBe(200);
+    expect(res.body.tables).toBeDefined();
   });
 });
 

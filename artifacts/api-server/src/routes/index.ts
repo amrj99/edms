@@ -46,6 +46,7 @@ import projectGovernanceRouter from "./project-governance.js";
 import departmentsRouter from "./departments.js";
 import projectDepartmentsRouter from "./project-departments.js";
 import externalContactsRouter from "./external-contacts.js";
+import documentTypesRouter from "./document-types.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 import { requireOrg } from "../middlewares/require-org.js";
@@ -195,5 +196,6 @@ router.use("/projects/:projectId", projectGovernanceRouter);
 
 router.use("/departments", departmentsRouter);
 router.use("/external-contacts", externalContactsRouter);
+router.use("/document-types", documentTypesRouter);
 
 export default router;

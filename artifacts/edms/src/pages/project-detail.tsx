@@ -15,6 +15,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
+import { MetadataFieldsForm } from "@/components/metadata-fields-form";
 import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
 
@@ -319,7 +320,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
   const [bulkAssignStatus, setBulkAssignStatus] = useState("in_review");
   // Document edit state
   const [editDoc, setEditDoc] = useState<any>(null);
-  const [editForm, setEditForm] = useState({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "" });
+  const [editForm, setEditForm] = useState<{ title: string; discipline: string; revision: string; documentType: string; description: string; source: string; issuedBy: string; metadata: Record<string, unknown> }>({ title: "", discipline: "", revision: "", documentType: "", description: "", source: "", issuedBy: "", metadata: {} });
   const [editFile, setEditFile] = useState<UploadedFile | null>(null);
   const [editAdditionalFiles, setEditAdditionalFiles] = useState<UploadedFile[]>([]);
   // Department assignments for the edit dialog (Phase B — data only)
@@ -395,6 +396,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
             source: u.meta.source || undefined,
             issuedBy: u.meta.issuedBy || undefined,
             direction: u.meta.direction || undefined,
+            metadata: u.meta.customFields ?? {},
             fileUrl: u.fileUrl,
             fileName: u.fileName,
             fileSize: u.fileSize,
@@ -430,6 +432,15 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
     },
   });
   const orgDepts: any[] = Array.isArray(orgDeptsRaw) ? orgDeptsRaw.filter((d: any) => d.isActive !== false) : [];
+
+  const { data: documentTypesRaw } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: async () => {
+      const r = await fetch("/api/document-types");
+      return r.ok ? r.json() : [];
+    },
+  });
+  const activeDocumentTypes: any[] = Array.isArray(documentTypesRaw) ? documentTypesRaw.filter((dt: any) => dt.isActive) : [];
 
   const { data: editDocDeptsRaw } = useQuery({
     queryKey: ["doc-departments", editDoc?.id],
@@ -1211,7 +1222,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                           setEditDocOrigDeptIds(new Set());
                           qc.invalidateQueries({ queryKey: ["doc-departments", doc.id] });
                           setEditDoc(doc);
-                          setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "" });
+                          setEditForm({ title: doc.title, discipline: doc.discipline ?? "", revision: doc.revision ?? "01", documentType: doc.documentType ?? "general", description: doc.description ?? "", source: doc.source ?? "", issuedBy: doc.issuedBy ?? "", metadata: doc.metadata ?? {} });
                           setEditFile(null);
                         }}>
                           <Pencil className="h-4 w-4" />
@@ -1316,7 +1327,18 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
               </div>
               <div>
                 <Label>Document Type</Label>
-                <Input value={editForm.documentType} onChange={e => setEditForm(f => ({ ...f, documentType: e.target.value }))} className="mt-1" placeholder="E.g. drawing" />
+                <Select value={editForm.documentType || "_none"} onValueChange={v => setEditForm(f => ({ ...f, documentType: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select document type…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {activeDocumentTypes.map((dt: any) => (
+                      <SelectItem key={dt.id} value={dt.code}>{dt.name}</SelectItem>
+                    ))}
+                    {editForm.documentType && !activeDocumentTypes.some((dt: any) => dt.code === editForm.documentType) && (
+                      <SelectItem value={editForm.documentType}>{editForm.documentType} (legacy)</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>Source</Label>
@@ -1339,6 +1361,11 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
               <Label>Description</Label>
               <Textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} className="mt-1" rows={3} />
             </div>
+            <MetadataFieldsForm
+              documentTypeId={activeDocumentTypes.find((dt: any) => dt.code === editForm.documentType)?.id ?? null}
+              value={editForm.metadata}
+              onChange={(v) => setEditForm(f => ({ ...f, metadata: v }))}
+            />
             {/* Departments — Phase B data-only classification */}
             {orgDepts.length > 0 && (
               <div>
@@ -1428,6 +1455,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                   title: editForm.title, discipline: editForm.discipline, revision: editForm.revision,
                   documentType: editForm.documentType, description: editForm.description,
                   source: editForm.source || undefined, issuedBy: editForm.issuedBy || undefined,
+                  metadata: editForm.metadata,
                   additionalFiles: combined,
                   ...(editFile ? { fileUrl: editFile.url, fileName: editFile.name, fileSize: editFile.size } : {}),
                 });
@@ -1827,7 +1855,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                     value={wfEngineTemplateId ? String(wfEngineTemplateId) : (wfEngineTemplates[0] ? String(wfEngineTemplates[0].id) : "")}
                     onValueChange={v => setWfEngineTemplateId(parseInt(v))}
                   >
-                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="mt-1 w-full"><SelectValue placeholder="Select a template" /></SelectTrigger>
                     <SelectContent>
                       {wfEngineTemplates.map((t: any) => (
                         <SelectItem key={t.id} value={String(t.id)}>

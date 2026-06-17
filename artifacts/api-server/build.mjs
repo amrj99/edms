@@ -80,6 +80,14 @@ async function buildAll() {
     plugins: [],
   });
 
+  // Build document-types seed script (runs during container startup)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/scripts/seed-document-types.ts")],
+    outdir: distDir,
+    plugins: [],
+  });
+
   // Build migration runner (runs during container startup before the API)
   await esbuild({
     ...sharedConfig,

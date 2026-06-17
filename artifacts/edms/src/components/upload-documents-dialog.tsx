@@ -3,6 +3,7 @@ import {
   FileText, Upload, X, Check, AlertCircle, Copy, Loader2,
   ChevronDown, ChevronUp, ClipboardCopy, Sparkles, ExternalLink, FilePlus2,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { MetadataFieldsForm } from "@/components/metadata-fields-form";
 
 const DOC_TYPES = ["general","drawing","specification","report","certificate","calculation","procedure","manual","datasheet","schedule","correspondence","other"];
 const SOURCES = ["internal","external","client","contractor","consultant","supplier"];
@@ -26,6 +28,7 @@ export interface DocMeta {
   source: string;
   issuedBy: string;
   direction?: string;
+  customFields: Record<string, unknown>;
 }
 
 interface StagedFile {
@@ -69,6 +72,7 @@ function defaultMeta(file: File): DocMeta {
     status: "draft",
     source: "",
     issuedBy: "",
+    customFields: {},
   };
 }
 
@@ -131,6 +135,20 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const anyUploading = isUploading || files.some(f => f.uploadStatus === "uploading");
+
+  const { data: documentTypesRaw } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: async () => {
+      const r = await fetch("/api/document-types");
+      return r.ok ? r.json() : [];
+    },
+  });
+  const activeDocumentTypes: { id: number; code: string; name: string }[] = Array.isArray(documentTypesRaw)
+    ? documentTypesRaw.filter((dt: any) => dt.isActive).map((dt: any) => ({ id: dt.id, code: dt.code, name: dt.name }))
+    : [];
+  const docTypeOptions = activeDocumentTypes.length > 0
+    ? activeDocumentTypes
+    : DOC_TYPES.map(t => ({ code: t, name: t.charAt(0).toUpperCase() + t.slice(1) }));
 
   const checkDocNumber = useCallback((fileId: string, docNumber: string) => {
     if (!docNumber.trim()) {
@@ -568,9 +586,12 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                         >
                           <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            {DOC_TYPES.map(t => (
-                              <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
+                            {docTypeOptions.map(t => (
+                              <SelectItem key={t.code} value={t.code}>{t.name}</SelectItem>
                             ))}
+                            {entry.meta.docType && !docTypeOptions.some(t => t.code === entry.meta.docType) && (
+                              <SelectItem value={entry.meta.docType}>{entry.meta.docType}</SelectItem>
+                            )}
                           </SelectContent>
                         </Select>
                       </div>
@@ -631,6 +652,13 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
                         </Select>
                       </div>
                     </div>
+                    <MetadataFieldsForm
+                      documentTypeId={activeDocumentTypes.find(t => t.code === entry.meta.docType)?.id ?? null}
+                      value={entry.meta.customFields}
+                      onChange={(v) => updateMeta(entry.id, { customFields: v })}
+                      disabled={entry.uploadStatus === "uploading"}
+                      className="pt-1.5 border-t"
+                    />
                     {!entry.meta.title.trim() && (
                       <p className="text-xs text-destructive">Title is required.</p>
                     )}

@@ -318,7 +318,7 @@ router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<
 });
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
-router.get("/backup", async (req, res): Promise<void> => {
+router.get("/backup", requireSysOwner, async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
 

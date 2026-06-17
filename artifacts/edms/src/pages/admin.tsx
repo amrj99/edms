@@ -29,7 +29,9 @@ import {
   Server, Wifi, WifiOff, Palette, Image as ImageIcon, ToggleLeft, ToggleRight,
   LayoutDashboard, ClipboardList, Bell, Link2, Zap, BarChart3,
   FileText, Send, TrendingUp, AlertTriangle, CreditCard, Sparkles,
+  Settings, ListChecks,
 } from "lucide-react";
+import { Link } from "wouter";
 import { useModules, type OrgModules } from "@/hooks/use-modules";
 import { useI18n, type TranslationKeys } from "@/lib/i18n";
 
@@ -90,9 +92,88 @@ export default function Admin() {
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
 
+  const { data: documentTypesData, isLoading: documentTypesLoading } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: async () => { const r = await fetch("/api/document-types"); return r.ok ? r.json() : []; },
+  });
+
+  const { data: metadataFieldsData } = useQuery({
+    queryKey: ["metadata-fields"],
+    queryFn: async () => { const r = await fetch("/api/metadata-fields"); return r.ok ? r.json() : { fields: [] }; },
+  });
+  const metadataFieldCountByDocType: Record<number, number> = {};
+  for (const f of (metadataFieldsData?.fields || [])) {
+    if (f.documentTypeId != null) {
+      metadataFieldCountByDocType[f.documentTypeId] = (metadataFieldCountByDocType[f.documentTypeId] || 0) + 1;
+    }
+  }
+
+  const createDocumentType = useMutation({
+    mutationFn: async (data: { code: string; name: string }) => {
+      const r = await fetch("/api/document-types", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to create document type");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["document-types"] });
+      setNewDocumentType({ code: "", name: "" });
+      toast({ title: "Document type created" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updateDocumentType = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: { name?: string; isActive?: boolean } }) => {
+      const r = await fetch(`/api/document-types/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to update document type");
+      }
+      return r.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["document-types"] }),
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const globalMetadataFields = (metadataFieldsData?.fields || []).filter((f: any) => f.documentTypeId == null);
+
+  const createGlobalMetadataField = useMutation({
+    mutationFn: async (data: { name: string; label: string; fieldType: string; options: string[]; required: boolean; appliesTo: string }) => {
+      const r = await fetch("/api/metadata-fields", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to create metadata field");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["metadata-fields"] });
+      setNewGlobalField({ name: "", label: "", fieldType: "text", options: "", required: false, appliesTo: "document" });
+      toast({ title: "Metadata field created" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updateGlobalMetadataField = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: Partial<{ label: string; options: string[]; required: boolean; isActive: boolean }> }) => {
+      const r = await fetch(`/api/metadata-fields/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.message || "Failed to update metadata field");
+      }
+      return r.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["metadata-fields"] }),
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const [form, setForm] = useState<any>(null);
   const [newCorrType, setNewCorrType] = useState({ name: "", prefix: "", slaDays: 7, color: "#3B82F6" });
-  const [newMetaField, setNewMetaField] = useState({ name: "", label: "", type: "text", required: false, scope: "global" });
+  const [newDocumentType, setNewDocumentType] = useState({ code: "", name: "" });
+  const [newGlobalField, setNewGlobalField] = useState({ name: "", label: "", fieldType: "text" as "text" | "number" | "date" | "select" | "multiselect" | "boolean", options: "", required: false, appliesTo: "document" });
 
   // User management state
   const [createUserOpen, setCreateUserOpen] = useState(false);
@@ -403,16 +484,6 @@ export default function Admin() {
     setForm((f: any) => ({ ...f, correspondenceTypes: (f.correspondenceTypes || []).filter((t: any) => t.id !== id) }));
   };
 
-  const addMetaField = () => {
-    if (!newMetaField.name.trim()) return;
-    setForm((f: any) => ({ ...f, metadataFields: [...(f.metadataFields || []), { ...newMetaField, id: Date.now() }] }));
-    setNewMetaField({ name: "", label: "", type: "text", required: false, scope: "global" });
-  };
-
-  const removeMetaField = (id: any) => {
-    setForm((f: any) => ({ ...f, metadataFields: (f.metadataFields || []).filter((m: any) => m.id !== id) }));
-  };
-
   const users = usersData?.users ?? [];
   const orgs = orgsData?.organizations ?? [];
   const projects = projectsData?.projects ?? [];
@@ -458,7 +529,7 @@ export default function Admin() {
             { value: "users", label: "Users", icon: Users },
             { value: "project-assign", label: "Project Assignment", icon: FolderKanban },
             { value: "departments", label: "Departments", icon: Users },
-            { value: "metadata", label: "Metadata", icon: Layers },
+            { value: "document-types", label: "Document Types", icon: FileType },
             { value: "corrtypes", label: "Corr. Types", icon: FileType },
             { value: "numbering", label: "Numbering", icon: Hash },
             { value: "workflows", label: "Workflows", icon: GitBranch },
@@ -1305,77 +1376,187 @@ export default function Admin() {
           </Dialog>
         </TabsContent>
 
-        {/* Metadata Management */}
-        <TabsContent value="metadata" className="mt-4 space-y-4">
+        {/* Document Types */}
+        <TabsContent value="document-types" className="mt-4 space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2"><Layers className="h-4 w-4" />Custom Metadata Fields</CardTitle>
-              <CardDescription>Define custom fields applied to documents globally or per project</CardDescription>
+              <CardTitle className="text-base flex items-center gap-2"><FileType className="h-4 w-4" />Document Types</CardTitle>
+              <CardDescription>Define the document types available when creating or editing documents. The code cannot be changed after creation.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(form.metadataFields || []).length === 0 && (
-                <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg border-dashed">No custom metadata fields defined yet</p>
+              {documentTypesLoading && <p className="text-sm text-muted-foreground py-4 text-center">Loading…</p>}
+              {!documentTypesLoading && (documentTypesData || []).length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg border-dashed">No document types defined yet</p>
               )}
               <div className="space-y-2">
-                {(form.metadataFields || []).map((field: any) => (
-                  <div key={field.id} className="flex items-center gap-3 p-3 border rounded-lg">
-                    <div className="flex-1 grid grid-cols-4 gap-3 text-sm">
-                      <div><span className="text-muted-foreground text-xs block">Field Name</span><span className="font-mono">{field.name}</span></div>
-                      <div><span className="text-muted-foreground text-xs block">Label</span>{field.label || field.name}</div>
-                      <div><span className="text-muted-foreground text-xs block">Type</span><Badge variant="outline" className="text-xs capitalize">{field.type}</Badge></div>
-                      <div className="flex gap-2">
-                        {field.required && <Badge className="text-xs">Required</Badge>}
-                        <Badge variant="secondary" className="text-xs capitalize">{field.scope}</Badge>
+                {(documentTypesData || []).map((dt: any) => (
+                  <div key={dt.id} className="flex items-center gap-3 p-3 border rounded-lg">
+                    <div className="flex-1 grid grid-cols-4 gap-3 text-sm items-center">
+                      <div><span className="text-muted-foreground text-xs block">Code</span><span className="font-mono">{dt.code}</span></div>
+                      <div>
+                        <span className="text-muted-foreground text-xs block">Name</span>
+                        <span>{dt.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Switch checked={dt.isActive} onCheckedChange={v => updateDocumentType.mutate({ id: dt.id, data: { isActive: v } })} />
+                        <Label className="text-xs">{dt.isActive ? "Active" : "Inactive"}</Label>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {metadataFieldCountByDocType[dt.id] || 0} metadata field{(metadataFieldCountByDocType[dt.id] || 0) === 1 ? "" : "s"}
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive shrink-0" onClick={() => removeMetaField(field.id)}>
-                      <X className="h-4 w-4" />
-                    </Button>
+                    <Link href={`/admin/document-types/${dt.id}`}>
+                      <Button variant="outline" size="sm" className="gap-1.5">
+                        <Settings className="h-3.5 w-3.5" /> Configure
+                      </Button>
+                    </Link>
                   </div>
                 ))}
               </div>
               <Separator />
               <div className="space-y-3">
-                <p className="text-sm font-medium">Add New Field</p>
+                <p className="text-sm font-medium">Add New Document Type</p>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div>
-                    <Label className="text-xs">Field Name (key)</Label>
-                    <Input placeholder="e.g. contract_number" value={newMetaField.name} onChange={e => setNewMetaField(f => ({ ...f, name: e.target.value }))} className="mt-1 font-mono text-sm" />
+                    <Label className="text-xs">Code</Label>
+                    <Input placeholder="e.g. DRAWING" value={newDocumentType.code} onChange={e => setNewDocumentType(f => ({ ...f, code: e.target.value }))} className="mt-1 font-mono text-sm" />
                   </div>
                   <div>
-                    <Label className="text-xs">Display Label</Label>
-                    <Input placeholder="e.g. Contract Number" value={newMetaField.label} onChange={e => setNewMetaField(f => ({ ...f, label: e.target.value }))} className="mt-1 text-sm" />
+                    <Label className="text-xs">Display Name</Label>
+                    <Input placeholder="e.g. Drawing" value={newDocumentType.name} onChange={e => setNewDocumentType(f => ({ ...f, name: e.target.value }))} className="mt-1 text-sm" />
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      onClick={() => newDocumentType.code.trim() && newDocumentType.name.trim() && createDocumentType.mutate(newDocumentType)}
+                      disabled={!newDocumentType.code.trim() || !newDocumentType.name.trim() || createDocumentType.isPending}
+                      className="gap-1 w-full mt-1"
+                      size="sm"
+                    >
+                      <Plus className="h-4 w-4" /> Add Document Type
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><ListChecks className="h-4 w-4" />Global Metadata Fields</CardTitle>
+              <CardDescription>Fields that apply to every document or task regardless of document type.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {globalMetadataFields.length === 0 && (
+                <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg border-dashed">No global metadata fields defined yet</p>
+              )}
+              <div className="space-y-2">
+                {globalMetadataFields.map((field: any) => (
+                  <div key={field.id} className="flex items-center gap-3 p-3 border rounded-lg">
+                    <div className="flex-1 grid grid-cols-5 gap-3 text-sm items-center">
+                      <div>
+                        <span className="text-muted-foreground text-xs block">Name</span>
+                        <span className="font-mono">{field.name}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground text-xs block">Label</span>
+                        <Input
+                          defaultValue={field.label}
+                          className="h-8 text-sm"
+                          onBlur={e => { const v = e.target.value.trim(); if (v && v !== field.label) updateGlobalMetadataField.mutate({ id: field.id, data: { label: v } }); }}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground text-xs block">Type</span>
+                        <span className="capitalize">{field.fieldType}</span>
+                        {(field.fieldType === "select" || field.fieldType === "multiselect") && (
+                          <Input
+                            defaultValue={(field.options || []).join(", ")}
+                            placeholder="option1, option2"
+                            className="h-8 text-sm mt-1"
+                            onBlur={e => {
+                              const opts = e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean);
+                              updateGlobalMetadataField.mutate({ id: field.id, data: { options: opts } });
+                            }}
+                          />
+                        )}
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground text-xs block">Applies To</span>
+                        <span className="capitalize">{field.appliesTo}</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-1.5 text-xs">
+                          <Checkbox checked={field.required} onCheckedChange={v => updateGlobalMetadataField.mutate({ id: field.id, data: { required: v === true } })} />
+                          Required
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <Switch checked={field.isActive} onCheckedChange={v => updateGlobalMetadataField.mutate({ id: field.id, data: { isActive: v } })} />
+                          <Label className="text-xs">{field.isActive ? "Active" : "Disabled"}</Label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <p className="text-sm font-medium">Add Global Field</p>
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                  <div>
+                    <Label className="text-xs">Name (key)</Label>
+                    <Input placeholder="e.g. project_phase" value={newGlobalField.name} onChange={e => setNewGlobalField(f => ({ ...f, name: e.target.value }))} className="mt-1 font-mono text-sm" />
                   </div>
                   <div>
-                    <Label className="text-xs">Field Type</Label>
-                    <Select value={newMetaField.type} onValueChange={v => setNewMetaField(f => ({ ...f, type: v }))}>
-                      <SelectTrigger className="mt-1 text-sm"><SelectValue /></SelectTrigger>
+                    <Label className="text-xs">Label</Label>
+                    <Input placeholder="e.g. Project Phase" value={newGlobalField.label} onChange={e => setNewGlobalField(f => ({ ...f, label: e.target.value }))} className="mt-1 text-sm" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Type</Label>
+                    <Select value={newGlobalField.fieldType} onValueChange={v => setNewGlobalField(f => ({ ...f, fieldType: v as typeof newGlobalField.fieldType }))}>
+                      <SelectTrigger className="mt-1 h-9 text-sm"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="text">Text</SelectItem>
-                        <SelectItem value="number">Number</SelectItem>
-                        <SelectItem value="date">Date</SelectItem>
-                        <SelectItem value="dropdown">Dropdown</SelectItem>
-                        <SelectItem value="boolean">Yes/No</SelectItem>
-                        <SelectItem value="url">URL</SelectItem>
+                        {["text", "number", "date", "select", "multiselect", "boolean"].map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
                   <div>
-                    <Label className="text-xs">Scope</Label>
-                    <Select value={newMetaField.scope} onValueChange={v => setNewMetaField(f => ({ ...f, scope: v }))}>
-                      <SelectTrigger className="mt-1 text-sm"><SelectValue /></SelectTrigger>
+                    <Label className="text-xs">Applies To</Label>
+                    <Select value={newGlobalField.appliesTo} onValueChange={v => setNewGlobalField(f => ({ ...f, appliesTo: v }))}>
+                      <SelectTrigger className="mt-1 h-9 text-sm"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="global">Global (all projects)</SelectItem>
-                        <SelectItem value="project">Per Project</SelectItem>
+                        <SelectItem value="document">Document</SelectItem>
+                        <SelectItem value="task">Task</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="flex items-center gap-2 mt-5">
-                    <Switch checked={newMetaField.required} onCheckedChange={v => setNewMetaField(f => ({ ...f, required: v }))} />
+                  {(newGlobalField.fieldType === "select" || newGlobalField.fieldType === "multiselect") && (
+                    <div>
+                      <Label className="text-xs">Options (comma-separated)</Label>
+                      <Input placeholder="option1, option2" value={newGlobalField.options} onChange={e => setNewGlobalField(f => ({ ...f, options: e.target.value }))} className="mt-1 text-sm" />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Checkbox checked={newGlobalField.required} onCheckedChange={v => setNewGlobalField(f => ({ ...f, required: v === true }))} />
                     <Label className="text-xs">Required</Label>
                   </div>
                   <div className="flex items-end">
-                    <Button onClick={addMetaField} className="gap-1 w-full mt-1" size="sm">
+                    <Button
+                      size="sm"
+                      className="gap-1.5 w-full"
+                      disabled={!newGlobalField.name.trim() || !newGlobalField.label.trim() || createGlobalMetadataField.isPending}
+                      onClick={() => createGlobalMetadataField.mutate({
+                        name: newGlobalField.name.trim(),
+                        label: newGlobalField.label.trim(),
+                        fieldType: newGlobalField.fieldType,
+                        options: (newGlobalField.fieldType === "select" || newGlobalField.fieldType === "multiselect")
+                          ? newGlobalField.options.split(",").map(s => s.trim()).filter(Boolean)
+                          : [],
+                        required: newGlobalField.required,
+                        appliesTo: newGlobalField.appliesTo,
+                      })}
+                    >
                       <Plus className="h-4 w-4" /> Add Field
                     </Button>
                   </div>

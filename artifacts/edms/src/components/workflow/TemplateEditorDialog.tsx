@@ -39,19 +39,21 @@ import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-const DOC_TYPES = [
-  "general", "drawing", "specification", "report", "certificate",
-  "calculation", "procedure", "manual", "datasheet", "schedule",
-  "correspondence", "contract", "Invoice", "other",
-];
-
 export interface WfTemplate {
   id: number;
   name: string;
   documentType: string;
+  documentTypeId?: number | null;
   description?: string;
   isActive: boolean;
   stages: WfStage[];
+}
+
+interface DocumentType {
+  id: number;
+  code: string;
+  name: string;
+  isActive: boolean;
 }
 
 export interface WfStage {
@@ -326,9 +328,7 @@ export function TemplateEditorDialog({
 
   // ── Local state ────────────────────────────────────────────────────────────
   const [name, setName] = useState("");
-  const [documentType, setDocumentType] = useState("general");
-  const [customType, setCustomType] = useState("");
-  const [useCustomType, setUseCustomType] = useState(false);
+  const [documentTypeId, setDocumentTypeId] = useState<number | null>(null);
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [stages, setStages] = useState<LocalStage[]>([]);
@@ -340,10 +340,7 @@ export function TemplateEditorDialog({
     if (!open) return;
     if (template) {
       setName(template.name);
-      const knownType = DOC_TYPES.includes(template.documentType);
-      setDocumentType(knownType ? template.documentType : "custom");
-      setCustomType(knownType ? "" : template.documentType);
-      setUseCustomType(!knownType);
+      setDocumentTypeId(template.documentTypeId ?? null);
       setDescription(template.description ?? "");
       setIsActive(template.isActive);
       setStages(
@@ -353,9 +350,7 @@ export function TemplateEditorDialog({
       );
     } else {
       setName("");
-      setDocumentType("general");
-      setCustomType("");
-      setUseCustomType(false);
+      setDocumentTypeId(null);
       setDescription("");
       setIsActive(true);
       setStages([emptyStage()]);
@@ -370,6 +365,15 @@ export function TemplateEditorDialog({
     staleTime: 120_000,
   });
   const users: OrgUser[] = usersData?.users ?? usersData ?? [];
+
+  // ── Document types for the document type dropdown ─────────────────────────
+  const { data: documentTypesData } = useQuery({
+    queryKey: ["document-types"],
+    queryFn: () => apiFetch("/document-types"),
+    staleTime: 120_000,
+  });
+  const documentTypes: DocumentType[] = Array.isArray(documentTypesData) ? documentTypesData : [];
+  const selectableDocumentTypes = documentTypes.filter(dt => dt.isActive || dt.id === documentTypeId);
 
   // ── DnD setup ─────────────────────────────────────────────────────────────
   const sensors = useSensors(
@@ -402,8 +406,7 @@ export function TemplateEditorDialog({
   };
 
   // ── Validation ─────────────────────────────────────────────────────────────
-  const resolvedDocType = useCustomType ? customType.trim() : documentType;
-  const isValid = name.trim().length > 0 && resolvedDocType.length > 0 && stages.every(s => s.name.trim().length > 0);
+  const isValid = name.trim().length > 0 && documentTypeId !== null && stages.every(s => s.name.trim().length > 0);
 
   // ── Save ───────────────────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -417,7 +420,7 @@ export function TemplateEditorDialog({
         // Create template
         const created = await apiPost("/workflow-engine/templates", {
           name: name.trim(),
-          documentType: resolvedDocType,
+          documentTypeId,
           description: description.trim() || undefined,
           isActive,
         });
@@ -443,7 +446,7 @@ export function TemplateEditorDialog({
         // Update template metadata
         await apiPut(`/workflow-engine/templates/${tplId}`, {
           name: name.trim(),
-          documentType: resolvedDocType,
+          documentTypeId,
           description: description.trim() || undefined,
           isActive,
         });
@@ -511,38 +514,26 @@ export function TemplateEditorDialog({
               {/* Document type */}
               <div>
                 <Label className="text-sm">Document type *</Label>
-                {!useCustomType ? (
-                  <Select value={documentType} onValueChange={setDocumentType}>
-                    <SelectTrigger className="mt-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DOC_TYPES.map(t => (
-                        <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
-                      ))}
-                      <SelectItem value="__custom__">Custom type…</SelectItem>
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <div className="flex gap-2 mt-1">
-                    <Input
-                      value={customType}
-                      onChange={e => setCustomType(e.target.value)}
-                      placeholder="Enter custom type"
-                    />
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="text-xs text-primary hover:underline mt-1"
-                  onClick={() => {
-                    setUseCustomType(v => !v);
-                    setCustomType("");
-                    setDocumentType("general");
-                  }}
+                <Select
+                  value={documentTypeId !== null ? String(documentTypeId) : undefined}
+                  onValueChange={v => setDocumentTypeId(Number(v))}
                 >
-                  {useCustomType ? "← Use standard types" : "Enter custom type"}
-                </button>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Select document type…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectableDocumentTypes.map(dt => (
+                      <SelectItem key={dt.id} value={String(dt.id)}>
+                        {dt.name}{!dt.isActive ? " (inactive)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {documentTypes.length === 0 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    No document types defined yet — add one in Admin → Document Types.
+                  </p>
+                )}
               </div>
 
               {/* Active toggle */}

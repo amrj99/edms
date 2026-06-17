@@ -22,7 +22,15 @@ node --enable-source-maps /app/artifacts/api-server/dist/migrate.mjs && \
   exit 1
 }
 
-# ── Step 2: Seed default workflow templates ───────────────────────────────────
+# ── Step 2: Seed document types from legacy data ──────────────────────────────
+echo "[entrypoint] Seeding document types..."
+node --enable-source-maps /app/artifacts/api-server/dist/seed-document-types.mjs && \
+  echo "[entrypoint] Document type seed complete." || {
+  echo "[entrypoint] WARNING: Document type seed returned non-zero exit — check logs above."
+  echo "[entrypoint] Continuing startup."
+}
+
+# ── Step 3: Seed default workflow templates ───────────────────────────────────
 echo "[entrypoint] Seeding default workflow templates..."
 node --enable-source-maps /app/artifacts/api-server/dist/seed-wf-defaults.mjs && \
   echo "[entrypoint] Workflow template seed complete." || {
@@ -30,6 +38,6 @@ node --enable-source-maps /app/artifacts/api-server/dist/seed-wf-defaults.mjs &&
   echo "[entrypoint] Continuing startup."
 }
 
-# ── Step 3: Start API server ──────────────────────────────────────────────────
+# ── Step 4: Start API server ──────────────────────────────────────────────────
 echo "[entrypoint] Starting API server..."
 exec node --enable-source-maps /app/artifacts/api-server/dist/index.mjs

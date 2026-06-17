@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -70,6 +70,7 @@ interface WfInstance {
   stageDueAt?: string | null;
   isOverdue?: boolean;
   daysRemaining?: number | null;
+  canAct?: boolean;
   transitions: Transition[];
   createdAt: string;
   updatedAt: string;
@@ -151,7 +152,7 @@ function InstanceDetail({
   const [comment, setComment] = useState("");
   const [rejectType, setRejectType] = useState("rejected");
   const [loading, setLoading] = useState(false);
-  const canAct = ["admin", "project_manager", "document_controller", "system_owner"].includes(user?.role ?? "");
+  const canAct = instance.canAct ?? false;
 
   const handle = async (type: "advance" | "reject") => {
     setLoading(true);
@@ -168,6 +169,20 @@ function InstanceDetail({
             {instance.documentNumber} — {instance.documentTitle}
           </DialogTitle>
         </DialogHeader>
+
+        {/* Document link — primary action for the reviewer */}
+        <Link
+          href={`/documents/${instance.documentId}`}
+          onClick={onClose}
+          className="flex items-center gap-2 rounded-lg border bg-muted/40 hover:bg-muted/70 px-3 py-2.5 transition-colors group"
+        >
+          <FileText className="h-4 w-4 text-primary shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="font-mono text-xs text-muted-foreground">{instance.documentNumber}</div>
+            <div className="text-sm font-medium truncate group-hover:text-primary transition-colors">{instance.documentTitle}</div>
+          </div>
+          <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
+        </Link>
 
         {/* Summary */}
         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -282,6 +297,7 @@ export default function WorkflowEnginePage() {
   const [selected, setSelected] = useState<WfInstance | null>(null);
   const [activeTab, setActiveTab] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [myActionsOnly, setMyActionsOnly] = useState(false);
   const [seeding, setSeeding] = useState(false);
 
   // Start workflow dialog state
@@ -318,7 +334,10 @@ export default function WorkflowEnginePage() {
   // Derive unique doc types from instances for tabs
   const docTypes = [...new Set(instances.map(i => i.documentType).filter(Boolean))] as string[];
 
+  const myPendingCount = instances.filter(i => i.canAct && i.status === "active").length;
+
   const filtered = instances.filter(i => {
+    if (myActionsOnly && !(i.canAct && i.status === "active")) return false;
     if (activeTab !== "all" && i.documentType !== activeTab) return false;
     if (statusFilter !== "all" && i.status !== statusFilter) return false;
     return true;
@@ -495,6 +514,20 @@ export default function WorkflowEnginePage() {
         </div>
       </div>
 
+      {/* My pending actions alert */}
+      {myPendingCount > 0 && !myActionsOnly && (
+        <div
+          className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-4 py-3 cursor-pointer hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors"
+          onClick={() => setMyActionsOnly(true)}
+        >
+          <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <div className="flex-1 text-sm text-amber-800 dark:text-amber-200">
+            <span className="font-semibold">{myPendingCount} workflow{myPendingCount > 1 ? "s" : ""} pending your action.</span>
+            {" "}Click to filter.
+          </div>
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
@@ -534,8 +567,22 @@ export default function WorkflowEnginePage() {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
-        {(activeTab !== "all" || statusFilter !== "all") && (
-          <Button variant="ghost" size="sm" onClick={() => { setActiveTab("all"); setStatusFilter("all"); }}>
+        <Button
+          variant={myActionsOnly ? "default" : "outline"}
+          size="sm"
+          onClick={() => setMyActionsOnly(v => !v)}
+          className="gap-1.5"
+        >
+          <AlertCircle className="h-3.5 w-3.5" />
+          My Actions
+          {myPendingCount > 0 && (
+            <span className={cn("ml-1 rounded-full px-1.5 py-0 text-xs font-semibold",
+              myActionsOnly ? "bg-white/20 text-white" : "bg-amber-500 text-white"
+            )}>{myPendingCount}</span>
+          )}
+        </Button>
+        {(activeTab !== "all" || statusFilter !== "all" || myActionsOnly) && (
+          <Button variant="ghost" size="sm" onClick={() => { setActiveTab("all"); setStatusFilter("all"); setMyActionsOnly(false); }}>
             <ArrowLeft className="h-3 w-3 mr-1" />Clear filters
           </Button>
         )}
@@ -586,12 +633,23 @@ export default function WorkflowEnginePage() {
                 {filtered.map(inst => (
                   <TableRow
                     key={inst.id}
-                    className="cursor-pointer hover:bg-muted/40"
+                    className={cn("cursor-pointer hover:bg-muted/40", inst.canAct && inst.status === "active" && "bg-amber-50/60 dark:bg-amber-950/20 hover:bg-amber-50 dark:hover:bg-amber-950/30")}
                     onClick={() => setSelected(inst)}
                   >
                     <TableCell className="font-medium">
-                      <div className="font-mono text-xs text-muted-foreground">{inst.documentNumber}</div>
+                      <Link
+                        href={`/documents/${inst.documentId}`}
+                        onClick={e => e.stopPropagation()}
+                        className="font-mono text-xs text-primary hover:underline underline-offset-2"
+                      >
+                        {inst.documentNumber}
+                      </Link>
                       <div className="font-medium text-sm truncate max-w-[180px]">{inst.documentTitle}</div>
+                      {inst.canAct && inst.status === "active" && (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400 mt-0.5">
+                          <AlertCircle className="h-3 w-3" /> Action required
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">{inst.documentType}</Badge>
@@ -620,7 +678,7 @@ export default function WorkflowEnginePage() {
                             Overdue {Math.abs(inst.daysRemaining ?? 0)}d
                           </Badge>
                         ) : (
-                          <span className={inst.daysRemaining !== null && inst.daysRemaining <= 2
+                          <span className={inst.daysRemaining != null && inst.daysRemaining <= 2
                             ? "text-amber-600 dark:text-amber-400 font-medium"
                             : "text-muted-foreground"
                           }>

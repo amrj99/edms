@@ -318,6 +318,22 @@ router.post("/:id/complete-review", requireAuth, async (req: Request<ProjectItem
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
   if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
 
+  // Assignment check: caller is the designated recipient/sender, or admin+ override
+  const { role: effectiveRole } = await resolveEffectiveRole(actor, projectId);
+  const isAssigned = transmittal.toUserId === actor.id || transmittal.createdById === actor.id;
+  const basis = checkAssignmentBasedPermission(effectiveRole, isAssigned, "reviewer");
+  if (!basis) {
+    res.status(403).json({ error: "Forbidden", message: "You must be the designated recipient to complete this review, or an admin to override" }); return;
+  }
+
+  if (basis === "admin_override") {
+    await createAuditLog({
+      userId: actor.id, organizationId: actor.organizationId,
+      action: "admin_override_complete_review", entityType: "transmittal",
+      entityId: id, projectId, details: { reviewComment },
+    });
+  }
+
   // Check no response already exists
   const [existingResponse] = await db.select({ id: transmittalsTable.id })
     .from(transmittalsTable).where(eq(transmittalsTable.responseToTransmittalId, id));

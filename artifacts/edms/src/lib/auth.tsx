@@ -11,6 +11,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// Pages reachable without an organisation (and, for most of them, without auth).
+// Used both to skip the "redirect to /login" guard and the "redirect to
+// /pending-org" guard below, so an authenticated org-less user can still
+// navigate to /register, /login, etc.
+const publicPaths = ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/set-password", "/pending-org"];
+
 // Apply fetch interceptor to attach JWT token globally.
 // IMPORTANT: headers may be a Headers instance (not a plain object), so we
 // must use `new Headers(config?.headers)` to safely merge them — spreading
@@ -54,7 +60,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [error, setLocation]);
 
   // Redirect to login if no token and not already on a public page
-  const publicPaths = ["/login", "/register", "/forgot-password", "/reset-password", "/set-password", "/pending-org"];
   useEffect(() => {
     if (!token && !publicPaths.some(p => location === p || location.startsWith(p + "?"))) {
       setLocation("/login");
@@ -63,13 +68,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Redirect to pending-org if user is authenticated but has no organisation.
   // system_owner is exempt — they intentionally operate without an org.
+  // Also exempt any public page (e.g. /register, /login) so an org-less user
+  // can navigate there (e.g. to create a new organisation) without being
+  // bounced straight back to /pending-org.
   // This guard runs after user data loads to avoid false redirects during init.
   useEffect(() => {
     if (
       user &&
       !user.organizationId &&
       (user as any).role !== "system_owner" &&
-      location !== "/pending-org"
+      !publicPaths.some(p => location === p || location.startsWith(p + "?"))
     ) {
       setLocation("/pending-org");
     }

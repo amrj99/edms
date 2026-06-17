@@ -26,15 +26,17 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   wfTemplatesTable, wfTemplateStagesTable, wfInstancesTable, wfInstanceTransitionsTable,
-  documentsTable, projectsTable, usersTable, notificationsTable,
+  documentsTable, projectsTable, usersTable, notificationsTable, documentTypesTable,
 } from "@workspace/db";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
-import { requireAuth, requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole, type AuthUser } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendWorkflowStageEmail } from "../lib/email.js";
 import { logger } from "../lib/logger.js";
 import {param, paramInt, requireInt} from '../lib/params';
+import { resolveEffectiveRole } from "../lib/governance.js";
+import { checkWorkflowStagePermission, isValidAppRole, ALL_ROLES } from "../lib/permissions.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -64,7 +66,36 @@ async function getTemplateWithStages(templateId: number, organizationId: number)
   return { ...tpl, stages };
 }
 
-async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
+/** Fetches the wf_template_stages row the instance is currently sitting at, or null. */
+async function getCurrentStage(inst: typeof wfInstancesTable.$inferSelect) {
+  if (!inst.currentStageId) return null;
+  const [stage] = await db.select().from(wfTemplateStagesTable)
+    .where(eq(wfTemplateStagesTable.id, inst.currentStageId)).limit(1);
+  return stage ?? null;
+}
+
+/**
+ * Resolves the caller's effective role for a project, memoized per-request so
+ * list endpoints don't re-resolve the same project's role for every instance.
+ */
+async function resolveEffectiveRoleCached(
+  user: AuthUser,
+  projectId: number | null | undefined,
+  cache: Map<number | null, string>,
+): Promise<string> {
+  const key = projectId ?? null;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const { role } = await resolveEffectiveRole(user, projectId ?? undefined);
+  cache.set(key, role);
+  return role;
+}
+
+async function enrichInstance(
+  inst: typeof wfInstancesTable.$inferSelect,
+  user: AuthUser,
+  roleCache: Map<number | null, string>,
+) {
   const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, documentType: documentsTable.documentType, status: documentsTable.status })
     .from(documentsTable).where(eq(documentsTable.id, inst.documentId)).limit(1);
   const [tpl] = await db.select({ id: wfTemplatesTable.id, name: wfTemplatesTable.name, documentType: wfTemplatesTable.documentType })
@@ -93,6 +124,11 @@ async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
 
   const stageMap = new Map(allStages.map(s => [s.id, s.name]));
 
+  // Whether the current caller may advance/reject this instance at its current stage
+  const effectiveRole = await resolveEffectiveRoleCached(user, inst.projectId, roleCache);
+  const canAct = inst.status === "active"
+    && checkWorkflowStagePermission(effectiveRole, user.id, currentStage ?? null) !== null;
+
   // SLA computed fields
   const now = new Date();
   const stageDueAt = inst.stageDueAt ? new Date(inst.stageDueAt) : null;
@@ -112,8 +148,10 @@ async function enrichInstance(inst: typeof wfInstancesTable.$inferSelect) {
     initiatedByName: initiatedBy ? `${initiatedBy.firstName} ${initiatedBy.lastName}`.trim() : undefined,
     currentStageName: currentStage?.name,
     currentStageRole: currentStage?.responsibleRole,
+    currentStageResponsibleUserId: currentStage?.responsibleUserId ?? null,
     currentStageSla: currentStage?.slaDays ?? null,
     currentStageReminderDays: currentStage?.reminderDays ?? null,
+    canAct,
     stageDueAt: inst.stageDueAt,
     isOverdue,
     daysRemaining,
@@ -151,12 +189,31 @@ async function notifyStageReached(inst: typeof wfInstancesTable.$inferSelect, st
       : [null];
     const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
 
-    // Resolve recipients: specific user OR all org admins+PMs
+    // Resolve recipients:
+    //   1. Specific assigned user
+    //   2. All users whose system role matches responsibleRole (e.g. "reviewer")
+    //   3. Fallback: all org admins + project_managers (for custom role strings like "GM", "Finance")
     let recipients: { userId: number; email: string; name: string }[] = [];
     if (stage.responsibleUserId) {
       const [u] = await db.select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable).where(and(eq(usersTable.id, stage.responsibleUserId), eq(usersTable.organizationId, inst.organizationId))).limit(1);
       if (u) recipients = [{ userId: u.id, email: u.email, name: `${u.firstName} ${u.lastName}`.trim() }];
+    } else if (stage.responsibleRole && isValidAppRole(stage.responsibleRole)) {
+      const roleUsers = await db.select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable)
+        .where(and(
+          eq(usersTable.organizationId, inst.organizationId),
+          eq(usersTable.isActive, true),
+          eq(usersTable.role, stage.responsibleRole as any),
+        ));
+      recipients = roleUsers.map(u => ({ userId: u.id, email: u.email, name: `${u.firstName} ${u.lastName}`.trim() }));
+      if (!recipients.length) {
+        // No users with that exact role — escalate to admins/PMs
+        const fallback = await db.select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable)
+          .where(and(eq(usersTable.organizationId, inst.organizationId), eq(usersTable.isActive, true), inArray(usersTable.role, ["admin", "project_manager"])));
+        recipients = fallback.map(u => ({ userId: u.id, email: u.email, name: `${u.firstName} ${u.lastName}`.trim() }));
+      }
     } else {
       const fallback = await db.select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable)
@@ -226,11 +283,23 @@ router.get("/templates/:id", async (req, res): Promise<void> => {
 
 router.post("/templates", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
-  const { name, documentType, description } = req.body;
-  if (!name || !documentType) { res.status(400).json({ error: "name and documentType are required" }); return; }
+  const { name, documentType, documentTypeId, description } = req.body;
+  if (!name) { res.status(400).json({ error: "name is required" }); return; }
+  if (!documentType && !documentTypeId) { res.status(400).json({ error: "documentType or documentTypeId is required" }); return; }
+
+  let resolvedDocumentType = documentType;
+  let resolvedDocumentTypeId: number | null = null;
+  if (documentTypeId != null) {
+    const [docType] = await db.select().from(documentTypesTable)
+      .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, org)));
+    if (!docType) { res.status(400).json({ error: "documentTypeId does not exist for this organization" }); return; }
+    resolvedDocumentTypeId = docType.id;
+    resolvedDocumentType = docType.code;
+  }
+
   try {
     const [tpl] = await db.insert(wfTemplatesTable).values({
-      organizationId: org, name, documentType, description: description ?? null,
+      organizationId: org, name, documentType: resolvedDocumentType, documentTypeId: resolvedDocumentTypeId, description: description ?? null,
       isActive: true, createdById: req.user!.id,
     }).returning();
     res.status(201).json({ ...tpl, stages: [] });
@@ -257,10 +326,21 @@ router.post("/templates", requireRole("admin", "project_manager", "system_owner"
 router.put("/templates/:id", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = requireInt(req.params.id);
-  const { name, documentType, description, isActive } = req.body;
+  const { name, documentType, documentTypeId, description, isActive } = req.body;
+
+  let resolvedDocumentType = documentType;
+  let resolvedDocumentTypeId: number | undefined;
+  if (documentTypeId != null) {
+    const [docType] = await db.select().from(documentTypesTable)
+      .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, org)));
+    if (!docType) { res.status(400).json({ error: "documentTypeId does not exist for this organization" }); return; }
+    resolvedDocumentTypeId = docType.id;
+    resolvedDocumentType = docType.code;
+  }
+
   try {
     const [tpl] = await db.update(wfTemplatesTable)
-      .set({ ...(name && { name }), ...(documentType && { documentType }), ...(description !== undefined && { description }), ...(isActive !== undefined && { isActive }), updatedAt: new Date() })
+      .set({ ...(name && { name }), ...(resolvedDocumentType && { documentType: resolvedDocumentType }), ...(resolvedDocumentTypeId !== undefined && { documentTypeId: resolvedDocumentTypeId }), ...(description !== undefined && { description }), ...(isActive !== undefined && { isActive }), updatedAt: new Date() })
       .where(and(eq(wfTemplatesTable.id, id), eq(wfTemplatesTable.organizationId, org)))
       .returning();
     if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
@@ -304,6 +384,12 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
 
     const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
     if (!name) { res.status(400).json({ error: "name is required" }); return; }
+
+    // responsibleRole gates advance/reject via isAtLeast() — must be a real AppRole
+    if (responsibleRole != null && !isValidAppRole(responsibleRole)) {
+      res.status(400).json({ error: `responsibleRole must be one of: ${ALL_ROLES.join(", ")}` });
+      return;
+    }
 
     // Validate responsibleUserId belongs to same org
     if (responsibleUserId) {
@@ -356,6 +442,10 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
     if (!tpl) { res.status(404).json({ error: "Template not found" }); return; }
 
     const { name, description, responsibleRole, responsibleUserId, isTerminal, stageOrder, slaDays, reminderDays } = req.body;
+    if (responsibleRole != null && !isValidAppRole(responsibleRole)) {
+      res.status(400).json({ error: `responsibleRole must be one of: ${ALL_ROLES.join(", ")}` });
+      return;
+    }
     if (responsibleUserId) {
       const [u] = await db.select({ id: usersTable.id }).from(usersTable)
         .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
@@ -436,11 +526,11 @@ router.post("/seed-invoice", requireRole("admin", "project_manager", "system_own
   }).returning();
 
   const stagesDef = [
-    { stageOrder: 1, name: "Finance Review",     responsibleRole: "Finance",    isTerminal: false },
-    { stageOrder: 2, name: "Contracts Review",   responsibleRole: "Contracts",  isTerminal: false },
-    { stageOrder: 3, name: "Operations Review",  responsibleRole: "Operations", isTerminal: false },
-    { stageOrder: 4, name: "GM Approval",        responsibleRole: "GM",         isTerminal: false },
-    { stageOrder: 5, name: "Issued",             responsibleRole: null,         isTerminal: true  },
+    { stageOrder: 1, name: "Finance Review",     responsibleRole: "document_controller", isTerminal: false },
+    { stageOrder: 2, name: "Contracts Review",   responsibleRole: "document_controller", isTerminal: false },
+    { stageOrder: 3, name: "Operations Review",  responsibleRole: "document_controller", isTerminal: false },
+    { stageOrder: 4, name: "GM Approval",        responsibleRole: "admin",               isTerminal: false },
+    { stageOrder: 5, name: "Issued",             responsibleRole: null,                  isTerminal: true  },
   ];
 
   const stages = await db.insert(wfTemplateStagesTable)
@@ -468,7 +558,8 @@ router.get("/instances", async (req, res): Promise<void> => {
   if (projectId) instances = instances.filter(i => i.projectId === parseInt(projectId as string));
   if (stageId) instances = instances.filter(i => i.currentStageId === parseInt(stageId as string));
 
-  const enriched = await Promise.all(instances.map(enrichInstance));
+  const roleCache = new Map<number | null, string>();
+  const enriched = await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
 
   // docType filter (applied after enrichment)
   const filtered = docType ? enriched.filter(i => i.documentType === docType) : enriched;
@@ -483,7 +574,7 @@ router.get("/instances/:id", async (req, res): Promise<void> => {
     .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org)))
     .limit(1);
   if (!inst) { res.status(404).json({ error: "Not found" }); return; }
-  res.json(await enrichInstance(inst));
+  res.json(await enrichInstance(inst, req.user!, new Map()));
 });
 
 router.post("/instances", async (req, res): Promise<void> => {
@@ -545,7 +636,7 @@ router.post("/instances", async (req, res): Promise<void> => {
   // Notify stage responsible
   if (firstStage) notifyStageReached(inst, firstStage, req.user!.id);
 
-  res.status(201).json(await enrichInstance(inst));
+  res.status(201).json(await enrichInstance(inst, req.user!, new Map()));
 });
 
 // ─── Advance to next stage ────────────────────────────────────────────────────
@@ -568,6 +659,30 @@ router.post("/instances/:id/advance", async (req, res): Promise<void> => {
   const currentIdx = stages.findIndex(s => s.id === inst.currentStageId);
   const currentStage = stages[currentIdx];
   const nextStage = stages[currentIdx + 1] ?? null;
+
+  // Authorization: only the stage's responsible user/role, or admin+ override, may advance.
+  const { role: effectiveRole } = await resolveEffectiveRole(req.user!, inst.projectId ?? undefined);
+  const basis = checkWorkflowStagePermission(effectiveRole, req.user!.id, currentStage ?? null);
+  if (!basis) {
+    res.status(403).json({ error: "Forbidden", message: "You are not authorized to advance this workflow at its current stage" });
+    return;
+  }
+  if (basis === "admin_override") {
+    await createAuditLog({
+      userId: req.user!.id,
+      organizationId: org,
+      action: "workflow_admin_override_advance",
+      entityType: "wf_instance",
+      entityId: id,
+      projectId: inst.projectId ?? undefined,
+      details: {
+        stageId: currentStage?.id ?? null,
+        stageName: currentStage?.name ?? null,
+        responsibleRole: currentStage?.responsibleRole ?? null,
+        responsibleUserId: currentStage?.responsibleUserId ?? null,
+      },
+    });
+  }
 
   let newStatus: string = inst.status;
   let newStageId: number | null = inst.currentStageId;
@@ -619,7 +734,7 @@ router.post("/instances/:id/advance", async (req, res): Promise<void> => {
   // Notify next stage responsible
   if (nextStage && newStatus === "active") notifyStageReached(updated, nextStage, req.user!.id);
 
-  res.json(await enrichInstance(updated));
+  res.json(await enrichInstance(updated, req.user!, new Map()));
 });
 
 // ─── Reject (cancel or send back) ────────────────────────────────────────────
@@ -633,6 +748,31 @@ router.post("/instances/:id/reject", async (req, res): Promise<void> => {
     .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org))).limit(1);
   if (!inst) { res.status(404).json({ error: "Not found" }); return; }
   if (inst.status !== "active") { res.status(409).json({ error: "Workflow is not active" }); return; }
+
+  // Authorization: only the stage's responsible user/role, or admin+ override, may reject/return/cancel.
+  const currentStage = await getCurrentStage(inst);
+  const { role: effectiveRole } = await resolveEffectiveRole(req.user!, inst.projectId ?? undefined);
+  const basis = checkWorkflowStagePermission(effectiveRole, req.user!.id, currentStage);
+  if (!basis) {
+    res.status(403).json({ error: "Forbidden", message: "You are not authorized to reject/return this workflow at its current stage" });
+    return;
+  }
+  if (basis === "admin_override") {
+    await createAuditLog({
+      userId: req.user!.id,
+      organizationId: org,
+      action: "workflow_admin_override_reject",
+      entityType: "wf_instance",
+      entityId: id,
+      projectId: inst.projectId ?? undefined,
+      details: {
+        stageId: currentStage?.id ?? null,
+        stageName: currentStage?.name ?? null,
+        responsibleRole: currentStage?.responsibleRole ?? null,
+        responsibleUserId: currentStage?.responsibleUserId ?? null,
+      },
+    });
+  }
 
   const finalAction = ["rejected", "cancelled", "returned"].includes(rejectAction) ? rejectAction : "rejected";
   const newStatus = finalAction === "returned" ? "active" : finalAction;
@@ -685,7 +825,7 @@ router.post("/instances/:id/reject", async (req, res): Promise<void> => {
     });
   }
 
-  res.json(await enrichInstance(updated));
+  res.json(await enrichInstance(updated, req.user!, new Map()));
 });
 
 
@@ -754,7 +894,8 @@ router.get("/instances/for-document/:docId", async (req, res): Promise<void> => 
   const instances = await db.select().from(wfInstancesTable)
     .where(and(eq(wfInstancesTable.documentId, docId), eq(wfInstancesTable.organizationId, org)))
     .orderBy(desc(wfInstancesTable.updatedAt));
-  const enriched = await Promise.all(instances.map(enrichInstance));
+  const roleCache = new Map<number | null, string>();
+  const enriched = await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
   res.json({ instances: enriched });
 });
 
@@ -779,9 +920,9 @@ router.post("/seed-defaults", requireRole("admin", "project_manager", "system_ow
       documentType: "general",
       description: "Standard approval for general documents",
       stages: [
-        { stageOrder: 1, name: "Internal Review",     responsibleRole: "Reviewer",      isTerminal: false },
-        { stageOrder: 2, name: "Senior Review",        responsibleRole: "Senior Engineer", isTerminal: false },
-        { stageOrder: 3, name: "Approved for Issue",   responsibleRole: null,            isTerminal: true  },
+        { stageOrder: 1, name: "Internal Review",     responsibleRole: "reviewer",            isTerminal: false },
+        { stageOrder: 2, name: "Senior Review",        responsibleRole: "document_controller", isTerminal: false },
+        { stageOrder: 3, name: "Approved for Issue",   responsibleRole: null,                  isTerminal: true  },
       ],
     },
     {
@@ -789,9 +930,9 @@ router.post("/seed-defaults", requireRole("admin", "project_manager", "system_ow
       documentType: "correspondence",
       description: "Action tracking for incoming and outgoing correspondence",
       stages: [
-        { stageOrder: 1, name: "Acknowledged",      responsibleRole: "Document Controller", isTerminal: false },
-        { stageOrder: 2, name: "Manager Review",    responsibleRole: "Manager",             isTerminal: false },
-        { stageOrder: 3, name: "Actioned",          responsibleRole: null,                  isTerminal: true  },
+        { stageOrder: 1, name: "Acknowledged",      responsibleRole: "document_controller", isTerminal: false },
+        { stageOrder: 2, name: "Manager Review",    responsibleRole: "project_manager",      isTerminal: false },
+        { stageOrder: 3, name: "Actioned",          responsibleRole: null,                   isTerminal: true  },
       ],
     },
     {
@@ -799,10 +940,10 @@ router.post("/seed-defaults", requireRole("admin", "project_manager", "system_ow
       documentType: "contract",
       description: "Multi-stage approval for contracts and agreements",
       stages: [
-        { stageOrder: 1, name: "Legal Review",          responsibleRole: "Legal",           isTerminal: false },
-        { stageOrder: 2, name: "Commercial Review",     responsibleRole: "Commercial",      isTerminal: false },
-        { stageOrder: 3, name: "Management Approval",   responsibleRole: "Management",      isTerminal: false },
-        { stageOrder: 4, name: "Executed",              responsibleRole: null,              isTerminal: true  },
+        { stageOrder: 1, name: "Legal Review",          responsibleRole: "document_controller", isTerminal: false },
+        { stageOrder: 2, name: "Commercial Review",     responsibleRole: "document_controller", isTerminal: false },
+        { stageOrder: 3, name: "Management Approval",   responsibleRole: "project_manager",     isTerminal: false },
+        { stageOrder: 4, name: "Executed",              responsibleRole: null,                  isTerminal: true  },
       ],
     },
     {
@@ -810,9 +951,9 @@ router.post("/seed-defaults", requireRole("admin", "project_manager", "system_ow
       documentType: "drawing",
       description: "Engineering review and approval for drawings",
       stages: [
-        { stageOrder: 1, name: "Checker Review",              responsibleRole: "Checker",           isTerminal: false },
-        { stageOrder: 2, name: "Senior Engineer Review",      responsibleRole: "Senior Engineer",   isTerminal: false },
-        { stageOrder: 3, name: "Approved for Construction",   responsibleRole: null,                isTerminal: true  },
+        { stageOrder: 1, name: "Checker Review",              responsibleRole: "reviewer",            isTerminal: false },
+        { stageOrder: 2, name: "Senior Engineer Review",      responsibleRole: "document_controller", isTerminal: false },
+        { stageOrder: 3, name: "Approved for Construction",   responsibleRole: null,                  isTerminal: true  },
       ],
     },
   ];

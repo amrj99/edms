@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { ObjectStorageService } from "./objectStorage.js";
 import { decrypt } from "./encryption.js";
 import { getEffectiveOnPremPath, isCloudStorageAvailable, ensureDir } from "./storageConfig.js";
+import { StorageNotConfiguredError } from "./errors.js";
 
 const cloudStorage = new ObjectStorageService();
 
@@ -44,6 +45,25 @@ function buildOnPremPath(
 }
 
 export type StorageMode = "cloud" | "onpremise" | "s3" | "r2";
+
+/**
+ * Resolve the effective on-premise/cloud storage mode for an org.
+ *
+ * A DB-stored storageType of "s3" without an s3Bucket is not a usable
+ * configuration (handled separately by the per-org S3 branch above, which
+ * requires both fields) — treat it as unset so DEFAULT_STORAGE_TYPE / the
+ * auto-detected default can take over, instead of silently falling through
+ * to the cloud (Replit) branch.
+ */
+function resolveStorageType(
+  cfg: { storageType?: string | null; s3Bucket?: string | null } | null,
+  envStorageType: StorageMode | undefined,
+): StorageMode {
+  const dbStorageType = cfg?.storageType as StorageMode | undefined;
+  const usableDbStorageType = dbStorageType === "s3" && !cfg?.s3Bucket ? undefined : dbStorageType;
+  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
+  return usableDbStorageType ?? envStorageType ?? autoDefault;
+}
 
 export interface UploadResult {
   mode: StorageMode;
@@ -222,8 +242,7 @@ export async function requestUpload(params: {
   }
 
   // ── 3. On-Premise (explicit or env default) ────────────────────────────────
-  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
+  const storageType = resolveStorageType(cfg, envStorageType);
 
   if (storageType === "onpremise") {
     const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
@@ -239,15 +258,24 @@ export async function requestUpload(params: {
     };
   }
 
-  // ── 4. Cloud (Replit / GCS) ────────────────────────────────────────────────
-  const uploadURL = await cloudStorage.getObjectEntityUploadURL();
-  const objectPath = cloudStorage.normalizeObjectEntityPath(uploadURL);
-  return {
-    mode: "cloud",
-    uploadURL,
-    objectPath,
-    serveUrl: `/api/storage/objects/${objectPath.replace(/^\/objects\//, "")}`,
-  };
+  // ── 4. Cloud (Replit / GCS) — only if actually configured ──────────────────
+  if (isCloudStorageAvailable()) {
+    const uploadURL = await cloudStorage.getObjectEntityUploadURL();
+    const objectPath = cloudStorage.normalizeObjectEntityPath(uploadURL);
+    return {
+      mode: "cloud",
+      uploadURL,
+      objectPath,
+      serveUrl: `/api/storage/objects/${objectPath.replace(/^\/objects\//, "")}`,
+    };
+  }
+
+  throw new StorageNotConfiguredError(
+    `No valid storage provider configured for organization ${organizationId}: ` +
+    `storageType="${storageType}", s3Bucket="${cfg?.s3Bucket ?? "(none)"}", ` +
+    `DEFAULT_STORAGE_TYPE="${envStorageType ?? "(unset)"}", PRIVATE_OBJECT_DIR not set.`,
+    { organizationId, storageType, hasS3Bucket: !!cfg?.s3Bucket, envStorageType: envStorageType ?? null },
+  );
 }
 
 // ─── getS3PresignedGetUrl ─────────────────────────────────────────────────────
@@ -358,8 +386,7 @@ export async function uploadBuffer(params: {
   }
 
   // ── 3. On-Premise ──────────────────────────────────────────────────────────
-  const autoDefault: StorageMode = isCloudStorageAvailable() ? "cloud" : "onpremise";
-  const storageType: StorageMode = (cfg?.storageType as StorageMode) ?? envStorageType ?? autoDefault;
+  const storageType = resolveStorageType(cfg, envStorageType);
 
   if (storageType === "onpremise") {
     const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);

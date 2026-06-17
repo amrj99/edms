@@ -23,6 +23,7 @@ import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
+import { validateDocumentMetadata } from "./metadata.js";
 import type { Request } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 
@@ -258,6 +259,16 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
     res.status(400).json({ error: "title is required" });
     return;
   }
+
+  // Validate metadata against the resolved fields for this document type (if mapped)
+  const [projForMetadata] = await db.select({ organizationId: projectsTable.organizationId })
+    .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+  const metaCheck = await validateDocumentMetadata(projForMetadata?.organizationId ?? null, documentType, metadata && typeof metadata === "object" ? metadata : {});
+  if (!metaCheck.ok) {
+    res.status(400).json({ error: "Bad Request", message: metaCheck.message });
+    return;
+  }
+
   // Document numbers are immutable once assigned — never update documentNumber after creation.
   // If not supplied, generate one using the project's owning org's numbering template + scoped SEQ counter.
   let resolvedDocNumber: string;
@@ -327,6 +338,7 @@ router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<
     status: status || "draft",
     description, folderId,
     projectId,
+    organizationId: projForMetadata?.organizationId ?? null,
     createdById: req.user!.id,
     fileUrl, fileName, fileSize,
     metadata: metadata || {},
@@ -569,6 +581,23 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     const transitionError = checkStatusTransition(currentStatus, status, effectiveRole);
     if (transitionError) {
       res.status(403).json({ error: "Forbidden", message: transitionError.message }); return;
+    }
+  }
+
+  // Validate metadata against the resolved fields for this document type (if mapped),
+  // only when the caller is actually submitting a metadata payload.
+  if (metadata !== undefined && metadata !== null) {
+    const [projForMetadata] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+    const metaCheck = await validateDocumentMetadata(
+      projForMetadata?.organizationId ?? null,
+      documentType ?? existing[0].documentType,
+      typeof metadata === "object" ? metadata : {},
+      (existing[0].metadata as Record<string, unknown>) ?? {},
+    );
+    if (!metaCheck.ok) {
+      res.status(400).json({ error: "Bad Request", message: metaCheck.message });
+      return;
     }
   }
 

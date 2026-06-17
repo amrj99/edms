@@ -662,7 +662,12 @@ router.post("/register-org", registerOrgLimiter, async (req, res): Promise<void>
 
   // Set up default module flags for the trial plan
   const modules = getDefaultModulesForPlan(TRIAL_PLAN_ID);
-  await db.insert(orgConfigTable).values({ organizationId: org.id, modules }).catch(() => {});
+
+  // Explicitly set storageType from DEFAULT_STORAGE_TYPE (defaulting to
+  // "onpremise") rather than relying on the org_config schema default
+  // ("s3"), which has no bucket configured and breaks uploads.
+  const defaultStorageType = process.env.DEFAULT_STORAGE_TYPE || "onpremise";
+  await db.insert(orgConfigTable).values({ organizationId: org.id, modules, storageType: defaultStorageType }).catch(() => {});
 
   // Create admin user (email unverified until token is clicked)
   const passwordHash = await hashPassword(adminPassword);

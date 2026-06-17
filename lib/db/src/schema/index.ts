@@ -28,3 +28,4 @@ export * from "./plan-catalog";
 export * from "./departments";
 export * from "./access-control";
 export * from "./external-contacts";
+export * from "./document-types";

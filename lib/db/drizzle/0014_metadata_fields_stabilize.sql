@@ -1,0 +1,4 @@
+ALTER TABLE "metadata_fields" ADD COLUMN "is_active" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_metadata_fields_org_global_name" ON "metadata_fields" USING btree ("organization_id","name") WHERE ("metadata_fields"."organization_id" is not null and "metadata_fields"."document_type_id" is null);--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_metadata_fields_org_type_name" ON "metadata_fields" USING btree ("organization_id","document_type_id","name") WHERE ("metadata_fields"."organization_id" is not null and "metadata_fields"."document_type_id" is not null);--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_metadata_fields_system_global_name" ON "metadata_fields" USING btree ("name") WHERE "metadata_fields"."organization_id" is null;

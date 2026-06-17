@@ -33,6 +33,7 @@ import General from "@/pages/general";
 import Config from "@/pages/config";
 import Reports from "@/pages/reports";
 import Admin from "@/pages/admin";
+import DocumentTypeDetailPage from "@/pages/document-type-detail";
 import CorrespondencePage from "@/pages/correspondence";
 import DocumentsPage from "@/pages/documents";
 import DocumentDetailPage from "@/pages/document-detail";
@@ -177,6 +178,9 @@ function Router() {
       </Route>
       <Route path="/admin">
         <ProtectedRoute component={Admin} />
+      </Route>
+      <Route path="/admin/document-types/:id">
+        <ProtectedRoute component={DocumentTypeDetailPage} />
       </Route>
 
       <Route path="/workflow-engine">

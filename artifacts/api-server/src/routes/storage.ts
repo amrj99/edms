@@ -3,9 +3,22 @@ import { Readable } from "stream";
 import path from "path";
 import fs from "fs";
 import { eq } from "drizzle-orm";
-import { db, orgConfigTable } from "@workspace/db";
+import {
+  db,
+  orgConfigTable,
+  documentsTable,
+  documentRevisionsTable,
+  documentFilesTable,
+  correspondenceTable,
+  correspondenceAttachmentsTable,
+  meetingAttachmentsTable,
+  chatGroupsTable,
+  chatMessagesTable,
+  migrationItemsTable,
+} from "@workspace/db";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
+import { StorageNotConfiguredError } from "../lib/errors.js";
 import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
 import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -174,6 +187,49 @@ async function assertOrgAccess(
 }
 
 /**
+ * Resolve which organization owns a cloud-stored object, by its serve URL
+ * (`/api/storage/objects/<wildcardPath>`). Checks the fileUrl columns of every
+ * tenant-scoped entity that can reference cloud object storage.
+ * Returns null if no record references this object (e.g. not yet attached
+ * to an entity).
+ */
+async function findOrgIdForObjectServeUrl(serveUrl: string): Promise<number | null> {
+  const [doc] = await db.select({ organizationId: documentsTable.organizationId })
+    .from(documentsTable).where(eq(documentsTable.fileUrl, serveUrl));
+  if (doc?.organizationId != null) return doc.organizationId;
+
+  const [rev] = await db.select({ organizationId: documentRevisionsTable.organizationId })
+    .from(documentRevisionsTable).where(eq(documentRevisionsTable.fileUrl, serveUrl));
+  if (rev?.organizationId != null) return rev.organizationId;
+
+  const [file] = await db.select({ organizationId: documentFilesTable.organizationId })
+    .from(documentFilesTable).where(eq(documentFilesTable.fileUrl, serveUrl));
+  if (file?.organizationId != null) return file.organizationId;
+
+  const [corr] = await db.select({ organizationId: correspondenceTable.organizationId })
+    .from(correspondenceAttachmentsTable)
+    .innerJoin(correspondenceTable, eq(correspondenceAttachmentsTable.correspondenceId, correspondenceTable.id))
+    .where(eq(correspondenceAttachmentsTable.fileUrl, serveUrl));
+  if (corr?.organizationId != null) return corr.organizationId;
+
+  const [meeting] = await db.select({ organizationId: meetingAttachmentsTable.organizationId })
+    .from(meetingAttachmentsTable).where(eq(meetingAttachmentsTable.fileUrl, serveUrl));
+  if (meeting?.organizationId != null) return meeting.organizationId;
+
+  const [chat] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatMessagesTable)
+    .innerJoin(chatGroupsTable, eq(chatMessagesTable.groupId, chatGroupsTable.id))
+    .where(eq(chatMessagesTable.fileUrl, serveUrl));
+  if (chat?.organizationId != null) return chat.organizationId;
+
+  const [migration] = await db.select({ organizationId: migrationItemsTable.organizationId })
+    .from(migrationItemsTable).where(eq(migrationItemsTable.fileUrl, serveUrl));
+  if (migration?.organizationId != null) return migration.organizationId;
+
+  return null;
+}
+
+/**
  * Validate that an S3 object key belongs to the requesting org.
  * Supports two formats:
  *  - Legacy per-org S3:  {orgId}/{projectId}/{fileType}/{filename}
@@ -281,6 +337,11 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
       metadata: { name, size, contentType },
     });
   } catch (error: any) {
+    if (error instanceof StorageNotConfiguredError) {
+      console.error("Error generating upload URL:", error.message);
+      res.status(503).json({ error: "storage_not_configured", message: error.message });
+      return;
+    }
     console.error("Error generating upload URL:", error);
     res.status(500).json({ error: "Failed to generate upload URL" });
   }
@@ -426,6 +487,20 @@ router.get(
       const raw = req.params.path;
       const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
       const objectPath = `/objects/${wildcardPath}`;
+
+      // ── Ownership check ─────────────────────────────────────────────────
+      // If this object is referenced by a tenant-scoped entity (document,
+      // correspondence attachment, meeting attachment, chat file, migration
+      // item, ...), enforce that the requester belongs to that entity's
+      // organization (or is system_owner). Objects not yet linked to any
+      // entity are left to the existing auth check only.
+      const serveUrl = `/api/storage/objects/${wildcardPath}`;
+      const ownerOrgId = await findOrgIdForObjectServeUrl(serveUrl);
+      if (ownerOrgId != null) {
+        const allowed = await assertOrgAccess(req, res, ownerOrgId, { route: "objects", key: wildcardPath });
+        if (!allowed) return;
+      }
+
       const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
       const response = await objectStorageService.downloadObject(objectFile);
       // Set Content-Type — prefer the ?ct= hint from the client (validated against whitelist)

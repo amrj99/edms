@@ -92,6 +92,20 @@
       "when": 1749168000000,
       "tag": "0011_must_change_password",
       "breakpoints": false
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781326819694,
+      "tag": "0013_document_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1781338140334,
+      "tag": "0014_metadata_fields_stabilize",
+      "breakpoints": true
     }
   ]
 }
