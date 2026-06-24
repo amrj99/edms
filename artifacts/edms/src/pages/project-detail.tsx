@@ -15,6 +15,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDropZone, type UploadedFile } from "@/components/file-drop-zone";
 import { UploadDocumentsDialog, type DocMeta } from "@/components/upload-documents-dialog";
+import { UploadDocumentDialog } from "@/components/upload-document-dialog";
 import { MetadataFieldsForm } from "@/components/metadata-fields-form";
 import { RecipientAutocomplete, EmailChipInput, type RecipientUser } from "@/components/recipient-autocomplete";
 import { format, differenceInDays, parseISO } from "date-fns";
@@ -297,6 +298,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
   const { getThStyle: getDocThStyle, startResize: startDocResize, resetWidths: resetDocWidths } = useResizableColumns(`project-docs-${projectId}`, PROJECT_DOC_COLS);
   const { data, isLoading, refetch: refetchDocs } = useListDocuments(projectId);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isUploadSingleOpen, setIsUploadSingleOpen] = useState(false);
   const [isBulkTransOpen, setIsBulkTransOpen] = useState(false);
   const [isBulkAssignOpen, setIsBulkAssignOpen] = useState(false);
   const createDoc = useCreateDocument();
@@ -422,6 +424,35 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
     if (failedCount < uploads.length) setIsUploadOpen(false);
   };
 
+  const handleSingleUploadSuccess = async (result: { meta: DocMeta; fileUrl: string; fileName: string; fileSize: number }) => {
+    try {
+      await createDoc.mutateAsync({
+        projectId,
+        data: {
+          documentNumber: result.meta.docNumber || undefined,
+          title: result.meta.title || result.fileName.replace(/\.[^.]+$/, ""),
+          revision: result.meta.revision || "01",
+          status: (result.meta.status as any) || "draft",
+          discipline: result.meta.discipline || undefined,
+          documentType: result.meta.docType || "general",
+          source: result.meta.source || undefined,
+          issuedBy: result.meta.issuedBy || undefined,
+          metadata: result.meta.customFields ?? {},
+          fileUrl: result.fileUrl,
+          fileName: result.fileName,
+          fileSize: result.fileSize,
+        } as any,
+      });
+      setIsUploadSingleOpen(false);
+    } catch (err: any) {
+      const msg: string = err?.message ?? "";
+      if (msg.includes("409") || msg.toLowerCase().includes("already exists")) {
+        toast({ title: "Document number already exists", description: "Use 'Upload New Revision' for existing documents.", variant: "destructive" });
+      } else {
+        toast({ title: "Failed to save document", variant: "destructive" });
+      }
+    }
+  };
 
   // ── Department queries for edit dialog (Phase B) ─────────────────────────
   const { data: orgDeptsRaw } = useQuery({
@@ -840,10 +871,32 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
             <FolderMinus className="h-3.5 w-3.5" /> Import Existing
           </Button>
           {perms.canCreateDocument && (
-            <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
-              <Upload className="h-3.5 w-3.5" /> Bulk Upload
-            </Button>
+            <>
+              <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadSingleOpen(true)}>
+                <Upload className="h-3.5 w-3.5" /> Upload Document
+              </Button>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={() => setIsUploadOpen(true)}>
+                <Upload className="h-3.5 w-3.5" /> Bulk Upload
+              </Button>
+            </>
           )}
+          <UploadDocumentDialog
+            open={isUploadSingleOpen}
+            onOpenChange={setIsUploadSingleOpen}
+            projectId={projectId}
+            projectCode={projectCode}
+            projectName={projectName}
+            onSuccess={handleSingleUploadSuccess}
+            onOpenDocument={id => {
+              setIsUploadSingleOpen(false);
+              const doc = (allDocs as any[]).find(d => d.id === id);
+              if (doc) setDocPreview(doc);
+            }}
+            onUploadRevision={doc => {
+              setIsUploadSingleOpen(false);
+              setNewRevDoc(doc);
+            }}
+          />
           <UploadDocumentsDialog
             open={isUploadOpen}
             onOpenChange={setIsUploadOpen}
