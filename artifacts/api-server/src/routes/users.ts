@@ -451,7 +451,7 @@ router.post("/:id/reset-password", requireAuth, async (req, res): Promise<void> 
   }
   const now = new Date();
   const [user] = await db.update(usersTable)
-    .set({ passwordHash: await hashPassword(newPassword), passwordChangedAt: now, updatedAt: now })
+    .set({ passwordHash: await hashPassword(newPassword), passwordChangedAt: now, mustChangePassword: false, updatedAt: now })
     .where(eq(usersTable.id, id))
     .returning();
   if (!user) { res.status(404).json({ error: "Not Found" }); return; }
