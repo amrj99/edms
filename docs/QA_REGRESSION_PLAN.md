@@ -726,3 +726,32 @@ Documents: 7 مستندات بأنواع ودisciplines مختلفة
 ---
 
 *هذه الخطة وثيقة حية — أضف Test Cases جديدة مع كل Bug تكتشفه.*
+
+---
+
+## نتائج Browser Verification — Master Register (2026-06-26)
+
+تمّ الاختبار على `localhost:5174` بعد تطوير Master Register مع server-side filtering.
+
+### ما نجح ✅
+| TC | الاختبار |
+|----|---------|
+| TC1 | "Master Register" button من المشروع يفتح `/reports?tab=master&projectId=X` مع pre-filter |
+| TC2 | يعرض مستندات المشروع الصحيحة (10 records) |
+| TC3 | Search server-side يعمل ("Foundation" → 1 record) |
+| TC4 | Project filter يعمل (pre-populated من URL) |
+| TC5 | Status filter "approved" → 4 records (SQL WHERE) |
+| TC8 | Excel export — ملف يُحمَّل بنجاح |
+| TC9 | PDF export — "master-register.pdf" بتنسيق احترافي |
+| TC10 | Bulk Actions: "2 selected" + Change status + Export selected |
+| TC11 | Click على Doc No. يفتح detail panel |
+| TC12 | Layout نظيف، لا overflow، status badges متسقة |
+
+### Backlog — ملاحظات مستقبلية
+
+| # | الملاحظة | النوع | الأولوية |
+|---|---------|-------|---------|
+| **U1** | Em-dash (—) يظهر كـ ◆ (diamond) في جدول المتصفح | Pre-existing bug | منخفضة — تحتاج font encoding fix |
+| **U2** | Em-dash تظهر كـ "yy" في PDF export (jsPDF لا يدعم Unicode خارج Latin) | Pre-existing bug | منخفضة — تحتاج custom jsPDF font |
+| **U3** | Column headers غير قابلة للنقر للفرز في Master Register | UX Enhancement | متوسطة — الـ backend يدعم sortBy/sortOrder، الـ frontend يحتاج header click handlers |
+| **U4** | زر "Master Register" من المشروع يفتح نفس التبويب — قد يكون الأفضل `target="_blank"` | UX قرار | منخفضة — ناقش مع صاحب المنتج |

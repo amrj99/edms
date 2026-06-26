@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useRef, type ReactNode } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isBefore, isAfter } from "date-fns";
 import * as XLSX from "xlsx";
@@ -744,7 +745,14 @@ function MasterRegister({ filters }: { filters: Filters }) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailItem, setDetailItem] = useState<any>(null);
   const [bulkStatus, setBulkStatus] = useState("_none");
+  const [sortBy, setSortBy] = useState("updatedAt");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const PER_PAGE = 50;
+
+  // Reset page when filters change
+  const filterKey = JSON.stringify({ ...filters, sortBy, sortOrder });
+  const prevFilterKey = useMemo(() => filterKey, [filterKey]);
+  if (prevFilterKey !== filterKey) setPage(1);
 
   const COLS_DEF = [
     { key: "documentNumber", label: t("docNumber") },
@@ -762,27 +770,36 @@ function MasterRegister({ filters }: { filters: Filters }) {
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("master", COLS_DEF.map(c => c.key));
   const COLS = COLS_DEF.filter(c => visibleCols.has(c.key));
 
+  // Build query params — pass all filters to server
+  const queryParams = useMemo(() => {
+    const p = new URLSearchParams();
+    if (filters.projectId !== "_all") p.set("projectId", filters.projectId);
+    if (filters.status   !== "_all") p.set("status",    filters.status);
+    if (filters.search)              p.set("search",    filters.search);
+    if (filters.dateFrom)            p.set("dateFrom",  filters.dateFrom);
+    if (filters.dateTo)              p.set("dateTo",    filters.dateTo);
+    if (filters.discipline !== "_all") p.set("discipline",   filters.discipline);
+    if (filters.docType    !== "_all") p.set("documentType", filters.docType);
+    p.set("sortBy",    sortBy);
+    p.set("sortOrder", sortOrder);
+    p.set("page",  String(page));
+    p.set("limit", String(PER_PAGE));
+    return p.toString();
+  }, [filters, sortBy, sortOrder, page]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["rpt-global-docs"],
+    queryKey: ["rpt-global-docs", queryParams],
     queryFn: async () => {
-      const r = await fetch("/api/documents?limit=1000");
+      const r = await fetch(`/api/documents?${queryParams}`);
       if (!r.ok) throw new Error("Failed");
       return r.json();
     },
+    staleTime: 30_000,
   });
-  const allDocs: any[] = data?.documents ?? [];
 
-  const filtered = useMemo(() => {
-    let d = allDocs;
-    if (filters.projectId !== "_all") d = d.filter(x => x.projectId === parseInt(filters.projectId));
-    if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
-    d = applyDateFilter(d, "updatedAt", filters.dateFrom, filters.dateTo);
-    d = applyTextFilter(d, filters.search, ["documentNumber", "title", "discipline", "documentType", "source", "issuedBy"]);
-    return d;
-  }, [allDocs, filters]);
-
-  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-  const totalPages = Math.ceil(filtered.length / PER_PAGE);
+  const paginated: any[]   = data?.documents ?? [];
+  const totalPages: number = data?.totalPages ?? 1;
+  const filtered = paginated; // server already filtered — kept as alias for downstream code
 
   const allPageSelected = paginated.length > 0 && paginated.every(d => selectedIds.has(d.id));
   const toggleAll = () => {
@@ -805,7 +822,7 @@ function MasterRegister({ filters }: { filters: Filters }) {
       ));
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["rpt-global-docs"] });
+      qc.invalidateQueries({ queryKey: ["rpt-global-docs", queryParams] });
       setSelectedIds(new Set());
       setBulkStatus("_none");
       toast({ title: `Updated ${selectedIds.size} documents` });
@@ -2410,6 +2427,16 @@ export default function Reports() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [activeTab, setActiveTab] = useState("master");
   const { activeOrgId } = useOrgContext();
+  const [location] = useLocation();
+
+  // Read URL params on mount: ?tab=master&projectId=5
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    const pid = params.get("projectId");
+    if (tab) setActiveTab(tab);
+    if (pid) setFilters(f => ({ ...f, projectId: pid }));
+  }, [location]);
   const addOverride = useOrgOverrideUrl();
 
   const { data: projectsData } = useQuery({

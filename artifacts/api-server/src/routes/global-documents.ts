@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, asc, and, or, ilike, inArray, count, gte, lte, type SQL } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { shadowEvaluate, resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import {param, paramInt, requireInt} from '../lib/params';
@@ -46,7 +46,7 @@ async function getAllowedProjectIds(userId: number, organizationId: number, sysA
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const { projectId, discipline, documentType, status, source, issuedBy, search, page, limit, dateFrom, dateTo, projectName } = req.query;
   const lim = Math.min(parseInt(limit as string || "100"), 500);
-  const pg = Math.max(1, parseInt(page as string || "1"));
+  const pg  = Math.max(1, parseInt(page as string || "1"));
 
   const user = req.user!;
 
@@ -56,107 +56,134 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     isSysAdmin(user),
   );
 
-  // User has no accessible projects → return empty immediately
   if (!allowedProjectIds.length) {
-    res.json({ documents: [], total: 0, page: pg, totalPages: 0 });
+    res.json({ documents: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
     return;
   }
 
-  const docs = await db.select({
-    doc: documentsTable,
-    createdBy: usersTable,
-    folder: foldersTable,
-    project: projectsTable,
-  }).from(documentsTable)
-    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-    .orderBy(desc(documentsTable.updatedAt));
+  // ── Build SQL WHERE conditions ──────────────────────────────────────────────
+  const conds: SQL[] = [inArray(documentsTable.projectId, allowedProjectIds)];
 
-  // Primary security filter: restrict to allowed projects
-  // Documents without a projectId (org-level only) are shown only if the org matches
-  let filtered = docs.filter(d => {
-    if (d.doc.projectId) return allowedProjectIds.includes(d.doc.projectId);
-    return d.doc.organizationId === user.organizationId;
-  });
-
-  if (projectId) filtered = filtered.filter(d => d.doc.projectId === parseInt(projectId as string));
-  if (discipline) filtered = filtered.filter(d => d.doc.discipline === discipline);
-  if (documentType) filtered = filtered.filter(d => d.doc.documentType === documentType);
-  if (status) filtered = filtered.filter(d => d.doc.status === status);
-  if (source) filtered = filtered.filter(d => d.doc.source === source);
-  if (issuedBy) {
-    const ib = (issuedBy as string).toLowerCase();
-    filtered = filtered.filter(d => d.doc.issuedBy?.toLowerCase().includes(ib));
+  if (projectId) {
+    const pid = parseInt(projectId as string);
+    if (!isNaN(pid)) conds.push(eq(documentsTable.projectId, pid));
   }
-  if (search) {
-    const q = (search as string).toLowerCase();
-    filtered = filtered.filter(d =>
-      d.doc.title?.toLowerCase().includes(q) ||
-      d.doc.documentNumber?.toLowerCase().includes(q) ||
-      d.doc.discipline?.toLowerCase().includes(q) ||
-      d.doc.revision?.toLowerCase().includes(q) ||
-      d.doc.documentType?.toLowerCase().includes(q) ||
-      d.doc.source?.toLowerCase().includes(q) ||
-      d.doc.issuedBy?.toLowerCase().includes(q)
+  if (discipline)   conds.push(eq(documentsTable.discipline,   discipline as string));
+  if (documentType) conds.push(eq(documentsTable.documentType, documentType as string));
+  if (status)       conds.push(eq(documentsTable.status,       status as any));
+  if (source)       conds.push(eq(documentsTable.source,       source as string));
+  if (issuedBy) {
+    const c = ilike(documentsTable.issuedBy, `%${issuedBy}%`);
+    if (c) conds.push(c);
+  }
+  if (search && typeof search === "string" && search.trim()) {
+    const s = search.trim();
+    const c = or(
+      ilike(documentsTable.documentNumber, `%${s}%`),
+      ilike(documentsTable.title,          `%${s}%`),
+      ilike(documentsTable.discipline,     `%${s}%`),
+      ilike(documentsTable.documentType,   `%${s}%`),
+      ilike(documentsTable.issuedBy,       `%${s}%`),
     );
+    if (c) conds.push(c);
   }
   if (dateFrom) {
     const from = new Date(dateFrom as string);
-    if (!isNaN(from.getTime())) {
-      filtered = filtered.filter(d => new Date(d.doc.updatedAt) >= from);
-    }
+    if (!isNaN(from.getTime())) conds.push(gte(documentsTable.updatedAt, from));
   }
   if (dateTo) {
     const to = new Date(dateTo as string);
     if (!isNaN(to.getTime())) {
       to.setHours(23, 59, 59, 999);
-      filtered = filtered.filter(d => new Date(d.doc.updatedAt) <= to);
+      conds.push(lte(documentsTable.updatedAt, to));
     }
   }
+  // projectName filter requires a JOIN — handled via subquery on project name
   if (projectName) {
-    const pn = (projectName as string).toLowerCase();
-    filtered = filtered.filter(d =>
-      d.project?.name?.toLowerCase().includes(pn) ||
-      d.project?.code?.toLowerCase().includes(pn)
-    );
+    const matchingProjects = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(or(
+        ilike(projectsTable.name, `%${projectName}%`),
+        ilike(projectsTable.code, `%${projectName}%`),
+      ));
+    const ids = matchingProjects.map(p => p.id);
+    if (!ids.length) {
+      res.json({ documents: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
+      return;
+    }
+    conds.push(inArray(documentsTable.projectId, ids));
   }
 
-  // Department enforcement gate — must run on ALL filtered docs before pagination so that
-  // total counts are correct after denied documents are removed.
-  // When PHASE_D_ENFORCE_DEPT=false (default): fires shadow logging async, returns no denials.
-  // When PHASE_D_ENFORCE_DEPT=true: awaits batch evaluation, returns denied doc IDs to filter.
+  // ── Sort ────────────────────────────────────────────────────────────────────
+  const SORT_MAP: Record<string, any> = {
+    documentNumber: documentsTable.documentNumber,
+    title:          documentsTable.title,
+    revision:       documentsTable.revision,
+    discipline:     documentsTable.discipline,
+    documentType:   documentsTable.documentType,
+    status:         documentsTable.status,
+    issuedBy:       documentsTable.issuedBy,
+    updatedAt:      documentsTable.updatedAt,
+    createdAt:      documentsTable.createdAt,
+  };
+  const sortCol = SORT_MAP[(req.query.sortBy as string) ?? ""] ?? documentsTable.updatedAt;
+  const orderFn = (req.query.sortOrder as string) === "asc" ? asc : desc;
+
+  // ── Parallel: total count + paginated rows ──────────────────────────────────
+  const [rows, [{ total }]] = await Promise.all([
+    db.select({
+      doc:       documentsTable,
+      createdBy: usersTable,
+      folder:    foldersTable,
+      project:   projectsTable,
+    })
+      .from(documentsTable)
+      .leftJoin(usersTable,   eq(documentsTable.createdById, usersTable.id))
+      .leftJoin(foldersTable, eq(documentsTable.folderId,    foldersTable.id))
+      .leftJoin(projectsTable, eq(documentsTable.projectId,  projectsTable.id))
+      .where(and(...conds))
+      .orderBy(orderFn(sortCol))
+      .limit(lim)
+      .offset((pg - 1) * lim),
+
+    db.select({ total: count() })
+      .from(documentsTable)
+      .where(and(...conds)),
+  ]);
+
+  // Shadow enforcement (default: no denials; does not affect counts)
   const { deniedDocIds } = await resolveListAndEnforce({
-    userId:    user.id,
-    userRole:  user.role,
-    documents: filtered.map(({ doc }) => ({
+    userId:   user.id,
+    userRole: user.role,
+    documents: rows.map(({ doc }) => ({
       id:             doc.id,
       projectId:      doc.projectId,
       isConfidential: doc.isConfidential ?? false,
     })),
     endpoint: "GET /api/documents",
   });
-  if (deniedDocIds.size > 0) {
-    filtered = filtered.filter(d => !deniedDocIds.has(d.doc.id));
-  }
 
-  const total = filtered.length;
-  const totalPages = Math.ceil(total / lim);
-  const paginated = filtered.slice((pg - 1) * lim, pg * lim);
+  const finalRows = deniedDocIds.size > 0
+    ? rows.filter(d => !deniedDocIds.has(d.doc.id))
+    : rows;
+
+  const totalCount = total ?? 0;
+  const totalPages = Math.ceil(totalCount / lim);
 
   res.json({
-    documents: paginated.map(({ doc, createdBy, folder, project }) => ({
+    documents: finalRows.map(({ doc, createdBy, folder, project }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
-      folderName: folder?.name,
-      projectName: project?.name,
-      projectCode: project?.code,
+      folderName:   folder?.name,
+      projectName:  project?.name,
+      projectCode:  project?.code,
     })),
-    total,
-    page: pg,
+    total:      totalCount,
+    page:       pg,
     totalPages,
-    limit: lim,
-    hasMore: pg < totalPages,
+    limit:      lim,
+    hasMore:    pg < totalPages,
   });
 });
 

@@ -1,4 +1,4 @@
-import { useParams, Link, useLocation } from "wouter";
+﻿import { useParams, Link, useLocation } from "wouter";
 import { useResizableColumns } from "@/hooks/useResizableColumns";
 import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/api-client-react";
 import {
@@ -869,6 +869,15 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
             onClick={() => navigate(`/migration-wizard?projectId=${projectId}`)}
           >
             <FolderMinus className="h-3.5 w-3.5" /> Import Existing
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-9 gap-1.5 text-muted-foreground hover:text-foreground"
+            onClick={() => navigate(`/reports?tab=master&projectId=${projectId}`)}
+            title="Open this project in the Master Register"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Master Register
           </Button>
           {perms.canCreateDocument && (
             <>
@@ -4823,3 +4832,4 @@ function ProjectDepartmentsTab({ projectId }: { projectId: number }) {
     </div>
   );
 }
+
