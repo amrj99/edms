@@ -703,8 +703,8 @@ router.put("/ai-classification", requireMinRole("admin"), async (req, res): Prom
 router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
-  if (isSysAdmin(user)) {
-    // Return quota summary for every org that has an org_config row
+  if (isSystemOwner(user)) {
+    // system_owner only: return quota summary for every org
     const configs = await db
       .select({
         organizationId: orgConfigTable.organizationId,
@@ -726,7 +726,7 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  // Non-sysadmin: own org only
+  // admin (org-scoped) and everyone else: own org only
   if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
   const quota = await getOrgAiQuota(user.organizationId);
   res.json({ organizationId: user.organizationId, quota });

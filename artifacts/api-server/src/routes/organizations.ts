@@ -132,7 +132,7 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
+  if (!isSystemOwner(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, id)).limit(1);
@@ -144,7 +144,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 
 router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  if (!isSysAdmin(req.user!) && req.user!.organizationId !== id) {
+  if (!isSystemOwner(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;

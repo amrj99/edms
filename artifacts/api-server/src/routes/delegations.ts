@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { delegationsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, or, isNull, desc, gt } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
@@ -17,7 +17,9 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const now = new Date();
   const { scope } = req.query; // "active" | "all"
 
-  const baseWhere = isSysAdmin(caller)
+  // system_owner can see all delegations; everyone else (including admin)
+  // sees only delegations where they are grantor or delegate within their org.
+  const baseWhere = isSystemOwner(caller)
     ? undefined
     : or(
         eq(delegationsTable.fromUserId, caller.id),
