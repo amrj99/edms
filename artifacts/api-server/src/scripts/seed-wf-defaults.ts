@@ -27,27 +27,19 @@ interface DefaultTemplate {
   }>;
 }
 
+// All responsibleRole values MUST be valid AppRole system roles or null (terminal stage).
+// Custom strings like "Finance", "GM", "Legal" are not system roles and will not route
+// notifications or canAct checks correctly. Use: reviewer, document_controller,
+// project_manager, admin, system_owner — or null for terminal stages.
 const DEFAULT_TEMPLATES: DefaultTemplate[] = [
-  {
-    name: "Invoice Approval Workflow",
-    documentType: "Invoice",
-    description: "Standard invoice approval: Finance → Contracts → Operations → GM → Issued",
-    stages: [
-      { stageOrder: 1, name: "Finance Review",     responsibleRole: "Finance",    isTerminal: false },
-      { stageOrder: 2, name: "Contracts Review",   responsibleRole: "Contracts",  isTerminal: false },
-      { stageOrder: 3, name: "Operations Review",  responsibleRole: "Operations", isTerminal: false },
-      { stageOrder: 4, name: "GM Approval",        responsibleRole: "GM",         isTerminal: false },
-      { stageOrder: 5, name: "Issued",             responsibleRole: null,         isTerminal: true  },
-    ],
-  },
   {
     name: "General Document Approval",
     documentType: "general",
-    description: "Standard approval for general documents",
+    description: "Standard approval for general documents: internal review → senior review → issued",
     stages: [
-      { stageOrder: 1, name: "Internal Review",   responsibleRole: "Reviewer",        isTerminal: false },
-      { stageOrder: 2, name: "Senior Review",     responsibleRole: "Senior Engineer", isTerminal: false },
-      { stageOrder: 3, name: "Approved for Issue", responsibleRole: null,             isTerminal: true  },
+      { stageOrder: 1, name: "Internal Review",    responsibleRole: "reviewer",            isTerminal: false },
+      { stageOrder: 2, name: "Senior Review",      responsibleRole: "document_controller", isTerminal: false },
+      { stageOrder: 3, name: "Approved for Issue", responsibleRole: null,                  isTerminal: true  },
     ],
   },
   {
@@ -55,30 +47,29 @@ const DEFAULT_TEMPLATES: DefaultTemplate[] = [
     documentType: "correspondence",
     description: "Action tracking for incoming and outgoing correspondence",
     stages: [
-      { stageOrder: 1, name: "Acknowledged",  responsibleRole: "Document Controller", isTerminal: false },
-      { stageOrder: 2, name: "Manager Review", responsibleRole: "Manager",            isTerminal: false },
-      { stageOrder: 3, name: "Actioned",       responsibleRole: null,                 isTerminal: true  },
+      { stageOrder: 1, name: "Acknowledged",   responsibleRole: "document_controller", isTerminal: false },
+      { stageOrder: 2, name: "Manager Review", responsibleRole: "project_manager",     isTerminal: false },
+      { stageOrder: 3, name: "Actioned",       responsibleRole: null,                  isTerminal: true  },
     ],
   },
   {
     name: "Contract Approval Workflow",
     documentType: "contract",
-    description: "Multi-stage approval for contracts and agreements",
+    description: "Approval workflow for contracts and formal agreements",
     stages: [
-      { stageOrder: 1, name: "Legal Review",        responsibleRole: "Legal",      isTerminal: false },
-      { stageOrder: 2, name: "Commercial Review",   responsibleRole: "Commercial", isTerminal: false },
-      { stageOrder: 3, name: "Management Approval", responsibleRole: "Management", isTerminal: false },
-      { stageOrder: 4, name: "Executed",            responsibleRole: null,         isTerminal: true  },
+      { stageOrder: 1, name: "Review",               responsibleRole: "document_controller", isTerminal: false },
+      { stageOrder: 2, name: "Management Approval",  responsibleRole: "project_manager",     isTerminal: false },
+      { stageOrder: 3, name: "Executed",             responsibleRole: null,                  isTerminal: true  },
     ],
   },
   {
     name: "Drawing Approval Workflow",
     documentType: "drawing",
-    description: "Engineering review and approval for drawings",
+    description: "Engineering review and approval for technical drawings",
     stages: [
-      { stageOrder: 1, name: "Checker Review",             responsibleRole: "Checker",         isTerminal: false },
-      { stageOrder: 2, name: "Senior Engineer Review",     responsibleRole: "Senior Engineer",  isTerminal: false },
-      { stageOrder: 3, name: "Approved for Construction",  responsibleRole: null,               isTerminal: true  },
+      { stageOrder: 1, name: "Technical Review",          responsibleRole: "reviewer",            isTerminal: false },
+      { stageOrder: 2, name: "Senior Engineer Review",    responsibleRole: "document_controller", isTerminal: false },
+      { stageOrder: 3, name: "Approved for Construction", responsibleRole: null,                  isTerminal: true  },
     ],
   },
 ];
