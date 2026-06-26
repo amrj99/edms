@@ -1,7 +1,7 @@
 # ArcScale EDMS — Feature Inventory
 > **الحالة الفعلية للنظام** — ليس Roadmap.  
 > يُحدَّث بعد كل ميزة أو إصلاح مكتمل.  
-> آخر تحديث: 2026-06-26 | Commit: `4d381a6`
+> آخر تحديث: 2026-06-26 | Commit: `4ba0ca1`
 
 ---
 
@@ -143,8 +143,8 @@
 | "My Actions" view | ✅ | amber banner + filter + badge |
 | Document link في Workflow instance | ✅ | نقرة واحدة لفتح المستند |
 | Workflow history (transitions) | ✅ | Immutable audit |
-| Default template عند إنشاء org | ❌ | **غير مُنفَّذ — الأولوية التالية** |
-| Workflow للمنظمات الجديدة | ⚠️ | رسالة "No template configured" — يحتاج default seed |
+| Default template عند إنشاء org | ⚠️ | يعمل في أول deploy بعد إضافة مستخدم — لا trigger فوري |
+| Workflow للمنظمات الجديدة | ⚠️ | 4 templates تظهر بعد أول deploy (General/Drawing/Correspondence/Contract) |
 | SLA / deadline per stage | ❌ | |
 
 ---
@@ -333,6 +333,8 @@
 | K5 | Column sort UI | backend يدعم sortBy لكن headers غير قابلة للنقر |
 | K6 | Audit logs org_id = null | للسجلات القديمة — buildOrgCondition يعالجها |
 | K7 | Tasks with projectId = null | لا org scope — لا أحد يستطيع رؤيتها cross-org |
+| K8 | Default WF seed — orgs الجديدة فقط | `seed-wf-defaults.mjs` idempotent — الـ orgs الحالية لا تُعدَّل تلقائياً. يمكن تحديثها يدوياً بـ "Setup Default Templates" في Workflow Engine |
+| K9 | Invoice Approval Workflow | مُزال من default seed (2026-06-26). يُنشأ يدوياً من Workflow Engine أو مستقبلاً عبر Template Library لأنه متخصص لكل شركة |
 
 ---
 
