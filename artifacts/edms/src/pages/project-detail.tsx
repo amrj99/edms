@@ -46,31 +46,40 @@ import { usePermissions } from "@/hooks/usePermissions";
 // ─── Shared Utilities ────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    draft: "bg-gray-100 text-gray-700",
-    sent: "bg-blue-100 text-blue-700",
-    acknowledged: "bg-green-100 text-green-700",
-    rejected: "bg-red-100 text-red-700",
-    approved: "bg-green-100 text-green-700",
+    draft:                  "bg-gray-100 text-gray-600",
+    sent:                   "bg-blue-100 text-blue-700",
+    acknowledged:           "bg-emerald-100 text-emerald-700",
+    rejected:               "bg-red-100 text-red-700",
+    approved:               "bg-emerald-100 text-emerald-700",
     approved_with_comments: "bg-teal-100 text-teal-700",
-    for_revision: "bg-amber-100 text-amber-700",
-    pending_review: "bg-yellow-100 text-yellow-700",
-    responded: "bg-purple-100 text-purple-700",
-    closed: "bg-gray-100 text-gray-500",
-    overdue: "bg-red-100 text-red-700",
-    active: "bg-emerald-100 text-emerald-700",
-    in_review: "bg-blue-100 text-blue-700",
-    under_review: "bg-blue-100 text-blue-700",
-    issued: "bg-indigo-100 text-indigo-700",
-    superseded: "bg-gray-100 text-gray-500",
-    void: "bg-gray-100 text-gray-400",
+    for_revision:           "bg-amber-100 text-amber-700",
+    pending_review:         "bg-yellow-100 text-yellow-700",
+    responded:              "bg-purple-100 text-purple-700",
+    closed:                 "bg-gray-100 text-gray-500",
+    overdue:                "bg-red-100 text-red-700",
+    active:                 "bg-emerald-100 text-emerald-700",
+    in_review:              "bg-blue-100 text-blue-700",
+    under_review:           "bg-blue-100 text-blue-700",
+    issued:                 "bg-indigo-100 text-indigo-700",
+    superseded:             "bg-slate-100 text-slate-500",
+    void:                   "bg-red-50 text-red-400",
+    archived:               "bg-gray-50 text-gray-400",
   };
   const labels: Record<string, string> = {
+    draft:                  "Draft",
+    under_review:           "Under Review",
+    approved:               "Approved",
     approved_with_comments: "Approved w/ Comments",
-    for_revision: "For Revision",
-    under_review: "Under Review",
+    for_revision:           "For Revision",
+    rejected:               "Rejected",
+    issued:                 "Issued",
+    superseded:             "Superseded",
+    void:                   "Void",
+    archived:               "Archived",
+    in_review:              "In Review",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] ?? "bg-muted text-muted-foreground"}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${map[status] ?? "bg-muted text-muted-foreground"}`}>
       {labels[status] ?? status.replace(/_/g, " ")}
     </span>
   );
@@ -1256,7 +1265,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                   >
                     <div className="flex items-center gap-2">
                       <FileText className="h-4 w-4 text-primary/70 shrink-0" />
-                      <span className="line-clamp-1 hover:underline underline-offset-2">{doc.title}</span>
+                      <span className="line-clamp-1 hover:underline underline-offset-2" title={doc.title}>{doc.title}</span>
                     </div>
                   </TableCell>
                   {isDocColVis("discipline") && <TableCell className="text-sm">{(doc as any).discipline || "—"}</TableCell>}
@@ -3976,9 +3985,16 @@ function TasksTab({ projectId }: { projectId: number }) {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="font-semibold text-lg">Project Tasks</h3>
-        <Button asChild variant="outline" className="gap-2">
-          <Link href="/tasks">View All Tasks <ArrowLeft className="h-4 w-4 rotate-180" /></Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild size="sm" className="h-8 gap-1.5">
+            <Link href={`/tasks?projectId=${projectId}&create=1`}>
+              <Plus className="h-3.5 w-3.5" /> Add Task
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5">
+            <Link href="/tasks">View All <ArrowLeft className="h-3.5 w-3.5 rotate-180" /></Link>
+          </Button>
+        </div>
       </div>
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
         <Table>
