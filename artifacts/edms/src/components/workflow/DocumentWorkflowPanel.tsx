@@ -313,8 +313,10 @@ function StartWorkflowWidget({
   onStarted: () => void;
 }) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
+  const canSetupWorkflow = ["system_owner", "admin", "project_manager"].includes(user?.role ?? "");
 
   const { data, isLoading } = useQuery({
     queryKey: ["wf-templates-for-type", documentType],
@@ -353,15 +355,37 @@ function StartWorkflowWidget({
   );
 
   if (!templates.length) return (
-    <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
-      <GitBranch className="h-8 w-8 mx-auto text-muted-foreground/40" />
-      <p className="text-sm text-muted-foreground">
-        No workflow template is configured for <strong>{documentType}</strong> documents.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        An admin can set one up on the{" "}
-        <a href="/workflow-engine" className="text-primary hover:underline">Workflow Engine</a> page.
-      </p>
+    <div className="rounded-lg border border-dashed p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <GitBranch className="h-5 w-5 mt-0.5 text-muted-foreground/50 shrink-0" />
+        <div className="space-y-1 flex-1">
+          <p className="text-sm font-medium text-foreground">
+            No approval workflow set up for this document type
+          </p>
+          {canSetupWorkflow ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                <strong>{documentType}</strong> documents don't have a workflow template yet.
+                You can create one in Workflow Engine, or set up the standard templates for all types.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <a
+                  href="/workflow-engine"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                >
+                  <Layers className="h-3.5 w-3.5" />
+                  Go to Workflow Engine →
+                </a>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Contact your <strong>Admin</strong> or <strong>Project Manager</strong> to set up
+              an approval workflow for <strong>{documentType}</strong> documents.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 
