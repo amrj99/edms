@@ -18,6 +18,7 @@ import {
   getTestDb,
   truncateAllTables,
 } from "./helpers/index.js";
+import { signToken } from "../lib/auth.js";
 import { documentTypesTable, normalizeDocTypeCode, orgConfigTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -203,5 +204,99 @@ describe("workflow-engine templates — documentTypeId integration", () => {
       .send({ name: "Bad Template", documentTypeId: 999999 });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe("document-types — system_owner org-override scoping", () => {
+  let orgA: { id: number };
+  let orgB: { id: number };
+  let sysOwner: { id: number };
+  // Token with no organizationId — mirrors a real system_owner JWT
+  let sysOwnerToken: string;
+
+  beforeAll(async () => {
+    await truncateAllTables();
+    orgA = await createOrg({ name: "Override Org A", code: "OVA" });
+    orgB = await createOrg({ name: "Override Org B", code: "OVB" });
+    sysOwner = await createUser({ organizationId: orgA.id, role: "system_owner", email: "sysowner@override.test" });
+
+    // Create a token where organizationId is absent (production system_owner shape)
+    sysOwnerToken = signToken({ id: sysOwner.id, email: "sysowner@override.test", role: "system_owner" });
+
+    // Seed orgA with one document type
+    const db = getTestDb();
+    await db.insert(documentTypesTable).values({
+      organizationId: orgA.id,
+      code: "DRAWING",
+      name: "Drawing",
+      isActive: true,
+    });
+  });
+
+  afterAll(async () => {
+    await truncateAllTables();
+  });
+
+  it("GET without orgOverride returns empty when system_owner has no JWT org", async () => {
+    const res = await api()
+      .get("/api/document-types")
+      .set({ Authorization: `Bearer ${sysOwnerToken}` });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // orgId = null/undefined → WHERE organization_id = null → 0 rows
+    expect(res.body.length).toBe(0);
+  });
+
+  it("GET with ?orgOverride returns the targeted org's types", async () => {
+    const res = await api()
+      .get(`/api/document-types?orgOverride=${orgA.id}`)
+      .set({ Authorization: `Bearer ${sysOwnerToken}` });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body.every((dt: any) => dt.organizationId === orgA.id)).toBe(true);
+  });
+
+  it("GET with ?orgOverride for orgB returns only orgB's types (not orgA's)", async () => {
+    const res = await api()
+      .get(`/api/document-types?orgOverride=${orgB.id}`)
+      .set({ Authorization: `Bearer ${sysOwnerToken}` });
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // orgB has no types yet
+    expect(res.body.length).toBe(0);
+  });
+
+  it("POST with ?orgOverride creates the document type in the correct org", async () => {
+    const res = await api()
+      .post(`/api/document-types?orgOverride=${orgB.id}`)
+      .set({ Authorization: `Bearer ${sysOwnerToken}` })
+      .send({ code: "SPECIFICATION", name: "Specification" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.organizationId).toBe(orgB.id);
+    expect(res.body.code).toBe("SPECIFICATION");
+
+    // Verify orgA is untouched
+    const getA = await api()
+      .get(`/api/document-types?orgOverride=${orgA.id}`)
+      .set({ Authorization: `Bearer ${sysOwnerToken}` });
+    expect(getA.body.some((dt: any) => dt.code === "SPECIFICATION")).toBe(false);
+  });
+
+  it("orgOverride is silently ignored for non-system_owner — they stay in their own org", async () => {
+    const adminA = await createUser({ organizationId: orgA.id, role: "admin", email: "admin@ovA.test" });
+
+    // Admin for orgA tries to pass orgOverride=orgB — should be ignored
+    const res = await api()
+      .get(`/api/document-types?orgOverride=${orgB.id}`)
+      .set(authHeader("admin", adminA.id, orgA.id));
+
+    expect(res.status).toBe(200);
+    // Must see only orgA's types (override ignored, JWT org used)
+    expect(res.body.every((dt: any) => dt.organizationId === orgA.id)).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useAuth } from "@/lib/auth";
+import { useOrgContext } from "@/lib/org-context";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -324,6 +325,7 @@ export function TemplateEditorDialog({
   onSaved,
 }: TemplateEditorDialogProps) {
   const { toast } = useToast();
+  const { activeOrgId } = useOrgContext();
   const isNew = template === null;
 
   // ── Local state ────────────────────────────────────────────────────────────
@@ -360,15 +362,18 @@ export function TemplateEditorDialog({
 
   // ── Org users for assignment dropdown ─────────────────────────────────────
   const { data: usersData } = useQuery({
-    queryKey: ["org-users"],
-    queryFn: () => apiFetch("/users"),
+    queryKey: ["org-users", activeOrgId],
+    queryFn: () => apiFetch(activeOrgId ? `/users?organizationId=${activeOrgId}` : "/users"),
     staleTime: 120_000,
   });
   const users: OrgUser[] = usersData?.users ?? usersData ?? [];
 
   // ── Document types for the document type dropdown ─────────────────────────
+  // queryKey includes activeOrgId so the cache is org-specific.
+  // window.fetch is patched by OrgContextProvider to inject ?orgOverride= when
+  // activeOrgId is set, which requireAuth uses to scope the backend query.
   const { data: documentTypesData } = useQuery({
-    queryKey: ["document-types"],
+    queryKey: ["document-types", activeOrgId],
     queryFn: () => apiFetch("/document-types"),
     staleTime: 120_000,
   });
@@ -531,7 +536,9 @@ export function TemplateEditorDialog({
                 </Select>
                 {documentTypes.length === 0 && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    No document types defined yet — add one in Admin → Document Types.
+                    {activeOrgId === null
+                      ? "Select a specific organization first to see available document types."
+                      : "No document types defined yet — add one in Admin → Document Types."}
                   </p>
                 )}
               </div>
