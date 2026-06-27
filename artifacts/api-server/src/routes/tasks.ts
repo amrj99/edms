@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { tasksTable, usersTable, projectsTable, notificationsTable } from "@workspace/db";
+import { tasksTable, usersTable, projectsTable, notificationsTable, wfInstancesTable } from "@workspace/db";
 import { eq, and, desc, isNull, or } from "drizzle-orm";
 import { requireAuth, isSysAdmin } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
@@ -35,12 +35,39 @@ async function enrichTasks(tasks: (typeof tasksTable.$inferSelect)[], callerOrgI
   const userMap = new Map(users.map(u => [u.id, u]));
   const projectMap = new Map(projects.map(p => [p.id, p]));
 
-  return tasks.map(t => ({
-    ...t,
-    assignedToName: t.assignedToId ? (userMap.get(t.assignedToId) ? `${userMap.get(t.assignedToId)!.firstName} ${userMap.get(t.assignedToId)!.lastName}` : undefined) : undefined,
-    createdByName: t.createdById ? (userMap.get(t.createdById) ? `${userMap.get(t.createdById)!.firstName} ${userMap.get(t.createdById)!.lastName}` : undefined) : undefined,
-    projectName: t.projectId ? projectMap.get(t.projectId)?.name : undefined,
-  }));
+  // For workflow tasks: resolve the document URL from the workflow instance
+  const wfInstanceIds = [...new Set(
+    tasks.filter(t => t.sourceType === "workflow" && t.sourceId != null).map(t => t.sourceId!)
+  )];
+  const wfDocMap = new Map<number, { documentId: number; projectId: number | null }>();
+  if (wfInstanceIds.length > 0) {
+    const instances = await db
+      .select({ id: wfInstancesTable.id, documentId: wfInstancesTable.documentId, projectId: wfInstancesTable.projectId })
+      .from(wfInstancesTable)
+      .where(drizzleInArray(wfInstancesTable.id, wfInstanceIds));
+    for (const inst of instances) {
+      wfDocMap.set(inst.id, { documentId: inst.documentId, projectId: inst.projectId });
+    }
+  }
+
+  return tasks.map(t => {
+    let actionUrl: string | undefined;
+    if (t.sourceType === "workflow" && t.sourceId != null) {
+      const wfDoc = wfDocMap.get(t.sourceId);
+      if (wfDoc) {
+        actionUrl = wfDoc.projectId != null
+          ? `/projects/${wfDoc.projectId}/documents/${wfDoc.documentId}`
+          : `/documents/${wfDoc.documentId}`;
+      }
+    }
+    return {
+      ...t,
+      assignedToName: t.assignedToId ? (userMap.get(t.assignedToId) ? `${userMap.get(t.assignedToId)!.firstName} ${userMap.get(t.assignedToId)!.lastName}` : undefined) : undefined,
+      createdByName: t.createdById ? (userMap.get(t.createdById) ? `${userMap.get(t.createdById)!.firstName} ${userMap.get(t.createdById)!.lastName}` : undefined) : undefined,
+      projectName: t.projectId ? projectMap.get(t.projectId)?.name : undefined,
+      actionUrl,
+    };
+  });
 }
 
 router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
@@ -232,6 +259,15 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
         });
       }
     }
+  }
+
+  // Workflow tasks: status is owned by the workflow engine, not users
+  if (before.sourceType === "workflow" && status !== undefined) {
+    res.status(403).json({
+      error: "workflow_task_immutable",
+      message: "Workflow task status is managed by the workflow engine and cannot be changed manually.",
+    });
+    return;
   }
 
   const completedAt = status === "completed" ? new Date() : undefined;

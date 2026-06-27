@@ -26,9 +26,9 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   wfTemplatesTable, wfTemplateStagesTable, wfInstancesTable, wfInstanceTransitionsTable,
-  documentsTable, projectsTable, usersTable, notificationsTable, documentTypesTable,
+  documentsTable, projectsTable, usersTable, notificationsTable, documentTypesTable, tasksTable,
 } from "@workspace/db";
-import { eq, and, desc, asc, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, inArray, or } from "drizzle-orm";
 import { requireAuth, requireRole, type AuthUser } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
@@ -176,8 +176,31 @@ async function syncDocumentStatus(docId: number, newStatus: "under_review" | "ap
   } catch (_) {}
 }
 
+// ─── Workflow task lifecycle ───────────────────────────────────────────────────
+
+async function closeOpenWorkflowTask(instanceId: number, closeStatus: "completed" | "cancelled") {
+  try {
+    await db.update(tasksTable)
+      .set({
+        status: closeStatus,
+        completedAt: closeStatus === "completed" ? new Date() : undefined,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(tasksTable.sourceType, "workflow"),
+        eq(tasksTable.sourceId, instanceId),
+        or(eq(tasksTable.status, "pending"), eq(tasksTable.status, "in_progress")),
+      ));
+  } catch (_) {}
+}
+
 // ─── Notification helper: notify stage responsible when stage changes ──────────
-async function notifyStageReached(inst: typeof wfInstancesTable.$inferSelect, stage: typeof wfTemplateStagesTable.$inferSelect, actorId: number) {
+async function notifyStageReached(
+  inst: typeof wfInstancesTable.$inferSelect,
+  stage: typeof wfTemplateStagesTable.$inferSelect,
+  actorId: number,
+  taskCloseStatus?: "completed" | "cancelled",
+) {
   try {
     const [doc] = await db.select({ title: documentsTable.title, documentNumber: documentsTable.documentNumber })
       .from(documentsTable).where(eq(documentsTable.id, inst.documentId)).limit(1);
@@ -188,6 +211,31 @@ async function notifyStageReached(inst: typeof wfInstancesTable.$inferSelect, st
       ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, inst.projectId)).limit(1)
       : [null];
     const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+
+    // ── Task lifecycle ────────────────────────────────────────────────────────
+    // Close the previous stage's task (when advancing or returning to a stage)
+    if (taskCloseStatus) {
+      await closeOpenWorkflowTask(inst.id, taskCloseStatus);
+    }
+    // Create a new task only for explicitly assigned users — role-only stages
+    // get notifications but no Task (no specific assignedToId to set).
+    if (stage.responsibleUserId) {
+      const docLabel = doc?.documentNumber ?? doc?.title ?? "Document";
+      await db.insert(tasksTable).values({
+        title: `[Action Required] ${stage.name}: ${docLabel}`,
+        description: `Open the document to review and take action at the ${stage.name} stage.`,
+        status: "pending",
+        priority: "medium",
+        assignedToId: stage.responsibleUserId,
+        createdById: inst.initiatedById,
+        projectId: inst.projectId ?? undefined,
+        organizationId: inst.organizationId ?? undefined,
+        sourceType: "workflow",
+        sourceId: inst.id,
+        dueDate: inst.stageDueAt ?? undefined,
+        assignedAt: new Date(),
+      }).catch(() => {});
+    }
 
     // Resolve recipients:
     //   1. Specific assigned user
@@ -731,8 +779,13 @@ router.post("/instances/:id/advance", async (req, res): Promise<void> => {
     });
   }
 
-  // Notify next stage responsible
-  if (nextStage && newStatus === "active") notifyStageReached(updated, nextStage, req.user!.id);
+  // Task lifecycle + notification for next stage
+  if (nextStage && newStatus === "active") {
+    notifyStageReached(updated, nextStage, req.user!.id, "completed");
+  } else if (newStatus === "completed") {
+    // Workflow finished — close the final stage's task
+    closeOpenWorkflowTask(id, "completed");
+  }
 
   res.json(await enrichInstance(updated, req.user!, new Map()));
 });
@@ -823,6 +876,14 @@ router.post("/instances/:id/reject", async (req, res): Promise<void> => {
       entityId: inst.documentId,
       details: { toStatus: "draft", via: `workflow_${finalAction}`, workflowInstanceId: id },
     });
+  }
+
+  // Task lifecycle: on return, close current task + create new one for the return stage;
+  // on reject/cancel, close current task as cancelled.
+  if (finalAction === "returned" && returnStage) {
+    notifyStageReached(updated, returnStage, req.user!.id, "cancelled");
+  } else {
+    closeOpenWorkflowTask(id, "cancelled");
   }
 
   res.json(await enrichInstance(updated, req.user!, new Map()));

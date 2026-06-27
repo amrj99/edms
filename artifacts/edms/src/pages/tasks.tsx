@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useListTasks, useListProjects, getListTasksQueryKey } from "@workspace/api-client-react";
 import {
@@ -70,6 +71,7 @@ export default function Tasks() {
   const { t, isRtl } = useI18n();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [, navigate] = useLocation();
 
   const { data, isLoading } = useListTasks({ assignedToMe: true });
   const { data: projectsData } = useListProjects();
@@ -251,8 +253,14 @@ export default function Tasks() {
       ) : (
         <div className="grid gap-4">
           {sorted.map(task => {
+            const isWorkflow = (task as any).sourceType === "workflow";
+            const actionUrl = (task as any).actionUrl as string | undefined;
             return (
-              <Card key={task.id} className="hover:shadow-md transition-shadow">
+              <Card
+                key={task.id}
+                className={cn("transition-shadow", isWorkflow && actionUrl ? "hover:shadow-md cursor-pointer" : "hover:shadow-md")}
+                onClick={isWorkflow && actionUrl ? () => navigate(actionUrl) : undefined}
+              >
                 <CardContent className="p-5 flex items-center gap-4">
                   <div className={cn("h-10 w-10 rounded-full flex items-center justify-center shrink-0", PRIORITY_COLORS[task.priority])}>
                     {task.priority === "urgent" ? <AlertCircle className="h-5 w-5" /> : <CheckSquare className="h-5 w-5" />}
@@ -264,7 +272,13 @@ export default function Tasks() {
                           <FolderKanban className="h-3 w-3" /> {task.projectName}
                         </span>
                       )}
-                      <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
+                      {isWorkflow ? (
+                        <Badge variant="outline" className="text-[10px] text-violet-600 border-violet-300 bg-violet-50 dark:bg-violet-900/20 gap-1">
+                          <Brain className="h-2.5 w-2.5" /> Workflow
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
+                      )}
                     </div>
                     <h3 className="text-base font-semibold text-foreground truncate">{task.title}</h3>
                     {task.description && (
@@ -272,20 +286,33 @@ export default function Tasks() {
                     )}
                   </div>
                   <div className="flex flex-col items-end gap-2 shrink-0">
-                    <Select
-                      value={task.status}
-                      onValueChange={val => updateMutation.mutate({ id: task.id, status: val })}
-                    >
-                      <SelectTrigger className="h-7 text-xs w-[120px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending" className="text-xs">{t("taskPending")}</SelectItem>
-                        <SelectItem value="in_progress" className="text-xs">{t("taskInProgress")}</SelectItem>
-                        <SelectItem value="completed" className="text-xs">{t("taskCompleted")}</SelectItem>
-                        <SelectItem value="cancelled" className="text-xs">{t("taskCancelled")}</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    {isWorkflow ? (
+                      <>
+                        <Badge variant="outline" className="text-xs capitalize text-violet-600 border-violet-200">
+                          {task.status?.replace("_", " ")}
+                        </Badge>
+                        {actionUrl && (
+                          <span className="flex items-center gap-1 text-xs text-violet-600 font-medium">
+                            <ExternalLink className="h-3 w-3" /> View Document
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <Select
+                        value={task.status}
+                        onValueChange={val => updateMutation.mutate({ id: task.id, status: val })}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[120px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pending" className="text-xs">{t("taskPending")}</SelectItem>
+                          <SelectItem value="in_progress" className="text-xs">{t("taskInProgress")}</SelectItem>
+                          <SelectItem value="completed" className="text-xs">{t("taskCompleted")}</SelectItem>
+                          <SelectItem value="cancelled" className="text-xs">{t("taskCancelled")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                     <Badge variant="outline" className={cn("capitalize text-[10px]", PRIORITY_COLORS[task.priority])}>
                       {task.priority}
                     </Badge>
