@@ -32,7 +32,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE task_priority            AS ENUM ('low','medium','high','urgent');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-DO $$ BEGIN CREATE TYPE task_source_type         AS ENUM ('manual','workflow','correspondence');
+DO $$ BEGIN CREATE TYPE task_source_type         AS ENUM ('manual','workflow','correspondence','document');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN CREATE TYPE metadata_field_type      AS ENUM ('text','number','date','select','multiselect','boolean');
@@ -450,6 +450,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_type     task_source_type   NOT NULL DEFAULT 'manual',
   source_id       integer,
   due_date        timestamp,
+  assigned_at     timestamp,
   completed_at    timestamp,
   created_at      timestamp          NOT NULL DEFAULT now(),
   updated_at      timestamp          NOT NULL DEFAULT now()
@@ -457,6 +458,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_organization_id ON tasks (organization_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id      ON tasks (project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to_id  ON tasks (assigned_to_id);
+-- Incremental: add task columns and enum value introduced in migration 0015
+ALTER TYPE  task_source_type ADD VALUE IF NOT EXISTS 'document';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at timestamp;
 
 -- deliverables
 CREATE TABLE IF NOT EXISTS deliverables (
