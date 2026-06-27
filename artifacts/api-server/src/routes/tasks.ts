@@ -99,10 +99,11 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
     title, description, priority,
     assignedToId: effectiveAssignedToId,
     createdById: req.user!.id,
-    projectId: projectId || null,
-    organizationId: req.user!.organizationId ?? null,
+    projectId: projectId || undefined,
+    organizationId: req.user!.organizationId ?? undefined,
     dueDate: dueDate ? new Date(dueDate) : undefined,
     sourceType: "manual",
+    assignedAt: effectiveAssignedToId ? new Date() : undefined,
   }).returning();
 
   // Notify the assignee (if assigned to someone other than the creator)
@@ -234,9 +235,14 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   }
 
   const completedAt = status === "completed" ? new Date() : undefined;
+  const now = new Date();
+  // assignedAt tracks WHEN the current assignee was set — only update on reassignment
+  const assignedAtUpdate = (assignedToId !== undefined && assignedToId !== before.assignedToId)
+    ? { assignedAt: now }
+    : {};
 
   const [task] = await db.update(tasksTable)
-    .set({ title, description, status, priority, assignedToId, dueDate: dueDate ? new Date(dueDate) : undefined, completedAt, updatedAt: new Date() })
+    .set({ title, description, status, priority, assignedToId, dueDate: dueDate ? new Date(dueDate) : undefined, completedAt, updatedAt: now, ...assignedAtUpdate })
     .where(eq(tasksTable.id, id))
     .returning();
 

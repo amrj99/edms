@@ -23,6 +23,7 @@ export const taskSourceTypeEnum = pgEnum("task_source_type", [
   "manual",
   "workflow",
   "correspondence",
+  "document",
 ]);
 
 export const tasksTable = pgTable("tasks", {
@@ -38,6 +39,7 @@ export const tasksTable = pgTable("tasks", {
   sourceType: taskSourceTypeEnum("source_type").notNull().default("manual"),
   sourceId: integer("source_id"),
   dueDate: timestamp("due_date"),
+  assignedAt: timestamp("assigned_at"),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

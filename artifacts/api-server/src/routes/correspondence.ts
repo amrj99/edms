@@ -9,6 +9,7 @@ import {
   usersTable,
   projectsTable,
   notificationsTable,
+  tasksTable,
 } from "@workspace/db";
 import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
@@ -522,6 +523,39 @@ async function createCorrespondence(
     }
   }
 
+  // ─── Create linked Task when Task To is set and correspondence is sent ────────
+  if (sendNow && corr.assignedToId) {
+    try {
+      // Deduplication: never create a second task for the same correspondence
+      const [existingTask] = await db.select({ id: tasksTable.id })
+        .from(tasksTable)
+        .where(and(
+          eq(tasksTable.sourceType, "correspondence"),
+          eq(tasksTable.sourceId, corr.id),
+        ))
+        .limit(1);
+
+      if (!existingTask) {
+        await db.insert(tasksTable).values({
+          title: `[Action Required] ${corr.subject}`,
+          description: corr.referenceNumber ? `Ref: ${corr.referenceNumber}` : undefined,
+          status: "pending",
+          priority: (corr.priority as any) ?? "medium",
+          assignedToId: corr.assignedToId ?? undefined,
+          createdById: corr.fromUserId,
+          projectId: corr.projectId ?? undefined,
+          organizationId: corr.organizationId ?? undefined,
+          sourceType: "correspondence",
+          sourceId: corr.id,
+          dueDate: corr.dueDate ?? undefined,
+          assignedAt: new Date(),
+        });
+      }
+    } catch (taskErr: any) {
+      console.warn("[correspondence] Failed to create linked task:", taskErr?.message);
+    }
+  }
+
   const enriched = await enrichCorrespondence([corr]);
   res.status(201).json(enriched[0]);
 }
@@ -773,6 +807,22 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
     details: { recalledBy: caller.id, recalledAt: now.toISOString() },
   });
 
+  // Cancel the linked task (Task To) when correspondence is recalled
+  try {
+    const [linkedTask] = await db.select({ id: tasksTable.id })
+      .from(tasksTable)
+      .where(and(
+        eq(tasksTable.sourceType, "correspondence"),
+        eq(tasksTable.sourceId, id),
+      ))
+      .limit(1);
+    if (linkedTask) {
+      await db.update(tasksTable)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(eq(tasksTable.id, linkedTask.id));
+    }
+  } catch (_) {}
+
   // Notify all To recipients that the item was recalled
   const recipients = await db.select({ userId: correspondenceRecipientsTable.userId })
     .from(correspondenceRecipientsTable)
@@ -808,7 +858,7 @@ router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): P
 router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
-  const { subject, body, folder, status, referenceNumber } = req.body;
+  const { subject, body, folder, status, referenceNumber, taskToId } = req.body;
   const orgId = caller.organizationId;
 
   // Fetch the existing record to check ownership and project context
@@ -816,6 +866,7 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     fromUserId: correspondenceTable.fromUserId,
     projectId: correspondenceTable.projectId,
     status: correspondenceTable.status,
+    assignedToId: correspondenceTable.assignedToId,
   }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -850,18 +901,53 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     }
   }
 
+  const newAssignedToId = taskToId ? parseInt(taskToId) : undefined;
+
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
   if (subject !== undefined) updateData.subject = subject;
   if (body !== undefined) updateData.body = body;
   if (folder !== undefined) updateData.folder = folder;
   if (status !== undefined) updateData.status = status;
   if (referenceNumber !== undefined) updateData.referenceNumber = referenceNumber?.trim() || undefined;
+  if (newAssignedToId !== undefined) updateData.assignedToId = newAssignedToId;
 
   const [corr] = await db.update(correspondenceTable)
     .set(updateData)
     .where(eq(correspondenceTable.id, id))
     .returning();
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // ─── Sync linked task on status/assignedToId changes ──────────────────────
+  try {
+    const [linkedTask] = await db.select({ id: tasksTable.id, status: tasksTable.status })
+      .from(tasksTable)
+      .where(and(
+        eq(tasksTable.sourceType, "correspondence"),
+        eq(tasksTable.sourceId, id),
+      ))
+      .limit(1);
+
+    if (linkedTask) {
+      const taskUpdate: Record<string, unknown> = { updatedAt: new Date() };
+
+      // Close correspondence → complete the linked task
+      if (status === "closed" && linkedTask.status !== "completed") {
+        taskUpdate.status = "completed";
+        taskUpdate.completedAt = new Date();
+      }
+
+      // Task To changed → reassign linked task + update assignedAt
+      if (newAssignedToId !== undefined && newAssignedToId !== existing.assignedToId) {
+        taskUpdate.assignedToId = newAssignedToId;
+        taskUpdate.assignedAt = new Date();
+      }
+
+      if (Object.keys(taskUpdate).length > 1) {
+        await db.update(tasksTable).set(taskUpdate).where(eq(tasksTable.id, linkedTask.id));
+      }
+    }
+  } catch (_) {}
+
   const enriched = await enrichCorrespondence([corr]);
   res.json(enriched[0]);
 });
@@ -913,6 +999,22 @@ router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res):
   await db.update(correspondenceTable)
     .set({ status: "responded", updatedAt: new Date() })
     .where(eq(correspondenceTable.id, parentId));
+
+  // Complete the linked task when parent correspondence is responded
+  try {
+    const [linkedTask] = await db.select({ id: tasksTable.id })
+      .from(tasksTable)
+      .where(and(
+        eq(tasksTable.sourceType, "correspondence"),
+        eq(tasksTable.sourceId, parentId),
+      ))
+      .limit(1);
+    if (linkedTask) {
+      await db.update(tasksTable)
+        .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+        .where(eq(tasksTable.id, linkedTask.id));
+    }
+  } catch (_) {}
 
   const { refNum } = await resolveReferenceNumber({
     orgId,
