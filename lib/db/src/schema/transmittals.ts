@@ -40,6 +40,7 @@ export const transmittalsTable = pgTable("transmittals", {
   ccEmails: text("cc_emails"),
   direction: text("direction"),
   partyType: text("party_type"),
+  reference: text("reference"),
   reviewCode: text("review_code"),
   responseToTransmittalId: integer("response_to_transmittal_id"),
   reviewOutcome: text("review_outcome"),

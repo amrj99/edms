@@ -162,6 +162,7 @@ ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS party_type                   t
 ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS review_code                  text;
 ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS response_to_transmittal_id   integer;
 ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS review_outcome               text;
+ALTER TABLE transmittals ADD COLUMN IF NOT EXISTS "reference"                  text;
 
 -- transmittal_items
 ALTER TABLE transmittal_items ADD COLUMN IF NOT EXISTS review_code text;
