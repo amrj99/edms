@@ -89,11 +89,15 @@ interface WfTemplate {
 
 const api = {
   get: (path: string) => fetch(`/api${path}`, { credentials: "include" }).then(r => r.json()),
-  post: (path: string, body: object) => fetch(`/api${path}`, {
-    method: "POST", credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  }).then(r => r.json()),
+  post: async (path: string, body: object) => {
+    const r = await fetch(`/api${path}`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (r.status === 204) return {};
+    return r.json();
+  },
   put: (path: string, body: object) => fetch(`/api${path}`, {
     method: "PUT", credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -306,6 +310,7 @@ export default function WorkflowEnginePage() {
   const [docResults, setDocResults] = useState<Array<{ id: number; title: string; documentNumber: string; documentType: string }>>([]);
   const [docSearchLoading, setDocSearchLoading] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<{ id: number; title: string; documentNumber: string; documentType: string } | null>(null);
+  const [selectedDocPriorWorkflows, setSelectedDocPriorWorkflows] = useState<Array<{ status: string; workflowName?: string }>>([]);
   const [startTemplateId, setStartTemplateId] = useState<number | null>(null);
   const [startingWorkflow, setStartingWorkflow] = useState(false);
 
@@ -381,6 +386,27 @@ export default function WorkflowEnginePage() {
     finally { setDocSearchLoading(false); }
   }, []);
 
+  const selectDoc = useCallback(async (doc: { id: number; title: string; documentNumber: string; documentType: string }) => {
+    setSelectedDoc(doc);
+    setDocSearch("");
+    setDocResults([]);
+    setStartTemplateId(null);
+    setSelectedDocPriorWorkflows([]);
+    try {
+      const hist = await api.get(`/workflow-engine/instances/for-document/${doc.id}`);
+      setSelectedDocPriorWorkflows((hist.instances ?? []).map((i: any) => ({ status: i.status, workflowName: i.workflowName })));
+    } catch { /* non-critical — history badge is informational only */ }
+  }, []);
+
+  const closeStartDialog = useCallback(() => {
+    setShowStartDialog(false);
+    setSelectedDoc(null);
+    setSelectedDocPriorWorkflows([]);
+    setDocSearch("");
+    setDocResults([]);
+    setStartTemplateId(null);
+  }, []);
+
   // Auto-select template when doc changes
   // Exact type match first; fall back to all active templates so the user can still pick one
   const exactTemplatesForDoc = selectedDoc
@@ -398,11 +424,7 @@ export default function WorkflowEnginePage() {
       const res = await api.post("/workflow-engine/instances", { documentId: selectedDoc.id, templateId });
       if (res.error) throw new Error(res.error);
       toast({ title: "Workflow started", description: `Stage: ${res.currentStageName}` });
-      setShowStartDialog(false);
-      setSelectedDoc(null);
-      setDocSearch("");
-      setDocResults([]);
-      setStartTemplateId(null);
+      closeStartDialog();
       await load();
     } catch (e: any) {
       toast({ title: e.message ?? "Failed to start workflow", variant: "destructive" });
@@ -857,7 +879,7 @@ export default function WorkflowEnginePage() {
                         <button
                           key={doc.id}
                           className="w-full text-left px-3 py-2.5 hover:bg-muted/60 transition-colors"
-                          onClick={() => { setSelectedDoc(doc); setDocSearch(""); setDocResults([]); setStartTemplateId(null); }}
+                          onClick={() => selectDoc(doc)}
                         >
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-xs text-primary font-semibold">{doc.documentNumber}</span>
@@ -885,10 +907,32 @@ export default function WorkflowEnginePage() {
                       </div>
                       <div className="text-sm text-muted-foreground truncate mt-0.5">{selectedDoc.title}</div>
                     </div>
-                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0" onClick={() => { setSelectedDoc(null); setStartTemplateId(null); }}>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs shrink-0" onClick={() => { setSelectedDoc(null); setSelectedDocPriorWorkflows([]); setStartTemplateId(null); }}>
                       Change
                     </Button>
                   </div>
+
+                  {/* Prior workflow history notice */}
+                  {selectedDocPriorWorkflows.length > 0 && (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-medium">Prior workflow history:</span>
+                        {" "}
+                        {selectedDocPriorWorkflows.map((w, i) => (
+                          <span key={i}>
+                            {i > 0 && " · "}
+                            <span className={cn(
+                              "font-medium capitalize",
+                              w.status === "rejected" || w.status === "cancelled" ? "text-red-600 dark:text-red-400" : "text-green-700 dark:text-green-400",
+                            )}>{w.status}</span>
+                            {w.workflowName && <span className="text-muted-foreground"> ({w.workflowName})</span>}
+                          </span>
+                        ))}
+                        {". A new workflow can be started."}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Template selector */}
                   <div className="mt-3">
@@ -923,7 +967,7 @@ export default function WorkflowEnginePage() {
             </div>
 
             <DialogFooter>
-              <Button variant="outline" onClick={() => { setShowStartDialog(false); setSelectedDoc(null); setDocSearch(""); setDocResults([]); }}>
+              <Button variant="outline" onClick={closeStartDialog}>
                 Cancel
               </Button>
               <Button

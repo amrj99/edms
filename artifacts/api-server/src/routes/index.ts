@@ -18,6 +18,7 @@ import searchRouter from "./search.js";
 import auditLogsRouter from "./audit-logs.js";
 
 import transmittalsRouter from "./transmittals.js";
+import submissionChainsRouter from "./submission-chains.js";
 import notificationsRouter from "./notifications.js";
 import configRouter from "./config.js";
 import storageRouter from "./storage.js";
@@ -160,6 +161,7 @@ router.use("/projects/:projectId/correspondence", requireModule("correspondence"
 router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
 
 router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
+router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
 router.use("/projects/:projectId", projectDepartmentsRouter);
 router.use("/tasks", tasksRouter);
 router.use("/metadata-fields", metadataRouter);

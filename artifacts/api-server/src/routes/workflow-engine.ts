@@ -446,6 +446,13 @@ router.post("/templates/:id/stages", requireRole("admin", "project_manager", "sy
       if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
     }
 
+    // Non-terminal stages must have a responsible party — otherwise checkWorkflowStagePermission
+    // returns null for all callers and the stage can never be acted on (permanent deadlock).
+    if (!(isTerminal ?? false) && !responsibleRole && !responsibleUserId) {
+      res.status(400).json({ error: "Non-terminal stages must have a responsibleRole or responsibleUserId" });
+      return;
+    }
+
     // Default stageOrder to max+1
     const existing = await db.select({ stageOrder: wfTemplateStagesTable.stageOrder })
       .from(wfTemplateStagesTable).where(eq(wfTemplateStagesTable.templateId, templateId));
@@ -498,6 +505,18 @@ router.put("/templates/:id/stages/:stageId", requireRole("admin", "project_manag
       const [u] = await db.select({ id: usersTable.id }).from(usersTable)
         .where(and(eq(usersTable.id, responsibleUserId), eq(usersTable.organizationId, org))).limit(1);
       if (!u) { res.status(400).json({ error: "responsibleUserId must belong to the same organization" }); return; }
+    }
+    // Compute effective state after update and reject if it would create a deadlocked non-terminal stage
+    const [priorStage] = await db.select().from(wfTemplateStagesTable)
+      .where(and(eq(wfTemplateStagesTable.id, stageId), eq(wfTemplateStagesTable.templateId, templateId))).limit(1);
+    if (priorStage) {
+      const effIsTerminal = isTerminal !== undefined ? isTerminal : priorStage.isTerminal;
+      const effRole = responsibleRole !== undefined ? responsibleRole : priorStage.responsibleRole;
+      const effUserId = responsibleUserId !== undefined ? (responsibleUserId || null) : priorStage.responsibleUserId;
+      if (!effIsTerminal && !effRole && !effUserId) {
+        res.status(400).json({ error: "Non-terminal stages must have a responsibleRole or responsibleUserId" });
+        return;
+      }
     }
     const [stage] = await db.update(wfTemplateStagesTable)
       .set({
@@ -889,6 +908,39 @@ router.post("/instances/:id/reject", async (req, res): Promise<void> => {
   res.json(await enrichInstance(updated, req.user!, new Map()));
 });
 
+// ─── Cancel (admin/PM emergency stop — bypasses stage auth) ──────────────────
+
+router.post("/instances/:id/cancel", requireRole("admin", "project_manager", "system_owner"), async (req, res): Promise<void> => {
+  const org = orgId(req);
+  const id = requireInt(req.params.id);
+  const { comment } = req.body;
+
+  const [inst] = await db.select().from(wfInstancesTable)
+    .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org))).limit(1);
+  if (!inst) { res.status(404).json({ error: "Not found" }); return; }
+  if (inst.status !== "active") { res.status(409).json({ error: "Workflow is not active" }); return; }
+
+  const prevStageId = inst.currentStageId;
+  const [updated] = await db.update(wfInstancesTable)
+    .set({ currentStageId: null, status: "cancelled", stageDueAt: null, updatedAt: new Date() })
+    .where(eq(wfInstancesTable.id, id))
+    .returning();
+
+  await db.insert(wfInstanceTransitionsTable).values({
+    instanceId: id, fromStageId: prevStageId, toStageId: null,
+    action: "cancelled", actorId: req.user!.id, comment: comment ?? null,
+  });
+
+  await createAuditLog({ userId: req.user!.id, action: "workflow_cancelled", entityType: "wf_instance", entityId: id });
+
+  syncDocumentStatus(inst.documentId, "draft");
+  await createAuditLog({
+    userId: req.user!.id, action: "status_change", entityType: "document", entityId: inst.documentId,
+    details: { toStatus: "draft", via: "workflow_cancel", workflowInstanceId: id },
+  });
+
+  res.json(await enrichInstance(updated, req.user!, new Map()));
+});
 
 // ─── Duplicate template ───────────────────────────────────────────────────────
 

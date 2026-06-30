@@ -7,6 +7,7 @@ This folder contains architecture decision records and system boundary definitio
 | File | Description |
 |---|---|
 | `MULTI_TENANT_BOUNDARIES.md` | Tenant isolation model — organization vs project boundaries |
+| `ARCHITECTURE_DEBT_REGISTER.md` | Deferred architectural decisions and known technical debts (FUTURE/POLICY/ACCEPTED_RISK) |
 
 ## See Also
 

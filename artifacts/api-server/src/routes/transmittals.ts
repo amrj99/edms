@@ -6,8 +6,8 @@ import {
   tasksTable, projectMembersTable, notificationsTable,
   correspondenceTable,
 } from "@workspace/db";
-import { eq, and, desc, sql } from "drizzle-orm";
-import { requireAuth, requireRole, hashPassword, isSysAdmin, hashToken } from "../lib/auth.js";
+import { eq, and, or, desc, sql, inArray } from "drizzle-orm";
+import { requireAuth, requireRole, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { TransmittalPermissions, checkAssignmentBasedPermission } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -19,9 +19,25 @@ import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams}
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
+// Party-scoped transmittal predicate: sender org OR named recipient OR recipient's org.
+// system_owner bypasses the party filter and sees all transmittals in the project.
+function transmittalPartyFilter(caller: { id: number; role: string; organizationId: number | null }, projectId: number) {
+  if (isSystemOwner(caller)) return eq(transmittalsTable.projectId, projectId);
+  return and(
+    eq(transmittalsTable.projectId, projectId),
+    or(
+      eq(transmittalsTable.organizationId, caller.organizationId),
+      eq(transmittalsTable.toUserId, caller.id),
+      // Org-level receiver access: caller shares an org with the named toUserId
+      sql`EXISTS (SELECT 1 FROM users u WHERE u.id = ${transmittalsTable.toUserId} AND u.organization_id = ${caller.organizationId})`,
+    )
+  );
+}
+
 // List transmittals for a project
 router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
   const transmittals = await db
     .select({
       id: transmittalsTable.id,
@@ -63,7 +79,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
     })
     .from(transmittalsTable)
     .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
-    .where(eq(transmittalsTable.projectId, projectId))
+    .where(transmittalPartyFilter(caller, projectId))
     .orderBy(desc(transmittalsTable.createdAt));
   res.json(transmittals);
 });
@@ -72,10 +88,11 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
   const [transmittal] = await db
     .select()
     .from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    .where(and(eq(transmittalsTable.id, id), transmittalPartyFilter(caller, projectId)));
   if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
 
   const items = await db
@@ -124,7 +141,7 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
 // Create transmittal
 router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode, toUserId, reference } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
   // Generate transmittal number
@@ -150,6 +167,8 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
     externalEmails: externalEmails ?? null,
     ccEmails: ccEmails ?? null,
     organizationId: req.user!.organizationId ?? null,
+    toUserId: toUserId ?? null,
+    reference: reference ?? null,
     projectId,
     createdById: req.user!.id,
     direction: direction ?? null,
@@ -193,10 +212,16 @@ router.post("/", requireRole("admin", "project_manager", "document_controller"),
 router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
-  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode } = req.body;
+  const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode, toUserId, reference } = req.body;
 
   const [existing] = await db.select().from(transmittalsTable)
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+  if (existing.status === "acknowledged") {
+    res.status(409).json({ error: "Conflict", message: "This transmittal has been acknowledged and cannot be modified", currentStatus: existing.status });
+    return;
+  }
 
   let resolvedStatus = status;
   const reviewCodeChanged = reviewCode !== undefined && reviewCode !== existing?.reviewCode;
@@ -207,7 +232,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
   }
 
   const [transmittal] = await db.update(transmittalsTable)
-    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, externalEmails: externalEmails ?? undefined, ccEmails: ccEmails ?? undefined, status: resolvedStatus, direction, partyType, reviewCode, updatedAt: new Date() })
+    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, externalEmails: externalEmails ?? undefined, ccEmails: ccEmails ?? undefined, status: resolvedStatus, direction, partyType, reviewCode, toUserId, reference, updatedAt: new Date() })
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
     .returning();
 
@@ -256,7 +281,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
         .from(projectMembersTable)
         .where(and(eq(projectMembersTable.projectId, transmittal.projectId), eq(projectMembersTable.role, "project_manager")))
         .limit(1);
-      const autoAssignee = pm?.userId ?? req.user!.id;
+      const autoAssignee = transmittal.toUserId ?? pm?.userId ?? req.user!.id;
       const [task] = await db.insert(tasksTable).values({
         title: `Review transmittal: ${transmittal.transmittalNumber}`,
         description: transmittal.subject ?? undefined,
@@ -265,6 +290,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
         projectId: transmittal.projectId,
         createdById: req.user!.id,
         assignedToId: autoAssignee,
+        sourceId: transmittal.id,
         dueDate,
       }).returning();
       // Notify assignee if different from sender
@@ -278,6 +304,19 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
           entityType: "task",
           entityId: task.id,
           actionUrl: `/tasks`,
+        });
+      }
+      // Notify the designated recipient that a transmittal is waiting for their review
+      if (transmittal.toUserId) {
+        await db.insert(notificationsTable).values({
+          userId: transmittal.toUserId,
+          type: "transmittal_received",
+          title: "Transmittal received for review",
+          message: `${transmittal.transmittalNumber}: ${transmittal.subject ?? ""}${transmittal.dueDate ? ` — due ${transmittal.dueDate.toLocaleDateString()}` : ""}`,
+          projectId: transmittal.projectId,
+          entityType: "transmittal",
+          entityId: id,
+          actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
         });
       }
     } catch (e) {
@@ -303,6 +342,25 @@ router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Pr
     description: "Transmittal acknowledged by recipient",
     performedByName: actorName,
   });
+  if (transmittal) {
+    // Auto-close the linked review task created when the transmittal was sent
+    await db.update(tasksTable)
+      .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(tasksTable.sourceId, id), inArray(tasksTable.status, ["pending", "in_progress"])));
+    // Notify the original sender (DC) that their transmittal was acknowledged
+    if (transmittal.createdById && transmittal.createdById !== actor?.id) {
+      await db.insert(notificationsTable).values({
+        userId: transmittal.createdById,
+        type: "transmittal_acknowledged",
+        title: "Transmittal acknowledged",
+        message: `${transmittal.transmittalNumber} has been acknowledged by the recipient`,
+        projectId: transmittal.projectId,
+        entityType: "transmittal",
+        entityId: id,
+        actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
+      });
+    }
+  }
   res.json(transmittal);
 });
 
@@ -474,7 +532,28 @@ router.post("/:id/complete-review", requireAuth, async (req: Request<ProjectItem
     details: { outcome: worstCode, responseTrsNumber: responseNumber, comment: reviewComment ?? null },
   });
 
-  res.json({ reviewOutcome: worstCode, responseTrs: response });
+  // Notify the DC who created the transmittal about the review outcome
+  if (transmittal.createdById && transmittal.createdById !== actor.id) {
+    await db.insert(notificationsTable).values({
+      userId: transmittal.createdById,
+      type: "transmittal_acknowledged",
+      title: `Review completed: ${outcomeLabels[worstCode] ?? worstCode}`,
+      message: `${transmittal.transmittalNumber} reviewed — overall outcome: ${worstCode} (${outcomeLabels[worstCode] ?? worstCode})${reviewComment ? ` — ${reviewComment}` : ""}`,
+      projectId,
+      entityType: "transmittal",
+      entityId: id,
+      actionUrl: `/projects/${projectId}/transmittals/${id}`,
+    });
+  }
+
+  res.json({
+    reviewOutcome: worstCode,
+    responseTrs: response,
+    sideEffects: {
+      createdTransmittal: { id: response.id, transmittalNumber: response.transmittalNumber, reference: response.reference ?? null },
+      acknowledgmentApplied: true,
+    },
+  });
 });
 
 // Get transmittal history

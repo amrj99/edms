@@ -78,12 +78,15 @@ interface WfInstance {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
-const post = (path: string, body: object) =>
-  fetch(`/api${path}`, {
+const post = async (path: string, body: object) => {
+  const r = await fetch(`/api${path}`, {
     method: "POST", credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(r => r.json());
+  });
+  if (r.status === 204) return {};
+  return r.json();
+};
 
 // ─── Status badges ────────────────────────────────────────────────────────────
 
