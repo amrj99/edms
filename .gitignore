@@ -48,6 +48,9 @@ testem.log
 Thumbs.db
 
 .cursor/rules/nx-rules.mdc
+
+# Claude Code session data
+.claude/
 .github/instructions/nx.instructions.md
 
 # Replit

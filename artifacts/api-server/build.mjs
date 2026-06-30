@@ -88,6 +88,14 @@ async function buildAll() {
     plugins: [],
   });
 
+  // Build business scenario seed script (manual — run once per dev environment)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/scripts/seed-business-scenarios.ts")],
+    outdir: distDir,
+    plugins: [],
+  });
+
   // Build migration runner (runs during container startup before the API)
   await esbuild({
     ...sharedConfig,

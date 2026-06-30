@@ -1,0 +1,50 @@
+# docker-compose.dev.yml — Development override
+# ============================================================
+# Enables fast iteration without rebuilding the Docker image.
+#
+# (A) Full Docker dev — API runs inside a container with mounted source:
+#
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+#   Edit src/ or lib/ on the host → changes appear in the container immediately.
+#   Restart the API to rebuild and reload:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml restart api
+#
+# (B) Local native dev — API runs on your host (Windows / Linux / Mac):
+#
+#   1. Start only the database (postgres exposed on localhost:5432):
+#      docker-compose -f docker-compose.yml -f docker-compose.dev.yml up postgres
+#
+#   2. Add to your .env (or set in the shell):
+#      DATABASE_URL=postgresql://edms:edms_dev_password@localhost:5432/edms
+#
+#   3. In the api-server directory:
+#      pnpm dev
+#
+# ============================================================
+
+services:
+  postgres:
+    # Expose postgres to localhost so the API can run natively on the host.
+    # This port is NOT opened in the base docker-compose.yml (intentional: keeps
+    # postgres internal-only in production). Only open it here for local dev.
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      # Use the api-builder stage: it has devDeps (esbuild, TypeScript) and the
+      # full source tree. The production `api` stage has neither.
+      target: api-builder
+    # Override the production entrypoint with the dev entry point.
+    working_dir: /app/artifacts/api-server
+    command: node --enable-source-maps dev.mjs
+    # Mount API server source from the host so changes are visible without a full image rebuild.
+    # lib/ is intentionally NOT mounted: it contains pnpm-managed node_modules whose transitive
+    # deps live in the container's virtual store and are not accessible from the host tree.
+    # To change lib/ packages, rebuild the image: docker-compose ... build api
+    volumes:
+      - ./artifacts/api-server/src:/app/artifacts/api-server/src:ro
+    environment:
+      NODE_ENV: development
+      PORT: 8080

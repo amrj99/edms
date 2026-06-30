@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "export NODE_ENV=development && pnpm run build && node --enable-source-maps ./start.mjs",
+    "dev": "node --enable-source-maps dev.mjs",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./start.mjs",
     "start:prod": "NODE_ENV=production node --enable-source-maps ./dist/index.mjs",
     "seed": "node ./build.mjs && node --enable-source-maps ./dist/seed.mjs",
+    "seed:scenarios": "node ./build.mjs && node --enable-source-maps ./dist/seed-business-scenarios.mjs",
     "db:push": "pnpm --filter @workspace/db run push",
     "db:migrate": "pnpm --filter @workspace/db run push",
     "db:seed": "pnpm run seed",
