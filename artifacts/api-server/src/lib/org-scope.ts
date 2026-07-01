@@ -1,19 +1,37 @@
 /**
- * Organization Scoping Middleware
+ * Organization Scoping — Middleware and Query Helpers
  *
- * Enforces tenant isolation at the middleware level so individual routes
- * do not need to repeat manual org checks.
+ * Tenant isolation has two shapes. Use the right tool for each:
  *
- * Usage in routes:
- *   router.get("/", requireAuth, requireOrgScope, async (req, res) => {
- *     const orgId = req.orgId!;          // guaranteed non-null for non-sysadmin
- *     // use assertOrgMatch to guard resource access:
- *     if (!assertOrgMatch(req, res, resource.organizationId)) return;
- *   });
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │ SHAPE 1 — Scoped mutation (one DB round-trip, preferred)               │
+ * │                                                                         │
+ * │   const filter = orgScopedWhere(caller, table.id, id, table.orgId);   │
+ * │   const [row] = await db.update(table).set({…}).where(filter)          │
+ * │                  .returning();                                          │
+ * │   if (!row) { res.status(404).json(…); return; }  // not found OR      │
+ * │                                                    // cross-org (same) │
+ * │                                                                         │
+ * │   Cross-org requests see "Not Found" — indistinguishable from a        │
+ * │   missing ID, which leaks no information about other tenants.          │
+ * │                                                                         │
+ * │ SHAPE 2 — Check-after-fetch (for cross-table / no direct org column)  │
+ * │                                                                         │
+ * │   const [row] = await db.select(…).where(eq(table.id, id)).limit(1);  │
+ * │   if (!row) { res.status(404).json(…); return; }                       │
+ * │   if (!assertOrgMatch(req, res, row.organizationId)) return;           │
+ * │                                                                         │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ *
+ * SECURITY RULE: every UPDATE and DELETE on a tenant-owned table MUST use
+ * one of these two shapes. A bare `eq(table.id, id)` without an org filter
+ * is a tenant isolation violation.
  */
 
+import { and, eq, type SQL } from "drizzle-orm";
+import type { AnyColumn } from "drizzle-orm";
 import { Request, Response, NextFunction } from "express";
-import { isSysAdmin, isSystemOwner } from "./auth.js";
+import { isSystemOwner } from "./auth.js";
 import { createAuditLog } from "./audit.js";
 
 declare global {
@@ -21,11 +39,76 @@ declare global {
     interface Request {
       /** Resolved organization ID for the current request.
        *  Set for all authenticated users (including system_owner with orgOverride).
-       *  Null for system_owner with no override — they see all orgs. */
+       *  Undefined for system_owner with no override — they see all orgs. */
       orgId?: number;
     }
   }
 }
+
+// ─── Shape 1: Scoped WHERE clause ────────────────────────────────────────────
+
+/**
+ * Build a tenant-scoped WHERE clause for Drizzle UPDATE/DELETE queries.
+ *
+ * system_owner → idColumn = id               (sees all orgs)
+ * all others   → idColumn = id
+ *                AND orgColumn = caller.organizationId
+ *
+ * Returns "Not Found" for cross-org requests — safe information leakage.
+ *
+ * @param caller   - The authenticated JWT payload (req.user)
+ * @param idColumn - The primary key column (e.g. table.id)
+ * @param id       - The resource ID from the request
+ * @param orgColumn - The organization FK column (e.g. table.organizationId)
+ */
+export function orgScopedWhere(
+  caller: { role: string; organizationId?: number | null },
+  idColumn: AnyColumn,
+  id: number,
+  orgColumn: AnyColumn,
+): SQL {
+  if (isSystemOwner(caller)) return eq(idColumn, id);
+  return and(eq(idColumn, id), eq(orgColumn, caller.organizationId!)) as SQL;
+}
+
+// ─── Shape 2: Check-after-fetch ───────────────────────────────────────────────
+
+/**
+ * Assert that a fetched resource belongs to the requesting user's organization.
+ *
+ * Returns true  → caller may proceed.
+ * Returns false → 403 already written to res; caller must `return` immediately.
+ *
+ * system_owner always returns true (not org-scoped).
+ *
+ * Prefer orgScopedWhere() when the resource has a direct organizationId column
+ * and you are doing a single mutation — it avoids the extra SELECT round-trip.
+ *
+ * Use assertOrgMatch() when:
+ *   • The org is determined through a JOIN (e.g. project → org)
+ *   • You need to fetch the row regardless (e.g. to return it in the response)
+ */
+export function assertOrgMatch(
+  req: Request,
+  res: Response,
+  resourceOrgId: number | null | undefined,
+): boolean {
+  const user = req.user!;
+
+  if (isSystemOwner(user)) return true;
+
+  if (!resourceOrgId || resourceOrgId !== user.organizationId) {
+    res.status(403).json({
+      error: "Forbidden",
+      message: "Cross-organization access denied.",
+    });
+    return false;
+  }
+
+  return true;
+}
+
+// ─── Middleware ───────────────────────────────────────────────────────────────
 
 /**
  * Middleware: resolve and attach req.orgId from the authenticated user.
@@ -77,38 +160,6 @@ export function requireOrgScope(req: Request, res: Response, next: NextFunction)
   }
 
   next();
-}
-
-/**
- * Assert that a resource belongs to the requesting user's organization.
- * Returns true if the check passes (caller may proceed).
- * Returns false and writes a 403 response if the check fails (caller must return immediately).
- *
- * system_owner always passes — they are not org-scoped.
- * org admin (admin role) must still match their own organizationId.
- *
- * Example:
- *   const doc = await fetchDoc(id);
- *   if (!assertOrgMatch(req, res, doc.organizationId)) return;
- */
-export function assertOrgMatch(
-  req: Request,
-  res: Response,
-  resourceOrgId: number | null | undefined,
-): boolean {
-  const user = req.user!;
-
-  if (isSystemOwner(user)) return true;
-
-  if (!resourceOrgId || resourceOrgId !== user.organizationId) {
-    res.status(403).json({
-      error: "Forbidden",
-      message: "Cross-organization access denied.",
-    });
-    return false;
-  }
-
-  return true;
 }
 
 /**

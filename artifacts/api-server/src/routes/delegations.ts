@@ -139,8 +139,11 @@ router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
 
   if (!delegation) { res.status(404).json({ error: "Delegation not found" }); return; }
 
-  // Only the grantor, grantedBy, or an admin can revoke
-  const canRevoke = isSysAdmin(caller)
+  // Only the grantor, grantedBy, or an admin of the same org can revoke.
+  // isSysAdmin was intentionally narrowed: a system-owner bypasses all orgs,
+  // but an org-admin may only revoke delegations within their own organization.
+  const canRevoke = isSystemOwner(caller)
+    || (caller.role === "admin" && delegation.organizationId === caller.organizationId)
     || delegation.fromUserId === caller.id
     || delegation.grantedByUserId === caller.id;
   if (!canRevoke) { res.status(403).json({ error: "You do not have permission to revoke this delegation" }); return; }

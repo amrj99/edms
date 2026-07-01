@@ -15,6 +15,7 @@ import crypto from "crypto";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import type { Request, Response } from "express";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
+import { orgScopedWhere } from "../lib/org-scope.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -256,8 +257,9 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
   const id = requireInt(req.params.id);
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
-    .where(eq(transmittalsTable.id, id))
+    .where(orgScopedWhere(req.user!, transmittalsTable.id, id, transmittalsTable.organizationId))
     .returning();
+  if (!transmittal) { res.status(404).json({ error: "Not Found" }); return; }
   const actor = req.user as any;
   const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
   await db.insert(transmittalHistoryTable).values({

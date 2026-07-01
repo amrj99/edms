@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -28,7 +28,10 @@ export const meetingsTable = pgTable("meetings", {
   referenceNumber: text("reference_number"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  // B-6: search SQL fallback — WHERE organization_id = $1 AND project_id = $2
+  index("idx_meetings_org_project").on(t.organizationId, t.projectId),
+]);
 
 export const meetingAttendeesTable = pgTable("meeting_attendees", {
   id: serial("id").primaryKey(),

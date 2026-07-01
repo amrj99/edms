@@ -13,7 +13,7 @@ import {
   projectMembersTable,
 } from "@workspace/db";
 import { eq, isNull, desc, or, inArray, and } from "drizzle-orm";
-import { requireAuth, hashToken, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, hashToken, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { TenantIsolationError } from '../lib/errors.js';
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
@@ -173,8 +173,13 @@ router.patch("/correspondence/:id/move", async (req, res): Promise<void> => {
     return;
   }
 
+  const caller = req.user!;
   const items = await db.select().from(correspondenceTable)
-    .where(and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId)))
+    .where(and(
+      eq(correspondenceTable.id, id),
+      isNull(correspondenceTable.projectId),
+      isSystemOwner(caller) ? undefined : eq(correspondenceTable.organizationId, caller.organizationId!),
+    ))
     .limit(1);
 
   if (!items[0]) {
@@ -184,7 +189,10 @@ router.patch("/correspondence/:id/move", async (req, res): Promise<void> => {
 
   const [updated] = await db.update(correspondenceTable)
     .set({ projectId, updatedAt: new Date() })
-    .where(eq(correspondenceTable.id, id))
+    .where(and(
+      eq(correspondenceTable.id, id),
+      isSystemOwner(caller) ? undefined : eq(correspondenceTable.organizationId, caller.organizationId!),
+    ))
     .returning();
 
   await createAuditLog({

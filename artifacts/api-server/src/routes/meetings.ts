@@ -10,6 +10,7 @@ import { createAuditLog } from "../lib/audit.js";
 import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
+import { orgScopedWhere } from "../lib/org-scope.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -397,10 +398,12 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
 router.put("/:id/attendees/:attId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const attId = requireInt(req.params.attId);
   const { attended } = req.body;
+  const caller = req.user!;
   const [updated] = await db.update(meetingAttendeesTable)
     .set({ attended: !!attended })
-    .where(eq(meetingAttendeesTable.id, attId))
+    .where(orgScopedWhere(caller, meetingAttendeesTable.id, attId, meetingAttendeesTable.organizationId))
     .returning();
+  if (!updated) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ attendee: updated });
 });
 
@@ -473,6 +476,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
 router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const itemId = requireInt(req.params.itemId);
   const { title, assignedToId, assignedToName, dueDate, status, priority, notes } = req.body;
+  const caller = req.user!;
   const [item] = await db.update(meetingActionItemsTable).set({
     ...(title          !== undefined && { title: title.trim() }),
     ...(assignedToId   !== undefined && { assignedToId }),
@@ -482,21 +486,30 @@ router.put("/:id/action-items/:itemId", requireRole("admin", "project_manager", 
     ...(priority       !== undefined && { priority }),
     ...(notes          !== undefined && { notes }),
     updatedAt: new Date(),
-  }).where(eq(meetingActionItemsTable.id, itemId)).returning();
+  }).where(orgScopedWhere(caller, meetingActionItemsTable.id, itemId, meetingActionItemsTable.organizationId)).returning();
+  if (!item) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ actionItem: item });
 });
 
 // ─── Delete action item ────────────────────────────────────────────────────────
 router.delete("/:id/action-items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request, res: Response): Promise<void> => {
   const itemId = requireInt(req.params.itemId);
-  await db.delete(meetingActionItemsTable).where(eq(meetingActionItemsTable.id, itemId));
+  const caller = req.user!;
+  const [deleted] = await db.delete(meetingActionItemsTable)
+    .where(orgScopedWhere(caller, meetingActionItemsTable.id, itemId, meetingActionItemsTable.organizationId))
+    .returning();
+  if (!deleted) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ message: "Deleted" });
 });
 
 // ─── Delete meeting ────────────────────────────────────────────────────────────
 router.delete("/:id", requireRole("admin", "project_manager"), async (req: Request, res: Response): Promise<void> => {
   const id = requireInt(req.params.id);
-  await db.delete(meetingsTable).where(eq(meetingsTable.id, id));
+  const caller = req.user!;
+  const [deleted] = await db.delete(meetingsTable)
+    .where(orgScopedWhere(caller, meetingsTable.id, id, meetingsTable.organizationId))
+    .returning();
+  if (!deleted) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ message: "Deleted" });
 });
 

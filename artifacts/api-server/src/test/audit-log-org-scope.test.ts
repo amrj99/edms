@@ -265,4 +265,115 @@ describe("R7 Regression: audit log org-scoping", () => {
       expect(orgBEntries.length).toBe(0);
     });
   });
+
+  // ── CSV export — B-7 column projection + filter parity ──────────────────────
+
+  describe("CSV export (/export) — B-7 fixes", () => {
+
+    // Parses the CSV text into an array of objects keyed by the header row.
+    function parseCsv(text: string): Record<string, string>[] {
+      const lines = text.trim().split("\n");
+      const headers = lines[0].split(",").map(h => h.replace(/^"|"$/g, ""));
+      return lines.slice(1).map(line => {
+        const values = line.match(/"(?:[^"]|"")*"/g) ?? [];
+        return Object.fromEntries(
+          headers.map((h, i) => [h, (values[i] ?? "").replace(/^"|"$/g, "").replace(/""/g, '"')]),
+        );
+      });
+    }
+
+    it("CSV response contains exactly the 7 expected columns — no sensitive fields", async () => {
+      const org   = await createOrg();
+      const admin = await createUser({ organizationId: org.id, role: "admin" });
+
+      await seedAuditLog({ userId: admin.id, organizationId: org.id });
+
+      const token = makeToken({ id: admin.id, email: admin.email, role: "admin", organizationId: org.id });
+      const res = await api().get("/api/audit-logs/export").set({ Authorization: `Bearer ${token}` });
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/text\/csv/);
+      expect(res.headers["cache-control"]).toBe("no-store");
+
+      const rows = parseCsv(res.text);
+      expect(rows.length).toBeGreaterThan(0);
+
+      const columns = Object.keys(rows[0]);
+      expect(columns).toEqual(["ID", "Date/Time", "User", "Action", "Entity Type", "Entity Title", "Project ID"]);
+
+      // Explicitly confirm no sensitive user fields leak into the CSV
+      for (const col of columns) {
+        expect(col.toLowerCase()).not.toContain("password");
+        expect(col.toLowerCase()).not.toContain("token");
+        expect(col.toLowerCase()).not.toContain("hash");
+      }
+    });
+
+    it("CSV userId filter — returns only logs for the specified user", async () => {
+      const org    = await createOrg();
+      const admin  = await createUser({ organizationId: org.id, role: "admin" });
+      const other  = await createUser({ organizationId: org.id, role: "member" });
+
+      await seedAuditLog({ userId: admin.id, organizationId: org.id, action: "update" });
+      await seedAuditLog({ userId: other.id, organizationId: org.id, action: "create" });
+
+      const token = makeToken({ id: admin.id, email: admin.email, role: "admin", organizationId: org.id });
+      const res = await api()
+        .get(`/api/audit-logs/export?userId=${other.id}`)
+        .set({ Authorization: `Bearer ${token}` });
+
+      expect(res.status).toBe(200);
+      const rows = parseCsv(res.text);
+      // All rows must be for `other` — the admin's own log must not appear
+      for (const row of rows) {
+        expect(row["Action"]).toBe("create");
+      }
+    });
+
+    it("CSV search filter — returns only matching rows", async () => {
+      const org   = await createOrg();
+      const admin = await createUser({ organizationId: org.id, role: "admin" });
+      const db    = getTestDb();
+
+      // Two logs with different entityType values
+      await db.insert(auditLogsTable).values([
+        { userId: admin.id, organizationId: org.id, action: "update", entityType: "document",      entityId: 1, entityTitle: "Alpha Doc" },
+        { userId: admin.id, organizationId: org.id, action: "update", entityType: "correspondence", entityId: 2, entityTitle: "Beta Corr" },
+      ]);
+
+      const token = makeToken({ id: admin.id, email: admin.email, role: "admin", organizationId: org.id });
+      const res = await api()
+        .get("/api/audit-logs/export?search=document")
+        .set({ Authorization: `Bearer ${token}` });
+
+      expect(res.status).toBe(200);
+      const rows = parseCsv(res.text);
+      expect(rows.length).toBeGreaterThan(0);
+      // All returned rows must match the search term in one of the searched columns
+      for (const row of rows) {
+        const matched =
+          row["Entity Type"].toLowerCase().includes("document") ||
+          row["Action"].toLowerCase().includes("document") ||
+          row["Entity Title"].toLowerCase().includes("document");
+        expect(matched).toBe(true);
+      }
+    });
+
+    it("CSV export is org-scoped — does not include other orgs' logs", async () => {
+      const orgA   = await createOrg();
+      const orgB   = await createOrg();
+      const adminA = await createUser({ organizationId: orgA.id, role: "admin" });
+      const userB  = await createUser({ organizationId: orgB.id, role: "viewer" });
+
+      await seedAuditLog({ userId: adminA.id, organizationId: orgA.id, action: "login_success" });
+      await seedAuditLog({ userId: userB.id,  organizationId: orgB.id, action: "login_success" });
+
+      const token = makeToken({ id: adminA.id, email: adminA.email, role: "admin", organizationId: orgA.id });
+      const res = await api().get("/api/audit-logs/export").set({ Authorization: `Bearer ${token}` });
+
+      expect(res.status).toBe(200);
+      // userB's name must not appear in the CSV — it belongs to orgB
+      expect(res.text).not.toContain(userB.email);
+    });
+  });
 });

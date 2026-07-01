@@ -27,8 +27,53 @@ import { APP_URL } from "../email.js";
 import { dispatchNotification } from "./index.js";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const CONCURRENCY = 5;                   // jobs processed in parallel per chunk
 
-async function processBatch() {
+// B-4-1: pre-fetched user shape — only the columns each handler needs
+type UserRecord = { id: number; firstName: string; lastName: string; email: string };
+
+// ─── Per-job processor ────────────────────────────────────────────────────────
+//
+// Self-contained: catches its own errors and always marks sentAt — even on
+// failure — so Promise.allSettled never sees a rejection from this function.
+// "mark sent on failure" is intentional; see comment below.
+
+async function processJob(
+  job: typeof scheduledNotificationsTable.$inferSelect,
+  userMap: Map<number, UserRecord>,
+): Promise<void> {
+  try {
+    await handleJob(job, userMap);
+    await db
+      .update(scheduledNotificationsTable)
+      .set({ sentAt: new Date() })
+      .where(eq(scheduledNotificationsTable.id, job.id));
+  } catch (err: any) {
+    console.error(`[scheduler] Job ${job.id} (${job.eventKey}) failed:`, err?.message ?? err);
+    // Mark sent anyway to prevent infinite retry loops — log the error
+    await db
+      .update(scheduledNotificationsTable)
+      .set({ sentAt: new Date() })
+      .where(eq(scheduledNotificationsTable.id, job.id));
+    try {
+      await db.insert(notificationLogsTable).values({
+        eventKey: job.eventKey,
+        recipientUserId: job.targetUserId ?? undefined,
+        recipientEmail: job.targetEmail ?? undefined,
+        organizationId: job.organizationId ?? undefined,
+        entityType: job.entityType ?? undefined,
+        entityId: job.entityId ?? undefined,
+        channel: "email",
+        status: "failed",
+        errorMessage: err?.message,
+      });
+    } catch (_) {}
+  }
+}
+
+// ─── Batch processor (exported for integration tests) ─────────────────────────
+
+export async function processBatch(): Promise<void> {
   const now = new Date();
 
   const pending = await db
@@ -47,44 +92,45 @@ async function processBatch() {
 
   console.info(`[scheduler] Processing ${pending.length} scheduled notification(s)`);
 
-  for (const job of pending) {
-    try {
-      await handleJob(job);
-      await db
-        .update(scheduledNotificationsTable)
-        .set({ sentAt: new Date() })
-        .where(eq(scheduledNotificationsTable.id, job.id));
-    } catch (err: any) {
-      console.error(`[scheduler] Job ${job.id} (${job.eventKey}) failed:`, err?.message ?? err);
-      // Mark sent anyway to prevent infinite retry loops — log the error
-      await db
-        .update(scheduledNotificationsTable)
-        .set({ sentAt: new Date() })
-        .where(eq(scheduledNotificationsTable.id, job.id));
-      try {
-        await db.insert(notificationLogsTable).values({
-          eventKey: job.eventKey,
-          recipientUserId: job.targetUserId ?? undefined,
-          recipientEmail: job.targetEmail ?? undefined,
-          organizationId: job.organizationId ?? undefined,
-          entityType: job.entityType ?? undefined,
-          entityId: job.entityId ?? undefined,
-          channel: "email",
-          status: "failed",
-          errorMessage: err?.message,
-        });
-      } catch (_) {}
-    }
+  // B-4-1: Batch user lookup — one query for all unique targetUserIds in the batch
+  // instead of one SELECT per job inside handleJob.
+  const userIds = [
+    ...new Set(pending.map(j => j.targetUserId).filter((id): id is number => id != null)),
+  ];
+  const users = userIds.length > 0
+    ? await db
+        .select({
+          id: usersTable.id,
+          firstName: usersTable.firstName,
+          lastName: usersTable.lastName,
+          email: usersTable.email,
+        })
+        .from(usersTable)
+        .where(inArray(usersTable.id, userIds))
+    : [];
+  const userMap = new Map<number, UserRecord>(users.map(u => [u.id, u]));
+
+  // B-4-2: Process in parallel chunks — Promise.allSettled ensures one job failure
+  // does not abort the remaining jobs in the same chunk.
+  for (let i = 0; i < pending.length; i += CONCURRENCY) {
+    const chunk = pending.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(chunk.map(job => processJob(job, userMap)));
   }
 }
 
-async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
+// ─── Event handlers ───────────────────────────────────────────────────────────
+
+async function handleJob(
+  job: typeof scheduledNotificationsTable.$inferSelect,
+  userMap: Map<number, UserRecord>,
+): Promise<void> {
   const meta = (job.metadata ?? {}) as Record<string, unknown>;
+
+  // B-4-1: resolve user from pre-fetched map — no per-job DB query
+  const user = job.targetUserId != null ? userMap.get(job.targetUserId) : undefined;
 
   switch (job.eventKey) {
     case "governance.delegation_expiry": {
-      if (!job.targetUserId) return;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
       if (!user) return;
       await dispatchNotification({
         event: "governance.delegation_expiry",
@@ -105,8 +151,6 @@ async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
     }
 
     case "sla.due_soon": {
-      if (!job.targetUserId) return;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
       if (!user) return;
       await dispatchNotification({
         event: "sla.due_soon",
@@ -127,8 +171,6 @@ async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
     }
 
     case "sla.breached": {
-      if (!job.targetUserId) return;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
       if (!user) return;
       await dispatchNotification({
         event: "sla.breached",
@@ -149,8 +191,6 @@ async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
     }
 
     case "correspondence.unread_reminder": {
-      if (!job.targetUserId) return;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
       if (!user) return;
       await dispatchNotification({
         event: "correspondence.unread_reminder",
@@ -171,8 +211,6 @@ async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
     }
 
     case "correspondence.no_response": {
-      if (!job.targetUserId) return;
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, job.targetUserId)).limit(1);
       if (!user) return;
       await dispatchNotification({
         event: "correspondence.no_response",
@@ -197,6 +235,8 @@ async function handleJob(job: typeof scheduledNotificationsTable.$inferSelect) {
   }
 }
 
+// ─── Scheduler lifecycle ──────────────────────────────────────────────────────
+
 let _started = false;
 
 export function startNotificationScheduler() {
@@ -213,6 +253,8 @@ export function startNotificationScheduler() {
     processBatch().catch(err => console.error("[scheduler] Batch failed:", err));
   }, POLL_INTERVAL_MS);
 }
+
+// ─── Public helpers ───────────────────────────────────────────────────────────
 
 /**
  * scheduleNotification — helper to create a scheduled notification job.

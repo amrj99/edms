@@ -231,13 +231,19 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
 });
 
 // ─── CSV export (legacy) ──────────────────────────────────────────────────────
+//
+// limit(5000) is intentional: protects Node.js heap from unbounded IN-memory
+// accumulation. Streaming or an async export-job can be added when a real need
+// is confirmed on production data; until then the hard cap is the right trade-off.
 
 router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res): Promise<void> => {
   const projectId  = qstr(req.query.projectId);
   const entityType = qstr(req.query.entityType);
   const action     = qstr(req.query.action);
+  const userId     = qstr(req.query.userId);
   const dateFrom   = qstr(req.query.dateFrom);
   const dateTo     = qstr(req.query.dateTo);
+  const search     = qstr(req.query.search);
 
   const conditions: SQL<unknown>[] = [];
 
@@ -252,18 +258,29 @@ router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res)
   if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
   if (entityType && entityType !== "_all" && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType));
   if (action     && action     !== "_all" && action     !== "all") conditions.push(eq(auditLogsTable.action,     action));
+  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId, parseInt(userId)));
   if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
   if (dateTo) {
     const d = new Date(dateTo);
     d.setHours(23, 59, 59, 999);
     conditions.push(lte(auditLogsTable.createdAt, d));
   }
+  if (search) {
+    const q = `%${search}%`;
+    conditions.push(
+      or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
+    );
+  }
 
   const where = buildWhere(conditions);
 
   const logs = await db.select({
     log: auditLogsTable,
-    user: usersTable,
+    user: {
+      firstName: usersTable.firstName,
+      lastName:  usersTable.lastName,
+      email:     usersTable.email,
+    },
   }).from(auditLogsTable)
     .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
     .where(where)
@@ -287,6 +304,7 @@ router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res)
 
   res.setHeader("Content-Type", "text/csv");
   res.setHeader("Content-Disposition", `attachment; filename="audit-log-${new Date().toISOString().split("T")[0]}.csv"`);
+  res.setHeader("Cache-Control", "no-store");
   res.send(csv);
 });
 

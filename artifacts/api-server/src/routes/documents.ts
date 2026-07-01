@@ -5,8 +5,9 @@ import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTabl
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { isExpiredPlan } from "../lib/plan-normalizer.js";
-import { eq, and, count, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, or, count, asc, desc, sql, inArray, ilike, type SQL } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
+import { orgScopedWhere } from "../lib/org-scope.js";
 import { checkStatusTransition } from "../lib/doc-status-machine.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
@@ -64,7 +65,16 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
     return;
   }
-  const folders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, projectId));
+  const folders = await db.select({
+    id: foldersTable.id,
+    name: foldersTable.name,
+    projectId: foldersTable.projectId,
+    organizationId: foldersTable.organizationId,
+    parentId: foldersTable.parentId,
+    createdAt: foldersTable.createdAt,
+  }).from(foldersTable)
+    .where(eq(foldersTable.projectId, projectId))
+    .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
   const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
     .from(documentsTable)
     .where(eq(documentsTable.projectId, projectId))
@@ -75,6 +85,12 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
 
 router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
   const { name, parentId } = req.body;
   if (!name?.trim()) { res.status(400).json({ error: "name is required" }); return; }
   const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
@@ -84,6 +100,12 @@ router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): P
 router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const folderId = requireInt(req.params.folderId);
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
   const { name, parentId } = req.body;
   const update: Record<string, any> = {};
   if (name !== undefined) update.name = name.trim();
@@ -100,6 +122,12 @@ router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>
 router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const folderId = requireInt(req.params.folderId);
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
   const [folder] = await db.select().from(foldersTable)
     .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
   if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
@@ -126,7 +154,11 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
   if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
     res.status(403).json({ error: "Source project not in same organization" }); return;
   }
-  const sourceFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
+  const sourceFolders = await db.select({
+    id: foldersTable.id,
+    name: foldersTable.name,
+    parentId: foldersTable.parentId,
+  }).from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
   // Insert in two passes: roots first, then children (BFS)
   const idMap = new Map<number, number>();
   const roots = sourceFolders.filter(f => !f.parentId);
@@ -150,7 +182,16 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
     }
     remaining = next;
   }
-  const newFolders = await db.select().from(foldersTable).where(eq(foldersTable.projectId, projectId));
+  const newFolders = await db.select({
+    id: foldersTable.id,
+    name: foldersTable.name,
+    projectId: foldersTable.projectId,
+    organizationId: foldersTable.organizationId,
+    parentId: foldersTable.parentId,
+    createdAt: foldersTable.createdAt,
+  }).from(foldersTable)
+    .where(eq(foldersTable.projectId, projectId))
+    .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
   res.json({ folders: newFolders, copiedCount: idMap.size });
 });
 
@@ -166,6 +207,44 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
 
+  // ── Build SQL WHERE clause from all filter parameters ──────────────────────
+  // All filtering is done in SQL (not JS memory) so Postgres can use indexes and
+  // avoid loading the full document list into the Node.js process.
+  const conditions: SQL[] = [eq(documentsTable.projectId, projectId)];
+
+  if (discipline)   conditions.push(eq(documentsTable.discipline, discipline as string));
+  if (documentType) conditions.push(eq(documentsTable.documentType, documentType as string));
+  if (status)       conditions.push(eq(documentsTable.status, status as string));
+  if (folderId)     conditions.push(eq(documentsTable.folderId, parseInt(folderId as string)));
+  if (source)       conditions.push(eq(documentsTable.source, source as string));
+  if (direction && (direction === "incoming" || direction === "outgoing")) {
+    conditions.push(eq(documentsTable.direction, direction as string));
+  }
+  if (issuedBy) {
+    conditions.push(ilike(documentsTable.issuedBy, `%${issuedBy}%`));
+  }
+  if (search) {
+    const q = `%${search}%`;
+    conditions.push(or(
+      ilike(documentsTable.title,          q),
+      ilike(documentsTable.documentNumber, q),
+      ilike(documentsTable.discipline,     q),
+      ilike(documentsTable.revision,       q),
+      ilike(documentsTable.documentType,   q),
+      ilike(documentsTable.source,         q),
+      ilike(documentsTable.issuedBy,       q),
+    ) as SQL);
+  }
+
+  const where = and(...conditions) as SQL;
+
+  // ── Query 1: total count (SQL) ─────────────────────────────────────────────
+  const [{ totalCount }] = await db
+    .select({ totalCount: count() })
+    .from(documentsTable)
+    .where(where);
+
+  // ── Query 2: paginated page data (SQL LIMIT/OFFSET) ────────────────────────
   const docs = await db.select({
     doc: documentsTable,
     createdBy: usersTable,
@@ -173,66 +252,51 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   }).from(documentsTable)
     .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
     .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .where(eq(documentsTable.projectId, projectId))
-    .orderBy(desc(documentsTable.updatedAt));
+    .where(where)
+    .orderBy(desc(documentsTable.updatedAt))
+    .limit(lim)
+    .offset((pg - 1) * lim);
 
-  let filtered = docs;
-  if (discipline) filtered = filtered.filter(d => d.doc.discipline === discipline);
-  if (documentType) filtered = filtered.filter(d => d.doc.documentType === documentType);
-  if (status) filtered = filtered.filter(d => d.doc.status === status);
-  if (folderId) filtered = filtered.filter(d => d.doc.folderId === parseInt(folderId as string));
-  if (source) filtered = filtered.filter(d => d.doc.source === source);
-  if (direction && (direction === "incoming" || direction === "outgoing")) filtered = filtered.filter(d => d.doc.direction === direction);
-  if (issuedBy) {
-    const ib = (issuedBy as string).toLowerCase();
-    filtered = filtered.filter(d => d.doc.issuedBy?.toLowerCase().includes(ib));
-  }
-  if (search) {
-    const q = (search as string).toLowerCase();
-    filtered = filtered.filter(d =>
-      d.doc.title?.toLowerCase().includes(q) ||
-      d.doc.documentNumber?.toLowerCase().includes(q) ||
-      d.doc.discipline?.toLowerCase().includes(q) ||
-      d.doc.revision?.toLowerCase().includes(q) ||
-      d.doc.documentType?.toLowerCase().includes(q) ||
-      d.doc.source?.toLowerCase().includes(q) ||
-      d.doc.issuedBy?.toLowerCase().includes(q)
-    );
-  }
-
-  // Department enforcement gate — must run on ALL filtered docs before pagination so that
-  // total counts are correct after denied documents are removed.
-  // When PHASE_D_ENFORCE_DEPT=false (default): fires shadow logging async, returns no denials.
-  // When PHASE_D_ENFORCE_DEPT=true: awaits batch evaluation, returns denied doc IDs to filter.
+  // ── Department enforcement gate ────────────────────────────────────────────
+  // PHASE_D_ENFORCE_DEPT=false (current default): resolveListAndEnforce fires
+  // shadow logging asynchronously and returns an empty deniedDocIds — zero
+  // impact on response shape or latency.
+  //
+  // NOTE: if PHASE_D_ENFORCE_DEPT=true is ever enabled, the `total` returned
+  // here will NOT account for denied documents on OTHER pages — only the current
+  // page is evaluated. Accurate total-after-enforcement requires a separate
+  // refactor: (1) fetch all matching doc IDs in a lightweight ID-only query,
+  // (2) run enforcement on the full ID set, (3) subtract denied IDs from total,
+  // (4) re-paginate. Do NOT enable enforcement without that refactor.
   const { deniedDocIds } = await resolveListAndEnforce({
     userId:    caller.id,
     userRole:  caller.role,
-    documents: filtered.map(({ doc }) => ({
+    documents: docs.map(({ doc }) => ({
       id:             doc.id,
       projectId:      doc.projectId,
       isConfidential: doc.isConfidential ?? false,
     })),
     endpoint: "GET /api/projects/:projectId/documents",
   });
-  if (deniedDocIds.size > 0) {
-    filtered = filtered.filter(d => !deniedDocIds.has(d.doc.id));
-  }
 
-  const totalCount = filtered.length;
-  const totalPages = Math.ceil(totalCount / lim);
-  const paginated = filtered.slice((pg - 1) * lim, pg * lim);
+  const pageDocs = deniedDocIds.size > 0
+    ? docs.filter(d => !deniedDocIds.has(d.doc.id))
+    : docs;
+
+  const total      = Number(totalCount);
+  const totalPages = Math.ceil(total / lim);
 
   res.json({
-    documents: paginated.map(({ doc, createdBy, folder }) => ({
+    documents: pageDocs.map(({ doc, createdBy, folder }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName: folder?.name,
     })),
-    total: totalCount,
-    page: pg,
+    total,
+    page:       pg,
     totalPages,
-    limit: lim,
-    hasMore: pg < totalPages,
+    limit:      lim,
+    hasMore:    pg < totalPages,
   });
 });
 
@@ -1055,13 +1119,14 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
 router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
+  const caller = req.user!;
   const { reviewerIds, comment } = req.body;
 
-  // Update document status
   const [doc] = await db.update(documentsTable)
     .set({ status: "under_review", updatedAt: new Date() })
-    .where(eq(documentsTable.id, id))
+    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
     .returning();
+  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Create review tasks for each assigned reviewer
   if (reviewerIds?.length > 0) {
@@ -1391,9 +1456,16 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
   const fileId = requireInt(req.params.fileId);
+  const caller = req.user!;
 
+  // Tenant isolation: verify caller's org owns the document before allowing file deletion.
+  // documentFilesTable has no organizationId so the guard sits on the parent document.
   const [doc] = await db.select().from(documentsTable)
-    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+    .where(and(
+      eq(documentsTable.id, docId),
+      eq(documentsTable.projectId, projectId),
+      isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!),
+    ));
   if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
   const [file] = await db.select().from(documentFilesTable)
@@ -1443,7 +1515,7 @@ router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, re
 
   const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
     .from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
     .limit(1);
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -1453,7 +1525,7 @@ router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, re
 
   const [updated] = await db.update(documentsTable)
     .set({ status: "archived", updatedAt: new Date() })
-    .where(eq(documentsTable.id, id))
+    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
     .returning();
 
   await createAuditLog({
@@ -1485,7 +1557,7 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
 
   const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
     .from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
     .limit(1);
   if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -1495,7 +1567,7 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
 
   const [updated] = await db.update(documentsTable)
     .set({ status: "obsolete", updatedAt: new Date() })
-    .where(eq(documentsTable.id, id))
+    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
     .returning();
 
   await createAuditLog({

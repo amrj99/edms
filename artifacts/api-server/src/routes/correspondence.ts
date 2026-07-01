@@ -12,8 +12,9 @@ import {
   notificationsTable,
   tasksTable,
 } from "@workspace/db";
-import { eq, and, or, asc, desc, inArray, isNull, sql } from "drizzle-orm";
+import { eq, and, or, asc, desc, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
+import { orgScopedWhere } from "../lib/org-scope.js";
 import { hasMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
@@ -40,7 +41,9 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
   const recipients = await db.select({
     corrId: correspondenceRecipientsTable.correspondenceId,
     userId: correspondenceRecipientsTable.userId,
-    user: usersTable,
+    firstName: usersTable.firstName,
+    lastName: usersTable.lastName,
+    email: usersTable.email,
   }).from(correspondenceRecipientsTable)
     .leftJoin(usersTable, eq(correspondenceRecipientsTable.userId, usersTable.id))
     .where(inArray(correspondenceRecipientsTable.correspondenceId, itemIds));
@@ -48,17 +51,31 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
   const ccRows = await db.select({
     corrId: correspondenceCcTable.correspondenceId,
     userId: correspondenceCcTable.userId,
-    user: usersTable,
+    firstName: usersTable.firstName,
+    lastName: usersTable.lastName,
+    email: usersTable.email,
   }).from(correspondenceCcTable)
     .leftJoin(usersTable, eq(correspondenceCcTable.userId, usersTable.id))
     .where(inArray(correspondenceCcTable.correspondenceId, itemIds));
 
-  const attachments = await db.select().from(correspondenceAttachmentsTable)
+  const attachments = await db.select({
+    id: correspondenceAttachmentsTable.id,
+    correspondenceId: correspondenceAttachmentsTable.correspondenceId,
+    fileName: correspondenceAttachmentsTable.fileName,
+    fileUrl: correspondenceAttachmentsTable.fileUrl,
+    fileSize: correspondenceAttachmentsTable.fileSize,
+    uploadedAt: correspondenceAttachmentsTable.uploadedAt,
+  }).from(correspondenceAttachmentsTable)
     .where(inArray(correspondenceAttachmentsTable.correspondenceId, itemIds));
 
   const fromUserIds = [...new Set(items.map(i => i.fromUserId))];
   const fromUsers = fromUserIds.length > 0
-    ? await db.select().from(usersTable).where(inArray(usersTable.id, fromUserIds))
+    ? await db.select({
+        id: usersTable.id,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        email: usersTable.email,
+      }).from(usersTable).where(inArray(usersTable.id, fromUserIds))
     : [];
   const fromUserMap = new Map(fromUsers.map(u => [u.id, u]));
 
@@ -67,9 +84,9 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
     if (!recipientMap.has(r.corrId)) recipientMap.set(r.corrId, { ids: [], names: [], emails: [] });
     const entry = recipientMap.get(r.corrId)!;
     entry.ids.push(r.userId);
-    if (r.user) {
-      entry.names.push(`${r.user.firstName} ${r.user.lastName}`);
-      entry.emails.push(r.user.email);
+    if (r.firstName) {
+      entry.names.push(`${r.firstName} ${r.lastName}`);
+      entry.emails.push(r.email!);
     }
   }
 
@@ -78,9 +95,9 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
     if (!ccMap.has(r.corrId)) ccMap.set(r.corrId, { ids: [], names: [], emails: [] });
     const entry = ccMap.get(r.corrId)!;
     entry.ids.push(r.userId);
-    if (r.user) {
-      entry.names.push(`${r.user.firstName} ${r.user.lastName}`);
-      entry.emails.push(r.user.email);
+    if (r.firstName) {
+      entry.names.push(`${r.firstName} ${r.lastName}`);
+      entry.emails.push(r.email!);
     }
   }
 
@@ -638,16 +655,19 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
         )
       );
 
+  // Build SQL conditions for optional query-param filters (B-3-2)
+  const extraConds: SQL[] = [];
+  if (folder) extraConds.push(eq(correspondenceTable.folder, folder as string));
+  if (type)   extraConds.push(eq(correspondenceTable.type, type as string));
+  if (scope)  extraConds.push(eq(correspondenceTable.scope, scope as string));
+
   if (wantsViewAll) {
     // Return all correspondence in scope:
     //   admin+  → automatic (org-level authority)
     //   PM/DC   → opt-in via viewAll=true query param
-    let allItems = await db.select().from(correspondenceTable)
-      .where(baseFilter)
+    const allItems = await db.select().from(correspondenceTable)
+      .where(extraConds.length > 0 ? and(baseFilter, ...extraConds) : baseFilter)
       .orderBy(desc(correspondenceTable.updatedAt));
-    if (folder) allItems = allItems.filter(i => i.folder === folder);
-    if (type) allItems = allItems.filter(i => i.type === type as string);
-    if (scope) allItems = allItems.filter(i => i.scope === scope as string);
     const enriched = await enrichCorrespondence(allItems);
     res.json({
       items: enriched,
@@ -659,8 +679,11 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   }
 
   // Default mail-model: only show correspondence where caller is sender, To, or CC
+  const sentWhere = extraConds.length > 0
+    ? and(baseFilter, eq(correspondenceTable.fromUserId, userId), ...extraConds)
+    : and(baseFilter, eq(correspondenceTable.fromUserId, userId));
   const sent = await db.select().from(correspondenceTable)
-    .where(and(baseFilter, eq(correspondenceTable.fromUserId, userId)))
+    .where(sentWhere)
     .orderBy(desc(correspondenceTable.updatedAt));
 
   const receivedRels = await db.select({ corrId: correspondenceRecipientsTable.correspondenceId })
@@ -680,8 +703,11 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   if (involvedIds.size > 0) {
     // Query by IDs directly (not baseFilter) so cross-org received correspondence
     // is visible to named recipients regardless of organizationId.
+    const receivedWhere = extraConds.length > 0
+      ? and(inArray(correspondenceTable.id, [...involvedIds]), ...extraConds)
+      : inArray(correspondenceTable.id, [...involvedIds]);
     received = await db.select().from(correspondenceTable)
-      .where(inArray(correspondenceTable.id, [...involvedIds]))
+      .where(receivedWhere)
       .orderBy(desc(correspondenceTable.updatedAt));
     received = received.filter(c => c.fromUserId !== userId);
   }
@@ -689,10 +715,6 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   let allItems = [...sent, ...received];
   const seen = new Set<number>();
   allItems = allItems.filter(item => { if (seen.has(item.id)) return false; seen.add(item.id); return true; });
-
-  if (folder) allItems = allItems.filter(i => i.folder === folder);
-  if (type) allItems = allItems.filter(i => i.type === type);
-  if (scope) allItems = allItems.filter(i => i.scope === scope);
 
   const enriched = await enrichCorrespondence(allItems);
   res.json({ items: enriched, total: enriched.length, viewAll: false });
@@ -859,10 +881,11 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
 
 router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const caller = req.user!;
   const { isRead } = req.body;
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
-    .where(eq(correspondenceTable.id, id))
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
     .returning();
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ id: corr.id, isRead: corr.isRead });
@@ -989,8 +1012,24 @@ router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res):
 
   if (!parent[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
+  // Tenant isolation: same-org callers reply freely; cross-org callers must be
+  // an explicit recipient of the parent correspondence (e.g. external contractor
+  // replying to a sent item). system_owner bypasses.
+  if (!isSystemOwner(caller) && parent[0].organizationId !== caller.organizationId) {
+    const [recipientRow] = await db
+      .select({ userId: correspondenceRecipientsTable.userId })
+      .from(correspondenceRecipientsTable)
+      .where(and(
+        eq(correspondenceRecipientsTable.correspondenceId, parentId),
+        eq(correspondenceRecipientsTable.userId, caller.id!),
+      ))
+      .limit(1);
+    if (!recipientRow) {
+      res.status(403).json({ error: "Forbidden", message: "You are not a recipient of this correspondence." }); return;
+    }
+  }
+
   // Derive org: caller's org first, then inherit from parent correspondence (system_owner case).
-  // Org equality with parent is NOT required — cross-org recipients can reply.
   const orgId: number | null = caller.organizationId ?? parent[0]?.organizationId ?? null;
   if (!orgId) {
     res.status(400).json({
@@ -1078,7 +1117,24 @@ router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>,
 });
 
 router.delete("/:id/attachments/:attId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+  const id = requireInt(req.params.id);
   const attId = requireInt(req.params.attId);
+  const caller = req.user!;
+  // Tenant isolation: verify the attachment belongs to a correspondence in caller's org.
+  // correspondence_attachments has no RLS — app-level check is the only guard.
+  const [att] = await db
+    .select({ orgId: correspondenceTable.organizationId })
+    .from(correspondenceAttachmentsTable)
+    .innerJoin(correspondenceTable, eq(correspondenceAttachmentsTable.correspondenceId, correspondenceTable.id))
+    .where(and(
+      eq(correspondenceAttachmentsTable.id, attId),
+      eq(correspondenceAttachmentsTable.correspondenceId, id),
+    ))
+    .limit(1);
+  if (!att) { res.status(404).json({ error: "Not Found" }); return; }
+  if (!isSystemOwner(caller) && att.orgId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "Cross-organization access denied." }); return;
+  }
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
   res.json({ success: true });
 });
@@ -1170,9 +1226,12 @@ router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res):
 
 router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  await db.update(correspondenceTable)
+  const caller = req.user!;
+  const result = await db.update(correspondenceTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(eq(correspondenceTable.id, id));
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
+    .returning({ id: correspondenceTable.id });
+  if (result.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
 

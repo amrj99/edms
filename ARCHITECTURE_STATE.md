@@ -247,6 +247,8 @@ docker compose build \
 | TD-06 | No test suite for billing restrictions | High | Medium |
 | TD-07 | No test suite for RLS policies | High | Medium |
 | TD-08 | Obsolete `version:` field in `docker-compose.yml` | Low | Low |
+| AD-02 | **Correspondence: GET /:id does not return thread replies** — `correspondenceTable.parentId` links replies to parent, but `enrichCorrespondence` does not load children. If a "Threaded Correspondence View" is needed in the future it must be designed as an explicit feature (UX review + API change: adds `replies` array to the response shape) rather than a silent enrichment change. The current design is intentional — replies are visible as standalone items in the list. Decided: 2026-07-01 during Sprint B-3 performance review. |
+| AD-01 | **Chat: Cross-org collaboration not supported by current model** — `chatGroupsTable.organizationId NOT NULL` means every group belongs to exactly one org. If a future requirement involves communication between Client / Consultant / Subcontractor on the same project, this must be implemented as a **separate module with its own Authorization Model** (e.g. Project Chat Room scoped to `projectId` without org isolation), NOT as a modification to the internal Chat. Mixing the two models in one table or one permission layer will break the existing intra-org isolation. Decided: 2026-07-01 during Sprint A-final security review. | Low | Architectural |
 | TD-09 | `DEFAULT_STORAGE_TYPE=onpremise` while R2 is configured | Medium | Medium |
 | TD-10 | `0009_audit_immutable` + `0010_audit_schema` missing from journal | High | ✅ **Done** — added to `_journal.json` idx 10 & 11 |
 

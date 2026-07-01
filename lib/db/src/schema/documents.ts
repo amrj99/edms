@@ -26,7 +26,9 @@ export const foldersTable = pgTable("folders", {
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   parentId: integer("parent_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  index("idx_folders_project_id").on(t.projectId),
+]);
 
 export const documentsTable = pgTable("documents", {
   id: serial("id").primaryKey(),

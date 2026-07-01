@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, integer, pgEnum, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, integer, pgEnum, boolean, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -76,19 +76,32 @@ export const correspondenceTable = pgTable("correspondence", {
   sharePasswordHash: text("share_password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [
+  // I-03: main list query — WHERE organization_id + project_id ORDER BY updated_at DESC
+  index("idx_correspondence_org_project_updated").on(t.organizationId, t.projectId, t.updatedAt),
+]);
 
 export const correspondenceRecipientsTable = pgTable("correspondence_recipients", {
   id: serial("id").primaryKey(),
   correspondenceId: integer("correspondence_id").references(() => correspondenceTable.id).notNull(),
   userId: integer("user_id").references(() => usersTable.id).notNull(),
-});
+}, (t) => [
+  // I-04: enrichCorrespondence batch lookup — WHERE correspondence_id IN (...)
+  index("idx_corr_recipients_corr_id").on(t.correspondenceId),
+  // I-05: mail-model received lookup — WHERE user_id = $userId
+  index("idx_corr_recipients_user_id").on(t.userId),
+]);
 
 export const correspondenceCcTable = pgTable("correspondence_cc", {
   id: serial("id").primaryKey(),
   correspondenceId: integer("correspondence_id").references(() => correspondenceTable.id).notNull(),
   userId: integer("user_id").references(() => usersTable.id).notNull(),
-});
+}, (t) => [
+  // I-06: enrichCorrespondence batch lookup — WHERE correspondence_id IN (...)
+  index("idx_corr_cc_corr_id").on(t.correspondenceId),
+  // I-07: mail-model CC lookup — WHERE user_id = $userId
+  index("idx_corr_cc_user_id").on(t.userId),
+]);
 
 export const correspondenceAttachmentsTable = pgTable("correspondence_attachments", {
   id: serial("id").primaryKey(),
@@ -97,7 +110,10 @@ export const correspondenceAttachmentsTable = pgTable("correspondence_attachment
   fileUrl: text("file_url").notNull(),
   fileSize: integer("file_size"),
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
-});
+}, (t) => [
+  // I-08: enrichCorrespondence batch lookup — WHERE correspondence_id IN (...)
+  index("idx_corr_attachments_corr_id").on(t.correspondenceId),
+]);
 
 // ─── Correspondence numbering sequences ───────────────────────────────────────
 export const correspondenceSequencesTable = pgTable(

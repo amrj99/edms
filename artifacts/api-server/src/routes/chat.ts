@@ -11,9 +11,10 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, inArray, sql, desc, gt, or, ilike, isNull, ne } from "drizzle-orm";
-import { requireAuth, requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole, isSystemOwner } from "../lib/auth.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
+import { orgScopedWhere } from "../lib/org-scope.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -210,11 +211,17 @@ router.get("/groups/:id", async (req, res): Promise<void> => {
 // ─── PUT /api/chat/groups/:id ──────────────────────────────────────────────────
 router.put("/groups/:id", async (req, res): Promise<void> => {
   const userId = req.user!.id;
+  const caller = req.user!;
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const role = req.user!.role;
-  const canEdit = (await isGroupAdmin(groupId, userId)) || role === "admin" || role === "system_owner";
+  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  if (!group) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const canEdit = (await isGroupAdmin(groupId, userId))
+    || isSystemOwner(caller)
+    || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canEdit) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
   const { name, description, isArchived } = req.body;
@@ -223,21 +230,31 @@ router.put("/groups/:id", async (req, res): Promise<void> => {
   if (description !== undefined) updates.description = description;
   if (isArchived !== undefined) updates.isArchived = isArchived;
 
-  const [updated] = await db.update(chatGroupsTable).set(updates).where(eq(chatGroupsTable.id, groupId)).returning();
+  const [updated] = await db.update(chatGroupsTable)
+    .set(updates)
+    .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId))
+    .returning();
   res.json({ group: updated });
 });
 
 // ─── DELETE /api/chat/groups/:id ───────────────────────────────────────────────
 router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manager", "document_controller"), async (req, res): Promise<void> => {
   const userId = req.user!.id;
+  const caller = req.user!;
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const role = req.user!.role;
-  const canDelete = (await isGroupAdmin(groupId, userId)) || role === "admin" || role === "system_owner";
+  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  if (!group) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const canDelete = (await isGroupAdmin(groupId, userId))
+    || isSystemOwner(caller)
+    || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canDelete) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
-  await db.delete(chatGroupsTable).where(eq(chatGroupsTable.id, groupId));
+  await db.delete(chatGroupsTable)
+    .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId));
   await createAuditLog({ userId, action: "delete", entityType: "chat_group", entityId: groupId, details: {} });
   res.json({ success: true });
 });
@@ -270,11 +287,17 @@ router.get("/groups/:id/members", async (req, res): Promise<void> => {
 // ─── POST /api/chat/groups/:id/members ────────────────────────────────────────
 router.post("/groups/:id/members", async (req, res): Promise<void> => {
   const userId = req.user!.id;
+  const caller = req.user!;
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const role = req.user!.role;
-  const canManage = (await isGroupAdmin(groupId, userId)) || role === "admin" || role === "system_owner";
+  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  if (!group) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const canManage = (await isGroupAdmin(groupId, userId))
+    || isSystemOwner(caller)
+    || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canManage) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
   const { userIds } = req.body;
@@ -300,14 +323,22 @@ router.post("/groups/:id/members", async (req, res): Promise<void> => {
 // ─── DELETE /api/chat/groups/:id/members/:userId ───────────────────────────────
 router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> => {
   const currentUserId = req.user!.id;
+  const caller = req.user!;
   const groupId = requireInt(req.params.id);
   const targetUserId = requireInt(req.params.memberId);
 
-  const role = req.user!.role;
-  const canManage = currentUserId === targetUserId || (await isGroupAdmin(groupId, currentUserId)) || role === "admin" || role === "system_owner";
+  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  if (!group) { res.status(404).json({ error: "Not Found" }); return; }
+
+  const canManage = currentUserId === targetUserId
+    || (await isGroupAdmin(groupId, currentUserId))
+    || isSystemOwner(caller)
+    || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canManage) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
-  await db.delete(chatGroupMembersTable).where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, targetUserId)));
+  await db.delete(chatGroupMembersTable)
+    .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, targetUserId)));
   res.json({ success: true });
 });
 
@@ -435,14 +466,20 @@ router.post("/groups/:id/messages", async (req, res): Promise<void> => {
 // ─── DELETE /api/chat/groups/:id/messages/:msgId ───────────────────────────────
 router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => {
   const userId = req.user!.id;
+  const caller = req.user!;
   const groupId = requireInt(req.params.id);
   const msgId = requireInt(req.params.msgId);
 
   const [msg] = await db.select().from(chatMessagesTable).where(eq(chatMessagesTable.id, msgId));
   if (!msg) { res.status(404).json({ error: "Message not found" }); return; }
 
-  const role = req.user!.role;
-  const canDelete = msg.userId === userId || (await isGroupAdmin(groupId, userId)) || role === "admin" || role === "system_owner";
+  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+
+  const canDelete = msg.userId === userId
+    || (await isGroupAdmin(groupId, userId))
+    || isSystemOwner(caller)
+    || (caller.role === "admin" && group?.organizationId === caller.organizationId);
   if (!canDelete) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
   await db.update(chatMessagesTable).set({ isDeleted: true }).where(eq(chatMessagesTable.id, msgId));

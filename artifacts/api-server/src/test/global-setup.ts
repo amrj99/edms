@@ -14,11 +14,17 @@ import { execSync } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
+import { config as dotenvConfig } from "dotenv";
 
 const { Client } = pg;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../../..");
+const apiRoot  = path.resolve(__dirname, "../..");
+
+// Load .env.test before anything else so TEST_DATABASE_URL is available
+// when global-setup runs (setup.ts loads it too, but only after globalSetup).
+dotenvConfig({ path: path.join(apiRoot, ".env.test"), override: false });
 
 export async function setup(): Promise<void> {
   const testDbUrl = process.env.TEST_DATABASE_URL;

@@ -47,8 +47,13 @@ import {
 import {
   documentsTable,
   correspondenceTable,
+  correspondenceAttachmentsTable,
   notificationsTable,
   auditLogsTable,
+  orgConfigTable,
+  chatGroupsTable,
+  chatGroupMembersTable,
+  chatMessagesTable,
 } from "@workspace/db";
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
@@ -61,8 +66,11 @@ interface TestFixture {
   projectA: { id: number };
   documentId: number;
   correspondenceId: number;
+  attachmentId: number;  // attachment on Org A's correspondence
   notificationId: number;
   auditLogId: number;
+  chatGroupId: number;   // chat group owned by Org A
+  chatMessageId: number; // message in Org A's chat group
 }
 
 let fx: TestFixture;
@@ -112,6 +120,38 @@ beforeAll(async () => {
     referenceNumber: "CORR-001",
   }).returning();
 
+  // Insert an attachment on Org A's correspondence (used in A-2 isolation test)
+  const [att] = await db.insert(correspondenceAttachmentsTable).values({
+    correspondenceId: corr.id,
+    fileName: "alpha-confidential.pdf",
+    fileUrl: "https://storage.example.com/alpha-confidential.pdf",
+    fileSize: 12345,
+  }).returning();
+
+  // Grant BOTH orgs module access so the module gate does not shadow the
+  // tenant-isolation check in mutation tests. chat is included so cross-org
+  // chat tests hit the isolation check rather than the module gate.
+  await db.insert(orgConfigTable).values([
+    { organizationId: orgA.id, modules: { correspondence: true, dashboard: true, deliverables: true, registers: true, notifications: true, chat: true } },
+    { organizationId: orgB.id, modules: { correspondence: true, dashboard: true, deliverables: true, registers: true, notifications: true, chat: true } },
+  ]);
+
+  // Create a chat group in Org A (userA is the group admin)
+  const [chatGroup] = await db.insert(chatGroupsTable).values({
+    name: "Alpha Internal Chat",
+    type: "general",
+    organizationId: orgA.id,
+    createdById: userA.id,
+  }).returning();
+  await db.insert(chatGroupMembersTable).values({ groupId: chatGroup.id, userId: userA.id, role: "admin" });
+
+  // Insert a message in Org A's group (owned by userA)
+  const [chatMsg] = await db.insert(chatMessagesTable).values({
+    groupId: chatGroup.id,
+    userId: userA.id,
+    content: "Confidential Alpha discussion",
+  }).returning();
+
   // Insert a notification for userA (should NOT be visible to userB)
   const [notif] = await db.insert(notificationsTable).values({
     userId: userA.id,
@@ -139,8 +179,11 @@ beforeAll(async () => {
     projectA:        { id: projectA.id },
     documentId:      doc.id,
     correspondenceId: corr.id,
+    attachmentId:    att.id,
     notificationId:  notif.id,
     auditLogId:      auditLog.id,
+    chatGroupId:     chatGroup.id,
+    chatMessageId:   chatMsg.id,
   };
 });
 
@@ -273,6 +316,39 @@ describe("Correspondence — cross-org isolation", () => {
 
     expectDenied(res.status, `POST /api/.../correspondence/${fx.correspondenceId}/reply`);
   });
+
+  // ── Mutation isolation (Sprint A0 security fixes) ──────────────────────────
+  // These three tests target the specific endpoints that were missing org checks.
+  // Both orgs have correspondence module enabled (set in beforeAll) so the module
+  // gate does NOT interfere — a denial here means the org isolation fix is working.
+
+  it("[A-1] Org B admin cannot mark Org A's correspondence as read (PUT /:id/read)", async () => {
+    const res = await api()
+      .put(`/api/correspondence/${fx.correspondenceId}/read`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"))
+      .send({ isRead: true });
+
+    // Must be denied. 200 here means the fix is broken — cross-org write succeeded.
+    expectDenied(res.status, `PUT /api/correspondence/${fx.correspondenceId}/read`);
+  });
+
+  it("[A-2] Org B admin cannot delete Org A's correspondence attachment (DELETE /:id/attachments/:attId)", async () => {
+    const res = await api()
+      .delete(`/api/correspondence/${fx.correspondenceId}/attachments/${fx.attachmentId}`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"));
+
+    // Must be denied. 200 here = cross-org deletion succeeded — data destruction.
+    expectDenied(res.status, `DELETE /api/correspondence/${fx.correspondenceId}/attachments/${fx.attachmentId}`);
+  });
+
+  it("[A-3] Org B admin cannot revoke Org A's correspondence share (DELETE /:id/share)", async () => {
+    const res = await api()
+      .delete(`/api/correspondence/${fx.correspondenceId}/share`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"));
+
+    // Must be denied. 200 here = cross-org DoS on shared correspondence.
+    expectDenied(res.status, `DELETE /api/correspondence/${fx.correspondenceId}/share`);
+  });
 });
 
 // ─── 4. Notifications ─────────────────────────────────────────────────────────
@@ -383,7 +459,61 @@ describe("Audit Logs — cross-org isolation", () => {
   });
 });
 
-// ─── 7. REGRESSION: organizationId from token, not URL param ─────────────────
+// ─── 7. Chat — cross-org isolation ───────────────────────────────────────────
+//
+// Chat is intra-org by design (chatGroupsTable.organizationId NOT NULL).
+// These tests guard the role === "admin" bypass that was narrowed in Sprint A-final:
+// org-admin must only manage groups within their own organization.
+//
+// Both orgs have the "chat" module enabled in beforeAll so module-gate 402s
+// do not shadow the actual isolation check.
+
+describe("Chat — cross-org isolation (Admin bypass)", () => {
+
+  it("[A-4] Org B admin cannot edit Org A's chat group (PUT /groups/:id)", async () => {
+    const res = await api()
+      .put(`/api/chat/groups/${fx.chatGroupId}`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"))
+      .send({ name: "Hacked Group Name" });
+
+    expectDenied(res.status, `PUT /api/chat/groups/${fx.chatGroupId}`);
+  });
+
+  it("[A-5] Org B admin cannot delete Org A's chat group (DELETE /groups/:id)", async () => {
+    const res = await api()
+      .delete(`/api/chat/groups/${fx.chatGroupId}`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"));
+
+    expectDenied(res.status, `DELETE /api/chat/groups/${fx.chatGroupId}`);
+  });
+
+  it("[A-6] Org B admin cannot add members to Org A's chat group (POST /groups/:id/members)", async () => {
+    const res = await api()
+      .post(`/api/chat/groups/${fx.chatGroupId}/members`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"))
+      .send({ userIds: [fx.userB.id] });
+
+    expectDenied(res.status, `POST /api/chat/groups/${fx.chatGroupId}/members`);
+  });
+
+  it("[A-7] Org B admin cannot remove members from Org A's chat group (DELETE /groups/:id/members/:userId)", async () => {
+    const res = await api()
+      .delete(`/api/chat/groups/${fx.chatGroupId}/members/${fx.userA.id}`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"));
+
+    expectDenied(res.status, `DELETE /api/chat/groups/${fx.chatGroupId}/members/${fx.userA.id}`);
+  });
+
+  it("[A-8] Org B admin cannot delete a message in Org A's chat group (DELETE /groups/:id/messages/:msgId)", async () => {
+    const res = await api()
+      .delete(`/api/chat/groups/${fx.chatGroupId}/messages/${fx.chatMessageId}`)
+      .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"));
+
+    expectDenied(res.status, `DELETE /api/chat/groups/${fx.chatGroupId}/messages/${fx.chatMessageId}`);
+  });
+});
+
+// ─── 8. REGRESSION: organizationId from token, not URL param ─────────────────
 
 describe("REGRESSION: org isolation cannot be bypassed via URL manipulation", () => {
   /**
