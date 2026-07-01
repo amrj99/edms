@@ -53,6 +53,7 @@ async function main() {
 
   try {
     await ensureBaseline();
+    await repairStaleBaseline();
     await ensureEnumValues();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     console.log("[migrate] All migrations applied successfully.");
@@ -103,6 +104,71 @@ async function ensureEnumValues(): Promise<void> {
         throw err;
       }
     }
+  }
+}
+
+/**
+ * Detect and remove incorrectly baselined migration entries.
+ *
+ * When ensureBaseline() runs on an existing database it registers ALL journal
+ * entries as applied, including migrations that were added in the current
+ * deployment and have never actually executed.  This function scans tracking
+ * entries for CREATE INDEX migrations and removes any whose indexes are
+ * absent from pg_indexes — allowing migrate() to apply them on this startup.
+ *
+ * Runs on every startup; is fully idempotent.
+ */
+async function repairStaleBaseline(): Promise<void> {
+  const { rows: schemaExists } = await pool.query<{ exists: boolean }>(`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.schemata WHERE schema_name = $1
+    ) AS "exists"
+  `, [DRIZZLE_SCHEMA]);
+  if (!schemaExists[0].exists) return;
+
+  const journalPath = path.join(MIGRATIONS_FOLDER, "meta/_journal.json");
+  if (!fs.existsSync(journalPath)) return;
+  const journal: { entries: Array<{ tag: string; when: number }> } =
+    JSON.parse(fs.readFileSync(journalPath, "utf-8"));
+
+  let repaired = 0;
+  for (const entry of journal.entries) {
+    const sqlPath = path.join(MIGRATIONS_FOLDER, `${entry.tag}.sql`);
+    if (!fs.existsSync(sqlPath)) continue;
+    const sqlContent = fs.readFileSync(sqlPath, "utf-8");
+
+    // Only verify CREATE INDEX migrations — checking other DDL effects is risky
+    const indexMatches = [
+      ...sqlContent.matchAll(
+        /CREATE\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/gi,
+      ),
+    ];
+    if (indexMatches.length === 0) continue;
+
+    let allPresent = true;
+    for (const [, indexName] of indexMatches) {
+      const { rows } = await pool.query<{ exists: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1) AS "exists"`,
+        [indexName],
+      );
+      if (!rows[0].exists) { allPresent = false; break; }
+    }
+
+    if (!allPresent) {
+      const hash = createHash("sha256").update(sqlContent).digest("hex");
+      const result = await pool.query(
+        `DELETE FROM "${DRIZZLE_SCHEMA}"."${DRIZZLE_TABLE}" WHERE hash = $1`,
+        [hash],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        console.log(`[migrate] repair: removed stale baseline entry for ${entry.tag} — will re-apply`);
+        repaired++;
+      }
+    }
+  }
+
+  if (repaired > 0) {
+    console.log(`[migrate] Baseline repair complete — ${repaired} migration(s) queued for re-application.`);
   }
 }
 
