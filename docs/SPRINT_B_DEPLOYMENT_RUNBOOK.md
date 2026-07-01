@@ -1,6 +1,6 @@
 # Sprint B — Production Deployment Runbook
 
-**الإصدار:** 1.2 (Validation Run corrections)  
+**الإصدار:** 1.3 (Post-Validation Run — Sprint B رُسمياً مغلق)  
 **تاريخ الإعداد:** 2026-07-01  
 **يُطبَّق على:** VPS الإنتاج — الخدمات: `edms_api` (port 8080)، `edms_postgres` (internal)  
 **المدة المتوقعة:** 15-20 دقيقة  
@@ -8,6 +8,11 @@
 > **ملاحظة v1.2:** تصحيحات Validation Run — Port صحيح 8080، psql user = edms،
 > مسار المشروع = `/var/www/edms`، أمر deploy = `docker compose`.
 > Migrations تعمل تلقائياً عبر `docker-entrypoint.sh` → لا حاجة لتشغيلها يدوياً.
+>
+> **ملاحظة v1.3:** تحديثات ما بعد Validation Run:
+> · token generation: استخدم `read -s PASS` بدلاً من كتابة كلمة المرور مباشرة
+> · لا تستخدم `PATH` كاسم متغير في shell scripts — يُلغي متغير النظام
+> · repairStaleBaseline أصلحت `0010_audit_schema` كـ bonus repair (موثَّق في Deployment History)
 
 ---
 
@@ -313,17 +318,24 @@ docker logs edms_api --since 5m 2>&1 | grep -iE "warn" | head -20
 
 ## الخطوة 9 — Smoke Tests
 
-**احصل على token أولاً:**
+**احصل على token أولاً (بدون كتابة كلمة المرور في الـ terminal history):**
 
 ```bash
+# 1. اقرأ كلمة المرور بدون echo — اكتبها ثم اضغط Enter
+read -s PASS
+
+# 2. تسجيل الدخول والحصول على الـ token
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"<ADMIN_EMAIL>","password":"<ADMIN_PASSWORD>"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+  -d "{\"email\":\"<ADMIN_EMAIL>\",\"password\":\"$PASS\"}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])") && unset PASS
 
-echo "Token: ${TOKEN:0:20}..."
-# إذا كان فارغاً: الـ login فشل — توقف هنا
+echo "Token: ${TOKEN:0:30}..."
+# إذا كان فارغاً أو ظهر KeyError: الـ login فشل — تحقق من الـ email وأعد المحاولة
 ```
+
+> **تحذير:** لا تستخدم `read -s` ثم تضغط `Ctrl+C` — سيُفرِّغ `$PASS` ويُفشِل الـ login.  
+> **الحساب المقترح:** `amr_j_98@hotmail.com` (system_owner) — أعلى صلاحية لتغطية جميع الـ endpoints.
 
 ### 9.1 Health
 
@@ -613,10 +625,38 @@ curl -s http://localhost:8080/api/health
 
 | Date | Version | Commit | Deployed By | Result | Rollback | Notes |
 |------|---------|--------|-------------|--------|----------|-------|
-| — | — | — | — | — | — | First deployment pending |
+| 2026-07-01 | Sprint A Security + Sprint B Performance | `7059f90` | amr_j_98@hotmail.com | ✅ PASS | N/A | First production deployment. Migration baseline bug found+fixed (repairStaleBaseline). 0010_audit_schema indexes repaired as bonus. All 8 Sprint B indexes applied. Smoke Tests 6/6 ✅. Perf: docs=0.082s, folders=0.008s, corr=0.010s, search=0.014s, csv=0.024s — جميعها ضمن الحد. |
 
 *أضف صفاً جديداً بعد كل عملية نشر ناجحة أو فاشلة.*
 
 ---
 
-*آخر تحديث: 2026-07-01 — الإصدار 1.2 (Validation Run corrections)*
+## Validation Run Findings (2026-07-01)
+
+> هذا القسم يوثّق ما اكتُشف خلال أول Production Validation Run — مرجع لفهم السلوك والقرارات.
+
+### المشكلة 1 — Migration Baseline Bug
+
+**الجذر:** `ensureBaseline()` تُسجّل جميع entries الـ journal (بما فيها migrations جديدة لم تُنفَّذ بعد) كـ "applied" في أول تشغيل على قاعدة بيانات قديمة.
+
+**الأثر:** الـ migrations الجديدة (0017, 0018) لم تُطبَّق رغم بناء الـ image.
+
+**الحل:** دالة `repairStaleBaseline()` في `migrate.ts` — تفحص CREATE INDEX migrations وتحذف tracking entries للـ indexes الغائبة، مما يسمح لـ Drizzle بإعادة تطبيقها.
+
+**الملاحظة:** نفس الـ repair أصلحت `0010_audit_schema` (audit_logs indexes كانت غائبة من baseline) — هذا سلوك متوقع ومرغوب.
+
+### المشكلة 2 — Migration Journal Timestamps
+
+**الجذر:** timestamps لـ 0017 و 0018 في `_journal.json` كانت قبل timestamp لـ 0016 (يوليو 2025 vs مايو 2026)، مما يجعل Drizzle يتجاهلها.
+
+**الحل:** تحديث timestamps بحيث 0017 (1782979200000) و 0018 (1782982800000) يأتيان بعد 0016 (1782777601000).
+
+### تحذير PATH
+
+**الجذر:** استخدام `PATH` كاسم متغير في shell script يُلغي متغير النظام `$PATH`.
+
+**القاعدة:** لا تستخدم `PATH` كاسم متغير في أي script — استخدم `ENDPOINT` أو `URL` أو `API_PATH` بدلاً منه.
+
+---
+
+*آخر تحديث: 2026-07-01 — الإصدار 1.3 (Sprint B مغلق رسمياً)*
