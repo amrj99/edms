@@ -169,6 +169,13 @@
       "when": 1751500802000,
       "tag": "0022_org_entity_link",
       "breakpoints": false
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1751500803000,
+      "tag": "0023_project_participants",
+      "breakpoints": false
     }
   ]
 }
