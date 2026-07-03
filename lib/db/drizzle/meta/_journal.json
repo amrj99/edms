@@ -148,6 +148,27 @@
       "when": 1783069200000,
       "tag": "0019_file_content_hash",
       "breakpoints": false
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1751500800000,
+      "tag": "0020_entity_directory",
+      "breakpoints": false
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1751500801000,
+      "tag": "0021_contacts_directory",
+      "breakpoints": false
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1751500802000,
+      "tag": "0022_org_entity_link",
+      "breakpoints": false
     }
   ]
 }
