@@ -11,6 +11,36 @@ import { getOrgPlan } from "../lib/plan-service.js";
 import { sendOnboardingEmail, APP_URL } from "../lib/email.js";
 import { passwordResetTokensTable } from "@workspace/db";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
+import { z } from "zod";
+import { parseBody } from "../lib/validate.js";
+
+// ─── Validation schemas ───────────────────────────────────────────────────────
+
+const ORG_ROLES = [
+  "admin", "project_manager", "document_controller",
+  "reviewer", "member", "viewer",
+] as const;
+
+const ORG_ROLES_MSG = `Role must be one of: ${ORG_ROLES.join(", ")}`;
+
+const createUserSchema = z.object({
+  email:          z.string().email("Invalid email address").max(254, "Email too long"),
+  firstName:      z.string().min(1, "First name is required").max(100, "First name too long"),
+  lastName:       z.string().min(1, "Last name is required").max(100, "Last name too long"),
+  role:           z.enum(ORG_ROLES, { message: ORG_ROLES_MSG }),
+  organizationId: z.number().int().positive().optional(),
+});
+
+// Partial schema for updates — all fields optional, role still enum-constrained.
+// Uses default strip mode: unknown fields are removed from req.body.
+const updateUserSchema = z.object({
+  firstName:      z.string().min(1).max(100).optional(),
+  lastName:       z.string().min(1).max(100).optional(),
+  role:           z.enum(ORG_ROLES, { message: ORG_ROLES_MSG }).optional(),
+  isActive:       z.boolean().optional(),
+  organizationId: z.number().int().nullable().optional(),
+  department:     z.string().max(100).nullable().optional(),
+});
 
 const router = Router();
 
@@ -101,7 +131,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 // create users. Without this gate any authenticated user (viewer, member, etc.)
 // could POST to this endpoint and create accounts with elevated roles — a
 // direct privilege escalation path.
-router.post("/", requireAuth, requireMinRole("admin"), async (req, res): Promise<void> => {
+router.post("/", requireAuth, requireMinRole("admin"), parseBody(createUserSchema), async (req, res): Promise<void> => {
   const caller = req.user!;
 
   // ── Onboarding flow: password is not required from admin.
@@ -270,7 +300,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   });
 });
 
-router.put("/:id", requireAuth, async (req, res): Promise<void> => {
+router.put("/:id", requireAuth, parseBody(updateUserSchema), async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const isSelf = caller.id === id;

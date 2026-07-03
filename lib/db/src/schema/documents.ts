@@ -93,6 +93,7 @@ export const documentFilesTable = pgTable("document_files", {
   fileSize: integer("file_size"),
   fileType: text("file_type"),
   uploadedById: integer("uploaded_by_id").references(() => usersTable.id),
+  sha256: text("sha256"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

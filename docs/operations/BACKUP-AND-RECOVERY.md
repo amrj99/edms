@@ -11,10 +11,11 @@
 |---|---|---|---|---|
 | PostgreSQL database | All tables, indexes, sequences, schema | `pg_dump --format=custom` | Cloudflare R2 `edms-backups/nightly/` | 90 days |
 | Pre-deploy snapshots | Same as above | `pg_dump --format=custom` | Cloudflare R2 `edms-backups/pre-deploy/` | 30 days |
-| Uploaded files (R2 mode) | Document binaries | Cloudflare R2 replication | Cloudflare-managed (geo-redundant) | Until user deletes |
-| Uploaded files (on-prem mode) | Document binaries | Not backed up by default | VPS disk only | Until user deletes |
+| Uploaded files (on-prem mode) | Document binaries from `uploads_data` volume | `aws s3 sync` (no `--delete`) | Cloudflare R2 `edms-backups/files-mirror/` | Accumulating mirror |
+| Uploaded files (R2 mode) | Document binaries | Cloudflare R2 geo-redundancy | Cloudflare-managed | Until user deletes |
+| Uploaded files (per-org S3 mode) | Document binaries | S3 provider redundancy | Org's S3 bucket | Tenant-managed |
 
-> **Important:** If your VPS is configured with `DEFAULT_STORAGE_TYPE=onpremise`, uploaded files are **not** backed up by any mechanism in this document. See Section 7 for on-premise file backup options.
+> **Note on file backup policy (v1):** The `files-mirror` sync uses no `--delete` flag — files removed from the VPS are retained in R2. This is a safe accumulating mirror. Cleanup policy and R2 versioning will be defined in a future sprint.
 
 ---
 
@@ -207,6 +208,27 @@ STEP 7 — Restore the dump
     -U edms -d edms --no-password --verbose < /tmp/restore.dump
   # Some "already exists" notices are normal for idempotent statements — not errors.
 
+STEP 7b — Restore uploaded files (on-premise mode only)
+  # Skip this step if your deployment uses R2 or S3 file storage.
+  #
+  # Download the file mirror from R2 to a local staging directory:
+  mkdir -p /tmp/edms-files-restore
+  AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$R2_SECRET_KEY" \
+    aws s3 sync "s3://$BACKUP_BUCKET/files-mirror/" /tmp/edms-files-restore/ \
+    --endpoint-url "$R2_ENDPOINT" --region auto
+  #
+  # Verify the staging directory is not empty:
+  echo "Files downloaded: $(find /tmp/edms-files-restore -type f | wc -l)"
+  #
+  # Copy files into the Docker volume (container must be stopped or volume must be writable):
+  docker run --rm \
+    -v edms_uploads_data:/target \
+    -v /tmp/edms-files-restore:/source:ro \
+    alpine sh -c "cp -a /source/. /target/ && echo 'Files copied.'"
+  #
+  # Clean up staging directory:
+  rm -rf /tmp/edms-files-restore
+
 STEP 8 — Verify row counts
   docker exec edms_postgres psql -U edms -d edms -c \
     "SELECT
@@ -248,21 +270,63 @@ STEP 14 — Notify users
 
 ## 7. On-Premise File Storage
 
-If your deployment uses `DEFAULT_STORAGE_TYPE=onpremise`, uploaded files are stored in the `uploads_data` Docker volume on the VPS disk. This data is **not uploaded to R2** and is **not included in the pg_dump**.
+If your deployment uses `DEFAULT_STORAGE_TYPE=onpremise`, uploaded files are stored in the `uploads_data` Docker volume on the VPS disk. The `backup-files.sh` script syncs this volume to R2 automatically as part of the nightly backup.
 
-**Risk:** VPS disk failure means permanent file loss.
+### How file backup works
 
-**Mitigation options (in order of simplicity):**
+`backup.sh` calls `backup-files.sh` immediately after the DB dump completes, minimising the consistency window between DB and file backups. The file sync uses `aws s3 sync` with the same R2 credentials as the DB backup.
 
-1. **Scheduled rsync to off-VPS destination:**
-   ```bash
-   # Cron daily at 03:00 — rsync uploads to a backup VPS or object storage via rclone
-   0 3 * * * rsync -avz --delete /var/lib/docker/volumes/edms_uploads_data/_data/ backup-server:/backups/edms-uploads/
-   ```
+```
+R2 bucket: edms-backups
+  ├── nightly/               ← DB dumps (pg_dump)
+  ├── pre-deploy/            ← Pre-deployment DB snapshots
+  └── files-mirror/          ← On-premise file sync (aws s3 sync)
+```
 
-2. **Switch to R2 for file storage:** Set `DEFAULT_STORAGE_TYPE=r2` (or leave DEFAULT_STORAGE_TYPE unset and configure R2 credentials). R2 has built-in redundancy and geo-replication managed by Cloudflare.
+### Setup
 
-3. **Per-org S3 configuration:** Orgs can be configured with their own S3 bucket via Settings → Storage in the admin panel.
+No additional setup is required beyond what `backup.sh` already needs. The file backup runs automatically as part of the nightly cron job.
+
+**Optional:** Add a separate healthchecks.io check for file backup monitoring:
+
+```bash
+# In /var/www/edms/.env:
+FILES_HEALTHCHECK_URL=https://hc-ping.com/your-files-check-uuid
+```
+
+**Optional:** Override the uploads directory path (default is auto-detected from Docker volume):
+
+```bash
+# In /var/www/edms/.env:
+UPLOADS_VOLUME_DIR=/var/lib/docker/volumes/edms_uploads_data/_data
+```
+
+### Manual run
+
+```bash
+bash /var/www/edms/scripts/backup-files.sh
+```
+
+Expected output:
+```
+[backup-files] ── ArcScale EDMS File Backup ── Mon May 12 02:00:05 UTC 2026
+[backup-files] Local files found: 847 (in /var/lib/docker/volumes/edms_uploads_data/_data)
+[backup-files] Syncing to R2 s3://edms-backups/files-mirror/ ...
+[backup-files]   Mode: accumulating mirror (no deletion propagation)
+[backup-files] Sync complete.
+[backup-files] R2 files-mirror total: 847 objects (local: 847)
+[backup-files] ── Done: Mon May 12 02:00:38 UTC 2026 ──
+```
+
+### Backup policy (v1)
+
+- **No `--delete` flag** — files deleted from the VPS are **retained** in R2. The mirror accumulates over time.
+- This is intentional: protects against accidental deletion propagating to the backup.
+- Future sprint: define cleanup policy and optionally enable R2 Object Versioning.
+
+### If using R2 or S3 file storage
+
+`backup-files.sh` detects that the uploads volume directory is absent and exits cleanly with a skip message. R2 and S3 storage modes are inherently redundant and do not need this script.
 
 ---
 
@@ -271,6 +335,7 @@ If your deployment uses `DEFAULT_STORAGE_TYPE=onpremise`, uploaded files are sto
 | Backup type | Schedule | Retention | Script |
 |---|---|---|---|
 | Nightly database dump | 02:00 daily (cron) | 90 days | `scripts/backup.sh` |
+| On-premise file sync | 02:01 daily, called by backup.sh | Accumulating mirror (no deletion) | `scripts/backup-files.sh` |
 | Pre-deploy database dump | Before every deploy (manual) | 30 days | `scripts/pre-deploy-backup.sh` |
 | Restore verification | Monthly (manual during beta) | Log only | `scripts/restore-verify.sh` |
 

@@ -32,6 +32,7 @@ fi
 
 BACKUP_BUCKET="${BACKUP_BUCKET:-edms-backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-nightly}"
+FILES_PREFIX="${FILES_PREFIX:-files-mirror}"
 TEST_PORT="${TEST_PORT:-5433}"
 TEST_PG_PASSWORD="${TEST_PG_PASSWORD:-test_restore_only}"
 DB_CONTAINER="${DB_CONTAINER:-edms_postgres}"
@@ -169,6 +170,79 @@ for TABLE in users organizations documents projects audit_logs; do
     fi
   fi
 done
+
+# ── Verify file backup integrity ──────────────────────────────────────────────
+#
+# Compares document_files row count in the restored DB against the number of
+# objects in R2 files-mirror. Catches two failure modes:
+#   1. File backup was never run (R2 = 0, DB > 0) → FAIL
+#   2. Large gap between DB records and R2 objects (>20%) → FAIL
+#
+# R2 count may legitimately exceed DB count: the accumulating mirror retains
+# files removed from the VPS. R2 slightly less than DB is also acceptable
+# (small timing gap between DB dump at 02:00 and file sync at 02:01).
+
+echo ""
+echo "[restore-verify] Verifying file backup integrity..."
+
+# Count document_files records in the RESTORED database
+DB_FILE_COUNT=$(
+  PGPASSWORD="$TEST_PG_PASSWORD" psql \
+    --host=127.0.0.1 \
+    --port="$TEST_PORT" \
+    --username="$DB_USER" \
+    --dbname="$DB_NAME" \
+    --no-password \
+    -t -c "SELECT COUNT(*) FROM document_files;" 2>/dev/null | tr -d ' '
+) || DB_FILE_COUNT=0
+
+# Count objects currently in R2 files-mirror
+R2_FILE_COUNT=$(
+  AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
+  AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
+  aws s3 ls \
+    "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/" \
+    --endpoint-url "${R2_ENDPOINT}" \
+    --region auto \
+    --recursive \
+  2>/dev/null | wc -l | tr -d ' '
+) || R2_FILE_COUNT=0
+
+echo "[restore-verify]   document_files (restored DB): ${DB_FILE_COUNT} records"
+echo "[restore-verify]   R2 files-mirror objects:      ${R2_FILE_COUNT}"
+
+if [ "$DB_FILE_COUNT" -eq 0 ]; then
+  # New installation or empty DB — no files expected; skip file check
+  echo "[restore-verify]   No document_files records in DB — file backup check skipped."
+
+elif [ "$R2_FILE_COUNT" -eq 0 ]; then
+  # DB has files but R2 has nothing — file backup has never run or is misconfigured
+  echo "[restore-verify]   FAIL: DB has ${DB_FILE_COUNT} file record(s) but R2 files-mirror is EMPTY."
+  echo "[restore-verify]        File backup has not run or credentials/bucket are wrong."
+  echo "[restore-verify]        Run manually: bash /var/www/edms/scripts/backup-files.sh"
+  PASS=false
+
+elif [ "$R2_FILE_COUNT" -lt "$DB_FILE_COUNT" ]; then
+  # R2 has fewer objects than DB records — compute gap percentage
+  PERCENT_GAP=$(( (DB_FILE_COUNT - R2_FILE_COUNT) * 100 / DB_FILE_COUNT ))
+  if [ "$PERCENT_GAP" -gt 20 ]; then
+    echo "[restore-verify]   FAIL: R2 has ${PERCENT_GAP}% fewer files than DB records."
+    echo "[restore-verify]        Expected: R2 >= ~${DB_FILE_COUNT} objects. Got: ${R2_FILE_COUNT}."
+    echo "[restore-verify]        This suggests incomplete file syncing. Investigate backup-files.sh."
+    PASS=false
+  else
+    echo "[restore-verify]   WARN: R2 has ${PERCENT_GAP}% fewer files than DB (gap: $((DB_FILE_COUNT - R2_FILE_COUNT)))."
+    echo "[restore-verify]        Within acceptable range — likely due to timing between DB dump and file sync."
+  fi
+
+else
+  # R2 >= DB — healthy (mirror may retain older files)
+  EXCESS=$((R2_FILE_COUNT - DB_FILE_COUNT))
+  if [ "$EXCESS" -gt 0 ]; then
+    echo "[restore-verify]   R2 has ${EXCESS} extra object(s) — retained from previous deletes (accumulating mirror)."
+  fi
+  echo "[restore-verify]   File backup: OK"
+fi
 
 echo ""
 if [ "$PASS" = "true" ]; then

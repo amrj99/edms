@@ -165,4 +165,16 @@ else
   echo "[backup]   Get a free URL from https://healthchecks.io"
 fi
 
+# ── Backup uploaded files ─────────────────────────────────────────────────────
+# Run immediately after DB dump to minimise the DB / file consistency window.
+# Failure is non-fatal: DB backup is already safe in R2 at this point.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if bash "${SCRIPT_DIR}/backup-files.sh"; then
+  echo "[backup] File backup complete."
+else
+  echo "[backup] WARN: File backup failed — DB backup succeeded but files were not synced to R2."
+  echo "[backup]   Investigate and run manually: bash ${SCRIPT_DIR}/backup-files.sh"
+fi
+
 echo "[backup] ── Done: $(date) ──"

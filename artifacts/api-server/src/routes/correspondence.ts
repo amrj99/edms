@@ -28,6 +28,20 @@ import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
 import type { Request } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
+import { z } from "zod";
+import { parseBody } from "../lib/validate.js";
+
+// ─── Validation schema ────────────────────────────────────────────────────────
+// Validates the fields most likely to cause DB errors or security issues.
+// Uses .passthrough() so all other body fields reach createCorrespondence unchanged.
+
+const createCorrespondenceSchema = z.object({
+  subject:   z.string().min(1, "subject is required").max(500),
+  type:      z.string().min(1, "type is required").max(100),
+  toUserIds: z.array(z.number().int().positive(), { message: "toUserIds must be an array of integers" }).optional(),
+  ccUserIds: z.array(z.number().int().positive()).optional(),
+  direction: z.enum(["incoming", "outgoing"]).optional(),
+}).passthrough();
 
 const router = Router({ mergeParams: true });
 
@@ -720,7 +734,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   res.json({ items: enriched, total: enriched.length, viewAll: false });
 });
 
-router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/", requireAuth, parseBody(createCorrespondenceSchema), async (req: Request<ProjectParams>, res): Promise<void> => {
   const contextProjectId = req.params.projectId ? requireInt(req.params.projectId) : null;
   await createCorrespondence(req, res, contextProjectId);
 });

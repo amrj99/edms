@@ -22,11 +22,29 @@ import { TenantIsolationError } from '../lib/errors.js';
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
+import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 import { validateDocumentMetadata } from "./metadata.js";
 import type { Request } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
+import { z } from "zod";
+import { parseBody } from "../lib/validate.js";
+
+// ─── Validation schema for document creation ──────────────────────────────────
+// Validates fields that map to DB enums (direction, status) and enforces a
+// minimum title length. All other body fields pass through via .passthrough().
+
+const DOC_STATUSES = [
+  "draft", "under_review", "approved", "approved_with_comments",
+  "for_revision", "rejected", "issued", "superseded", "void", "archived", "obsolete",
+] as const;
+
+const createDocumentSchema = z.object({
+  title:     z.string().min(1, "title is required").max(500, "title too long"),
+  direction: z.enum(["incoming", "outgoing"]).optional(),
+  status:    z.enum(DOC_STATUSES).optional(),
+}).passthrough();
 
 const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { fileSize: MAX_UPLOAD_BYTES } });
 
@@ -300,7 +318,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   });
 });
 
-router.post("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!req.body || typeof req.body !== "object") {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
@@ -1353,29 +1371,31 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     }
   }
 
-  // ── Storage quota check ──────────────────────────────────────────────────
+  // ── Storage quota + plan gate ────────────────────────────────────────────
+  let _quotaResult: QuotaCheckResult | null = null;
+  let _totalNewBytes = 0;
+
   if (!skipQuotaChecks && orgId) {
-    const totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
-    const totalNewMb = totalNewBytes / (1024 * 1024);
+    _totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
 
-    // Phase 1: resolve plan via SSOT (subscriptions table → fallback to org.subscription_tier)
-    const [orgStorage] = await db
-      .select({ storageUsedMb: organizationsTable.storageUsedMb, subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
+    // Trial expiry gate (belt-and-suspenders for trial orgs)
+    const [orgMeta] = await db
+      .select({ subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
       .from(organizationsTable)
-      .where(eq(organizationsTable.id, orgId));
+      .where(eq(organizationsTable.id, orgId))
+      .limit(1);
 
-    // ── Trial expiry gate ────────────────────────────────────────────────
-    if (orgStorage?.subscriptionTier === "trial" && orgStorage.trialEndsAt && new Date() > new Date(orgStorage.trialEndsAt)) {
+    if (orgMeta?.subscriptionTier === "trial" && orgMeta.trialEndsAt && new Date() > new Date(orgMeta.trialEndsAt)) {
       res.status(403).json({
         error: "TRIAL_EXPIRED",
         message: "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
       }); return;
     }
 
+    // Per-plan file size enforcement (unchanged)
     const planId = await getOrgPlan(orgId);
     const plan = PLANS.find(p => p.id === planId);
     if (plan) {
-      // Per-plan file size enforcement
       const maxFileSizeMb = plan.maxFileSizeMb ?? 1024;
       const oversized = uploadedFiles.filter(f => f.size / (1024 * 1024) > maxFileSizeMb);
       if (oversized.length > 0) {
@@ -1385,17 +1405,17 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
           message: `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
         }); return;
       }
+    }
 
-      // Storage quota enforcement
-      if (orgStorage) {
-        const usedMb = orgStorage.storageUsedMb ?? 0;
-        if (usedMb + totalNewMb > plan.storageMb) {
-          res.status(403).json({
-            error: "STORAGE_LIMIT_REACHED",
-            message: `Storage limit reached. Your ${plan.name} plan allows ${plan.storageMb / 1024} GB. Used: ${usedMb.toFixed(1)} MB of ${plan.storageMb} MB.`,
-          }); return;
-        }
-      }
+    // Storage quota enforcement via StorageQuotaService (C-2)
+    _quotaResult = await storageQuota.check(orgId, _totalNewBytes, req.user!.id);
+    if (!_quotaResult.allowed) {
+      res.status(403).json({
+        error: "STORAGE_QUOTA_EXCEEDED",
+        message: _quotaResult.reason,
+        used:    _quotaResult.used,
+        quota:   _quotaResult.quota,
+      }); return;
     }
   }
   // ────────────────────────────────────────────────────────────────────────
@@ -1406,6 +1426,9 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   const results = [];
   let totalUploadedBytes = 0;
   for (const multerFile of uploadedFiles) {
+    // Compute SHA-256 before upload so the hash covers the exact bytes stored.
+    const sha256 = crypto.createHash("sha256").update(multerFile.buffer).digest("hex");
+
     // Upload buffer to org-aware storage backend
     const stored = await uploadBuffer({
       organizationId: orgId,
@@ -1423,6 +1446,7 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       fileSize: multerFile.size,
       fileType: multerFile.mimetype,
       uploadedById: req.user!.id,
+      sha256,
     }).returning();
 
     await createAuditLog({
@@ -1438,13 +1462,18 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     results.push({ ...dbFile, uploadedByName });
   }
 
-  // Increment org storage counter (ceil to avoid under-counting)
+  // Increment org storage counter via StorageQuotaService (C-2)
   if (orgId && totalUploadedBytes > 0) {
-    const addedMb = Math.ceil(totalUploadedBytes / (1024 * 1024));
-    await db
-      .update(organizationsTable)
-      .set({ storageUsedMb: sql`GREATEST(0, COALESCE(storage_used_mb, 0) + ${addedMb})`, updatedAt: new Date() })
-      .where(eq(organizationsTable.id, orgId));
+    await storageQuota.increment(orgId, totalUploadedBytes);
+  }
+
+  // Warning headers when approaching quota (level determined pre-upload by check())
+  if (_quotaResult && _quotaResult.level !== "ok") {
+    res.set("X-Storage-Level", _quotaResult.level);
+    if (_quotaResult.quota !== null) {
+      res.set("X-Storage-Quota-Mb", String(_quotaResult.quota));
+      res.set("X-Storage-Usage-Mb",  String(_quotaResult.used + Math.ceil(totalUploadedBytes / (1024 * 1024))));
+    }
   }
 
   emitToUser(req.user!.id, "document:updated", { documentId: docId });
@@ -1483,16 +1512,11 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
     projectId,
   });
 
-  // Decrement org storage counter (floor to avoid over-subtracting)
+  // Decrement org storage counter via StorageQuotaService (C-2)
+  // Math.ceil used for both directions — fixes the old Math.floor asymmetry
   const orgId = req.user!.organizationId;
   if (orgId && file.fileSize) {
-    const removedMb = Math.floor(file.fileSize / (1024 * 1024));
-    if (removedMb > 0) {
-      await db
-        .update(organizationsTable)
-        .set({ storageUsedMb: sql`GREATEST(0, COALESCE(storage_used_mb, 0) - ${removedMb})`, updatedAt: new Date() })
-        .where(eq(organizationsTable.id, orgId));
-    }
+    await storageQuota.decrement(orgId, file.fileSize);
   }
 
   res.status(204).end();
