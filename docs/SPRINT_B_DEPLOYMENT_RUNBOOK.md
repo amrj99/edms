@@ -626,6 +626,7 @@ curl -s http://localhost:8080/api/health
 | Date | Version | Commit | Deployed By | Result | Rollback | Notes |
 |------|---------|--------|-------------|--------|----------|-------|
 | 2026-07-01 | Sprint A Security + Sprint B Performance | `7059f90` | amr_j_98@hotmail.com | ✅ PASS | N/A | First production deployment. Migration baseline bug found+fixed (repairStaleBaseline). 0010_audit_schema indexes repaired as bonus. All 8 Sprint B indexes applied. Smoke Tests 6/6 ✅. Perf: docs=0.082s, folders=0.008s, corr=0.010s, search=0.014s, csv=0.024s — جميعها ضمن الحد. |
+| 2026-07-03 | Sprint C Production Safety (C-1..C-5) | `350bab7` | amr_j_98@hotmail.com | ✅ PASS | N/A | Migration 0019 (sha256 column) طُبِّقت بنجاح. Health shape جديد (disk/uploads/database) يعمل. File backup: 8/8 ملفات → R2 ✅. C-5 validation: 4/4 scenarios ✅. Cron 03:15 UTC مُضاف. Perf: health=0.01s, docs=0.01s, corr=0.02s. |
 
 *أضف صفاً جديداً بعد كل عملية نشر ناجحة أو فاشلة.*
 
