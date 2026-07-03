@@ -39,11 +39,11 @@ export const metadataFieldsTable = pgTable("metadata_fields", {
   // Org-scoped global fields (documentTypeId IS NULL): name unique per org.
   uniqueIndex("idx_metadata_fields_org_global_name")
     .on(t.organizationId, t.name)
-    .where(and(isNotNull(t.organizationId), isNull(t.documentTypeId))),
+    .where(and(isNotNull(t.organizationId), isNull(t.documentTypeId))!),
   // Org-scoped type-specific fields: name unique per (org, documentType).
   uniqueIndex("idx_metadata_fields_org_type_name")
     .on(t.organizationId, t.documentTypeId, t.name)
-    .where(and(isNotNull(t.organizationId), isNotNull(t.documentTypeId))),
+    .where(and(isNotNull(t.organizationId), isNotNull(t.documentTypeId))!),
   // System-global fields (organizationId IS NULL): name unique system-wide.
   uniqueIndex("idx_metadata_fields_system_global_name")
     .on(t.name)
