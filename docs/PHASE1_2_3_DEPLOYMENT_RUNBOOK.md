@@ -1045,7 +1045,7 @@ curl -s http://localhost:8080/api/health
 |------|---------|--------|-------------|--------|----------|-------|
 | 2026-07-01 | Sprint A+B | `7059f90` | amr_j_98@hotmail.com | ✅ PASS | N/A | First production deployment |
 | 2026-07-03 | Sprint C (C-1..C-5) | `350bab7` | amr_j_98@hotmail.com | ✅ PASS | N/A | Migration 0019 (sha256) |
-| __________ | Phase 1+2+3 | `329435c` | amr_j_98@hotmail.com | ⬜ | | Migrations 0020–0026 + Frontend Phase 3 |
+| 2026-07-04 | Phase 1+2+3 | `e497784` | amr_j_98@hotmail.com | ✅ PASS | N/A | Migrations 0020–0026 + Frontend Phase 3 · UI E2E Smoke U1–U15 اجتازت |
 
 *أضف صفاً جديداً بعد كل عملية نشر ناجحة أو فاشلة.*
 

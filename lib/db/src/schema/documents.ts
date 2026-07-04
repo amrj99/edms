@@ -65,6 +65,7 @@ export const documentsTable = pgTable("documents", {
   index("idx_documents_organization_id").on(t.organizationId),
   index("idx_documents_project_id").on(t.projectId),
   index("idx_documents_status").on(t.status),
+  index("idx_documents_folder_id").on(t.folderId),
   unique("documents_project_number_unique").on(t.projectId, t.documentNumber),
 ]);
 

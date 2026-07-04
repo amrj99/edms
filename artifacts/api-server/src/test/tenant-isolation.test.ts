@@ -513,7 +513,32 @@ describe("Chat — cross-org isolation (Admin bypass)", () => {
   });
 });
 
-// ─── 8. REGRESSION: organizationId from token, not URL param ─────────────────
+// ─── 8. Documents — submit-review reviewer org validation ([A-4-doc]) ────────
+//
+// submit-review must reject reviewerIds that belong to a different organization.
+// Without validation an attacker who knows another org's user ID can create a
+// task record assigned to that user — leaking cross-org assignment data.
+
+describe("Documents — submit-review reviewer org validation", () => {
+
+  it("[A-4-doc] Cannot assign a cross-org reviewer when submitting for review", async () => {
+    // userA (Org A admin) submits with reviewerIds = [userB.id] (Org B user).
+    // The validation must return 422 before updating the document or creating tasks.
+    const res = await api()
+      .post(`/api/projects/${fx.projectA.id}/documents/${fx.documentId}/submit-review`)
+      .set(authHeader("admin", fx.userA.id, fx.orgA.id, "admin@alpha.test"))
+      .send({ reviewerIds: [fx.userB.id] });
+
+    // 422 = org validation rejected the cross-org reviewer.
+    // Any 2xx means a task was created for a cross-org user — ISOLATION FAILURE.
+    expect(
+      res.status,
+      `Expected 422 for cross-org reviewerId, got ${res.status} — [A-4] reviewer org validation not working`,
+    ).toBe(422);
+  });
+});
+
+// ─── 9. REGRESSION: organizationId from token, not URL param ─────────────────
 
 describe("REGRESSION: org isolation cannot be bypassed via URL manipulation", () => {
   /**

@@ -322,12 +322,48 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## ADR-09 — Cross-Org `assignedToId` في Manual Tasks
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `FUTURE` — يُعالَج ضمن Party Model |
+| **الأولوية** | منخفضة (لا وصول فعلي للبيانات) |
+| **اكتُشف في** | Day-1 Hardening — Tasks Security Review — 2026-07-04 |
+| **يؤثر على** | `POST /tasks` و `PUT /tasks/:id` — تعيين tasks يدوياً |
+
+### الملاحظة
+
+`assignedToId` في إنشاء Task وتعديلها (POST / و PUT /:id) لا يُتحقَّق من أنه ينتمي لنفس منظمة المُنشئ. إذا عرف مستخدم ID مستخدم من منظمة أخرى، يمكنه:
+1. إنشاء task وإرسال notification + email لذلك المستخدم
+2. Task تحمل `organizationId` للمنظمة المُنشئة — المستخدم الأجنبي لا يراها
+
+### التمييز عن A-4
+
+| | A-4 (مُغلَق) | ADR-09 (مؤجَّل) |
+|---|---|---|
+| **الـ Endpoint** | `POST /:id/submit-review` | `POST /tasks`, `PUT /tasks/:id` |
+| **هل Task مرئية للمستخدم الأجنبي؟** | كانت نعم (قبل الإصلاح) | لا — task مقيَّدة بمنظمة المُنشئ |
+| **الأثر الفعلي** | وصول للبيانات ← ثغرة | notification فقط ← تسرب معلومات منخفض |
+
+### لماذا لم يُصلَح في Day-1
+
+- لا وصول فعلي للبيانات (task لا تظهر للمستخدم الأجنبي)
+- التأثير محدود بعنوان الـ task في notification فقط
+- Party Model سيُعيد تعريف "من يحق له أن يكون assignee" بشكل بنيوي — الإصلاح هنا سيصبح ضرورياً وطبيعياً
+
+### الخطوة التالية
+
+عند بناء Party Model: `assignedToId` يُستبدل بـ party-based assignment. التحقق من المنظمة يصبح جزءاً من Party authorization path.
+
+---
+
 ## سجل التحديثات
 
 | التاريخ | الإصدار | التغيير |
 |---------|---------|---------|
 | 2026-06-30 | v1.0 | إنشاء السجل — 8 بنود من Phase 1 |
 | 2026-06-30 | v1.1 | ADR-01: INVESTIGATE → RESOLVED — `dev.mjs` + `docker-compose.dev.yml` مُطبَّقان ومُختبَران |
+| 2026-07-04 | v1.2 | ADR-09: تسجيل Known Design Gap — cross-org assignedToId في manual tasks (Day-1 Hardening review) |
 
 ---
 

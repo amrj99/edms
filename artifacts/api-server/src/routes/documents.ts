@@ -1140,6 +1140,19 @@ router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams
   const caller = req.user!;
   const { reviewerIds, comment } = req.body;
 
+  // [A-4] Validate every reviewerId belongs to the caller's org before mutating.
+  // Without this check an attacker who knows another org's user ID can create a
+  // task record assigned to that user. Skip for system_owner (null organizationId).
+  if (reviewerIds?.length > 0 && caller.organizationId) {
+    const validReviewers = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(and(inArray(usersTable.id, reviewerIds), eq(usersTable.organizationId, caller.organizationId)));
+    if (validReviewers.length !== reviewerIds.length) {
+      res.status(422).json({ error: "reviewerIds must all belong to the same organization" });
+      return;
+    }
+  }
+
   const [doc] = await db.update(documentsTable)
     .set({ status: "under_review", updatedAt: new Date() })
     .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
@@ -1156,13 +1169,14 @@ router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams
       assignedToId: uid,
       createdById: req.user!.id,
       projectId,
+      organizationId: caller.organizationId ?? undefined,
       sourceType: "document" as const,
       sourceId: id,
     }));
     await db.insert(tasksTable).values(taskValues);
   }
 
-  await createAuditLog({ userId: req.user!.id, action: "submit_review", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+  await createAuditLog({ userId: req.user!.id, organizationId: caller.organizationId ?? undefined, action: "submit_review", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
 
   // In-app notification: notify each reviewer about the approval request
   if (reviewerIds?.length > 0) {
