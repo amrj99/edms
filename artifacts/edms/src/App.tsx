@@ -49,6 +49,7 @@ import MigrationWizard from "@/pages/migration-wizard";
 
 import WorkflowEnginePage from "@/pages/workflow-engine";
 import PendingOrg from "@/pages/pending-org";
+import SubmittalDetailPage from "@/pages/submittal-detail";
 
 import DelegationsPage from "@/pages/delegations";
 
@@ -236,6 +237,9 @@ function Router() {
       </Route>
       <Route path="/registers">
         <Redirect to="/reports" />
+      </Route>
+      <Route path="/projects/:id/submittals/:chainId">
+        <ProtectedRoute component={SubmittalDetailPage} />
       </Route>
       <Route path="/projects/:id/documents/:docId">
         {(params) => <Redirect to={`/documents/${params.docId}`} />}

@@ -1,7 +1,7 @@
 import { pgTable, serial, text, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
-import { projectsTable } from "./projects";
+import { projectsTable, projectParticipantsTable } from "./projects";
 import { usersTable } from "./users";
 import { organizationsTable } from "./organizations";
 import { documentsTable, documentRevisionsTable } from "./documents";
@@ -30,17 +30,27 @@ export const chainStepStatusEnum = pgEnum("chain_step_status", [
   "actioned",
 ]);
 
+// Phase 3: how the actual user is resolved when a step lands on a participant.
+//   named        — always route to defaultAssigneeId
+//   role_based   — any reviewer+ in the participant's linked org on this project
+//   unassigned   — RESERVED; Phase-3 API rejects this value at validation time
+export const assignmentStrategyEnum = pgEnum("assignment_strategy", [
+  "named",
+  "role_based",
+  "unassigned",
+]);
+
 // ─── submission_chains ────────────────────────────────────────────────────────
-// The top-level workflow entity. One chain per formal submission package.
-// Tracks which organisation currently holds the package and how long it has
-// been sitting with them (current_step_started_at → SLA / aging).
 
 export const submissionChainsTable = pgTable("submission_chains", {
   id: serial("id").primaryKey(),
 
-  chainNumber: text("chain_number").notNull().unique(),       // e.g. SC-PROJ-2024-001
+  chainNumber: text("chain_number").notNull().unique(),
   title: text("title").notNull(),
   description: text("description"),
+
+  // Phase 3: document submission type. 'rfi', 'ncr', 'mir' reserved for future.
+  type: text("type").notNull().default("submittal"),
 
   projectId: integer("project_id")
     .references(() => projectsTable.id, { onDelete: "cascade" })
@@ -53,6 +63,11 @@ export const submissionChainsTable = pgTable("submission_chains", {
   currentOrgId: integer("current_org_id")
     .references(() => organizationsTable.id)
     .notNull(),
+
+  // Phase 3: participant-level custodian. Set by setup-parties; updated on
+  // every forward/return/resubmit. Null for chains created before Phase 3.
+  currentParticipantId: integer("current_participant_id")
+    .references(() => projectParticipantsTable.id, { onDelete: "set null" }),
 
   currentStatus: submissionChainStatusEnum("current_status")
     .notNull()
@@ -77,32 +92,41 @@ export const submissionChainsTable = pgTable("submission_chains", {
 });
 
 // ─── submission_chain_allowed_parties ─────────────────────────────────────────
-// Defines which organisations may participate in a chain and in what order.
-// step_order 1 = originator, 2 = next party, 3 = next-next, etc.
-// Forward   → moves to step_order + 1
-// Return    → moves to step_order − 1
-// Arbitrary jumps are blocked at the API level.
+// Defines which participants may take part in a chain and in what order.
+// step_order 1 = originator, 2 = first reviewer, 3 = next, etc.
+//
+// Phase 3 migration note: org_id is DEPRECATED — its NOT NULL constraint was
+// dropped in migration 0025. New rows use participant_id instead. The column
+// will be dropped after production has been verified clean.
 
 export const submissionChainAllowedPartiesTable = pgTable("submission_chain_allowed_parties", {
   id: serial("id").primaryKey(),
   chainId: integer("chain_id")
     .references(() => submissionChainsTable.id, { onDelete: "cascade" })
     .notNull(),
+
+  // DEPRECATED: use participantId. Still nullable to preserve existing rows.
   orgId: integer("org_id")
-    .references(() => organizationsTable.id)
-    .notNull(),
-  stepOrder: integer("step_order").notNull(),        // 1-based; defines valid sequence
-  label: text("label"),                              // optional role label: "Subcontractor", "MC", "Consultant", "Owner"
-  // User-level assignment: who is normally responsible in this org for this chain
+    .references(() => organizationsTable.id),
+
+  // Phase 3: primary routing reference.
+  participantId: integer("participant_id")
+    .references(() => projectParticipantsTable.id, { onDelete: "cascade" }),
+
+  stepOrder: integer("step_order").notNull(),
+  label: text("label"),
+
+  assignmentStrategy: assignmentStrategyEnum("assignment_strategy")
+    .notNull()
+    .default("role_based"),
+
   defaultAssigneeId: integer("default_assignee_id")
     .references(() => usersTable.id),
 });
 
 // ─── submission_chain_steps ───────────────────────────────────────────────────
-// One row per movement event (forward or return) or review action.
-// A new step can only be created once the current latest step is 'actioned'.
-// review_code is nullable — forwarding without review is explicitly allowed;
-// the UI renders such steps with a "Forwarded without review" label.
+// One row per movement event (forward or return).
+// review_code + comments record what the receiving party thought of the package.
 
 export const submissionChainStepsTable = pgTable("submission_chain_steps", {
   id: serial("id").primaryKey(),
@@ -111,10 +135,10 @@ export const submissionChainStepsTable = pgTable("submission_chain_steps", {
     .references(() => submissionChainsTable.id, { onDelete: "cascade" })
     .notNull(),
 
-  stepNumber: integer("step_number").notNull(),       // global sequence within the chain (1, 2, 3…)
-  revisionCycle: integer("revision_cycle").notNull(), // which revision cycle this step belongs to
+  stepNumber: integer("step_number").notNull(),
+  revisionCycle: integer("revision_cycle").notNull(),
 
-  action: chainStepActionEnum("action").notNull(),    // forward | return
+  action: chainStepActionEnum("action").notNull(),
 
   fromOrgId: integer("from_org_id")
     .references(() => organizationsTable.id)
@@ -124,6 +148,13 @@ export const submissionChainStepsTable = pgTable("submission_chain_steps", {
     .references(() => organizationsTable.id)
     .notNull(),
 
+  // Phase 3: participant-level movement tracking (nullable — pre-Phase-3 rows = null).
+  fromParticipantId: integer("from_participant_id")
+    .references(() => projectParticipantsTable.id, { onDelete: "set null" }),
+
+  toParticipantId: integer("to_participant_id")
+    .references(() => projectParticipantsTable.id, { onDelete: "set null" }),
+
   actionedById: integer("actioned_by_id")
     .references(() => usersTable.id),
 
@@ -131,25 +162,20 @@ export const submissionChainStepsTable = pgTable("submission_chain_steps", {
     .notNull()
     .default("pending"),
 
-  // Review fields — populated when the receiving org records a review.
-  // review_code = null means forwarded without formal review.
-  reviewCode: text("review_code"),     // A | B | C | D | null
+  // Review fields — set by POST /:id/review before or after forward/return.
+  // reviewCode = null means no formal review was recorded for this step.
+  reviewCode: text("review_code"),
   comments: text("comments"),
   reviewedById: integer("reviewed_by_id")
     .references(() => usersTable.id),
   reviewedAt: timestamp("reviewed_at"),
 
-  // Linked only when the user explicitly chooses "Review + Send Transmittal".
-  // Never auto-populated.
   transmittalId: integer("transmittal_id")
     .references(() => transmittalsTable.id),
 
-  // User-level assignment — who in toOrg is specifically responsible for this step.
-  // Pre-filled from allowed_parties.default_assignee_id; overridable at forward time.
   assignedToUserId: integer("assigned_to_user_id")
     .references(() => usersTable.id),
 
-  // Reassignment audit — populated if a DC+/PM within toOrg changes the assignee
   reassignedAt: timestamp("reassigned_at"),
   reassignedById: integer("reassigned_by_id")
     .references(() => usersTable.id),
@@ -158,10 +184,6 @@ export const submissionChainStepsTable = pgTable("submission_chain_steps", {
 });
 
 // ─── submission_chain_documents ───────────────────────────────────────────────
-// Tracks which specific document revision is in scope for each revision cycle.
-// Old-cycle rows are permanent and immutable (enforced at API level).
-// When a new revision cycle opens, new rows are inserted for the corrected
-// revisions; the originals remain untouched.
 
 export const submissionChainDocumentsTable = pgTable("submission_chain_documents", {
   id: serial("id").primaryKey(),
@@ -178,7 +200,7 @@ export const submissionChainDocumentsTable = pgTable("submission_chain_documents
     .references(() => documentRevisionsTable.id)
     .notNull(),
 
-  revisionCycle: integer("revision_cycle").notNull(), // which cycle introduced this doc/revision
+  revisionCycle: integer("revision_cycle").notNull(),
 
   addedById: integer("added_by_id")
     .references(() => usersTable.id),
@@ -211,5 +233,6 @@ export const insertSubmissionChainDocumentSchema = createInsertSchema(submission
 export type SubmissionChain = typeof submissionChainsTable.$inferSelect;
 export type SubmissionChainStep = typeof submissionChainStepsTable.$inferSelect;
 export type SubmissionChainDocument = typeof submissionChainDocumentsTable.$inferSelect;
+export type SubmissionChainAllowedParty = typeof submissionChainAllowedPartiesTable.$inferSelect;
 export type InsertSubmissionChain = z.infer<typeof insertSubmissionChainSchema>;
 export type InsertSubmissionChainStep = z.infer<typeof insertSubmissionChainStepSchema>;

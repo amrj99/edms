@@ -9,7 +9,7 @@ import {
   ClipboardCheck, GitCompare, ShieldAlert, History, ThumbsUp, ThumbsDown,
   UserPlus, Diff, Pencil, Link2, Paperclip, Building2, ExternalLink,
   LayoutList, FolderTree, ChevronRight, Folder, FolderMinus, ShieldCheck, Search, FolderInput,
-  AlertTriangle, FilePlus2, GitMerge,
+  AlertTriangle, FilePlus2, GitMerge, ClipboardList,
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +42,7 @@ import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
 import { RoleMatrix } from "@/components/governance/RoleMatrix";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
+import { SubmittalsTab } from "@/components/submittals/SubmittalsTab";
 
 // ─── Shared Utilities ────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
@@ -168,6 +169,7 @@ export default function ProjectDetail() {
     { value: "documents", icon: FileText, label: "Documents" },
     { value: "review", icon: ClipboardCheck, label: "Review" },
     { value: "transmittals", icon: Send, label: "Transmittals" },
+    { value: "submittals", icon: ClipboardList, label: "Submittals" },
     { value: "correspondence", icon: Mail, label: "Correspondence" },
     { value: "packages", icon: Package, label: "Packages" },
     { value: "tasks", icon: CheckSquare, label: "Tasks" },
@@ -216,6 +218,9 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="transmittals">
             <TransmittalsTab projectId={projectId} projectName={project.name} projectCode={project.code} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
+          </TabsContent>
+          <TabsContent value="submittals">
+            <SubmittalsTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="correspondence">
             <CorrespondenceTab projectId={projectId} />
