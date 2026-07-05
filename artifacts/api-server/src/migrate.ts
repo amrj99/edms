@@ -54,11 +54,51 @@ async function main() {
   try {
     await ensureBaseline();
     await repairStaleBaseline();
+    await checkMigrationDrift();
     await ensureEnumValues();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     console.log("[migrate] All migrations applied successfully.");
   } finally {
     await pool.end();
+  }
+}
+
+/**
+ * Warn-only check: journal entry count vs tracking table count.
+ *
+ * If more migrations exist in the journal than are recorded in the tracking
+ * table, some were applied manually without updating the tracker (drift).
+ * This does NOT block startup or auto-repair; it logs a warning so operators
+ * can investigate before the next automated deploy causes a re-apply attempt.
+ *
+ * Never throws. Never parses SQL. Never modifies the tracking table.
+ */
+async function checkMigrationDrift(): Promise<void> {
+  try {
+    const journalPath = path.join(MIGRATIONS_FOLDER, "meta/_journal.json");
+    if (!fs.existsSync(journalPath)) return;
+
+    const journal: { entries: Array<{ tag: string; when: number }> } =
+      JSON.parse(fs.readFileSync(journalPath, "utf-8"));
+    const journalCount = journal.entries.length;
+
+    const { rows } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM "${DRIZZLE_SCHEMA}"."${DRIZZLE_TABLE}"`
+    );
+    const trackedCount = parseInt(rows[0].count, 10);
+
+    if (journalCount > trackedCount) {
+      console.warn(
+        `[migrate] WARNING: migration drift detected — journal has ${journalCount} entries but tracking table has ${trackedCount}.` +
+        ` ${journalCount - trackedCount} migration(s) may have been applied manually without updating the tracker.` +
+        ` Review drizzle.__drizzle_migrations before the next deploy.`
+      );
+    } else {
+      console.log(`[migrate] Migration tracking in sync: ${trackedCount}/${journalCount} entries tracked.`);
+    }
+  } catch {
+    // Non-fatal: if schema or table is absent (fresh DB before ensureBaseline),
+    // silently skip — there is nothing to compare yet.
   }
 }
 

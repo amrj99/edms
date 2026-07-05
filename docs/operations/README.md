@@ -7,6 +7,7 @@ This folder contains incident records, production recovery notes, and operationa
 | File | Description |
 |---|---|
 | `PRODUCTION_RECOVERY_2026-05-08.md` | Full incident record for the May 2026 migration failure |
+| `POSTGRES_CONTAINER_POLICY.md` | How to restart/upgrade postgres; current network state; why `edms_postgres` has no Compose labels |
 
 ## See Also
 

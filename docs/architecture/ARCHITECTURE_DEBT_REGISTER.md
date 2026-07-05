@@ -384,6 +384,69 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## ADR-11 — Migration Tracking Drift
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `FUTURE` |
+| **الأولوية** | متوسطة (Operational Risk) |
+| **اكتُشف في** | Phase 5 Production Deploy — 2026-07-05 |
+| **يؤثر على** | `docker-entrypoint.sh` → `migrate.ts` — كل عملية نشر |
+
+### الملاحظة
+
+أثناء نشر Phase 5، اكتُشف أن migrations 0020-0027 كانت مطبَّقة يدويًا على production DB في جلسات سابقة، لكن سجل Drizzle tracking (`drizzle.__drizzle_migrations`) لم يُحدَّث. عند محاولة تشغيل الكود الجديد:
+
+- Drizzle رأى 19 tracked migrations من أصل 29 في الـ journal
+- حاول تطبيق 10 migrations "فائتة"، فيها `CREATE TYPE entity_type` — فشل لأن النوع موجود فعلًا
+
+**الأثر:** API دخل في restart loop خلال نافذة downtime قصيرة. الحل يدوي (INSERT 7 tracking records).
+
+### جذر المشكلة
+
+`ensureBaseline()` في [`migrate.ts`](../../artifacts/api-server/src/migrate.ts) تعالج الحالة التي يكون فيها `drizzle` schema غائبًا كليًا (DB قديمة بدون tracking). لكنها لا تعالج:
+
+> **"drizzle schema موجود، لكن بعض migrations في الـ journal لا توجد في الـ tracking وهي مطبَّقة فعلًا في الـ schema"**
+
+هذا التقصير يمكن أن يتكرر في أي deployment تم فيه تطبيق migration خارج الآلية الرسمية.
+
+### `repairStaleBaseline()` — الحماية الحالية ونقاط ضعفها
+
+الدالة الموجودة حاليًا تتحقق فقط من `CREATE INDEX` migrations عبر `pg_indexes`. لا تتحقق من:
+- Enum types (`pg_type`)
+- Tables (`information_schema.tables`)
+- Columns (`information_schema.columns`)
+- Constraints
+
+### الحل المقترح (لا تنفيذ الآن)
+
+**Migration Health Audit** — يضاف لـ `migrate.ts` كدالة `auditMigrationDrift()`:
+
+```
+للقراءة فقط — يُشغَّل قبل migrate() وبعد repairStaleBaseline()
+
+لكل journal entry:
+  1. احسب hash من الملف
+  2. تحقق هل هو في tracking table
+  3. إذا غائب: فحص DB الفعلي (pg_type, information_schema, pg_indexes)
+  4. إذا Schema موجود: أضف tracking record + سجّل تحذير
+  5. إذا Schema غائب: اتركه لـ migrate() يشغّله طبيعيًا
+
+المخرج: تحذير واضح في logs عند وجود drift
+```
+
+### قيود قبل التنفيذ
+
+- الفحص يحتاج أن يعرف "signature" كل migration (ماذا تنشئ بالضبط) — هذا يعني إما parsing SQL أو metadata خارجية
+- الأبسط: تسجيل الـ drift كـ warning وإجراء يدوي للتحقق (وليس auto-fix)
+- الأفضل طويل المدى: منع تطبيق أي migration خارج الآلية الرسمية من الأساس (process rule)
+
+### الخطوة التالية
+
+يُعالَج ضمن Phase 5.1 (Operational Hardening) أو كـ standalone task قبل أول multi-environment deployment.
+
+---
+
 ## سجل التحديثات
 
 | التاريخ | الإصدار | التغيير |
@@ -392,6 +455,7 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 | 2026-06-30 | v1.1 | ADR-01: INVESTIGATE → RESOLVED — `dev.mjs` + `docker-compose.dev.yml` مُطبَّقان ومُختبَران |
 | 2026-07-04 | v1.2 | ADR-09: تسجيل Known Design Gap — cross-org assignedToId في manual tasks (Day-1 Hardening review) |
 | 2026-07-05 | v1.3 | ADR-10: تسجيل Known Simplification — download = read في Party Model Minimum (Phase 5 Design Review) |
+| 2026-07-05 | v1.4 | ADR-11: تسجيل Migration Tracking Drift — اكتُشف أثناء Phase 5 Production Deploy |
 
 ---
 
