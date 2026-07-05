@@ -356,14 +356,60 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
 });
 
 // Acknowledge transmittal
+// Authorization (Phase 6A): caller must be project member AND from sender or recipient org.
+// System_owner bypasses the org check. Any third-party org → 403.
 router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+
+  // Gate 1: must be a project member (any access mode)
+  const { allowed } = await canAccessProject(
+    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
+  );
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
+
+  // Fetch transmittal (read-only) scoped to this project
+  const [trs] = await db
+    .select({
+      organizationId: transmittalsTable.organizationId,
+      toUserId: transmittalsTable.toUserId,
+    })
+    .from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+  if (!trs) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Gate 2: caller must be from sender org or recipient org
+  if (!isSystemOwner(caller)) {
+    const callerOrgId = caller.organizationId;
+    const isSenderOrg = trs.organizationId != null && trs.organizationId === callerOrgId;
+
+    let isRecipientOrg = false;
+    if (trs.toUserId && callerOrgId) {
+      const [toUser] = await db
+        .select({ organizationId: usersTable.organizationId })
+        .from(usersTable)
+        .where(eq(usersTable.id, trs.toUserId));
+      isRecipientOrg = toUser?.organizationId === callerOrgId;
+    }
+
+    if (!isSenderOrg && !isRecipientOrg) {
+      res.status(403).json({
+        error: "Forbidden",
+        message: "You must be from the sender or recipient organization to acknowledge this transmittal",
+      });
+      return;
+    }
+  }
+
   const [transmittal] = await db.update(transmittalsTable)
     .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
-    .where(eq(transmittalsTable.id, id))
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
     .returning();
-  const actor = (req as any).user as any;
-  const actorName = actor ? `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "External" : "External";
+  const actor = req.user as any;
+  const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
   await db.insert(transmittalHistoryTable).values({
     transmittalId: id,
     eventType: "acknowledged",
