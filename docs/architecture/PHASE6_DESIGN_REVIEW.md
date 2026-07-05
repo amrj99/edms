@@ -1,7 +1,7 @@
 # Phase 6 — Cross-Org Transmittal Access: Design Review
 
 **التاريخ:** 2026-07-05
-**الحالة:** معتمدة — التنفيذ جارٍ (Phase 6A)
+**الحالة:** معتمدة v2 — Phase 6A مُنجزة (commit `c46d1c7`), Phase 6B مُنجزة
 **المرجع:** Phase 5 Party Model Minimum (commit `a49de00`) · Phase 5.1 (commit `a7a6ec2`)
 
 ---
@@ -283,3 +283,65 @@ Migration جديد. تحتاج موافقة منفصلة.
 | regression في orgScopedWhere | لا يُلمس — invariant مكتوب + code review gate |
 
 **Rollback:** كل مرحلة مستقلة، بلا migration (حتى 6E). `git revert` + deploy كافٍ لأي مرحلة.
+
+---
+
+## 11. Phase 6B — تعديلات التصميم v2
+
+**القرارات المعتمدة في مراجعة 2026-07-05:**
+
+### تغيير الاسم: `canReceiveTransmittal()` → `recipientOrganizationId()`
+
+الاسم الأصلي أوحى بمنح صلاحية. `recipientOrganizationId()` utility صافية:
+```typescript
+recipientOrganizationId(toUserId, toUserOrganizationId) → number | null
+```
+لا database calls. القرار في الـ Route بعدها:
+```typescript
+const recipientOrgId = recipientOrganizationId(trs.toUserId, toUserOrgId);
+const isRecipient = recipientOrgId === caller.organizationId;
+```
+
+### تغيير Observer Ceiling: إضافة `read_transmittal`
+
+```
+observer:    ["read_transmittal"]          ← v2 (v1 كان: [])
+contributor: ["read_transmittal",
+              "upload_document",
+              "create_transmittal",
+              "acknowledge_transmittal"]
+```
+
+**السبب:** observer يملك `read_document`. الـ transmittal هو غلاف إرسال الوثيقة — رؤيته ضرورية لفهم لماذا وصل الملف. عدم السماح كان تناقضاً مع الفلسفة.
+
+### Invariant I-9: توحيد predicate الـ List والـ Detail
+
+> `GET /transmittals/:id` يجب أن يستخدم نفس `transmittalPartyFilter` الخاصة بـ `GET /transmittals`.
+> لا يجوز أن يكون للوصول المفرد منطق مستقل. `GET /:id` قبل Phase 6B لم يستدعِ `canAccessProject()`
+> — تم تثبيت هذا في Phase 6B وإضافة gate صريح.
+
+### Filter الـ List — project_id صريح
+
+```sql
+project_id = :projectId          ← صريح، ليس ضمنياً
+AND (
+  organization_id = :callerOrgId
+  OR to_user_id = :callerId
+  OR EXISTS (SELECT 1 FROM users WHERE id = to_user_id AND organization_id = :callerOrgId)
+)
+```
+
+### Gate Model المحدَّث لـ acknowledge:
+
+```
+Gate 1: canAccessProject()                → allowed + mode + partyRole
+Gate 2: (party mode) isWithinPartyCeiling("acknowledge_transmittal")
+Gate 3: system_owner → bypass
+        party        → recipientOrganizationId() === callerOrgId (recipient only)
+        intra-org    → senderOrg OR recipientOrg (Phase 6A behavior preserved)
+```
+
+### P13 — Information Hiding على مستوى الـ transmittal
+
+Transmittal من مشروع مختلف يُعيد `404` (ليس `403`) — المستخدم لا يعلم بوجوده.
+`transmittalPartyFilter` يتضمن `project_id = :projectId` صراحةً.

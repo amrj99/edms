@@ -18,6 +18,7 @@ import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams}
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
+import { recipientOrganizationId } from "../lib/transmittal-recipient.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -42,10 +43,14 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
-  // Project-level access gate — party members are allowed to see transmittals
-  // that pass transmittalPartyFilter (sender org or named recipient).
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  // Gate 1: project membership. Gate 2 (party): ceiling check.
+  // Data filter: transmittalPartyFilter scopes results to sender-or-recipient org.
+  // Invariant I-9: list and detail use the same transmittalPartyFilter predicate.
+  const { allowed, mode: accessMode, partyRole } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
   if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+  if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "read_transmittal")) {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
+  }
 
   const transmittals = await db
     .select({
@@ -94,10 +99,20 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 });
 
 // Get single transmittal with items
+// Invariant I-9: uses transmittalPartyFilter — the same predicate as GET /.
+// canAccessProject here also enforces T-6 (revoked party access is cut immediately).
 router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
+
+  // Gate 1: project membership. Gate 2 (party): ceiling check.
+  const { allowed, mode: accessMode, partyRole } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+  if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "read_transmittal")) {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
+  }
+
   const [transmittal] = await db
     .select()
     .from(transmittalsTable)
@@ -356,19 +371,27 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
 });
 
 // Acknowledge transmittal
-// Authorization (Phase 6A): caller must be project member AND from sender or recipient org.
-// System_owner bypasses the org check. Any third-party org → 403.
+// Three-gate authorization model (Phase 6A + 6B):
+//   Gate 1: canAccessProject() — must be a project member
+//   Gate 2: party mode only — isWithinPartyCeiling("acknowledge_transmittal")
+//   Gate 3: org check — system_owner: bypass; party: recipient org only
+//                       intra-org: sender org OR recipient org (broader, as before)
 router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
-  // Gate 1: must be a project member (any access mode)
-  const { allowed } = await canAccessProject(
+  // Gate 1: project membership
+  const { allowed, mode: accessMode, partyRole } = await canAccessProject(
     caller.id, caller.organizationId, projectId, isSystemOwner(caller),
   );
   if (!allowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
+
+  // Gate 2 (party mode only): ceiling check
+  if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "acknowledge_transmittal")) {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit acknowledging transmittals" }); return;
   }
 
   // Fetch transmittal (read-only) scoped to this project
@@ -381,26 +404,39 @@ router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Pr
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
   if (!trs) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Gate 2: caller must be from sender org or recipient org
+  // Gate 3: org-level check
   if (!isSystemOwner(caller)) {
     const callerOrgId = caller.organizationId;
-    const isSenderOrg = trs.organizationId != null && trs.organizationId === callerOrgId;
 
-    let isRecipientOrg = false;
-    if (trs.toUserId && callerOrgId) {
+    // Pre-fetch recipient org (used by recipientOrganizationId utility)
+    let toUserOrgId: number | null | undefined;
+    if (trs.toUserId) {
       const [toUser] = await db
         .select({ organizationId: usersTable.organizationId })
         .from(usersTable)
         .where(eq(usersTable.id, trs.toUserId));
-      isRecipientOrg = toUser?.organizationId === callerOrgId;
+      toUserOrgId = toUser?.organizationId;
     }
+    const recipientOrgId = recipientOrganizationId(trs.toUserId, toUserOrgId);
 
-    if (!isSenderOrg && !isRecipientOrg) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: "You must be from the sender or recipient organization to acknowledge this transmittal",
-      });
-      return;
+    if (accessMode === "party") {
+      // Party: recipient org only (acknowledge is a recipient action)
+      if (recipientOrgId !== callerOrgId) {
+        res.status(403).json({
+          error: "Forbidden",
+          message: "Your organization is not the recipient of this transmittal",
+        }); return;
+      }
+    } else {
+      // Intra-org: sender org OR recipient org (broader, established in Phase 6A)
+      const isSenderOrg = trs.organizationId != null && trs.organizationId === callerOrgId;
+      const isRecipientOrg = recipientOrgId === callerOrgId;
+      if (!isSenderOrg && !isRecipientOrg) {
+        res.status(403).json({
+          error: "Forbidden",
+          message: "You must be from the sender or recipient organization to acknowledge this transmittal",
+        }); return;
+      }
     }
   }
 
