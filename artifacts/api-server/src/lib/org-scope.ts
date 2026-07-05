@@ -26,6 +26,9 @@
  * SECURITY RULE: every UPDATE and DELETE on a tenant-owned table MUST use
  * one of these two shapes. A bare `eq(table.id, id)` without an org filter
  * is a tenant isolation violation.
+ *
+ * Cross-org access (Party Model and beyond) belongs in lib/party-access.ts —
+ * never here. See ADR-011: docs/architecture/ADR-011.md
  */
 
 import { and, eq, type SQL } from "drizzle-orm";
@@ -67,7 +70,7 @@ export function orgScopedWhere(
   id: number,
   orgColumn: AnyColumn,
 ): SQL {
-  if (isSystemOwner(caller)) return eq(idColumn, id);
+  if (caller.role === "system_owner") return eq(idColumn, id);
   return and(eq(idColumn, id), eq(orgColumn, caller.organizationId!)) as SQL;
 }
 

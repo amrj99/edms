@@ -28,9 +28,9 @@ describe("project participants API", () => {
   let orgA: { id: number };
   let orgB: { id: number };
 
-  let adminA: { id: number; organizationId: number };
-  let viewerA: { id: number; organizationId: number };
-  let adminB: { id: number; organizationId: number };
+  let adminA: { id: number; organizationId: number | null };
+  let viewerA: { id: number; organizationId: number | null };
+  let adminB: { id: number; organizationId: number | null };
 
   let projectAId: number;
   let projectBId: number;  // belongs to orgB

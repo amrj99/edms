@@ -75,7 +75,7 @@ beforeAll(async () => {
   const [folder] = await db.insert(foldersTable).values({ name: "Structural", projectId: proj.id }).returning();
 
   // Seed 6 documents with varied attributes for filter testing
-  const seed = async (values: Parameters<typeof db.insert<typeof documentsTable>>[0] extends { values: (v: infer V) => unknown } ? V : never) => {
+  const seed = async (values: typeof documentsTable.$inferInsert) => {
     const [doc] = await db.insert(documentsTable).values(values).returning();
     return doc.id;
   };

@@ -7,7 +7,7 @@ import {
   correspondenceTable,
 } from "@workspace/db";
 import { eq, and, or, desc, sql, inArray } from "drizzle-orm";
-import { requireAuth, requireRole, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
+import { requireAuth, requireRole, hashPassword, isSysAdmin, isSystemOwner, hashToken, type AuthUser } from "../lib/auth.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { TransmittalPermissions, checkAssignmentBasedPermission } from "../lib/permissions.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -16,18 +16,20 @@ import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision
 import type { Request, Response } from "express";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { orgScopedWhere } from "../lib/org-scope.js";
+import { canAccessProject } from "../lib/can-access-project.js";
+import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 // Party-scoped transmittal predicate: sender org OR named recipient OR recipient's org.
 // system_owner bypasses the party filter and sees all transmittals in the project.
-function transmittalPartyFilter(caller: { id: number; role: string; organizationId: number | null }, projectId: number) {
+function transmittalPartyFilter(caller: AuthUser, projectId: number) {
   if (isSystemOwner(caller)) return eq(transmittalsTable.projectId, projectId);
   return and(
     eq(transmittalsTable.projectId, projectId),
     or(
-      eq(transmittalsTable.organizationId, caller.organizationId),
+      eq(transmittalsTable.organizationId, caller.organizationId!),
       eq(transmittalsTable.toUserId, caller.id),
       // Org-level receiver access: caller shares an org with the named toUserId
       sql`EXISTS (SELECT 1 FROM users u WHERE u.id = ${transmittalsTable.toUserId} AND u.organization_id = ${caller.organizationId})`,
@@ -39,6 +41,12 @@ function transmittalPartyFilter(caller: { id: number; role: string; organization
 router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
+
+  // Project-level access gate — party members are allowed to see transmittals
+  // that pass transmittalPartyFilter (sender org or named recipient).
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+
   const transmittals = await db
     .select({
       id: transmittalsTable.id,
@@ -140,8 +148,26 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
 });
 
 // Create transmittal
-router.post("/", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
+// Two-path authorization:
+//   - Party members: canAccessProject() gate + PARTY_CEILING_V1 (contributor only)
+//   - Intra-org / member path: original role gate (admin / pm / dc)
+router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+
+  const { allowed, mode: accessMode, partyRole } = await canAccessProject(
+    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
+  );
+  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+
+  if (accessMode === "party") {
+    if (!isWithinPartyCeiling(partyRole!, "create_transmittal")) {
+      res.status(403).json({ error: "Forbidden", message: "Your party role does not permit creating transmittals" }); return;
+    }
+  } else if (!["admin", "project_manager", "document_controller", "system_owner"].includes(caller.role)) {
+    res.status(403).json({ error: "Forbidden", message: "Insufficient role to create transmittals" }); return;
+  }
+
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode, toUserId, reference } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 

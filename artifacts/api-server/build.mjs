@@ -96,6 +96,14 @@ async function buildAll() {
     plugins: [],
   });
 
+  // Build UI test seed script (manual — local Phase F UI verification, test DB only)
+  await esbuild({
+    ...sharedConfig,
+    entryPoints: [path.resolve(artifactDir, "src/scripts/seed-ui-test.ts")],
+    outdir: distDir,
+    plugins: [],
+  });
+
   // Build migration runner (runs during container startup before the API)
   await esbuild({
     ...sharedConfig,

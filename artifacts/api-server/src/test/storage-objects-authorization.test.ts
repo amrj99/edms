@@ -33,8 +33,8 @@ import { documentsTable } from "@workspace/db";
 let orgA: { id: number };
 let orgB: { id: number };
 let projectA: { id: number };
-let userA: { id: number; organizationId: number };   // member of orgA — owns the document
-let userB: { id: number; organizationId: number };   // member of orgB — different org
+let userA: { id: number; organizationId: number | null };   // member of orgA — owns the document
+let userB: { id: number; organizationId: number | null };   // member of orgB — different org
 
 const OBJECT_KEY = "uploads/h2-test-object-key";
 const SERVE_URL = `/api/storage/objects/${OBJECT_KEY}`;

@@ -26,7 +26,7 @@ const db = getTestDb();
 
 describe("document metadata validation", () => {
   let org: { id: number };
-  let admin: { id: number; organizationId: number };
+  let admin: { id: number; organizationId: number | null };
   let project: { id: number };
   let ncrType: { id: number };
 

@@ -34,9 +34,9 @@ describe("normalizeDocTypeCode", () => {
 
 describe("document-types API", () => {
   let org: { id: number };
-  let admin: { id: number; organizationId: number };
+  let admin: { id: number; organizationId: number | null };
   let otherOrg: { id: number };
-  let otherAdmin: { id: number; organizationId: number };
+  let otherAdmin: { id: number; organizationId: number | null };
 
   beforeAll(async () => {
     await truncateAllTables();
@@ -150,7 +150,7 @@ describe("document-types API", () => {
 
 describe("workflow-engine templates — documentTypeId integration", () => {
   let org: { id: number };
-  let admin: { id: number; organizationId: number };
+  let admin: { id: number; organizationId: number | null };
   let docTypeId: number;
 
   beforeAll(async () => {

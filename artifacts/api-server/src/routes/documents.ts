@@ -28,6 +28,8 @@ import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file
 import { validateDocumentMetadata } from "./metadata.js";
 import type { Request } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
+import { canAccessProject } from "../lib/can-access-project.js";
+import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { z } from "zod";
 import { parseBody } from "../lib/validate.js";
 
@@ -50,29 +52,9 @@ const upload = multer({ storage: multer.memoryStorage(), fileFilter, limits: { f
 
 const router = Router({ mergeParams: true });
 
-// ─── Project access helper ─────────────────────────────────────────────────
-// Returns { allowed, projectOrgId }.
-// SysAdmins bypass all checks. Otherwise: org-owner match OR explicit project membership.
-// projectOrgId is returned so callers can pass it to the access resolver for org-boundary checks.
-async function canAccessProject(
-  userId: number,
-  userOrgId: number | undefined,
-  projectId: number,
-  sysAdmin: boolean,
-): Promise<{ allowed: boolean; projectOrgId: number | null }> {
-  if (sysAdmin) return { allowed: true, projectOrgId: null };
-  const [project] = await db.select({ organizationId: projectsTable.organizationId })
-    .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-  if (!project) return { allowed: false, projectOrgId: null };
-  const projectOrgId = project.organizationId ?? null;
-  if (project.organizationId === userOrgId) return { allowed: true, projectOrgId };
-  // Cross-org: check explicit project membership
-  const [member] = await db.select({ userId: projectMembersTable.userId })
-    .from(projectMembersTable)
-    .where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)))
-    .limit(1);
-  return { allowed: !!member, projectOrgId };
-}
+// canAccessProject() is defined in lib/can-access-project.ts (extracted Phase 5-B).
+// It now includes a party access branch (mode: 'party') in addition to the original
+// intra_org and member paths. Existing callers are backward-compatible.
 
 // Folders
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -232,11 +214,11 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 
   if (discipline)   conditions.push(eq(documentsTable.discipline, discipline as string));
   if (documentType) conditions.push(eq(documentsTable.documentType, documentType as string));
-  if (status)       conditions.push(eq(documentsTable.status, status as string));
+  if (status)       conditions.push(eq(documentsTable.status, status as any));
   if (folderId)     conditions.push(eq(documentsTable.folderId, parseInt(folderId as string)));
   if (source)       conditions.push(eq(documentsTable.source, source as string));
   if (direction && (direction === "incoming" || direction === "outgoing")) {
-    conditions.push(eq(documentsTable.direction, direction as string));
+    conditions.push(eq(documentsTable.direction, direction as any));
   }
   if (issuedBy) {
     conditions.push(ilike(documentsTable.issuedBy, `%${issuedBy}%`));
@@ -325,14 +307,17 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
     return;
   }
 
-  // Tenant isolation: verify the project belongs to the caller's organization
-  if (!isSystemOwner(req.user!)) {
-    const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
-      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
-    if (projCheck.organizationId !== req.user!.organizationId) {
-      throw new TenantIsolationError({ userId: req.user!.id, userOrgId: req.user!.organizationId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
-    }
+  // Project access gate — replaces prior TenantIsolationError for cross-org callers.
+  // Party contributors may upload; party observers may not (PARTY_CEILING_V1).
+  // Intra-org and member callers are unaffected (existing behavior preserved).
+  const { allowed: projectAccessAllowed, mode: accessMode, partyRole } = await canAccessProject(
+    req.user!.id, req.user!.organizationId, projectId, isSystemOwner(req.user!),
+  );
+  if (!projectAccessAllowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
+  if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "upload_document")) {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" }); return;
   }
 
   const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy, direction } = req.body;

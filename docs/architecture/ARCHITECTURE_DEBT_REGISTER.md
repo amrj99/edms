@@ -357,6 +357,33 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## ADR-10 — download = read في Party Model Minimum
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `FUTURE` |
+| **الأولوية** | منخفضة |
+| **اكتُشف في** | Phase 5 Design Review — 2026-07-05 |
+| **يؤثر على** | `GET /api/projects/:id/documents/:id/download` — وصول party members للملفات |
+
+### الملاحظة
+
+في Party Model Minimum (Phase 5)، `download` يُعامَل كامتداد لـ `read`. أي party member يستطيع قراءة وثيقة يستطيع تنزيلها — لا فصل بين رؤية قائمة الوثائق وتنزيل المحتوى.
+
+هذا القرار مقصود للحد الأدنى: القيمة الفعلية من وصول observer هي قراءة المحتوى، لا مجرد رؤية الاسم.
+
+### السيناريو المؤجَّل
+
+في المشاريع ذات البروتوكولات الصارمة (ISO 19650)، الوثيقة لا "تُوزَّع" رسمياً إلا بعد transmittal رسمي. التنزيل قبل الـ transmittal يتجاوز هذا الإجراء.
+
+**النموذج المستقبلي:** observer يرى metadata الوثيقة لكن يُنزِّل فقط ما وُزِّع إليه عبر transmittal رسمي من Org A (`download_requires_transmittal` ceiling).
+
+### الخطوة التالية
+
+يُقيَّم ضمن APF عند بناء fine-grained ceiling controls.
+
+---
+
 ## سجل التحديثات
 
 | التاريخ | الإصدار | التغيير |
@@ -364,6 +391,7 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 | 2026-06-30 | v1.0 | إنشاء السجل — 8 بنود من Phase 1 |
 | 2026-06-30 | v1.1 | ADR-01: INVESTIGATE → RESOLVED — `dev.mjs` + `docker-compose.dev.yml` مُطبَّقان ومُختبَران |
 | 2026-07-04 | v1.2 | ADR-09: تسجيل Known Design Gap — cross-org assignedToId في manual tasks (Day-1 Hardening review) |
+| 2026-07-05 | v1.3 | ADR-10: تسجيل Known Simplification — download = read في Party Model Minimum (Phase 5 Design Review) |
 
 ---
 

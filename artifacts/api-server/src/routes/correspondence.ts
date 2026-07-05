@@ -671,8 +671,8 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 
   // Build SQL conditions for optional query-param filters (B-3-2)
   const extraConds: SQL[] = [];
-  if (folder) extraConds.push(eq(correspondenceTable.folder, folder as string));
-  if (type)   extraConds.push(eq(correspondenceTable.type, type as string));
+  if (folder) extraConds.push(eq(correspondenceTable.folder, folder as any));
+  if (type)   extraConds.push(eq(correspondenceTable.type, type as any));
   if (scope)  extraConds.push(eq(correspondenceTable.scope, scope as string));
 
   if (wantsViewAll) {

@@ -25,8 +25,8 @@ const db = getTestDb();
 describe("metadata fields API", () => {
   let org: { id: number };
   let otherOrg: { id: number };
-  let admin: { id: number; organizationId: number };
-  let otherAdmin: { id: number; organizationId: number };
+  let admin: { id: number; organizationId: number | null };
+  let otherAdmin: { id: number; organizationId: number | null };
   let ncrType: { id: number };
   let drawingType: { id: number };
 

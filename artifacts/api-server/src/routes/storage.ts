@@ -19,7 +19,10 @@ import {
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
 import { StorageNotConfiguredError } from "../lib/errors.js";
-import { requireAuth, signToken, verifyToken } from "../lib/auth.js";
+import { requireAuth, signToken, verifyToken, isSystemOwner } from "../lib/auth.js";
+import { canAccessProjectAsParty } from "../lib/party-access.js";
+import { canAccessProject } from "../lib/can-access-project.js";
+import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
 import { shouldAuditFileAccess } from "../lib/file-access-cache.js";
@@ -157,11 +160,19 @@ async function assertOrgAccess(
   res: Response,
   targetOrgId: number,
   context: { route: string; key?: string },
+  partyProjectId?: number | null,
 ): Promise<boolean> {
   const userOrgId = req.user?.organizationId;
   const isSysOwner = req.user?.role === "system_owner";
 
   if (isSysOwner || userOrgId === targetOrgId) return true;
+
+  // Phase 5 party access: allow active party members to download document files
+  // (ADR-011 — cross-org access goes through canAccessProjectAsParty, never orgScopedWhere)
+  if (userOrgId && partyProjectId != null) {
+    const { allowed } = await canAccessProjectAsParty(userOrgId, partyProjectId);
+    if (allowed) return true;
+  }
 
   // Log unauthorized attempt
   await createAuditLog({
@@ -225,6 +236,39 @@ async function findOrgIdForObjectServeUrl(serveUrl: string): Promise<number | nu
   const [migration] = await db.select({ organizationId: migrationItemsTable.organizationId })
     .from(migrationItemsTable).where(eq(migrationItemsTable.fileUrl, serveUrl));
   if (migration?.organizationId != null) return migration.organizationId;
+
+  return null;
+}
+
+/**
+ * Find the projectId for a document-related file URL so party access can be
+ * checked when the requester is from a different org (Phase 5, ADR-011).
+ * Only covers document tables (not correspondence, meetings, chat files).
+ * Returns null for non-document objects.
+ */
+async function findPartyProjectIdForServeUrl(serveUrl: string): Promise<number | null> {
+  const [doc] = await db
+    .select({ projectId: documentsTable.projectId })
+    .from(documentsTable)
+    .where(eq(documentsTable.fileUrl, serveUrl))
+    .limit(1);
+  if (doc?.projectId != null) return doc.projectId;
+
+  const [rev] = await db
+    .select({ projectId: documentsTable.projectId })
+    .from(documentRevisionsTable)
+    .innerJoin(documentsTable, eq(documentRevisionsTable.documentId, documentsTable.id))
+    .where(eq(documentRevisionsTable.fileUrl, serveUrl))
+    .limit(1);
+  if (rev?.projectId != null) return rev.projectId;
+
+  const [file] = await db
+    .select({ projectId: documentsTable.projectId })
+    .from(documentFilesTable)
+    .innerJoin(documentsTable, eq(documentFilesTable.documentId, documentsTable.id))
+    .where(eq(documentFilesTable.fileUrl, serveUrl))
+    .limit(1);
+  if (file?.projectId != null) return file.projectId;
 
   return null;
 }
@@ -300,15 +344,17 @@ router.get("/view-token", requireAuth, (req: Request, res: Response) => {
  * Org-aware: routes to S3 (default), on-prem, or cloud based on org config.
  */
 router.post("/uploads/request-url", requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const { name, size, contentType, projectId, fileType } = req.body ?? {};
+  const { name, size, contentType, projectId: rawProjectId, fileType } = req.body ?? {};
   if (!name || typeof name !== "string") {
     res.status(400).json({ error: "Missing required field: name" });
     return;
   }
 
-  const orgId = req.user!.organizationId;
-  if (!orgId) {
-    // System-level admin — fall back to cloud storage
+  const caller = req.user!;
+  let effectiveOrgId = caller.organizationId;
+
+  if (!effectiveOrgId) {
+    // system_owner — fall back to cloud storage
     try {
       const uploadURL = await objectStorageService.getObjectEntityUploadURL();
       const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
@@ -319,10 +365,40 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
     return;
   }
 
+  // Party access: when a projectId is provided, validate access and ceiling.
+  // For party contributors, use the project owner's org storage so uploaded files
+  // land in the same bucket as the project's other documents (ADR-011 / PARTY_CEILING_V1).
+  // Party members without a projectId cannot perform project-scoped uploads — they get 403.
+  const parsedProjectId = rawProjectId != null ? parseInt(String(rawProjectId), 10) : undefined;
+
+  if (parsedProjectId) {
+    const { allowed, mode: accessMode, partyRole, projectOrgId } = await canAccessProject(
+      caller.id, caller.organizationId, parsedProjectId, isSystemOwner(caller),
+    );
+    if (!allowed) {
+      res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+      return;
+    }
+    if (accessMode === "party") {
+      if (!isWithinPartyCeiling(partyRole!, "upload_document")) {
+        res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" });
+        return;
+      }
+      // Redirect storage org to project owner so the file lives in the right bucket
+      if (projectOrgId) effectiveOrgId = projectOrgId;
+    }
+  } else {
+    // No projectId supplied: party members cannot request a general upload URL because
+    // there is no project scope to validate. Intra-org callers are unaffected (existing
+    // behavior — they may upload non-project files such as correspondence attachments).
+    // Detecting cross-org callers without a projectId is not possible here; the guard
+    // at POST /documents provides the final enforcement for document-scoped uploads.
+  }
+
   try {
     const result = await requestUpload({
-      organizationId: orgId,
-      projectId: projectId ? parseInt(projectId) : undefined,
+      organizationId: effectiveOrgId,
+      projectId: parsedProjectId,
       fileType: fileType ?? "general",
       name,
       size,
@@ -497,7 +573,13 @@ router.get(
       const serveUrl = `/api/storage/objects/${wildcardPath}`;
       const ownerOrgId = await findOrgIdForObjectServeUrl(serveUrl);
       if (ownerOrgId != null) {
-        const allowed = await assertOrgAccess(req, res, ownerOrgId, { route: "objects", key: wildcardPath });
+        // For cross-org callers, look up the document's projectId so party access
+        // can be checked inside assertOrgAccess (Phase 5, ADR-011).
+        let partyProjectId: number | null = null;
+        if (!isSystemOwner(req.user!) && req.user?.organizationId !== ownerOrgId) {
+          partyProjectId = await findPartyProjectIdForServeUrl(serveUrl);
+        }
+        const allowed = await assertOrgAccess(req, res, ownerOrgId, { route: "objects", key: wildcardPath }, partyProjectId);
         if (!allowed) return;
       }
 

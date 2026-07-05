@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { projectsTable, projectMembersTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { canAccessProject } from "../lib/can-access-project.js";
 import { requireMinRole, hasMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -281,9 +282,9 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 
   if (!results[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
-  if (!isSystemOwner(user) && results[0].project.organizationId !== user.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
-  }
+  // Party members can view projects they are active parties to (Phase 5, ADR-011)
+  const { allowed } = await canAccessProject(user.id, user.organizationId, id, isSystemOwner(user));
+  if (!allowed) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const mc = await db.select({ cnt: count() }).from(projectMembersTable).where(eq(projectMembersTable.projectId, id));
   const dc = await db.select({ cnt: count() }).from(documentsTable).where(eq(documentsTable.projectId, id));

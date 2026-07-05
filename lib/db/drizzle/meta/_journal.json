@@ -204,6 +204,13 @@
       "when": 1783152000000,
       "tag": "0027_day1_hardening",
       "breakpoints": false
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1783238400000,
+      "tag": "0028_party_model_minimum",
+      "breakpoints": false
     }
   ]
 }

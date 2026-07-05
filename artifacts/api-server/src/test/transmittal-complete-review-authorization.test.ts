@@ -42,10 +42,10 @@ import { eq, and } from "drizzle-orm";
 
 let org: { id: number };
 let project: { id: number; code: string };
-let admin: { id: number; organizationId: number };
-let recipient: { id: number; organizationId: number };  // role=reviewer, toUserId on transmittal
-let sender: { id: number; organizationId: number };     // role=document_controller, createdById
-let outsider: { id: number; organizationId: number };   // role=document_controller, not assigned
+let admin: { id: number; organizationId: number | null };
+let recipient: { id: number; organizationId: number | null };  // role=reviewer, toUserId on transmittal
+let sender: { id: number; organizationId: number | null };     // role=document_controller, createdById
+let outsider: { id: number; organizationId: number | null };   // role=document_controller, not assigned
 
 const db = getTestDb();
 

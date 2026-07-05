@@ -47,6 +47,7 @@ import projectGovernanceRouter from "./project-governance.js";
 import departmentsRouter from "./departments.js";
 import projectDepartmentsRouter from "./project-departments.js";
 import projectParticipantsRouter from "./project-participants.js";
+import projectPartiesRouter from "./project-parties.js";
 import externalContactsRouter from "./external-contacts.js";
 import documentTypesRouter from "./document-types.js";
 import entitiesRouter from "./entities.js";
@@ -166,6 +167,7 @@ router.use("/projects/:projectId/transmittals", requireModule("registers"), tran
 router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
 router.use("/projects/:projectId", projectDepartmentsRouter);
 router.use("/projects/:projectId", projectParticipantsRouter);
+router.use("/projects/:projectId", projectPartiesRouter);
 router.use("/tasks", tasksRouter);
 router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);

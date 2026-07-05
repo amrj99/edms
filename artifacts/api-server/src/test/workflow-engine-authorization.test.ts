@@ -44,10 +44,10 @@ import { eq, and } from "drizzle-orm";
 
 let org: { id: number };
 let project: { id: number };
-let admin: { id: number; organizationId: number };
-let assignedUser: { id: number; organizationId: number };   // responsibleUserId on stage 1
-let outsider: { id: number; organizationId: number };       // member, not assigned, not enough role
-let dcRoleHolder: { id: number; organizationId: number };    // document_controller, matches stage 2 responsibleRole
+let admin: { id: number; organizationId: number | null };
+let assignedUser: { id: number; organizationId: number | null };   // responsibleUserId on stage 1
+let outsider: { id: number; organizationId: number | null };       // member, not assigned, not enough role
+let dcRoleHolder: { id: number; organizationId: number | null };    // document_controller, matches stage 2 responsibleRole
 
 let templateId: number;
 let stage1Id: number; // responsibleUserId = assignedUser, responsibleRole = null

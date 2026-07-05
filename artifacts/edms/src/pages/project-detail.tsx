@@ -40,6 +40,7 @@ import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOver
 import { GovernanceDashboardTab } from "@/components/governance/GovernanceDashboardTab";
 import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
 import { RoleMatrix } from "@/components/governance/RoleMatrix";
+import { ProjectPartiesTab } from "@/components/governance/ProjectPartiesTab";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/hooks/usePermissions";
 import { SubmittalsTab } from "@/components/submittals/SubmittalsTab";
@@ -152,6 +153,7 @@ export default function ProjectDetail() {
   const { data: project, isLoading: projLoading } = useGetProject(projectId);
   const [activeTab, setActiveTab] = useState("documents");
   const [govSubTab, setGovSubTab] = useState<"dashboard" | "audit" | "matrix">("dashboard");
+  const [collaborationMode, setCollaborationMode] = useState<"org_only" | "parties">("org_only");
   const perms = usePermissions();
   // Bridge: Documents tab → Transmittals tab pre-populated create dialog
   const [pendingTransDocIds, setPendingTransDocIds] = useState<number[] | null>(null);
@@ -159,11 +161,16 @@ export default function ProjectDetail() {
     setPendingTransDocIds(docIds);
     setActiveTab("transmittals");
   }
+  // Sync collaborationMode from project data after load
+  useEffect(() => {
+    if (project) setCollaborationMode((project as any).collaborationMode ?? "org_only");
+  }, [(project as any)?.id]);
 
   if (projLoading) return <div className="p-12 flex justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   if (!project) return <div>Project not found</div>;
 
   const isAtLeastPM = ["system_owner", "admin", "project_manager"].includes(perms.effectiveRole ?? "");
+  const isAdmin = ["system_owner", "admin"].includes(perms.effectiveRole ?? "");
 
   const tabs = [
     { value: "documents", icon: FileText, label: "Documents" },
@@ -177,6 +184,7 @@ export default function ProjectDetail() {
     { value: "members", icon: Users, label: "Members" },
     { value: "departments", icon: Building2, label: "Departments" },
     { value: "role-overrides", icon: ShieldCheck, label: "Role Overrides" },
+    ...(isAdmin ? [{ value: "parties", icon: Building2, label: "Parties" }] : []),
     ...(perms.canEditDocument ? [{ value: "governance", icon: LayoutList, label: "Governance" }] : []),
   ];
 
@@ -246,6 +254,13 @@ export default function ProjectDetail() {
           </TabsContent>
           <TabsContent value="role-overrides">
             <ProjectRoleOverridesTab projectId={projectId} />
+          </TabsContent>
+          <TabsContent value="parties">
+            <ProjectPartiesTab
+              projectId={projectId}
+              collaborationMode={collaborationMode}
+              onModeChange={setCollaborationMode}
+            />
           </TabsContent>
           <TabsContent value="governance">
             {/* Governance sub-nav */}

@@ -10,6 +10,7 @@
     "start:prod": "NODE_ENV=production node --enable-source-maps ./dist/index.mjs",
     "seed": "node ./build.mjs && node --enable-source-maps ./dist/seed.mjs",
     "seed:scenarios": "node ./build.mjs && node --enable-source-maps ./dist/seed-business-scenarios.mjs",
+    "seed:ui-test": "node ./build.mjs && node --enable-source-maps ./dist/seed-ui-test.mjs",
     "db:push": "pnpm --filter @workspace/db run push",
     "db:migrate": "pnpm --filter @workspace/db run push",
     "db:seed": "pnpm run seed",
