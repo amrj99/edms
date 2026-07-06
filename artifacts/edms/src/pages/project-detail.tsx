@@ -904,27 +904,33 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
           <Button size="sm" variant="outline" className="h-9 w-9 p-0" title="Refresh documents" onClick={() => refetchDocs()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={runValidation} disabled={validating || allDocs.length === 0}>
-            <ShieldAlert className="h-3.5 w-3.5" />
-            {validating ? "Validating..." : "Validate"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 gap-1.5 border-amber-400/60 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950"
-            onClick={() => navigate(`/migration-wizard?projectId=${projectId}`)}
-          >
-            <FolderMinus className="h-3.5 w-3.5" /> Import Existing
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-9 gap-1.5 text-muted-foreground hover:text-foreground"
-            onClick={() => navigate(`/reports?tab=master&projectId=${projectId}`)}
-            title="Open this project in the Master Register"
-          >
-            <ExternalLink className="h-3.5 w-3.5" /> Master Register
-          </Button>
+          {/* Validation, migration import and master register are owner-org
+              workflows — hidden for external party members (Phase 6C) */}
+          {!partyRole && (
+            <>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5" onClick={runValidation} disabled={validating || allDocs.length === 0}>
+                <ShieldAlert className="h-3.5 w-3.5" />
+                {validating ? "Validating..." : "Validate"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 gap-1.5 border-amber-400/60 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950"
+                onClick={() => navigate(`/migration-wizard?projectId=${projectId}`)}
+              >
+                <FolderMinus className="h-3.5 w-3.5" /> Import Existing
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => navigate(`/reports?tab=master&projectId=${projectId}`)}
+                title="Open this project in the Master Register"
+              >
+                <ExternalLink className="h-3.5 w-3.5" /> Master Register
+              </Button>
+            </>
+          )}
           {canUploadDocs && (
             <>
               <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadSingleOpen(true)}>
