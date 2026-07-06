@@ -36,6 +36,7 @@ import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { DocumentPreviewContent } from "@/components/documents/DocumentPreviewContent";
 import { FolderSidebar } from "@/components/documents/FolderSidebar";
 import { useToast } from "@/hooks/use-toast";
+import { partyAllows, type PartyRole } from "@/lib/party-ceiling";
 import { ProjectRoleOverridesTab } from "@/components/governance/ProjectRoleOverridesTab";
 import { GovernanceDashboardTab } from "@/components/governance/GovernanceDashboardTab";
 import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
@@ -172,7 +173,16 @@ export default function ProjectDetail() {
   const isAtLeastPM = ["system_owner", "admin", "project_manager"].includes(perms.effectiveRole ?? "");
   const isAdmin = ["system_owner", "admin"].includes(perms.effectiveRole ?? "");
 
-  const tabs = [
+  // Phase 6C: party members (external orgs) get a reduced, read-oriented view.
+  // accessMode/partyRole come from GET /projects/:id; the backend enforces all
+  // actions regardless of what is shown here.
+  const partyRole: PartyRole | null =
+    (project as any).accessMode === "party" ? ((project as any).partyRole ?? null) : null;
+
+  const tabs = partyRole ? [
+    { value: "documents", icon: FileText, label: "Documents" },
+    { value: "transmittals", icon: Send, label: "Transmittals" },
+  ] : [
     { value: "documents", icon: FileText, label: "Documents" },
     { value: "review", icon: ClipboardCheck, label: "Review" },
     { value: "transmittals", icon: Send, label: "Transmittals" },
@@ -201,6 +211,11 @@ export default function ProjectDetail() {
               <Badge variant="outline" className="uppercase text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
                 {project.status.replace('_', ' ')}
               </Badge>
+              {partyRole && (
+                <Badge variant="outline" className="uppercase text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                  Partner Project — {partyRole}
+                </Badge>
+              )}
             </div>
             <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
             <p className="text-muted-foreground mt-2 max-w-3xl">{project.description}</p>
@@ -219,13 +234,13 @@ export default function ProjectDetail() {
 
         <div className="mt-6">
           <TabsContent value="documents">
-            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} />
+            <DocumentTab projectId={projectId} projectCode={project.code} projectName={project.name} onCreateTransmittal={openTransmittalCreate} partyRole={partyRole} />
           </TabsContent>
           <TabsContent value="review">
             <ReviewTab projectId={projectId} />
           </TabsContent>
           <TabsContent value="transmittals">
-            <TransmittalsTab projectId={projectId} projectName={project.name} projectCode={project.code} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} />
+            <TransmittalsTab projectId={projectId} projectName={project.name} projectCode={project.code} prefillDocIds={pendingTransDocIds} onPrefillConsumed={() => setPendingTransDocIds(null)} partyRole={partyRole} />
           </TabsContent>
           <TabsContent value="submittals">
             <SubmittalsTab projectId={projectId} />
@@ -316,11 +331,13 @@ const DOC_COLUMNS: ColumnDef[] = [
 ];
 const DOC_PINNED = ["docNum", "title"];
 
-function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void }) {
+function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal, partyRole }: { projectId: number; projectCode?: string; projectName?: string; onCreateTransmittal?: (docIds: number[]) => void; partyRole?: PartyRole | null }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const perms = usePermissions();
+  // Phase 6C: for party members the ceiling replaces role-based gating (backend enforces either way)
+  const canUploadDocs = partyRole ? partyAllows(partyRole, "upload_document") : perms.canCreateDocument;
   const { isVisible: isDocColVis, toggle: toggleDocCol, reset: resetDocCols, visibleCount: docColVisCount } =
     useColumnVisibility(`docs-${projectId}`, DOC_COLUMNS);
   const [, navigate] = useLocation();
@@ -908,7 +925,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
           >
             <ExternalLink className="h-3.5 w-3.5" /> Master Register
           </Button>
-          {perms.canCreateDocument && (
+          {canUploadDocs && (
             <>
               <Button size="sm" className="h-9 gap-1.5" onClick={() => setIsUploadSingleOpen(true)}>
                 <Upload className="h-3.5 w-3.5" /> Upload Document
@@ -1155,7 +1172,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                 >
                   <ExternalLink className="h-3.5 w-3.5" /> Open
                 </Button>
-                {perms.canCreateDocument && (
+                {canUploadDocs && (
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 shrink-0 bg-blue-600 hover:bg-blue-700 text-white"
@@ -1181,7 +1198,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal 
                   )}
                 </p>
               </div>
-              {perms.canCreateDocument && (
+              {canUploadDocs && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -2650,17 +2667,23 @@ function CreateTransmittalDialog({
   );
 }
 
-function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, onPrefillConsumed }: {
+function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, onPrefillConsumed, partyRole }: {
   projectId: number;
   projectName: string;
   projectCode: string;
   prefillDocIds?: number[] | null;
   onPrefillConsumed?: () => void;
+  partyRole?: PartyRole | null;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { user } = useAuth();
   const perms = usePermissions();
+  // Phase 6C: party ceiling replaces role gating for party members (backend enforces either way).
+  // Send stays hidden for party members: POST /:id/send is role-gated (admin/PM/DC) on the backend.
+  const canCreateTrs = partyRole ? partyAllows(partyRole, "create_transmittal") : perms.canCreateTransmittal;
+  const canAcknowledgeTrs = partyRole ? partyAllows(partyRole, "acknowledge_transmittal") : true;
+  const canSendTrs = partyRole ? false : perms.canSendTransmittal;
   const { isVisible: isColVis, toggle: toggleCol, reset: resetCols, visibleCount: trsColCount } =
     useColumnVisibility(`trs-${projectId}`, TRS_COLUMNS);
   const [createOpen, setCreateOpen] = useState(false);
@@ -2853,7 +2876,7 @@ function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, o
           <h3 className="font-semibold text-lg">Transmittals</h3>
           <p className="text-sm text-muted-foreground">{allTransmittals.length} transmittal(s) in this project</p>
         </div>
-        {perms.canCreateTransmittal && (
+        {canCreateTrs && (
           <Button onClick={() => openCreate()} className="gap-2">
             <Plus className="h-4 w-4" /> New Transmittal
           </Button>
@@ -2952,12 +2975,12 @@ function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, o
                       <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => { setSelected(t); setDetailOpen(true); }}>
                         <Eye className="h-3 w-3" /> Detail
                       </Button>
-                      {t.status === "draft" && perms.canSendTransmittal && (
+                      {t.status === "draft" && canSendTrs && (
                         <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => sendTransmittal.mutate(t.id)}>
                           <Send className="h-3 w-3" /> Send
                         </Button>
                       )}
-                      {t.status === "sent" && (
+                      {t.status === "sent" && canAcknowledgeTrs && (
                         <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-green-600" onClick={() => ackTransmittal.mutate(t.id)}>
                           <Check className="h-3 w-3" /> Acknowledge
                         </Button>

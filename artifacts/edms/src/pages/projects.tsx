@@ -350,9 +350,16 @@ export default function Projects() {
                     <div className="bg-primary/10 text-primary px-2 py-1 rounded text-xs font-bold tracking-wider mb-2 inline-block">
                       {project.code}
                     </div>
-                    <Badge variant="outline" className={`${statusColors[project.status]} uppercase text-[10px]`}>
-                      {project.status.replace('_', ' ')}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-1">
+                      <Badge variant="outline" className={`${statusColors[project.status]} uppercase text-[10px]`}>
+                        {project.status.replace('_', ' ')}
+                      </Badge>
+                      {project.accessMode === "party" && (
+                        <Badge variant="outline" className="uppercase text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                          Partner — {project.partyRole}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <h3 className="text-xl font-bold font-display group-hover:text-primary transition-colors">{project.name}</h3>
                   <p className="text-sm text-muted-foreground mt-1 line-clamp-2 min-h-[40px]">

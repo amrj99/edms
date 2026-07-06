@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { projectsTable, projectMembersTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
-import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
+import { projectsTable, projectMembersTable, projectPartiesTable, organizationsTable, usersTable, documentsTable } from "@workspace/db";
+import { eq, count, and, inArray, isNotNull, isNull } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { requireMinRole, hasMinRole } from "../middlewares/require-role.js";
@@ -69,6 +69,37 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     projects = projects.filter(p => p.project.visibleOnFree);
   }
 
+  // ── Party project discovery (Phase 6C) ──────────────────────────────────────
+  // Invariant I-10: every project in this list must satisfy canAccessProject()
+  // for the same caller — the list must never be broader than the detail gate.
+  // Both conditions below mirror the party branch of canAccessProject():
+  //   removed_at IS NULL          → revocation takes effect on the next request
+  //   collaboration_mode='parties' → stale party rows on org_only projects never leak
+  // Party access is org-wide (no project_members check), matching the detail gate.
+  const partyRoleMap = new Map<number, string>();
+  if (!isSystemOwner(user) && user.organizationId) {
+    const partyRows = await db.select({
+      project: projectsTable,
+      orgName: organizationsTable.name,
+      partyRole: projectPartiesTable.partyRole,
+    }).from(projectPartiesTable)
+      .innerJoin(projectsTable, eq(projectPartiesTable.projectId, projectsTable.id))
+      .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
+      .where(and(
+        eq(projectPartiesTable.organizationId, user.organizationId),
+        isNull(projectPartiesTable.removedAt),
+        eq(projectsTable.collaborationMode, "parties"),
+      ));
+
+    const ownIds = new Set(projects.map(p => p.project.id));
+    for (const row of partyRows) {
+      if (ownIds.has(row.project.id)) continue; // defensive dedupe — owner org cannot be its own party
+      if (!row.project.visibleOnFree) continue;
+      partyRoleMap.set(row.project.id, row.partyRole);
+      projects.push({ project: row.project, orgName: row.orgName });
+    }
+  }
+
   const memberCounts = await db.select({ projectId: projectMembersTable.projectId, cnt: count() }).from(projectMembersTable).groupBy(projectMembersTable.projectId);
   const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
 
@@ -81,6 +112,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       organizationName: orgName,
       memberCount: mcMap.get(project.id) ?? 0,
       documentCount: dcMap.get(project.id) ?? 0,
+      accessMode: partyRoleMap.has(project.id) ? "party" : "intra_org",
+      ...(partyRoleMap.has(project.id) ? { partyRole: partyRoleMap.get(project.id) } : {}),
     })),
     total: projects.length,
   });
@@ -283,12 +316,21 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!results[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Party members can view projects they are active parties to (Phase 5, ADR-011)
-  const { allowed } = await canAccessProject(user.id, user.organizationId, id, isSystemOwner(user));
+  const { allowed, mode, partyRole } = await canAccessProject(user.id, user.organizationId, id, isSystemOwner(user));
   if (!allowed) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const mc = await db.select({ cnt: count() }).from(projectMembersTable).where(eq(projectMembersTable.projectId, id));
   const dc = await db.select({ cnt: count() }).from(documentsTable).where(eq(documentsTable.projectId, id));
-  res.json({ ...results[0].project, organizationName: results[0].orgName, memberCount: Number(mc[0]?.cnt ?? 0), documentCount: Number(dc[0]?.cnt ?? 0) });
+  res.json({
+    ...results[0].project,
+    organizationName: results[0].orgName,
+    memberCount: Number(mc[0]?.cnt ?? 0),
+    documentCount: Number(dc[0]?.cnt ?? 0),
+    // Phase 6C: expose the resolved access mode so the UI can gate party views.
+    // Purely informational — enforcement stays in canAccessProject + ceilings.
+    accessMode: mode,
+    ...(partyRole ? { partyRole } : {}),
+  });
 });
 
 // ─── PUT /:id ─────────────────────────────────────────────────────────────────

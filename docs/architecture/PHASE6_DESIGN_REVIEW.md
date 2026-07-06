@@ -345,3 +345,63 @@ Gate 3: system_owner → bypass
 
 Transmittal من مشروع مختلف يُعيد `404` (ليس `403`) — المستخدم لا يعلم بوجوده.
 `transmittalPartyFilter` يتضمن `project_id = :projectId` صراحةً.
+
+---
+
+## 12. Phase 6C — Party Project Discovery (معتمدة ومنفذة 2026-07-06)
+
+**الدافع:** UAT Finding F1 — الطرف الخارجي يصل للموارد عبر URL مباشر لكن `GET /api/projects` يعيد قائمة فارغة له، فلا مسار اكتشاف في الـ UI.
+
+**التصنيف:** Architecture/Scope gap — ليس BUG (النظام كان fail-closed).
+
+### Invariant I-10
+
+كل مشروع يظهر في List يجب أن يحقق `canAccessProject() = allowed` لنفس المستخدم
+(List ⊆ Detail-accessible). مُثبت باختبار L10 الذي يمر على كامل response القائمة
+ويفتح كل مشروع عبر Detail.
+
+### التنفيذ — Backend
+
+`GET /api/projects` (routes/projects.ts): Query 2 منفصل يُدمج مع القائمة الحالية:
+
+```sql
+SELECT projects.*, pp.party_role
+FROM project_parties pp
+JOIN projects ON projects.id = pp.project_id
+WHERE pp.organization_id = :callerOrgId
+  AND pp.removed_at IS NULL              -- revocation فوري
+  AND projects.collaboration_mode = 'parties'  -- org_only لا يتسرب أبداً
+```
+
+- الشرطان يطابقان party branch في `canAccessProject()` حرفياً
+- وصول party هو org-wide (لا فلترة project_members) — يطابق الـ Detail gate
+- فلتر `visibleOnFree` يُطبق على صفوف party أيضاً
+- Query 1 (مشاريع المنظمة) بلا أي تغيير — سلوك Owner Org محفوظ 100%
+
+حقول جديدة non-breaking في List وDetail:
+`accessMode: "intra_org" | "member" | "party" | "system"` + `partyRole?` (فقط عند party).
+
+### التنفيذ — Frontend
+
+- `src/lib/party-ceiling.ts` (جديد): مرآة `PARTY_CEILING_V1` — للعرض فقط، الـ backend هو الـ enforcer الوحيد
+- `projects.tsx`: Badge «Partner — contributor/observer» على بطاقة المشروع
+- `project-detail.tsx`: عند `accessMode === "party"`:
+  - التبويبات: Documents + Transmittals فقط
+  - Badge «Partner Project — {role}» في الـ header
+  - الأزرار حسب الـ ceiling: observer قراءة فقط؛ contributor يحصل على Upload/Create/Acknowledge
+  - زر Send مخفي دائماً للـ party (backend يتطلب role admin/PM/DC)
+
+### الاختبارات
+
+`project-list-party-discovery.test.ts` — L1–L11 (إضافة فقط، صفر تعديل على الاختبارات القائمة):
+regression للـ owner admin/member، ظهور contributor/observer، org-wide parity،
+revocation فوري، عزل unrelated org، إخفاء org_only مع صفوف party قديمة (L8)،
+إخفاء visibleOnFree=false (L9)، Invariant I-10 loop (L10)، تطابق List/Detail (L11).
+
+### قيود مثبتة
+
+- لا Migration، لا تعديل `canAccessProject()`، لا تعديل `PARTY_CEILING_V1`، لا policy changes
+- ملاحظة موثقة خارج النطاق: `GET /projects/:id` يعيد 403 (لا 404) للمشروع الموجود غير
+  المصرح به — سلوك قائم قبل 6C، مرشح info-hiding مستقبلي
+- ملاحظة قائمة: party contributor يستطيع إنشاء transmittal (ceiling) لكن لا يستطيع
+  إرساله (`/send` requireRole admin/PM/DC) — asymmetry موروث من Phase 5، خارج نطاق 6C

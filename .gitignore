@@ -66,3 +66,4 @@ attached_assets/
 
 # Database backup dumps (backup_*.sql, pre-deploy dumps) — never commit
 backup_*.sql
+backups/
