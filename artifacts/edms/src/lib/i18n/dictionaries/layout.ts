@@ -1,0 +1,33 @@
+// layout — split from i18n.tsx (Phase 8A-2). Values unchanged.
+export const layout = {
+  en: {
+    myAccount: "My Account",
+    myProfile: "My Profile",
+    toggleTheme: "Toggle Theme",
+    logOut: "Log Out",
+    switchProject: "Switch Project",
+    globalSearchPlaceholder: "Search...",
+    globalSearchHint: "Search projects, documents, correspondence, meetings...",
+    globalSearchMin: "Type at least 2 characters to search...",
+    globalSearching: "Searching...",
+    globalNoResults: "No results found",
+    globalOpenResult: "Open",
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
+  },
+  ar: {
+    myAccount: "حسابي",
+    myProfile: "ملفي الشخصي",
+    toggleTheme: "تبديل المظهر",
+    logOut: "تسجيل الخروج",
+    switchProject: "تبديل المشروع",
+    globalSearchPlaceholder: "بحث...",
+    globalSearchHint: "ابحث في المشاريع والمستندات والمراسلات والاجتماعات...",
+    globalSearchMin: "اكتب حرفين على الأقل للبحث...",
+    globalSearching: "جاري البحث...",
+    globalNoResults: "لا توجد نتائج",
+    globalOpenResult: "فتح",
+    openMenu: "فتح القائمة",
+    closeMenu: "إغلاق القائمة",
+  },
+} as const;
