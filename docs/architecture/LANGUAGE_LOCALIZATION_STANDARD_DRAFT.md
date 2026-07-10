@@ -149,6 +149,26 @@
 
 ## 12. عزل Internal Edition ✅
 
-Internal Edition تُبنى من snapshot/release tag مثبَّت، إنجليزية فقط. أعمال Phase 8
+Internal Edition تُبنى من snapshot/release tag مثبَّت, إنجليزية فقط. أعمال Phase 8
 كلها في المنتج التجاري. التقاطع الوحيد: إصلاحات أمنية بـ cherry-pick صريح بقرار
-مالك المنتج، حالة بحالة.
+مالك المنتج, حالة بحالة.
+
+## 13. خارطة طريق Phase 8 والحالة (Roadmap & Status)
+
+| المرحلة | الوصف | الحالة | مرجع |
+|---|---|---|---|
+| **8.0** | Language & Localization Standard + Terminology Audit + Industry References | ✅ **Approved** (2026-07-07) | هذا المستند |
+| **8A** | Foundation — تقسيم `i18n.tsx` إلى `dictionaries/`, `useDirection`, `useLocalizedDate`, hardcoded guard | ✅ **Completed** — merged to `main` `02eb155` (2026-07-10) | PR #4 |
+| **8B-1** | Authentication Journey (Vertical Slice المرجعي) — 7 صفحات مصادقة + TermsGate/LegalModals chrome, EN/AR | ✅ **Completed** — merged `02eb155`; Acceptance UAT اجتازت محلياً؛ **نشر الإنتاج محجوز بانتظار إذن صريح** | PR #4 |
+| **8B-2** | التالي — Vertical Slice ثانٍ (النطاق مقترح, بانتظار اعتماد قبل أي تنفيذ) | 🔵 **Proposed — scope pending approval** | — |
+| **8B-n** | بقية الصفحات/المكوّنات وفق نفس النمط المرجعي | ⬜ Planned | — |
+| **8D** | رسائل الـ Backend (بنية معتمدة في §8) | ⬜ Planned | — |
+
+### المنهجية المرجعية (Reference Pattern — من 8A/8B-1, تُطبَّق على البقية)
+Root Cause أولاً → تحليل معماري قبل التنفيذ → Vertical Slice صغير مكتمل → إثبات بالأدلة
+(key parity + guard + typecheck-intersection + build + UAT مصفوفة) → لا توسيع نطاق → لا
+إصلاح ديون جانبية إلا إذا كانت تمنع التنفيذ فعلاً → مصطلحات §3.ب المجمَّدة تبقى مجمَّدة.
+
+### حواجز مفتوحة (مسجّلة في ARCHITECTURE_DEBT_REGISTER.md)
+- **ADR-12** — Arabic Legal Review Pending (`POLICY`): نص Terms/Privacy يبقى إنجليزياً باعتماد سياسة, مع تنبيه للمستخدم العربي؛ لا يُدّعى اكتمال ثنائية اللغة قبل مراجعة قانونية عربية.
+- **ADR-13** — Language Toggle Duplication (`FUTURE`): يُعالَج طبيعياً عند لمس App Shell (إن اختير كنطاق 8B-2).
