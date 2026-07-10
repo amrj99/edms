@@ -211,6 +211,13 @@
       "when": 1783238400000,
       "tag": "0028_party_model_minimum",
       "breakpoints": false
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1783664012951,
+      "tag": "0030_baseline_meta_sync",
+      "breakpoints": true
     }
   ]
 }
