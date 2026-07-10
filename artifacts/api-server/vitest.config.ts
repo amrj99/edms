@@ -45,12 +45,21 @@ export default defineConfig({
     // ── Sequence ─────────────────────────────────────────────────────────────
     // Run test files sequentially to avoid parallel DB conflicts.
     // Within a file, tests still run in order (default).
+    //
+    // singleFork alone is NOT enough: vitest still schedules test *files*
+    // concurrently inside the one fork, so two files' beforeAll hooks race on
+    // truncateAllTables (RESTART IDENTITY CASCADE), producing intermittent FK
+    // violations / deadlocks / "organization_id not present" — the exact
+    // symptoms seen in CI. fileParallelism:false enforces the documented intent:
+    // one test file at a time, no shared-DB races. This makes the suite
+    // deterministic in CI (and in ad-hoc subset runs) without weakening any test.
     pool: "forks",
     poolOptions: {
       forks: {
         singleFork: true, // single process per run — safe for shared test DB
       },
     },
+    fileParallelism: false, // one test file at a time — no cross-file DB races
   },
 
   resolve: {

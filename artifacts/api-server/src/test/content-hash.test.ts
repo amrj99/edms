@@ -24,8 +24,11 @@ import {
   createUser,
   createProject,
 } from "./helpers/index.js";
-import { documentsTable, documentFilesTable } from "@workspace/db";
+import { documentsTable, documentFilesTable, orgConfigTable } from "@workspace/db";
 import { api, makeToken } from "./helpers/index.js";
+import os from "os";
+import path from "path";
+import fs from "fs";
 
 // ─── Fixture ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +63,19 @@ describe("document_files.sha256 — Content Hash (C-4)", () => {
 
     const org = await createOrg({ name: "Hash Test Org", code: "HASH01" });
     orgId = org.id;
+
+    // Hermetic storage: pin this org to on-premise storage with a temp path so
+    // the upload path never depends on ambient DEFAULT_STORAGE_TYPE / cloud
+    // auto-detection. Without this, storage resolution falls through to
+    // autoDefault, which under some CI conditions resolves to "cloud" (no
+    // PRIVATE_OBJECT_DIR) and the upload 500s. The test controls its own backend.
+    const db0 = getTestDb();
+    const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), "edms-hash-test-"));
+    await db0.insert(orgConfigTable).values({
+      organizationId: orgId,
+      storageType: "onpremise",
+      storagePath,
+    });
 
     const user = await createUser({ organizationId: orgId, role: "admin" });
     userId = user.id;

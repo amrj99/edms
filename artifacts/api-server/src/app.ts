@@ -197,18 +197,28 @@ seedPlans()
     logger.error({ err }, "[seed-plans] startup plan seed failed — getResolvedPlan() will log warnings until plans are seeded");
   });
 
-// Phase 2.95 — Reset org_config.modules to exactly match plan defaults.
-// Eliminates all plan_gap and orphan mismatches on test/demo data.
-// Safe to call multiple times — skips orgs where modules already match.
-resetModulesToPlan().catch((err) => {
-  logger.error({ err }, "[reset-modules] startup module reset failed — org modules may not match plan defaults");
-});
+// Background module-config maintenance (reset + periodic sync) is skipped under
+// NODE_ENV=test. These issue DB writes/reads on their own schedule; in the test
+// process the module-sync timer (first run ~2 min in) fires mid-suite and
+// deadlocks with truncateAllTables (AccessExclusiveLock vs AccessShareLock),
+// making CI intermittently red. A test process must not run production
+// background jobs. Real runtime behaviour (dev/prod) is unchanged.
+const isTest = process.env.NODE_ENV === "test";
 
-// Phase 3 — Start periodic module sync scheduler.
-// Syncs org_config.modules for all orgs every 30 min (first run after 2 min).
-// Applies plan defaults + active org_feature_overrides.
-// Continues on per-org error — never crashes the process.
-startModuleSyncScheduler();
+if (!isTest) {
+  // Phase 2.95 — Reset org_config.modules to exactly match plan defaults.
+  // Eliminates all plan_gap and orphan mismatches on test/demo data.
+  // Safe to call multiple times — skips orgs where modules already match.
+  resetModulesToPlan().catch((err) => {
+    logger.error({ err }, "[reset-modules] startup module reset failed — org modules may not match plan defaults");
+  });
+
+  // Phase 3 — Start periodic module sync scheduler.
+  // Syncs org_config.modules for all orgs every 30 min (first run after 2 min).
+  // Applies plan defaults + active org_feature_overrides.
+  // Continues on per-org error — never crashes the process.
+  startModuleSyncScheduler();
+}
 
 // Idempotent — enables RLS + org-isolation policies on all critical tables.
 initRlsPolicies().catch((err) => {
