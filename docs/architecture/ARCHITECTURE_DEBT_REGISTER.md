@@ -1,6 +1,6 @@
 # Architecture Debt Register — ArcScale EDMS
 
-**آخر تحديث:** 2026-06-30 (ADR-01 RESOLVED)
+**آخر تحديث:** 2026-07-10 (ADR-12 + ADR-13 مُسجَّلان — Phase 8B-1)
 **الحالة الإجمالية:** Phase 1 (RC-01 → RC-06) مكتملة ✅ | ADR-01 مُعالج ✅ | المشروع في مرحلة Feature Development
 
 **الغرض من هذا السجل:** توثيق الديون المعمارية وقرارات الـ FUTURE/POLICY المؤجلة، مستقلةً عن سجل الـ Root Causes. كل بند هنا لا يمثل خللاً وظيفياً بل قراراً واعياً بالتأجيل أو مخاطرة مقبولة تم توثيقها.
@@ -447,6 +447,65 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## ADR-12 — Legal Localization Blocker: Arabic Terms Review
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `POLICY` |
+| **الأولوية** | عالية (قبل أي إطلاق تجاري بالعربية / قبل ادعاء أن الشروط ثنائية اللغة) |
+| **اكتُشف في** | Phase 8B-1 — Authentication Journey Vertical Slice — 2026-07-10 |
+| **يؤثر على** | `components/legal/TermsGate.tsx`, `components/legal/LegalModals.tsx`, `lib/i18n/dictionaries/legal.ts` |
+
+### الملاحظة
+
+في Phase 8B-1 تُرجمت **واجهة** المكوّنات القانونية بالكامل (العناوين، الأزرار، تعليمات التمرير، checkbox الموافقة، الـ toasts). لكن **نص الاتفاقية القانوني نفسه** (Terms of Use + Privacy Policy body — الأقسام المرقّمة) بقي في صياغته الإنجليزية المعتمدة ولم يُترجَم آلياً.
+
+عند `lang=ar` يظهر إشعار `legal.notice.arabicPending` (بانر amber) فوق النص الإنجليزي يُعلم المستخدم العربي بأن النسخة العربية قيد المراجعة القانونية المتخصصة، وأن الموافقة تعني الموافقة على النص الإنجليزي المعروض.
+
+### السبب (لماذا لم يُترجَم آلياً)
+
+الترجمة الآلية لنص قانوني ملزِم تحمل **مسؤولية قانونية** — الصياغة القانونية العربية يجب أن تُعتمد من مختص، لا أن تُولَّد آلياً.
+
+### الأثر على الـ Hardcoded Guard
+
+الـ 34 نتيجة `latin` المتبقية في الملفين (`LegalModals.tsx`=25, `TermsGate.tsx`=9 في `i18n-baseline.json`) هي **النص القانوني الإنجليزي المقصود** — وليست ديناً يُغلَق بترجمة الفاحص. لا يجوز خفضها بترجمة آلية.
+
+### القرار
+
+`POLICY` — لا تُترجم الاتفاقية آلياً. الانتظار لمراجعة قانونية عربية معتمدة. **لا يُدَّعى أن محتوى الشروط مكتمل ثنائي اللغة قبل اعتماد الصياغة العربية قانونياً.**
+
+### الخطوة التالية (الإجراء المطلوب)
+
+مراجعة قانونية عربية معتمدة → إضافة النسخة العربية المعتمدة إلى `legal.ts` → إزالة إشعار `arabicPending` → تحديث هذا البند إلى `RESOLVED`.
+
+---
+
+## ADR-13 — Language Toggle Logic Duplication
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `FUTURE` (DX / Refactor) |
+| **الأولوية** | منخفضة |
+| **اكتُشف في** | Phase 8B-1 — 2026-07-10 |
+| **يؤثر على** | `components/layout/AppLayout.tsx` (`LanguageToggle` غير مُصدَّر، ~سطر 643), `components/auth/AuthLanguageToggle.tsx` |
+| **Chip** | `task_ae214f34` (background chip — refactor) |
+
+### الملاحظة
+
+منطق قلب اللغة (`useI18n().setLang(lang==='en'?'ar':'en')` + رسم العلَم/التسمية) مكرَّر في موضعين. الـ `LanguageToggle` الرئيسي **دالة محلية غير مُصدَّرة داخل `AppLayout.tsx`** فلا يمكن استيرادها؛ ولأن صفحات المصادقة تُعرَض **خارج** `AppLayout`، أُنشئ `AuthLanguageToggle` الذي أعاد تنفيذ نفس المنطق الجوهري.
+
+الفروق تنسيقية فقط (الأساسي: `ghost` inline بنصوص hardcoded؛ الجديد: `outline` + fixed `end-4` + تسميات عبر `t()`).
+
+### القرار
+
+استخراج مكوّن/هوك مشترك (مثل `useLanguageToggle()` أو `LanguageToggle` مشترك مع variants) يستهلكه الطرفان. **لم يُنفَّذ في 8B-1 عمداً** لأن الإصلاح يستلزم تعديل `AppLayout.tsx` خارج سياج الملفات التسعة للشريحة المرجعية.
+
+### شرط إعادة التقييم
+
+عند لمس `AppLayout` header في مرحلة لاحقة، أو ظهور مبدّل لغة ثالث، أو ضمن أي جولة تنظيف i18n لاحقة.
+
+---
+
 ## سجل التحديثات
 
 | التاريخ | الإصدار | التغيير |
@@ -456,6 +515,7 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 | 2026-07-04 | v1.2 | ADR-09: تسجيل Known Design Gap — cross-org assignedToId في manual tasks (Day-1 Hardening review) |
 | 2026-07-05 | v1.3 | ADR-10: تسجيل Known Simplification — download = read في Party Model Minimum (Phase 5 Design Review) |
 | 2026-07-05 | v1.4 | ADR-11: تسجيل Migration Tracking Drift — اكتُشف أثناء Phase 5 Production Deploy |
+| 2026-07-10 | v1.5 | ADR-12: تسجيل Legal Localization Blocker (Arabic Terms Review) + ADR-13: Language Toggle Logic Duplication — اكتُشفا في Phase 8B-1 |
 
 ---
 
@@ -465,6 +525,7 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 |-------|----------------|---------|
 | ADR-04 | تحديد policy الوصول للـ Submission Chains | Product Owner |
 | ADR-07 | قرار write-lock على `rejected` transmittals | Product Owner |
+| ADR-12 | ترتيب مراجعة قانونية عربية معتمدة لنص Terms/Privacy | Product Owner / Legal |
 
 ---
 

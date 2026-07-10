@@ -1,0 +1,33 @@
+// notifications — split from i18n.tsx (Phase 8A-2). Values unchanged.
+export const notifications = {
+  en: {
+    notifBell: "Notifications",
+    notifMarkAllRead: "Mark all read",
+    notifMarkRead: "Mark as read",
+    notifMarkUnread: "Mark as unread",
+    notifDelete: "Delete",
+    notifEmpty: "No notifications",
+    notifEmptyDesc: "You're all caught up!",
+    notifAll: "All",
+    notifDocs: "Docs",
+    notifTasks: "Tasks",
+    notifMail: "Mail",
+    notifMeetings: "Meetings",
+    notifChat: "Chat",
+  },
+  ar: {
+    notifBell: "الإشعارات",
+    notifMarkAllRead: "تعليم الكل كمقروء",
+    notifMarkRead: "تعليم كمقروء",
+    notifMarkUnread: "تعليم كغير مقروء",
+    notifDelete: "حذف",
+    notifEmpty: "لا توجد إشعارات",
+    notifEmptyDesc: "أنت على اطلاع بكل شيء!",
+    notifAll: "الكل",
+    notifDocs: "مستندات",
+    notifTasks: "مهام",
+    notifMail: "بريد",
+    notifMeetings: "اجتماعات",
+    notifChat: "محادثة",
+  },
+} as const;

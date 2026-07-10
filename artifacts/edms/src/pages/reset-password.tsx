@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link, useSearch } from "wouter";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
@@ -15,26 +15,17 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useI18n, useDirection } from "@/lib/i18n";
+import { AuthLanguageToggle } from "@/components/auth/AuthLanguageToggle";
 
-const resetSchema = z.object({
-  password: z
-    .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number"),
-  confirmPassword: z.string(),
-}).refine((d) => d.password === d.confirmPassword, {
-  message: "Passwords do not match",
-  path: ["confirmPassword"],
-});
-
-type ResetFormValues = z.infer<typeof resetSchema>;
+type ResetFormValues = { password: string; confirmPassword: string };
 
 function PasswordStrength({ password }: { password: string }) {
+  const { t } = useI18n();
   const checks = [
-    { label: "At least 8 characters", valid: password.length >= 8 },
-    { label: "Uppercase letter", valid: /[A-Z]/.test(password) },
-    { label: "Number", valid: /[0-9]/.test(password) },
+    { label: t("auth.password.min8"), valid: password.length >= 8 },
+    { label: t("auth.password.uppercase"), valid: /[A-Z]/.test(password) },
+    { label: t("auth.password.number"), valid: /[0-9]/.test(password) },
   ];
   if (!password) return null;
   return (
@@ -50,6 +41,8 @@ function PasswordStrength({ password }: { password: string }) {
 }
 
 export default function ResetPassword() {
+  const { t, lang } = useI18n();
+  const { flipIconClass } = useDirection();
   const search = useSearch();
   const params = new URLSearchParams(search);
   const token = params.get("token") || "";
@@ -60,6 +53,22 @@ export default function ResetPassword() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  const resetSchema = useMemo(
+    () =>
+      z.object({
+        password: z
+          .string()
+          .min(8, t("auth.validation.passwordMin8"))
+          .regex(/[A-Z]/, t("auth.validation.passwordUppercase"))
+          .regex(/[0-9]/, t("auth.validation.passwordNumber")),
+        confirmPassword: z.string(),
+      }).refine((d) => d.password === d.confirmPassword, {
+        message: t("auth.validation.passwordsMismatch"),
+        path: ["confirmPassword"],
+      }),
+    [lang], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const form = useForm<ResetFormValues>({
     resolver: zodResolver(resetSchema),
     defaultValues: { password: "", confirmPassword: "" },
@@ -69,7 +78,7 @@ export default function ResetPassword() {
 
   const onSubmit = async (data: ResetFormValues) => {
     if (!token) {
-      setServerError("Invalid reset link. Please request a new password reset.");
+      setServerError(t("auth.reset.invalidLink"));
       return;
     }
     setIsLoading(true);
@@ -82,12 +91,12 @@ export default function ResetPassword() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setServerError(json.message || "Failed to reset password. Please try again.");
+        setServerError(json.message || t("auth.reset.failed"));
         return;
       }
       setSuccess(true);
     } catch {
-      setServerError("Network error. Please try again.");
+      setServerError(t("auth.shared.networkError"));
     } finally {
       setIsLoading(false);
     }
@@ -96,12 +105,13 @@ export default function ResetPassword() {
   if (!token) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <AuthLanguageToggle />
         <div className="max-w-md w-full text-center space-y-4">
           <AlertCircle className="h-12 w-12 text-destructive mx-auto" />
-          <h2 className="text-xl font-bold">Invalid Reset Link</h2>
-          <p className="text-muted-foreground">This reset link is missing or invalid.</p>
+          <h2 className="text-xl font-bold">{t("auth.reset.invalidTitle")}</h2>
+          <p className="text-muted-foreground">{t("auth.reset.invalidBody")}</p>
           <Link href="/forgot-password">
-            <Button className="mt-4">Request new reset link</Button>
+            <Button className="mt-4">{t("auth.reset.requestNew")}</Button>
           </Link>
         </div>
       </div>
@@ -110,6 +120,7 @@ export default function ResetPassword() {
 
   return (
     <div className="min-h-screen w-full flex bg-background">
+      <AuthLanguageToggle />
       <div className="flex-1 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8">
         <div className="w-full max-w-md space-y-8">
           <div className="text-center">
@@ -119,10 +130,10 @@ export default function ResetPassword() {
               </div>
             </div>
             <h2 className="text-3xl font-bold tracking-tight text-foreground">
-              {success ? "Password reset!" : "Set new password"}
+              {success ? t("auth.reset.titleSuccess") : t("auth.reset.title")}
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {success ? "Your password has been updated successfully" : "Choose a strong password for your account"}
+              {success ? t("auth.reset.subtitleSuccess") : t("auth.reset.subtitle")}
             </p>
           </div>
 
@@ -143,7 +154,7 @@ export default function ResetPassword() {
                       name="password"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>New password</FormLabel>
+                          <FormLabel>{t("auth.reset.newPassword")}</FormLabel>
                           <FormControl>
                             <div className="relative">
                               <Input
@@ -151,13 +162,13 @@ export default function ResetPassword() {
                                 type={showPassword ? "text" : "password"}
                                 autoComplete="new-password"
                                 disabled={isLoading}
-                                className="h-11 pr-10"
+                                className="h-11 pe-10"
                                 {...field}
                               />
                               <button
                                 type="button"
                                 onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                                 tabIndex={-1}
                               >
                                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -175,7 +186,7 @@ export default function ResetPassword() {
                       name="confirmPassword"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Confirm new password</FormLabel>
+                          <FormLabel>{t("auth.reset.confirmNewPassword")}</FormLabel>
                           <FormControl>
                             <div className="relative">
                               <Input
@@ -183,13 +194,13 @@ export default function ResetPassword() {
                                 type={showConfirm ? "text" : "password"}
                                 autoComplete="new-password"
                                 disabled={isLoading}
-                                className="h-11 pr-10"
+                                className="h-11 pe-10"
                                 {...field}
                               />
                               <button
                                 type="button"
                                 onClick={() => setShowConfirm(!showConfirm)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                                 tabIndex={-1}
                               >
                                 {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -208,11 +219,11 @@ export default function ResetPassword() {
                     >
                       {isLoading ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Updating password...
+                          <Loader2 className="me-2 h-4 w-4 animate-spin" />
+                          {t("auth.reset.updating")}
                         </>
                       ) : (
-                        "Set new password"
+                        t("auth.reset.submit")
                       )}
                     </Button>
                   </form>
@@ -226,11 +237,11 @@ export default function ResetPassword() {
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Your password has been updated. You can now log in with your new password.
+                  {t("auth.reset.successBody")}
                 </p>
                 <Link href="/login">
                   <Button className="w-full h-11 font-semibold mt-2">
-                    Go to sign in
+                    {t("auth.reset.goToSignIn")}
                   </Button>
                 </Link>
               </div>
@@ -239,8 +250,8 @@ export default function ResetPassword() {
             {!success && (
               <div className="mt-6 text-center">
                 <Link href="/login" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  Back to sign in
+                  <ArrowLeft className={`h-3.5 w-3.5 ${flipIconClass}`} />
+                  {t("auth.shared.backToSignIn")}
                 </Link>
               </div>
             )}
@@ -253,15 +264,15 @@ export default function ResetPassword() {
         <img
           className="absolute inset-0 h-full w-full object-cover opacity-80 mix-blend-overlay"
           src={`${import.meta.env.BASE_URL}images/auth-bg.png`}
-          alt="Architecture blueprint background"
+          alt={t("auth.shared.heroAlt")}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
-        <div className="absolute bottom-12 left-12 right-12 text-white">
+        <div className="absolute bottom-12 start-12 end-12 text-white">
           <h1 className="text-4xl font-bold tracking-tight mb-4">
-            Secure your account.
+            {t("auth.reset.heroTitle")}
           </h1>
           <p className="text-lg text-slate-300 max-w-xl leading-relaxed">
-            Choose a strong password to keep your engineering documents and team data safe.
+            {t("auth.reset.heroSubtitle")}
           </p>
         </div>
       </div>

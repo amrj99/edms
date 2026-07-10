@@ -1,0 +1,258 @@
+{
+  "src/components/admin/RulesTab.tsx": {
+    "latin": 27,
+    "arabic": 0
+  },
+  "src/components/documents/DocumentActivityTab.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/documents/DocumentAiTab.tsx": {
+    "latin": 7,
+    "arabic": 0
+  },
+  "src/components/documents/DocumentFilesPanel.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/documents/DocumentPreviewContent.tsx": {
+    "latin": 14,
+    "arabic": 0
+  },
+  "src/components/documents/DocumentRevisionsTab.tsx": {
+    "latin": 10,
+    "arabic": 0
+  },
+  "src/components/documents/FolderSidebar.tsx": {
+    "latin": 10,
+    "arabic": 0
+  },
+  "src/components/file-drop-zone.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/components/governance/AuditLogPanel.tsx": {
+    "latin": 6,
+    "arabic": 0
+  },
+  "src/components/governance/GovernanceDashboardTab.tsx": {
+    "latin": 29,
+    "arabic": 0
+  },
+  "src/components/governance/ProjectPartiesTab.tsx": {
+    "latin": 17,
+    "arabic": 0
+  },
+  "src/components/governance/ProjectRoleOverridesTab.tsx": {
+    "latin": 14,
+    "arabic": 0
+  },
+  "src/components/governance/RoleMatrix.tsx": {
+    "latin": 5,
+    "arabic": 0
+  },
+  "src/components/layout/AppLayout.tsx": {
+    "latin": 13,
+    "arabic": 2
+  },
+  "src/components/legal/LegalModals.tsx": {
+    "latin": 25,
+    "arabic": 0
+  },
+  "src/components/legal/TermsGate.tsx": {
+    "latin": 9,
+    "arabic": 0
+  },
+  "src/components/recipient-autocomplete.tsx": {
+    "latin": 3,
+    "arabic": 0
+  },
+  "src/components/submittals/CreateSubmittalDialog.tsx": {
+    "latin": 6,
+    "arabic": 0
+  },
+  "src/components/submittals/ForwardDialog.tsx": {
+    "latin": 3,
+    "arabic": 0
+  },
+  "src/components/submittals/ResubmitDialog.tsx": {
+    "latin": 3,
+    "arabic": 0
+  },
+  "src/components/submittals/ReturnDialog.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/submittals/ReviewDialog.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/submittals/SubmittalsTab.tsx": {
+    "latin": 8,
+    "arabic": 0
+  },
+  "src/components/ui/breadcrumb.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/components/ui/carousel.tsx": {
+    "latin": 2,
+    "arabic": 0
+  },
+  "src/components/ui/column-visibility-menu.tsx": {
+    "latin": 2,
+    "arabic": 0
+  },
+  "src/components/ui/field.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/components/ui/pagination.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/ui/searchable-select.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/components/ui/sidebar.tsx": {
+    "latin": 4,
+    "arabic": 0
+  },
+  "src/components/ui/spinner.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/components/upload-document-dialog.tsx": {
+    "latin": 18,
+    "arabic": 0
+  },
+  "src/components/upload-documents-dialog.tsx": {
+    "latin": 18,
+    "arabic": 0
+  },
+  "src/components/workflow/DocumentWorkflowPanel.tsx": {
+    "latin": 17,
+    "arabic": 0
+  },
+  "src/components/workflow/TemplateEditorDialog.tsx": {
+    "latin": 17,
+    "arabic": 0
+  },
+  "src/pages/action-items.tsx": {
+    "latin": 20,
+    "arabic": 0
+  },
+  "src/pages/activity-log.tsx": {
+    "latin": 0,
+    "arabic": 2
+  },
+  "src/pages/admin.tsx": {
+    "latin": 210,
+    "arabic": 31
+  },
+  "src/pages/calendar.tsx": {
+    "latin": 2,
+    "arabic": 0
+  },
+  "src/pages/chat.tsx": {
+    "latin": 12,
+    "arabic": 0
+  },
+  "src/pages/config.tsx": {
+    "latin": 26,
+    "arabic": 0
+  },
+  "src/pages/correspondence.tsx": {
+    "latin": 53,
+    "arabic": 0
+  },
+  "src/pages/dashboard.tsx": {
+    "latin": 38,
+    "arabic": 0
+  },
+  "src/pages/delegations.tsx": {
+    "latin": 15,
+    "arabic": 0
+  },
+  "src/pages/deliverables.tsx": {
+    "latin": 22,
+    "arabic": 0
+  },
+  "src/pages/document-detail.tsx": {
+    "latin": 23,
+    "arabic": 0
+  },
+  "src/pages/document-type-detail.tsx": {
+    "latin": 16,
+    "arabic": 0
+  },
+  "src/pages/documents.tsx": {
+    "latin": 50,
+    "arabic": 0
+  },
+  "src/pages/general.tsx": {
+    "latin": 13,
+    "arabic": 0
+  },
+  "src/pages/meetings.tsx": {
+    "latin": 33,
+    "arabic": 0
+  },
+  "src/pages/migration-wizard.tsx": {
+    "latin": 66,
+    "arabic": 0
+  },
+  "src/pages/not-found.tsx": {
+    "latin": 1,
+    "arabic": 0
+  },
+  "src/pages/organizations.tsx": {
+    "latin": 10,
+    "arabic": 0
+  },
+  "src/pages/profile.tsx": {
+    "latin": 16,
+    "arabic": 0
+  },
+  "src/pages/project-detail.tsx": {
+    "latin": 242,
+    "arabic": 0
+  },
+  "src/pages/projects.tsx": {
+    "latin": 18,
+    "arabic": 0
+  },
+  "src/pages/reports-dashboard.tsx": {
+    "latin": 21,
+    "arabic": 0
+  },
+  "src/pages/reports.tsx": {
+    "latin": 42,
+    "arabic": 1
+  },
+  "src/pages/search.tsx": {
+    "latin": 16,
+    "arabic": 0
+  },
+  "src/pages/settings.tsx": {
+    "latin": 9,
+    "arabic": 0
+  },
+  "src/pages/submittal-detail.tsx": {
+    "latin": 8,
+    "arabic": 0
+  },
+  "src/pages/tasks.tsx": {
+    "latin": 2,
+    "arabic": 0
+  },
+  "src/pages/users.tsx": {
+    "latin": 43,
+    "arabic": 0
+  },
+  "src/pages/workflow-engine.tsx": {
+    "latin": 37,
+    "arabic": 0
+  }
+}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useLogin } from "@workspace/api-client-react";
@@ -18,22 +18,33 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useI18n } from "@/lib/i18n";
+import { AuthLanguageToggle } from "@/components/auth/AuthLanguageToggle";
 
-const loginSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(1, "Password is required"),
-  rememberMe: z.boolean().optional(),
-});
-
-type LoginFormValues = z.infer<typeof loginSchema>;
+type LoginFormValues = {
+  email: string;
+  password: string;
+  rememberMe?: boolean;
+};
 
 export default function Login() {
+  const { t, lang } = useI18n();
   const { login: setAuthToken } = useAuth();
   const loginMutation = useLogin();
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
+
+  const loginSchema = useMemo(
+    () =>
+      z.object({
+        email: z.string().email(t("auth.validation.email")),
+        password: z.string().min(1, t("auth.validation.passwordRequired")),
+        rememberMe: z.boolean().optional(),
+      }),
+    [lang], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -65,19 +76,20 @@ export default function Login() {
       if (status === 429) {
         setRateLimited(true);
         setAttemptsRemaining(null);
-        const msg = body.message || "Too many login attempts. Please wait before trying again.";
+        const msg = body.message || t("auth.login.rateLimited");
         setServerError(msg);
         return;
       }
       const remaining = typeof body.attemptsRemaining === "number" ? body.attemptsRemaining : null;
       setAttemptsRemaining(remaining);
-      const msg = body.message || error?.message || "Invalid email or password. Please try again.";
+      const msg = body.message || error?.message || t("auth.login.invalidCredentials");
       setServerError(msg);
     }
   };
 
   return (
     <div className="min-h-screen w-full flex bg-background">
+      <AuthLanguageToggle />
       {/* Left panel */}
       <div className="flex-1 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8">
         <div className="w-full max-w-md space-y-8">
@@ -88,10 +100,10 @@ export default function Login() {
               </div>
             </div>
             <h2 className="text-3xl font-bold tracking-tight text-foreground">
-              Sign in to your account
+              {t("auth.login.title")}
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              ArcScale Engineering Document Management System
+              {t("auth.login.subtitle")}
             </p>
           </div>
 
@@ -103,7 +115,7 @@ export default function Login() {
                   {serverError}
                   {attemptsRemaining !== null && attemptsRemaining > 0 && (
                     <span className="block mt-1 text-xs opacity-90">
-                      {attemptsRemaining} attempt{attemptsRemaining !== 1 ? "s" : ""} remaining before temporary lockout
+                      {t("auth.login.attemptsRemaining").replace("{n}", String(attemptsRemaining))}
                     </span>
                   )}
                 </AlertDescription>
@@ -117,10 +129,10 @@ export default function Login() {
                   name="email"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Email address</FormLabel>
+                      <FormLabel>{t("auth.field.email")}</FormLabel>
                       <FormControl>
                         <Input
-                          placeholder="you@company.com"
+                          placeholder={t("auth.field.emailPlaceholder")}
                           type="email"
                           autoComplete="email"
                           disabled={loginMutation.isPending || rateLimited}
@@ -139,9 +151,9 @@ export default function Login() {
                   render={({ field }) => (
                     <FormItem>
                       <div className="flex items-center justify-between">
-                        <FormLabel>Password</FormLabel>
+                        <FormLabel>{t("auth.field.password")}</FormLabel>
                         <Link href="/forgot-password" className="text-sm text-primary hover:underline font-medium">
-                          Forgot password?
+                          {t("auth.login.forgotPassword")}
                         </Link>
                       </div>
                       <FormControl>
@@ -151,13 +163,13 @@ export default function Login() {
                             type={showPassword ? "text" : "password"}
                             autoComplete="current-password"
                             disabled={loginMutation.isPending || rateLimited}
-                            className="h-11 pr-10"
+                            className="h-11 pe-10"
                             {...field}
                           />
                           <button
                             type="button"
                             onClick={() => setShowPassword(!showPassword)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                             tabIndex={-1}
                           >
                             {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -173,7 +185,7 @@ export default function Login() {
                   control={form.control}
                   name="rememberMe"
                   render={({ field }) => (
-                    <FormItem className="flex items-center space-x-2 space-y-0">
+                    <FormItem className="flex items-center gap-2 space-y-0">
                       <FormControl>
                         <Checkbox
                           checked={field.value}
@@ -182,7 +194,7 @@ export default function Login() {
                         />
                       </FormControl>
                       <FormLabel className="text-sm font-normal cursor-pointer">
-                        Remember me for 7 days
+                        {t("auth.login.rememberMe")}
                       </FormLabel>
                     </FormItem>
                   )}
@@ -195,13 +207,13 @@ export default function Login() {
                 >
                   {loginMutation.isPending ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Signing in...
+                      <Loader2 className="me-2 h-4 w-4 animate-spin" />
+                      {t("auth.login.signingIn")}
                     </>
                   ) : rateLimited ? (
-                    "Too many attempts — please wait"
+                    t("auth.login.tooManyAttempts")
                   ) : (
-                    "Sign in"
+                    t("auth.login.submit")
                   )}
                 </Button>
               </form>
@@ -209,16 +221,16 @@ export default function Login() {
 
             <div className="mt-6 text-center">
               <p className="text-sm text-muted-foreground">
-                Don't have an account?{" "}
+                {t("auth.login.noAccountPrompt")}{" "}
                 <Link href="/register" className="text-primary font-medium hover:underline">
-                  Create account
+                  {t("auth.login.createAccount")}
                 </Link>
               </p>
             </div>
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            No account? Contact your system administrator for access.
+            {t("auth.login.contactAdmin")}
           </p>
           {(import.meta.env.VITE_GIT_HASH && import.meta.env.VITE_GIT_HASH !== "unknown") && (
             <p className="text-center text-[10px] text-muted-foreground/40 font-mono mt-1" title={`Built: ${import.meta.env.VITE_BUILD_TIME ?? "unknown"}`}>
@@ -233,16 +245,15 @@ export default function Login() {
         <img
           className="absolute inset-0 h-full w-full object-cover opacity-80 mix-blend-overlay"
           src={`${import.meta.env.BASE_URL}images/auth-bg.png`}
-          alt="Architecture blueprint background"
+          alt={t("auth.shared.heroAlt")}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
-        <div className="absolute bottom-12 left-12 right-12 text-white">
+        <div className="absolute bottom-12 start-12 end-12 text-white">
           <h1 className="text-4xl font-bold tracking-tight mb-4">
-            Build with confidence.
+            {t("auth.login.heroTitle")}
           </h1>
           <p className="text-lg text-slate-300 max-w-xl leading-relaxed">
-            The single source of truth for engineering documents, correspondence,
-            and workflows. Connect your teams across the entire project lifecycle.
+            {t("auth.login.heroSubtitle")}
           </p>
         </div>
       </div>

@@ -9,12 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Shield, FileText, Loader2, ChevronsDown, LogOut } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 
 const TERMS_VERSION = "1.0";
 const OWNER = import.meta.env.VITE_OWNER_NAME ?? "ArcScale EDMS";
 const CURRENT_YEAR = new Date().getFullYear();
 
 export function TermsGate({ children }: { children: React.ReactNode }) {
+  const { t, lang } = useI18n();
   const { user } = useAuth();
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -51,10 +53,10 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
       if (!r.ok) throw new Error("Failed to accept terms");
       await qc.invalidateQueries({ queryKey: ["/api/auth/me"] });
       await qc.refetchQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Terms accepted. Welcome to the system." });
+      toast({ title: t("legal.termsGate.toastSuccess") });
       setLocation("/");
     } catch {
-      toast({ title: "Failed to record terms acceptance. Please try again.", variant: "destructive" });
+      toast({ title: t("legal.termsGate.toastFail"), variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
@@ -75,9 +77,9 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
               <Shield className="h-5 w-5 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <h2 className="text-base font-semibold leading-tight">Terms of Use & Data Protection Notice</h2>
+              <h2 className="text-base font-semibold leading-tight">{t("legal.termsGate.title")}</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Version {TERMS_VERSION} · Please read the full terms before accepting
+                {t("legal.termsGate.versionNote").replace("{v}", TERMS_VERSION)}
               </p>
             </div>
             <Button
@@ -85,10 +87,10 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
               size="sm"
               onClick={logout}
               className="shrink-0 text-muted-foreground hover:text-foreground gap-1.5"
-              title="Sign out and switch account"
+              title={t("legal.termsGate.signOutTitle")}
             >
               <LogOut className="h-4 w-4" />
-              <span className="text-xs">Sign out</span>
+              <span className="text-xs">{t("legal.termsGate.signOut")}</span>
             </Button>
           </div>
 
@@ -100,8 +102,19 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
               className="h-full overflow-y-auto px-6 py-4 scroll-smooth"
             >
               <div className="space-y-5 text-sm leading-relaxed pb-4">
+                {/* Legal Localization Blocker — Arabic Terms Review.
+                    The legal body below is the approved English wording; the Arabic
+                    version awaits professional legal review. Notice shown to AR users. */}
+                {lang === "ar" && (
+                  <div className="flex items-start gap-2 p-3 border border-amber-300 dark:border-amber-700 rounded-lg bg-amber-50 dark:bg-amber-950/40">
+                    <FileText className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-amber-800 dark:text-amber-300">
+                      {t("legal.notice.arabicPending")}
+                    </p>
+                  </div>
+                )}
                 <p className="text-xs text-muted-foreground">
-                  Before accessing {OWNER}, you must read and accept these Terms of Use in full.
+                  {t("legal.termsGate.intro").replace("{owner}", OWNER)}
                 </p>
 
                 <section>
@@ -225,7 +238,7 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
                 className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-full px-3 py-1.5 transition-colors shadow-sm"
               >
                 <ChevronsDown className="h-3.5 w-3.5 animate-bounce" />
-                Scroll to read all terms
+                {t("legal.termsGate.scrollNudge")}
               </button>
             )}
           </div>
@@ -246,14 +259,13 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
                 htmlFor="terms-accept"
                 className={cn("text-sm leading-snug", hasScrolledToBottom ? "cursor-pointer" : "cursor-not-allowed")}
               >
-                I have read and agree to the Terms of Use and Privacy Policy for {OWNER}. I understand
-                that my activity is monitored and logged, and that unauthorized use may result in legal action.
+                {t("legal.termsGate.agreeLabel").replace("{owner}", OWNER)}
               </Label>
             </div>
 
             {!hasScrolledToBottom && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                ↑ Please scroll through and read all the terms above before accepting.
+                {t("legal.termsGate.scrollWarning")}
               </p>
             )}
 
@@ -264,9 +276,9 @@ export function TermsGate({ children }: { children: React.ReactNode }) {
                 className="min-w-[160px]"
               >
                 {submitting ? (
-                  <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording…</>
+                  <><Loader2 className="h-4 w-4 animate-spin me-2" />{t("legal.termsGate.recording")}</>
                 ) : (
-                  <><Shield className="h-4 w-4 mr-2" />Accept & Continue</>
+                  <><Shield className="h-4 w-4 me-2" />{t("legal.termsGate.accept")}</>
                 )}
               </Button>
             </div>

@@ -115,7 +115,11 @@ jobs:
     name: Deploy to VPS
     runs-on: ubuntu-latest
     needs: [validate, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Runs only on a real push to main (never on PRs). A commit whose message
+    # contains "[skip deploy]" is held back from production deployment on purpose
+    # (validate/test still run) — used to land code on main without deploying yet.
+    # Default is unchanged: any push without the marker deploys normally.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip deploy]')
 
     steps:
       - name: Deploy via SSH

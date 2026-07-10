@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { Building2, CheckCircle2, AlertCircle, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
+import { AuthLanguageToggle } from "@/components/auth/AuthLanguageToggle";
 
 type State = "loading" | "success" | "error" | "missing";
 
 export default function VerifyEmail() {
+  const { t } = useI18n();
   const search = useSearch();
   const token = new URLSearchParams(search).get("token");
   const [state, setState] = useState<State>(token ? "loading" : "missing");
@@ -18,20 +21,22 @@ export default function VerifyEmail() {
         const json = await r.json();
         if (r.ok) {
           setState("success");
-          setMessage(json.message ?? "Email verified successfully.");
+          setMessage(json.message ?? t("auth.verify.successDefault"));
         } else {
           setState("error");
-          setMessage(json.message ?? "Verification failed. The link may have expired.");
+          setMessage(json.message ?? t("auth.verify.failedDefault"));
         }
       })
       .catch(() => {
         setState("error");
-        setMessage("Network error. Please try again.");
+        setMessage(t("auth.shared.networkError"));
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-background px-4">
+      <AuthLanguageToggle />
       <div className="w-full max-w-md space-y-6">
         <div className="text-center">
           <div className="flex justify-center mb-6">
@@ -48,8 +53,8 @@ export default function VerifyEmail() {
                 <Loader2 className="h-12 w-12 animate-spin text-primary" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold">Verifying your email…</h3>
-                <p className="text-sm text-muted-foreground mt-1">Just a moment.</p>
+                <h3 className="text-lg font-semibold">{t("auth.verify.verifying")}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{t("auth.verify.justAMoment")}</p>
               </div>
             </>
           )}
@@ -62,11 +67,11 @@ export default function VerifyEmail() {
                 </div>
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-green-700">Email verified!</h3>
+                <h3 className="text-lg font-semibold text-green-700">{t("auth.verify.successTitle")}</h3>
                 <p className="text-sm text-muted-foreground mt-1">{message}</p>
               </div>
               <Link href="/login">
-                <Button className="w-full">Continue to login</Button>
+                <Button className="w-full">{t("auth.verify.continue")}</Button>
               </Link>
             </>
           )}
@@ -79,11 +84,11 @@ export default function VerifyEmail() {
                 </div>
               </div>
               <div>
-                <h3 className="text-lg font-semibold">Verification failed</h3>
+                <h3 className="text-lg font-semibold">{t("auth.verify.failedTitle")}</h3>
                 <p className="text-sm text-muted-foreground mt-1">{message}</p>
               </div>
               <Link href="/login">
-                <Button variant="outline" className="w-full">Go to login</Button>
+                <Button variant="outline" className="w-full">{t("auth.verify.goToLogin")}</Button>
               </Link>
             </>
           )}
@@ -96,13 +101,13 @@ export default function VerifyEmail() {
                 </div>
               </div>
               <div>
-                <h3 className="text-lg font-semibold">No verification token</h3>
+                <h3 className="text-lg font-semibold">{t("auth.verify.missingTitle")}</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  This link is invalid. Check your email for the verification link or contact your administrator.
+                  {t("auth.verify.missingBody")}
                 </p>
               </div>
               <Link href="/login">
-                <Button variant="outline" className="w-full">Go to login</Button>
+                <Button variant="outline" className="w-full">{t("auth.verify.goToLogin")}</Button>
               </Link>
             </>
           )}
