@@ -1,6 +1,22 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Shield, FileText } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
+
+// ⚠️ LEGAL LOCALIZATION BLOCKER — Arabic Terms Review.
+// Only the dialog chrome (titles) is translated. The legal bodies below stay in
+// their approved English wording; an Arabic-user notice is shown above them.
+// Do not machine-translate the legal text — it requires professional legal review.
+function ArabicPendingNotice() {
+  const { lang, t } = useI18n();
+  if (lang !== "ar") return null;
+  return (
+    <div className="flex items-start gap-2 p-3 mb-4 border border-amber-300 dark:border-amber-700 rounded-lg bg-amber-50 dark:bg-amber-950/40">
+      <FileText className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+      <p className="text-xs text-amber-800 dark:text-amber-300">{t("legal.notice.arabicPending")}</p>
+    </div>
+  );
+}
 
 const OWNER = import.meta.env.VITE_OWNER_NAME ?? "ArcScale EDMS";
 const CURRENT_YEAR = new Date().getFullYear();
@@ -8,17 +24,19 @@ const CURRENT_YEAR = new Date().getFullYear();
 // ─── Terms of Use ─────────────────────────────────────────────────────────────
 
 export function TermsOfUseModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useI18n();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
-            Terms of Use
+            {t("legal.modal.termsTitle")}
           </DialogTitle>
         </DialogHeader>
-        <ScrollArea className="flex-1 min-h-0 pr-4">
+        <ScrollArea className="flex-1 min-h-0 pe-4">
           <div className="space-y-5 text-sm leading-relaxed">
+            <ArabicPendingNotice />
             <p className="text-xs text-muted-foreground">Effective as of 1 January 2024 · Version 1.0</p>
 
             <section>
@@ -98,17 +116,19 @@ export function TermsOfUseModal({ open, onOpenChange }: { open: boolean; onOpenC
 // ─── Privacy Policy ───────────────────────────────────────────────────────────
 
 export function PrivacyPolicyModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useI18n();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
-            Privacy Policy
+            {t("legal.modal.privacyTitle")}
           </DialogTitle>
         </DialogHeader>
-        <ScrollArea className="flex-1 min-h-0 pr-4">
+        <ScrollArea className="flex-1 min-h-0 pe-4">
           <div className="space-y-5 text-sm leading-relaxed">
+            <ArabicPendingNotice />
             <p className="text-xs text-muted-foreground">Effective as of 1 January 2024 · Version 1.0</p>
 
             <section>

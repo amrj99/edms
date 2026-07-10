@@ -56,11 +56,11 @@
     "arabic": 2
   },
   "src/components/legal/LegalModals.tsx": {
-    "latin": 27,
+    "latin": 25,
     "arabic": 0
   },
   "src/components/legal/TermsGate.tsx": {
-    "latin": 14,
+    "latin": 9,
     "arabic": 0
   },
   "src/components/recipient-autocomplete.tsx": {
@@ -191,16 +191,8 @@
     "latin": 50,
     "arabic": 0
   },
-  "src/pages/forgot-password.tsx": {
-    "latin": 10,
-    "arabic": 0
-  },
   "src/pages/general.tsx": {
     "latin": 13,
-    "arabic": 0
-  },
-  "src/pages/login.tsx": {
-    "latin": 10,
     "arabic": 0
   },
   "src/pages/meetings.tsx": {
@@ -219,10 +211,6 @@
     "latin": 10,
     "arabic": 0
   },
-  "src/pages/pending-org.tsx": {
-    "latin": 7,
-    "arabic": 0
-  },
   "src/pages/profile.tsx": {
     "latin": 16,
     "arabic": 0
@@ -235,10 +223,6 @@
     "latin": 18,
     "arabic": 0
   },
-  "src/pages/register.tsx": {
-    "latin": 15,
-    "arabic": 0
-  },
   "src/pages/reports-dashboard.tsx": {
     "latin": 21,
     "arabic": 0
@@ -247,16 +231,8 @@
     "latin": 42,
     "arabic": 1
   },
-  "src/pages/reset-password.tsx": {
-    "latin": 12,
-    "arabic": 0
-  },
   "src/pages/search.tsx": {
     "latin": 16,
-    "arabic": 0
-  },
-  "src/pages/set-password.tsx": {
-    "latin": 7,
     "arabic": 0
   },
   "src/pages/settings.tsx": {
@@ -273,10 +249,6 @@
   },
   "src/pages/users.tsx": {
     "latin": 43,
-    "arabic": 0
-  },
-  "src/pages/verify-email.tsx": {
-    "latin": 8,
     "arabic": 0
   },
   "src/pages/workflow-engine.tsx": {

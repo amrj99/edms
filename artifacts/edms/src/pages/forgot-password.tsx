@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
@@ -15,18 +15,23 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useI18n, useDirection } from "@/lib/i18n";
+import { AuthLanguageToggle } from "@/components/auth/AuthLanguageToggle";
 
-const forgotSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-});
-
-type ForgotFormValues = z.infer<typeof forgotSchema>;
+type ForgotFormValues = { email: string };
 
 export default function ForgotPassword() {
+  const { t, lang } = useI18n();
+  const { flipIconClass } = useDirection();
   const [isLoading, setIsLoading] = useState(false);
   const [sent, setSent] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [resetInfo, setResetInfo] = useState<{ resetToken?: string; resetUrl?: string } | null>(null);
+
+  const forgotSchema = useMemo(
+    () => z.object({ email: z.string().email(t("auth.validation.email")) }),
+    [lang], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const form = useForm<ForgotFormValues>({
     resolver: zodResolver(forgotSchema),
@@ -44,7 +49,7 @@ export default function ForgotPassword() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setServerError(json.message || "Something went wrong. Please try again.");
+        setServerError(json.message || t("auth.forgot.error"));
         return;
       }
       setSent(true);
@@ -52,7 +57,7 @@ export default function ForgotPassword() {
         setResetInfo({ resetToken: json.resetToken, resetUrl: json.resetUrl });
       }
     } catch {
-      setServerError("Network error. Please check your connection and try again.");
+      setServerError(t("auth.forgot.networkError"));
     } finally {
       setIsLoading(false);
     }
@@ -60,6 +65,7 @@ export default function ForgotPassword() {
 
   return (
     <div className="min-h-screen w-full flex bg-background">
+      <AuthLanguageToggle />
       <div className="flex-1 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8">
         <div className="w-full max-w-md space-y-8">
           <div className="text-center">
@@ -69,12 +75,10 @@ export default function ForgotPassword() {
               </div>
             </div>
             <h2 className="text-3xl font-bold tracking-tight text-foreground">
-              {sent ? "Check your inbox" : "Forgot your password?"}
+              {sent ? t("auth.forgot.titleSent") : t("auth.forgot.title")}
             </h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              {sent
-                ? "We've sent you a password reset link"
-                : "Enter your email address and we'll send you a reset link"}
+              {sent ? t("auth.forgot.subtitleSent") : t("auth.forgot.subtitle")}
             </p>
           </div>
 
@@ -95,10 +99,10 @@ export default function ForgotPassword() {
                       name="email"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Email address</FormLabel>
+                          <FormLabel>{t("auth.field.email")}</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="you@company.com"
+                              placeholder={t("auth.field.emailPlaceholder")}
                               type="email"
                               autoComplete="email"
                               disabled={isLoading}
@@ -118,11 +122,11 @@ export default function ForgotPassword() {
                     >
                       {isLoading ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Sending link...
+                          <Loader2 className="me-2 h-4 w-4 animate-spin" />
+                          {t("auth.forgot.sending")}
                         </>
                       ) : (
-                        "Send reset link"
+                        t("auth.forgot.submit")
                       )}
                     </Button>
                   </form>
@@ -136,19 +140,19 @@ export default function ForgotPassword() {
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  If an account exists with that email address, you'll receive a password reset link shortly.
+                  {t("auth.forgot.successBody")}
                 </p>
 
                 {resetInfo?.resetToken && (
-                  <Alert className="text-left mt-4 bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800">
+                  <Alert className="text-start mt-4 bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800">
                     <AlertDescription className="text-xs">
-                      <strong className="text-amber-800 dark:text-amber-300">Development mode — reset link:</strong>
+                      <strong className="text-amber-800 dark:text-amber-300">{t("auth.forgot.devMode")}</strong>
                       <br />
                       <Link
                         href={resetInfo.resetUrl || `/reset-password?token=${resetInfo.resetToken}`}
                         className="text-primary underline break-all mt-1 block"
                       >
-                        Click here to reset password
+                        {t("auth.forgot.devLink")}
                       </Link>
                     </AlertDescription>
                   </Alert>
@@ -159,15 +163,15 @@ export default function ForgotPassword() {
                   className="w-full mt-4"
                   onClick={() => { setSent(false); form.reset(); }}
                 >
-                  Try a different email
+                  {t("auth.forgot.tryDifferent")}
                 </Button>
               </div>
             )}
 
             <div className="mt-6 text-center">
               <Link href="/login" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Back to sign in
+                <ArrowLeft className={`h-3.5 w-3.5 ${flipIconClass}`} />
+                {t("auth.shared.backToSignIn")}
               </Link>
             </div>
           </div>
@@ -179,15 +183,15 @@ export default function ForgotPassword() {
         <img
           className="absolute inset-0 h-full w-full object-cover opacity-80 mix-blend-overlay"
           src={`${import.meta.env.BASE_URL}images/auth-bg.png`}
-          alt="Architecture blueprint background"
+          alt={t("auth.shared.heroAlt")}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
-        <div className="absolute bottom-12 left-12 right-12 text-white">
+        <div className="absolute bottom-12 start-12 end-12 text-white">
           <h1 className="text-4xl font-bold tracking-tight mb-4">
-            We've got you covered.
+            {t("auth.forgot.heroTitle")}
           </h1>
           <p className="text-lg text-slate-300 max-w-xl leading-relaxed">
-            Securely recover access to your account and get back to managing your engineering documents.
+            {t("auth.forgot.heroSubtitle")}
           </p>
         </div>
       </div>

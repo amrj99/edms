@@ -18,6 +18,8 @@ import { notifications } from "./notifications.js";
 import { layout } from "./layout.js";
 import { meetings } from "./meetings.js";
 import { actionItems } from "./actionItems.js";
+import { auth } from "./auth.js";
+import { legal } from "./legal.js";
 
 export const translations = {
   en: {
@@ -38,6 +40,8 @@ export const translations = {
     ...layout.en,
     ...meetings.en,
     ...actionItems.en,
+    ...auth.en,
+    ...legal.en,
   },
   ar: {
     ...registers.ar,
@@ -57,5 +61,7 @@ export const translations = {
     ...layout.ar,
     ...meetings.ar,
     ...actionItems.ar,
+    ...auth.ar,
+    ...legal.ar,
   },
 } as const;
