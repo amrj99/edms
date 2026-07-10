@@ -1,0 +1,22 @@
+-- 0030_baseline_meta_sync — INTENTIONAL NO-OP
+--
+-- This migration contains NO DDL and NO DML. It exists only to carry a fresh
+-- Drizzle meta snapshot (meta/0030_snapshot.json) that reflects the true current
+-- schema. The meta snapshots had drifted: they stopped at 0014, while migrations
+-- 0015–0028 were authored as hand-written SQL without regenerating snapshots.
+-- As a result `drizzle-kit generate` diffed the schema against the stale 0014
+-- baseline and always produced a phantom "recreate everything" migration, keeping
+-- the Schema Migration Check permanently red.
+--
+-- Every table/enum this baseline records already exists in the live database
+-- (created by migrations 0015–0028). Re-applying that DDL would ERROR on a live
+-- DB ("already exists"), so the SQL is deliberately empty:
+--   * live DB (state 0028): applying 0030 is a no-op — nothing changes.
+--   * fresh DB: 0000–0028 create the full schema; 0030 adds nothing.
+-- The value is the paired snapshot, which becomes the new generate baseline so
+-- future `drizzle-kit generate` produces nothing until the schema actually changes.
+--
+-- Going forward: schema changes must use `drizzle-kit generate` (see
+-- docs/architecture/MIGRATION_POLICY.md). Any exceptional hand-written SQL must
+-- ship its meta snapshot + a fresh-DB apply test in the same PR.
+SELECT 1;
