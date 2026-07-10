@@ -97,10 +97,14 @@ export function startBackgroundJobs(): StartupHandles {
   }, SKILL_CRON_INITIAL_MS);
 
   // Due-date / workflow-SLA reminders — first run after a warm-up delay, then hourly.
+  // Explicit .catch so a rejection can never surface as an unhandledRejection,
+  // even though sendDueDateReminders wraps its own DB work in try/catch.
+  const runReminders = () =>
+    sendDueDateReminders().catch((err) => logger.warn({ err }, "reminder job: run failed"));
   let reminderInterval: NodeJS.Timeout | undefined;
   const reminderInitial = setTimeout(() => {
-    void sendDueDateReminders();
-    reminderInterval = setInterval(() => void sendDueDateReminders(), REMINDER_INTERVAL_MS);
+    void runReminders();
+    reminderInterval = setInterval(() => void runReminders(), REMINDER_INTERVAL_MS);
   }, REMINDER_INITIAL_MS);
 
   return {
