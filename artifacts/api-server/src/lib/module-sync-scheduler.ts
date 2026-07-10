@@ -54,23 +54,37 @@ async function runSync(): Promise<void> {
   }
 }
 
-export function startModuleSyncScheduler(): void {
+/** Handle to a running scheduler so callers can stop its timers explicitly. */
+export interface SchedulerHandle {
+  stop(): void;
+}
+
+export function startModuleSyncScheduler(): SchedulerHandle {
   logger.info(
     { initialDelayMs: INITIAL_MS, intervalMs: INTERVAL_MS },
     `${LABEL} module sync scheduler started`,
   );
 
+  let interval: NodeJS.Timeout | undefined;
+
   // First run after startup delay
-  setTimeout(() => {
+  const initial = setTimeout(() => {
     runSync().catch((err) =>
       logger.error({ err }, `${LABEL} initial run failed`),
     );
 
     // Subsequent runs on fixed interval
-    setInterval(() => {
+    interval = setInterval(() => {
       runSync().catch((err) =>
         logger.error({ err }, `${LABEL} interval run failed`),
       );
     }, INTERVAL_MS);
   }, INITIAL_MS);
+
+  return {
+    stop() {
+      clearTimeout(initial);
+      if (interval) clearInterval(interval);
+    },
+  };
 }

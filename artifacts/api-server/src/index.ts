@@ -3,6 +3,7 @@ import "./instrument.js";
 
 import { createServer } from "http";
 import app from "./app.js";
+import { runCriticalStartup, startBackgroundJobs, type StartupHandles } from "./bootstrap.js";
 import { initSocket } from "./lib/socket.js";
 import { logger } from "./lib/logger.js";
 import { startNotificationScheduler } from "./lib/notifications/scheduler.js";
@@ -11,6 +12,9 @@ import { validateStorageAtStartup } from "./lib/storageConfig.js";
 import { logAIConfigAtStartup } from "./lib/ai-core.js";
 import { seedAISettings } from "./lib/seed-ai-settings.js";
 import { seedSecuritySettings } from "./lib/seed-security-settings.js";
+
+// Background-job handles (module-sync, skill cron, reminders) — stopped on shutdown.
+let startupHandles: StartupHandles | undefined;
 
 const rawPort = process.env["PORT"];
 
@@ -34,6 +38,9 @@ async function shutdown(signal: string): Promise<void> {
   deadline.unref(); // don't keep the event loop alive just for the timeout
 
   try {
+    // Stop background timers/schedulers first so they don't touch the DB mid-drain
+    startupHandles?.stopAll();
+
     // Stop accepting new HTTP/WebSocket connections
     await new Promise<void>((resolve, reject) =>
       server.close(err => (err ? reject(err) : resolve())),
@@ -126,24 +133,37 @@ const server = createServer(app);
 
 initSocket(server);
 
-server.listen(port, (err?: Error) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
+// Critical startup MUST complete before the server accepts requests. If a fatal
+// step (integrity migrations, RLS) fails, we refuse to listen and exit non-zero
+// so a broken instance never serves traffic.
+runCriticalStartup()
+  .then(() => {
+    server.listen(port, (err?: Error) => {
+      if (err) {
+        logger.error({ err }, "Error listening on port");
+        process.exit(1);
+      }
+      logger.info({ port }, "Server listening (HTTP + WebSocket)");
+
+      // Register graceful-shutdown handlers after the server is up
+      process.on("SIGTERM", onSigterm);
+      process.on("SIGINT",  onSigint);
+
+      // Start background timers/schedulers only after critical init succeeded.
+      startupHandles = startBackgroundJobs();
+
+      startNotificationScheduler();
+      startTrialDowngradeScheduler();
+      // Seed AI routing defaults into system_settings (ON CONFLICT DO NOTHING — safe every boot).
+      // Look for "[seed-ai-settings] AI routing defaults seeded" in your logs.
+      seedAISettings().catch(() => {});
+      seedSecuritySettings().catch(() => {});
+      // Log resolved AI config AFTER seeding so the log reflects the DB values.
+      // Look for "[AI] ═══ startup config resolved ═══" in your logs.
+      logAIConfigAtStartup().catch(() => {});
+    });
+  })
+  .catch((err) => {
+    logger.fatal({ err }, "Critical startup failed — refusing to start the server");
     process.exit(1);
-  }
-  logger.info({ port }, "Server listening (HTTP + WebSocket)");
-
-  // Register graceful-shutdown handlers after the server is up
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT",  onSigint);
-
-  startNotificationScheduler();
-  startTrialDowngradeScheduler();
-  // Seed AI routing defaults into system_settings (ON CONFLICT DO NOTHING — safe every boot).
-  // Look for "[seed-ai-settings] AI routing defaults seeded" in your logs.
-  seedAISettings().catch(() => {});
-  seedSecuritySettings().catch(() => {});
-  // Log resolved AI config AFTER seeding so the log reflects the DB values.
-  // Look for "[AI] ═══ startup config resolved ═══" in your logs.
-  logAIConfigAtStartup().catch(() => {});
-});
+  });
