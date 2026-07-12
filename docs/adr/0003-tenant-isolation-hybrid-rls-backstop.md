@@ -48,3 +48,27 @@ Inventoried in Phase 0 B0.2. These run with the **privileged role**, not the app
 - Live: `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname='<app role>'` → both `f`.
 - Isolation test: unset `app.current_org_id` → query returns 0 rows.
 - Production confirmation of current `edms` role privileges requires DBA (no repo access to VPS).
+
+---
+
+## Revision 1 — 2026-07-10 (Post-Implementation Evidence — supersedes the phasing above)
+
+**Status change:** the "flip fail-open→fail-closed behind a flag for first customer, defer transactional RLS" phasing (above) is **RETRACTED as unsafe**, on evidence.
+
+### New evidence (from current code, not inference)
+- `lib/db/src/index.ts`: a **single** connection pool, all consumers share it.
+- `rls-init.ts:68-69`: the policy is **fail-open by construction** (empty/unset `app.current_org_id` ⇒ sees all rows).
+- `middlewares/rls-context.ts:17-28` — the code authors' own comment states: `set_config(..., FALSE)` is **session-scoped over a pool**, so subsequent queries in a request may hit a different connection with a **stale/unset** value; therefore *"RLS is a defence-in-depth layer here, NOT the primary isolation mechanism"*, and only a *"per-request transaction wrapper (SET LOCAL inside BEGIN/COMMIT)"* removes the limitation.
+
+### Consequence
+Flipping the policy to **fail-closed over the pooled, session-scoped context is unsafe**: queries landing on a connection without the correct tenant context return only `organization_id IS NULL` rows → **functional breakage (random empty results)**, plus a residual stale-context risk. **Fail-closed RLS therefore DEPENDS ON a transaction-bound tenant context** — i.e. the very "transactional RLS" the original phasing tried to defer. The dependency `B2.1 → B2.2` as written is invalid.
+
+### Decision (owner, 2026-07-10)
+1. **Isolated Pilot:** application-level tenant isolation is the **actual** isolation mechanism. RLS is **NOT** claimed as an effective backstop; it is documented as inert (role `edms` is superuser+BYPASSRLS; even for a non-super role the current policy is fail-open). Accepted **only** if the first pilot is an **isolated / dedicated-per-customer deployment**, or at minimum does **not** co-locate multiple independent, untrusted tenants in one shared production DB.
+2. **Real RLS backstop** = a **dedicated Workstream** (NOBYPASSRLS app role + transaction-bound tenant context + fail-closed policies). Its **gate is the HOSTING MODEL, not the subscription tier**: it is **required before Shared Multi-tenant Production / before running multiple independent tenants in one DB**. It is NOT "deferred to Enterprise".
+3. **Do NOT choose now** among the tenant-context mechanisms — *request-wide transaction* / *AsyncLocalStorage + per-query hook* / *connection-checkout hook* / *repository abstraction*. They are **recorded as alternatives**; selecting one requires a **separate Architecture Review** before implementation.
+4. **B2.1 and B2.2 are NOT executed now.** No new DB role is created without an approved connection plan.
+
+### Minimum Safe Launch Baseline — split by hosting model
+- **Isolated Pilot (dedicated/single-tenant deployment):** application-level isolation + strong cross-org negative tests (B2.7) + honest documentation that RLS is not an active backstop. **Sufficient.**
+- **Shared Multi-tenant SaaS (multiple independent tenants, one DB):** **BLOCKED** until the Real-RLS Workstream ships (or an equivalent approved security control). Launching shared multi-tenant on application-only isolation is **not** sanctioned.
