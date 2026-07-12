@@ -37,7 +37,7 @@ Paths that run with **no tenant context** and must keep working under fail-close
 App-layer scoping scale (F3): **42 route files** filter `organizationId` manually.
 
 ## B0.3 — Decision Gate ADRs
-Recorded as `docs/adr/0003`–`0007`. Status: 0003–0006 Accepted; **0007 (Retention/Soft-Delete/Legal Hold) PENDING owner Policy/Product input** (blocks Phase 6 G5).
+Recorded as `docs/adr/0003`–`0007`. Status: 0003–0006 Accepted; 0007 Accepted (Product Policy v1) — Gate G5 OPEN.
 
 ## B0.4 — EXPLAIN Baseline
 **Deferred (conscious):** local dataset is not representative of the scale at which the query findings (F20–F23) bite; an EXPLAIN baseline on tiny local data would be misleading. To be captured on a representative dataset (staging with production-like volume) before Phase 8 index/trigram work.
@@ -52,4 +52,4 @@ Recorded as `docs/adr/0003`–`0007`. Status: 0003–0006 Accepted; **0007 (Rete
 | B0.3 Decision ADRs | ✅ Done (0007 pending policy) |
 | B0.4 EXPLAIN baseline | ◑ Deferred (representative data) |
 
-**Open gate:** ADR 0007 retention policy (Owner + Legal).
+**Open gate:** none — ADR 0007 accepted (Product Policy v1, 2026-07-10).
