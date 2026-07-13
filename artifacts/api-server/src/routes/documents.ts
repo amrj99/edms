@@ -1542,6 +1542,10 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
         // NOT fire-and-forget: a failed audit rolls the whole upload back.
         await createAuditLogTx(tx, {
           userId: req.user!.id,
+          // Tenant attribution: the audit row belongs to the org that OWNS the
+          // audited document (project-owner org, per ADR-011), not necessarily
+          // the uploader's org (which may differ for a party contributor).
+          organizationId: doc.organizationId ?? undefined,
           action: "update",
           entityType: "document",
           entityId: docId,

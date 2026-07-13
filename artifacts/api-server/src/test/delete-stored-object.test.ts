@@ -18,6 +18,8 @@ import os from "os";
 import path from "path";
 import { createOrg, getTestDb } from "./helpers/index.js";
 import { orgConfigTable } from "@workspace/db";
+import * as storageMod from "../lib/orgStorage.js";
+import { compensateStorage } from "../lib/document-file-write.js";
 
 const h = vi.hoisted(() => ({
   s3Send: vi.fn(),
@@ -49,26 +51,66 @@ import { deleteStoredObject } from "../lib/orgStorage.js";
 
 beforeEach(() => { h.s3Send.mockReset(); h.gcsDelete.mockReset(); });
 
-describe("B2.3a adapter — on-premise", () => {
-  let dir: string;
-  beforeAll(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "b23a-onprem-")); });
-  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+describe("B2.3a adapter — on-premise (containment)", () => {
+  let base: string;     // storage base (org config storagePath)
+  let orgId: number;
+  let orgRoot: string;  // path.resolve(base, orgId) — the ONLY tree deletes may touch
+  beforeAll(async () => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), "b23a-onprem-"));
+    const org = await createOrg({ name: "OnPrem Org", code: "ONPR" });
+    orgId = org.id;
+    await getTestDb().insert(orgConfigTable).values({ organizationId: orgId, storageType: "onpremise", storagePath: base });
+    orgRoot = path.resolve(base, String(orgId));
+    fs.mkdirSync(path.join(orgRoot, "1", "document"), { recursive: true });
+  });
+  afterAll(() => { try { fs.rmSync(base, { recursive: true, force: true }); } catch { /* ignore */ } });
 
-  it("deletes exactly the target file and leaves siblings untouched (isolation)", async () => {
-    const a = path.join(dir, "a.pdf");
-    const b = path.join(dir, "b.pdf");
+  const inRoot = (name: string) => path.join(orgRoot, "1", "document", name);
+
+  it("deletes a file inside the org root and leaves siblings untouched (isolation)", async () => {
+    const a = inRoot("a.pdf");
+    const b = inRoot("b.pdf");
     fs.writeFileSync(a, "A");
     fs.writeFileSync(b, "B");
 
-    await deleteStoredObject({ mode: "onpremise", objectPath: a, organizationId: 1 });
+    await deleteStoredObject({ mode: "onpremise", objectPath: a, organizationId: orgId });
 
     expect(fs.existsSync(a)).toBe(false);
-    expect(fs.existsSync(b)).toBe(true); // sibling not affected
+    expect(fs.existsSync(b)).toBe(true); // sibling untouched
   });
 
-  it("is idempotent — deleting an already-absent file does not throw", async () => {
-    const gone = path.join(dir, "never.pdf");
-    await expect(deleteStoredObject({ mode: "onpremise", objectPath: gone, organizationId: 1 })).resolves.toBeUndefined();
+  it("is idempotent — an already-absent in-root file does not throw", async () => {
+    await expect(deleteStoredObject({ mode: "onpremise", objectPath: inRoot("ghost.pdf"), organizationId: orgId }))
+      .resolves.toBeUndefined();
+  });
+
+  it("rejects a ../ traversal path that escapes the org root", async () => {
+    const escape = path.resolve(path.join(orgRoot, "..", "escape.pdf")); // = base/escape.pdf
+    fs.writeFileSync(escape, "X");
+    await expect(deleteStoredObject({ mode: "onpremise", objectPath: path.join(orgRoot, "..", "escape.pdf"), organizationId: orgId }))
+      .rejects.toThrow(/outside org|storage root|escapes/i);
+    expect(fs.existsSync(escape)).toBe(true); // untouched
+    fs.unlinkSync(escape);
+  });
+
+  it("rejects an absolute path outside the storage base", async () => {
+    const outside = path.join(os.tmpdir(), "b23a-outside-abs.pdf");
+    fs.writeFileSync(outside, "X");
+    await expect(deleteStoredObject({ mode: "onpremise", objectPath: outside, organizationId: orgId }))
+      .rejects.toThrow(/outside org|storage root/i);
+    expect(fs.existsSync(outside)).toBe(true);
+    fs.unlinkSync(outside);
+  });
+
+  it("rejects a path that belongs to ANOTHER org's root", async () => {
+    const otherRoot = path.resolve(base, String(orgId + 12345));
+    fs.mkdirSync(otherRoot, { recursive: true });
+    const foreign = path.join(otherRoot, "foreign.pdf");
+    fs.writeFileSync(foreign, "X");
+    await expect(deleteStoredObject({ mode: "onpremise", objectPath: foreign, organizationId: orgId }))
+      .rejects.toThrow(/outside org|storage root/i);
+    expect(fs.existsSync(foreign)).toBe(true); // NOT deleted — cross-org containment held
+    fs.unlinkSync(foreign);
   });
 });
 
@@ -82,24 +124,32 @@ describe("B2.3a adapter — per-org S3", () => {
     });
   });
 
-  it("addresses the org's configured bucket + exact key (bucket/key isolation)", async () => {
+  it("addresses the org's configured bucket + exact org-owned key (bucket/key isolation)", async () => {
     h.s3Send.mockResolvedValueOnce({});
-    await deleteStoredObject({ mode: "s3", objectPath: "1/2/document/k.pdf", organizationId: orgId });
+    const key = `${orgId}/2/document/k.pdf`;
+    await deleteStoredObject({ mode: "s3", objectPath: key, organizationId: orgId });
 
     expect(h.s3Send).toHaveBeenCalledTimes(1);
     const cmd = h.s3Send.mock.calls[0][0];
-    expect(cmd.input).toEqual({ Bucket: "bucket-alpha", Key: "1/2/document/k.pdf" });
+    expect(cmd.input).toEqual({ Bucket: "bucket-alpha", Key: key });
   });
 
-  it("is idempotent — a missing key (S3 returns 204) does not throw", async () => {
+  it("REJECTS a key owned by another org (prefix mismatch) BEFORE any SDK call", async () => {
+    const foreignKey = `${orgId + 5000}/2/document/x.pdf`;
+    await expect(deleteStoredObject({ mode: "s3", objectPath: foreignKey, organizationId: orgId }))
+      .rejects.toThrow(/not owned by org/i);
+    expect(h.s3Send).not.toHaveBeenCalled(); // no delete attempted
+  });
+
+  it("is idempotent — a missing (org-owned) key (S3 returns 204) does not throw", async () => {
     h.s3Send.mockResolvedValueOnce({}); // S3 DeleteObject is 204 whether or not the key existed
-    await expect(deleteStoredObject({ mode: "s3", objectPath: "1/2/document/missing.pdf", organizationId: orgId }))
+    await expect(deleteStoredObject({ mode: "s3", objectPath: `${orgId}/2/document/missing.pdf`, organizationId: orgId }))
       .resolves.toBeUndefined();
   });
 
   it("throws (surfaces potential orphan) when the org has no S3 bucket configured", async () => {
     const org = await createOrg({ name: "No S3 Org", code: "NOS3" });
-    await expect(deleteStoredObject({ mode: "s3", objectPath: "x/y.pdf", organizationId: org.id }))
+    await expect(deleteStoredObject({ mode: "s3", objectPath: `${org.id}/y.pdf`, organizationId: org.id }))
       .rejects.toThrow(/no S3 config/i);
     expect(h.s3Send).not.toHaveBeenCalled();
   });
@@ -125,10 +175,39 @@ describe("B2.3a adapter — global R2", () => {
     expect(cmd.input).toEqual({ Bucket: "r2-bucket-x", Key: "org_1/projects/2/k.pdf" });
   });
 
-  it("is idempotent — a missing key does not throw", async () => {
+  it("REJECTS a key owned by another org (org_ prefix mismatch) BEFORE any SDK call", async () => {
+    await expect(deleteStoredObject({ mode: "r2", objectPath: "org_2/projects/2/x.pdf", organizationId: 1 }))
+      .rejects.toThrow(/not owned by org/i);
+    expect(h.s3Send).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — a missing (org-owned) key does not throw", async () => {
     h.s3Send.mockResolvedValueOnce({});
     await expect(deleteStoredObject({ mode: "r2", objectPath: "org_1/projects/2/gone.pdf", organizationId: 1 }))
       .resolves.toBeUndefined();
+  });
+});
+
+describe("B2.3a — compensation continuation (one failure must not block the rest)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("deletes the second object even when the first delete throws; residual = first only", async () => {
+    let n = 0;
+    const del = vi.spyOn(storageMod, "deleteStoredObject").mockImplementation(async () => {
+      n += 1;
+      if (n === 1) throw new Error("delete #1 failed");
+      // second call succeeds
+    });
+
+    const residual = await compensateStorage([
+      { mode: "onpremise", objectPath: "/tmp/first.pdf", organizationId: 1 },
+      { mode: "onpremise", objectPath: "/tmp/second.pdf", organizationId: 1 },
+    ]);
+
+    expect(del).toHaveBeenCalledTimes(2);                    // both attempted
+    expect(residual).toHaveLength(1);                        // only the failure remains
+    expect(residual[0].objectPath).toBe("/tmp/first.pdf");
+    expect(residual[0].reason).toMatch(/delete #1 failed/);
   });
 });
 

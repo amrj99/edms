@@ -431,18 +431,71 @@ export async function deleteStoredObject(target: {
   switch (mode) {
     // ── On-premise: objectPath is an absolute filesystem path ────────────────
     case "onpremise": {
+      // Containment: the object MUST resolve INSIDE this org's storage root.
+      // Never trust an absolute path just because it was passed internally —
+      // deleteStoredObject is a public export reused by compensation, B2.3b and
+      // the reaper, so its contract must be self-safe against traversal and
+      // cross-org paths.
+      const cfg = organizationId ? await getOrgConfig(organizationId) : null;
+      const basePath = getEffectiveOnPremPath(cfg?.storagePath || null);
+      const orgRoot = organizationId != null
+        ? path.resolve(basePath, String(organizationId))
+        : path.resolve(basePath);
+
+      const within = (root: string, p: string): boolean => {
+        const rel = path.relative(root, p);
+        return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+      };
+
+      const resolved = path.resolve(objectPath);
+      if (!within(orgRoot, resolved)) {
+        throw new Error(
+          `deleteStoredObject: onpremise path is outside org ${organizationId} storage root — refusing to delete ${objectPath}`,
+        );
+      }
+
+      // Inspect the leaf WITHOUT following it. A symlink inside the storage tree
+      // is anomalous (uploads never create one) — refuse rather than delete
+      // through it to an arbitrary target.
+      const leaf = await fs.promises.lstat(resolved).catch((err: any) => {
+        if (err?.code === "ENOENT") return null; // already gone → idempotent
+        throw err;
+      });
+      if (leaf === null) return;
+      if (leaf.isSymbolicLink()) {
+        throw new Error(`deleteStoredObject: refusing to delete a symlink in the storage tree — ${objectPath}`);
+      }
+
+      // Defend against a symlinked ANCESTOR directory: canonicalize the parent
+      // and re-check containment against the canonical org root.
       try {
-        await fs.promises.unlink(objectPath);
+        const realParent = await fs.promises.realpath(path.dirname(resolved));
+        const realTarget = path.join(realParent, path.basename(resolved));
+        const realRoot = await fs.promises.realpath(orgRoot);
+        if (!within(realRoot, realTarget)) {
+          throw new Error(`deleteStoredObject: onpremise path escapes org root via a symlinked parent — ${objectPath}`);
+        }
       } catch (err: any) {
-        if (err?.code === "ENOENT") return; // already gone → idempotent success
+        if (err?.code === "ENOENT") return; // root/parent vanished → nothing to delete
         throw err;
       }
+
+      await fs.promises.unlink(resolved);
       return;
     }
 
     // ── Per-org S3: objectPath is the object key ─────────────────────────────
     case "s3": {
-      const cfg = organizationId ? await getOrgConfig(organizationId) : null;
+      if (organizationId == null) {
+        throw new Error(`deleteStoredObject: s3 requires an organizationId (key ${objectPath})`);
+      }
+      // Key ownership: the key MUST sit under this org's canonical prefix
+      // (uploadBuffer writes `${orgId}/${projectId}/…`). Reject cross-org keys
+      // BEFORE touching the SDK.
+      if (!objectPath.startsWith(`${organizationId}/`)) {
+        throw new Error(`deleteStoredObject: s3 key ${objectPath} is not owned by org ${organizationId} — refusing`);
+      }
+      const cfg = await getOrgConfig(organizationId);
       if (!cfg?.s3Bucket) {
         throw new Error(
           `deleteStoredObject: no S3 config for org ${organizationId}; cannot compensate key ${objectPath}`,
@@ -457,6 +510,13 @@ export async function deleteStoredObject(target: {
 
     // ── Global R2 via env: objectPath is the object key ──────────────────────
     case "r2": {
+      if (organizationId == null) {
+        throw new Error(`deleteStoredObject: r2 requires an organizationId (key ${objectPath})`);
+      }
+      // Key ownership: R2 keys are `org_${orgId}/projects/…` (see buildR2Key).
+      if (!objectPath.startsWith(`org_${organizationId}/`)) {
+        throw new Error(`deleteStoredObject: r2 key ${objectPath} is not owned by org ${organizationId} — refusing`);
+      }
       const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await buildR2Client();
       await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: objectPath }));

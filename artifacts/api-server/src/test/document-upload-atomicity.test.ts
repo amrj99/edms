@@ -246,6 +246,11 @@ describe("B2.3a — Document File Upload Atomicity (failure injection)", () => {
     expect(await fileCount(fx.docId)).toBe(beforeFiles + 2);
     expect(await auditCount(fx.docId)).toBe(beforeAudit + 2);
     expect(await usedMb(fx.org.id)).toBe(beforeMb + 1); // ceil(tiny total / 1MB) = 1
+    // Tenant attribution: the file-add audit is bound to the document's owning org.
+    const auditOrg: any = await getTestDb().execute(
+      sql`SELECT organization_id FROM audit_logs WHERE entity_id = ${fx.docId} AND action = 'update' AND entity_type = 'document' ORDER BY id DESC LIMIT 1`,
+    );
+    expect(Number(auditOrg.rows[0].organization_id)).toBe(fx.org.id);
     // The socket event fires exactly once, and only AFTER the commit succeeded.
     expect(emit).toHaveBeenCalledTimes(1);
     expect(emit).toHaveBeenCalledWith(fx.user.id, "document:updated", { documentId: fx.docId });
