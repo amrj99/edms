@@ -30,6 +30,7 @@ import { validateDocumentMetadata } from "./metadata.js";
 import type { Request, Response, NextFunction } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { canAccessProject } from "../lib/can-access-project.js";
+import { requireProjectAccess } from "../middlewares/project-access.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { z } from "zod";
 import { parseBody } from "../lib/validate.js";
@@ -72,16 +73,10 @@ const router = Router({ mergeParams: true });
 // party-ceiling and role checks still apply ON TOP of this gate. Fail-closed with
 // 403 — mirrors the established folders/read-route policy. requireAuth is idempotent
 // (pure JWT verify) so running it here in addition to per-route is harmless.
-router.use(requireAuth, async (req: Request<ProjectParams>, res: Response, next: NextFunction): Promise<void> => {
-  const projectId = requireInt(req.params.projectId);
-  const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-    return;
-  }
-  next();
-});
+// B2 Refactor: extracted to the shared requireProjectAccess() primitive
+// (same behaviour/403 as the previous inline gate). See ADR "Tenant Isolation
+// & Object-Level Authorization Pattern v1".
+router.use(requireAuth, requireProjectAccess());
 
 // Folders
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {

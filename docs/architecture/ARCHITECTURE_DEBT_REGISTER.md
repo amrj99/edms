@@ -519,6 +519,52 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## D1 — Party Ceiling default-deny for unknown party actions
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `DECISION_PENDING` — **Security/Product Decision Required (NOT Accepted)** |
+| **اكتُشف في** | B2.4-FIX / Architecture Closure Review — 2026-07-13 |
+| **يؤثر على** | `PARTY_CEILING_V1` — كل أفعال الطرف عبر الراوترات |
+
+**الملاحظة:** `PARTY_CEILING_V1` يسمح افتراضياً بالأفعال غير المدرجة (default-allow) — غير آمن للأفعال التدميرية. عُولج per-router بـ `denyPartyDestructive` (fail-closed) لكن الافتراض الأساسي ما زال متساهلاً.
+
+**الاتجاه المبدئي (غير معتمد):** Unknown Party Actions → deny by default.
+
+**مطلوب قبل التنفيذ:** (1) جرد كل Party Actions الفعلية؛ (2) تسجيل القدرات الشرعية صراحةً؛ (3) اختبارات تمنع كسر السلوك الحالي؛ (4) PR Security/Product مستقل. **لا تنفيذ استباقي.** (بلا رقم ADR جديد.)
+
+---
+
+## D2 — Correspondence Dual Mount (Org-scoped vs Project-scoped)
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `INVESTIGATE` — **Architecture/Product Evidence Required (NOT Accepted)** |
+| **اكتُشف في** | B2.5-FIX / Architecture Closure Review — 2026-07-13 |
+| **يؤثر على** | `routes/correspondence.ts` mount المزدوج (`/projects/:projectId/correspondence` + `/correspondence`) |
+
+**الملاحظة:** الـ dual mount هو جذر تباعُد correspondence عن نمط الـ project-gate (اضطُر لاستخدام `orgScopedWhere`). هل المراسلة org-scoped فعلاً أم project-scoped حصراً؟
+
+**مطلوب قبل القرار:** جرد بيانات + استخدام فعلي للمسار `/correspondence` (بلا projectId). **لا تغيير الآن.** (بلا رقم ADR جديد.)
+
+---
+
+## Observation — workflow-engine resolveEffectiveRole usage
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `WATCH` |
+| **Category** | Security / Authorization Review |
+| **Severity** | غير محسومة حتى اختبارات RED |
+| **Blocking** | لا — لا يمنع الـ Refactor الحالي ولا أي عمل |
+| **اكتُشف في** | Architecture Closure Review (check 2) — 2026-07-13 |
+
+**الملاحظة:** استخدامات `resolveEffectiveRole` في `routes/workflow-engine.ts` تحتاج مراجعة مستقلة لإثبات أن **جميع Entry Points تقيّد المؤسسة قبل حل الدور**. مساراته (approve/reject) تُجري lookup مُقيّداً بالـ org قبل resolveEffectiveRole (يبدو محمياً)، لكن لا بوابة راوتر وموضع مبكر لم يُتحقق منه.
+
+**Action:** Batch أمني مستقل لاحقاً بمنهجية RED؛ **بلا إصلاح استباقي**، ولا يُلمس في هذا الـ Refactor.
+
+---
+
 ## الإجراءات المطلوبة من Product
 
 | البند | الإجراء المطلوب | المسؤول |
