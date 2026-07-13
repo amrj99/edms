@@ -43,11 +43,11 @@ import {
 } from "@workspace/db";
 import { eq, and, or, isNull, gt, sql } from "drizzle-orm";
 import { getOrgPlan } from "./plan-service.js";
+import { PLANS } from "./plans.js";
+import { createAuditLog } from "./audit.js";
 
 /** A db handle or an open transaction — anything that can .update() a table. */
 type QuotaExecutor = Pick<typeof db, "update">;
-import { PLANS } from "./plans.js";
-import { createAuditLog } from "./audit.js";
 
 // ─── Resource Framework Types ─────────────────────────────────────────────────
 
