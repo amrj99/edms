@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { Readable } from "stream";
 import path from "path";
 import fs from "fs";
-import { eq } from "drizzle-orm";
+import { eq, and, isNotNull } from "drizzle-orm";
 import {
   db,
   orgConfigTable,
@@ -68,6 +68,20 @@ function getMimeType(filename: string): string {
 function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const viewToken = req.query.vt as string | undefined;
+
+    // ── B2.3b-1: uniform soft-delete download guard ──────────────────────────
+    // Every file-serve route funnels through here and exposes its exact serve
+    // URL via expectedPathFn. If that URL belongs to a SOFT-DELETED document
+    // file, deny the download on ALL backends (onpremise/s3/r2/cloud) and for
+    // BOTH auth methods (bearer + view-token) — even if the caller knows the
+    // fileUrl. Non-document objects (correspondence/meeting/chat) never match
+    // and are unaffected.
+    const guardPath = expectedPathFn(req);
+    const [softDeleted] = await db.select({ id: documentFilesTable.id })
+      .from(documentFilesTable)
+      .where(and(eq(documentFilesTable.fileUrl, guardPath), isNotNull(documentFilesTable.deletedAt)))
+      .limit(1);
+    if (softDeleted) { res.status(404).json({ error: "File not found" }); return; }
 
     if (viewToken) {
       const payload = verifyToken(viewToken) as Record<string, unknown> | null;

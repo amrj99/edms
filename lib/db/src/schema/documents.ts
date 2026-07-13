@@ -96,6 +96,14 @@ export const documentFilesTable = pgTable("document_files", {
   uploadedById: integer("uploaded_by_id").references(() => usersTable.id),
   sha256: text("sha256"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // B2.3b-1 — File soft delete. A soft-deleted file is hidden from all normal
+  // listings/downloads but its storage object is retained for `purge_after` so
+  // it can be restored. Storage removal + quota decrement happen only later in
+  // the (gated) B2.3b-2 purge worker — NOT here. States derive from these
+  // columns alone (no generic status): active = deletedAt IS NULL.
+  deletedAt: timestamp("deleted_at"),
+  deletedById: integer("deleted_by_id").references(() => usersTable.id),
+  purgeAfter: timestamp("purge_after"), // deletedAt + FILE_RETENTION_DAYS
 });
 
 // Tracks the next available SEQ per (project × org × discipline × docType).
