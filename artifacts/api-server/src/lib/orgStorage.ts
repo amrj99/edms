@@ -404,6 +404,86 @@ export async function uploadBuffer(params: {
   return uploadToCloud(buffer, safeFile, contentType);
 }
 
+/**
+ * B2.3a — Idempotent deletion of a previously uploaded object.
+ *
+ * Used as the COMPENSATION step when the post-upload DB transaction rolls back:
+ * every storage object written during the failed request is removed so no
+ * orphan file survives a rolled-back DB write.
+ *
+ * Contract:
+ *   - Idempotent: an already-absent object is treated as success (no throw).
+ *     This lets a retried/partial compensation run safely.
+ *   - Throws ONLY for a real backend failure (network/permission), so the
+ *     caller can record the residual object as a potential orphan needing
+ *     reconciliation instead of silently losing track of it.
+ *
+ * Takes the exact { mode, objectPath } produced by uploadBuffer plus the org id
+ * (needed to resolve per-org S3 credentials for the s3 mode).
+ */
+export async function deleteStoredObject(target: {
+  mode: StorageMode;
+  objectPath: string;
+  organizationId: number | null;
+}): Promise<void> {
+  const { mode, objectPath, organizationId } = target;
+
+  switch (mode) {
+    // ── On-premise: objectPath is an absolute filesystem path ────────────────
+    case "onpremise": {
+      try {
+        await fs.promises.unlink(objectPath);
+      } catch (err: any) {
+        if (err?.code === "ENOENT") return; // already gone → idempotent success
+        throw err;
+      }
+      return;
+    }
+
+    // ── Per-org S3: objectPath is the object key ─────────────────────────────
+    case "s3": {
+      const cfg = organizationId ? await getOrgConfig(organizationId) : null;
+      if (!cfg?.s3Bucket) {
+        throw new Error(
+          `deleteStoredObject: no S3 config for org ${organizationId}; cannot compensate key ${objectPath}`,
+        );
+      }
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      const s3 = await buildS3Client(cfg);
+      // S3 DeleteObject returns 204 for a missing key → inherently idempotent.
+      await s3.send(new DeleteObjectCommand({ Bucket: cfg.s3Bucket, Key: objectPath }));
+      return;
+    }
+
+    // ── Global R2 via env: objectPath is the object key ──────────────────────
+    case "r2": {
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      const r2 = await buildR2Client();
+      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: objectPath }));
+      return;
+    }
+
+    // ── Cloud (GCS): reconstruct bucket/object from PRIVATE_OBJECT_DIR ────────
+    case "cloud": {
+      const privateObjectDir = process.env.PRIVATE_OBJECT_DIR;
+      if (!privateObjectDir) {
+        throw new Error(
+          `deleteStoredObject: PRIVATE_OBJECT_DIR unset; cannot compensate cloud object ${objectPath}`,
+        );
+      }
+      const safeFile = path.basename(objectPath);
+      const fullPath = `${privateObjectDir}/uploads/${safeFile}`;
+      const parts = fullPath.startsWith("/") ? fullPath.slice(1).split("/") : fullPath.split("/");
+      const bucketName = parts[0];
+      const objectName = parts.slice(1).join("/");
+      const { objectStorageClient } = await import("./objectStorage.js");
+      // ignoreNotFound keeps this idempotent for an already-absent object.
+      await objectStorageClient.bucket(bucketName).file(objectName).delete({ ignoreNotFound: true });
+      return;
+    }
+  }
+}
+
 async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: string): Promise<UploadBufferResult> {
   if (!isCloudStorageAvailable()) {
     const basePath = getEffectiveOnPremPath(null);

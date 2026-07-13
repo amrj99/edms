@@ -11,7 +11,7 @@ import { orgScopedWhere } from "../lib/org-scope.js";
 import { checkStatusTransition } from "../lib/doc-status-machine.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
-import { createAuditLog } from "../lib/audit.js";
+import { createAuditLog, createAuditLogTx } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail, sendDocumentUploadedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
@@ -22,6 +22,7 @@ import { TenantIsolationError } from '../lib/errors.js';
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
+import { insertDocumentFileRow, compensateStorage, type WrittenObject, type CompensationResidual } from "../lib/document-file-write.js";
 import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
@@ -1453,50 +1454,113 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   const uploader = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).then(r => r[0]);
   const uploadedByName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined;
 
-  const results = [];
-  let totalUploadedBytes = 0;
-  for (const multerFile of uploadedFiles) {
-    // Compute SHA-256 before upload so the hash covers the exact bytes stored.
-    const sha256 = crypto.createHash("sha256").update(multerFile.buffer).digest("hex");
+  // ── B2.3a: Document File Upload Atomicity ────────────────────────────────
+  // Storage lives outside PostgreSQL, so a DB transaction alone cannot undo a
+  // written file. We split the write into two phases with a compensation step:
+  //   Phase 1 — write every file to storage, collecting an exact descriptor
+  //             (mode + objectPath) so the whole set can be deleted on failure.
+  //   Phase 2 — ONE db.transaction inserting all document_files rows + the
+  //             success audit rows + the quota increment. Any failure rolls the
+  //             whole transaction back (zero half-written rows, no success
+  //             audit), then we compensate the Phase-1 storage objects.
+  // Residual (un-deletable) objects are logged with their storage keys as
+  // potential orphans for out-of-band reconciliation — never hidden.
+  const logStorageResidual = (residual: CompensationResidual[]): void => {
+    for (const r of residual) {
+      console.error(
+        `[B2.3a][storage-orphan] compensation delete FAILED — object may be orphaned. ` +
+        `mode=${r.mode} key=${r.objectPath} orgId=${orgId ?? "null"} docId=${docId} ` +
+        `userId=${req.user!.id} reason=${r.reason}`,
+      );
+    }
+  };
+  const writtenObjects = (written: Array<{ stored: { mode: WrittenObject["mode"]; objectPath: string } }>): WrittenObject[] =>
+    written.map((w) => ({ mode: w.stored.mode, objectPath: w.stored.objectPath, organizationId: orgId }));
 
-    // Upload buffer to org-aware storage backend
-    const stored = await uploadBuffer({
-      organizationId: orgId,
-      projectId,
-      fileType: "document",
-      name: multerFile.originalname,
-      buffer: multerFile.buffer,
-      contentType: multerFile.mimetype,
-    });
-
-    const [dbFile] = await db.insert(documentFilesTable).values({
-      documentId: docId,
-      fileUrl: stored.serveUrl,
-      fileName: multerFile.originalname,
-      fileSize: multerFile.size,
-      fileType: multerFile.mimetype,
-      uploadedById: req.user!.id,
-      sha256,
-    }).returning();
-
-    await createAuditLog({
-      userId: req.user!.id,
-      action: "update",
-      entityType: "document",
-      entityId: docId,
-      entityTitle: `${doc.title} — added file: ${multerFile.originalname}`,
-      projectId,
-    });
-
-    totalUploadedBytes += multerFile.size;
-    results.push({ ...dbFile, uploadedByName });
+  // ── Phase 1: write all files to storage (no DB writes yet) ────────────────
+  const written: Array<{
+    stored: { mode: WrittenObject["mode"]; objectPath: string; serveUrl: string };
+    values: typeof documentFilesTable.$inferInsert;
+    size: number;
+    fileName: string;
+  }> = [];
+  try {
+    for (const multerFile of uploadedFiles) {
+      // Compute SHA-256 before upload so the hash covers the exact bytes stored.
+      const sha256 = crypto.createHash("sha256").update(multerFile.buffer).digest("hex");
+      const stored = await uploadBuffer({
+        organizationId: orgId,
+        projectId,
+        fileType: "document",
+        name: multerFile.originalname,
+        buffer: multerFile.buffer,
+        contentType: multerFile.mimetype,
+      });
+      written.push({
+        stored,
+        size: multerFile.size,
+        fileName: multerFile.originalname,
+        values: {
+          documentId: docId,
+          fileUrl: stored.serveUrl,
+          fileName: multerFile.originalname,
+          fileSize: multerFile.size,
+          fileType: multerFile.mimetype,
+          uploadedById: req.user!.id,
+          sha256,
+        },
+      });
+    }
+  } catch (storageErr) {
+    // A storage write failed part-way. No DB rows were written. Compensate the
+    // objects already stored for THIS request, then fail closed.
+    const residual = await compensateStorage(writtenObjects(written));
+    logStorageResidual(residual);
+    console.error(`[B2.3a] storage write failed for docId=${docId}:`, (storageErr as Error)?.message ?? storageErr);
+    res.status(500).json({ error: "UPLOAD_FAILED", message: "File storage failed; no changes were saved." });
+    return;
   }
 
-  // Increment org storage counter via StorageQuotaService (C-2)
-  if (orgId && totalUploadedBytes > 0) {
-    await storageQuota.increment(orgId, totalUploadedBytes);
+  const totalUploadedBytes = written.reduce((sum, w) => sum + w.size, 0);
+
+  // ── Phase 2: single DB transaction — rows + audit + quota, all-or-nothing ──
+  const results: Array<Record<string, unknown>> = [];
+  try {
+    await db.transaction(async (tx) => {
+      results.length = 0; // guard against a retried transaction body double-appending
+      for (const w of written) {
+        const dbFile = await insertDocumentFileRow(tx, w.values);
+        results.push({ ...dbFile, uploadedByName });
+        // Success audit is committed atomically with the row it describes —
+        // NOT fire-and-forget: a failed audit rolls the whole upload back.
+        await createAuditLogTx(tx, {
+          userId: req.user!.id,
+          action: "update",
+          entityType: "document",
+          entityId: docId,
+          entityTitle: `${doc.title} — added file: ${w.fileName}`,
+          projectId,
+        });
+      }
+      if (orgId && totalUploadedBytes > 0) {
+        await storageQuota.increment(orgId, totalUploadedBytes, tx);
+      }
+    });
+  } catch (dbErr) {
+    // The transaction rolled back → zero rows, no audit, quota unchanged.
+    // Compensate the storage objects written in Phase 1.
+    const residual = await compensateStorage(writtenObjects(written));
+    logStorageResidual(residual);
+    console.error(`[B2.3a] upload transaction failed for docId=${docId}:`, (dbErr as Error)?.message ?? dbErr);
+    res.status(500).json({
+      error: "UPLOAD_FAILED",
+      message: "Saving the upload failed; no changes were saved.",
+      ...(residual.length > 0 ? { orphanedStorageKeys: residual.map((r) => r.objectPath) } : {}),
+    });
+    return;
   }
 
+  // ── Success — the transaction committed. Only now do side effects fire. ────
   // Warning headers when approaching quota (level determined pre-upload by check())
   if (_quotaResult && _quotaResult.level !== "ok") {
     res.set("X-Storage-Level", _quotaResult.level);

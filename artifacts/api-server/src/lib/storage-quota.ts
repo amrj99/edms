@@ -43,6 +43,9 @@ import {
 } from "@workspace/db";
 import { eq, and, or, isNull, gt, sql } from "drizzle-orm";
 import { getOrgPlan } from "./plan-service.js";
+
+/** A db handle or an open transaction — anything that can .update() a table. */
+type QuotaExecutor = Pick<typeof db, "update">;
 import { PLANS } from "./plans.js";
 import { createAuditLog } from "./audit.js";
 
@@ -228,11 +231,14 @@ export class StorageQuotaService {
    * P2: Math.ceil — same formula as decrement (fixes the old Math.floor asymmetry).
    * P3: Takes bytes — no storage provider details.
    */
-  async increment(orgId: number, bytes: number): Promise<void> {
+  async increment(orgId: number, bytes: number, exec: QuotaExecutor = db): Promise<void> {
     const deltaMb = bytesToMb(bytes);
     if (deltaMb === 0) return;
 
-    await db
+    // B2.3a: accepts an optional transaction handle so the counter update
+    // commits atomically with the document_files rows it accounts for. When
+    // omitted it uses the global db (unchanged for all existing callers).
+    await exec
       .update(organizationsTable)
       .set({
         storageUsedMb: sql`GREATEST(0, COALESCE(storage_used_mb, 0) + ${deltaMb})`,
