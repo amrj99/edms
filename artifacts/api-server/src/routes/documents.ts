@@ -26,7 +26,7 @@ import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 import { validateDocumentMetadata } from "./metadata.js";
-import type { Request } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { canAccessProject } from "../lib/can-access-project.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
@@ -55,6 +55,32 @@ const router = Router({ mergeParams: true });
 // canAccessProject() is defined in lib/can-access-project.ts (extracted Phase 5-B).
 // It now includes a party access branch (mode: 'party') in addition to the original
 // intra_org and member paths. Existing callers are backward-compatible.
+
+// ─── B2.7-FIX: router-wide project-access gate (cross-organization isolation) ──
+// Every route under /projects/:projectId/documents is gated on the caller having
+// access to the project via the canonical canAccessProject() resolver. This closes
+// cross-org document/file mutation holes: several mutation handlers (files upload,
+// file delete, approve/reject/submit-review, share, archive/obsolete, departments,
+// folder-move, and the delete path) previously resolved the resource by
+// (id, projectId) ONLY, never verifying the project belonged to the caller's org —
+// letting an Org B user mutate Org A's documents (confirmed: POST /:id/files → 201).
+//
+// projectId comes from the URL and is client-controlled, so it is validated HERE,
+// never trusted on its own. Object-level checks (document/file belongs to this
+// project) remain in each handler's existing (id, projectId) lookup; per-handler
+// party-ceiling and role checks still apply ON TOP of this gate. Fail-closed with
+// 403 — mirrors the established folders/read-route policy. requireAuth is idempotent
+// (pure JWT verify) so running it here in addition to per-route is harmless.
+router.use(requireAuth, async (req: Request<ProjectParams>, res: Response, next: NextFunction): Promise<void> => {
+  const projectId = requireInt(req.params.projectId);
+  const caller = req.user!;
+  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
+  next();
+});
 
 // Folders
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -627,7 +653,12 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 
   const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy, direction } = req.body;
 
-  const existing = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+  // Object-level scoping (B2.7-FIX): the document must belong to the project in
+  // the URL. Without the projectId predicate a caller with access to project X
+  // could target a document in project Y by id (the update below no-ops but the
+  // lookup would otherwise succeed and leak existence). id-only was the gap.
+  const existing = await db.select().from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
   if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Resolve effective role (respects project-level overrides, delegations, project member roles)
