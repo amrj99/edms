@@ -11,7 +11,7 @@ import { orgScopedWhere } from "../lib/org-scope.js";
 import { checkStatusTransition } from "../lib/doc-status-machine.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
 import { DocumentPermissions } from "../lib/permissions.js";
-import { createAuditLog } from "../lib/audit.js";
+import { createAuditLog, createAuditLogTx } from "../lib/audit.js";
 import crypto from "crypto";
 import { sendReviewSubmittedEmail, sendDocumentApprovedEmail, sendDocumentRejectedEmail, sendDocumentUploadedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
@@ -22,6 +22,7 @@ import { TenantIsolationError } from '../lib/errors.js';
 import { evaluateRules } from "../lib/rule-engine.js";
 import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
+import { insertDocumentFileRow, compensateStorage, type WrittenObject, type CompensationResidual } from "../lib/document-file-write.js";
 import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
@@ -1337,6 +1338,16 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
   if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
+  // Party ceiling (PARTY_CEILING_V1): a party CONTRIBUTOR may add files/revisions;
+  // a party OBSERVER may not. The router-wide gate only proves project ACCESS —
+  // it deliberately does not enforce the per-action ceiling, so mirror the
+  // create handler's enforcement here (adding a file/revision is an upload).
+  const access = await canAccessProject(req.user!.id, req.user!.organizationId, projectId, isSystemOwner(req.user!));
+  if (access.mode === "party" && !isWithinPartyCeiling(access.partyRole!, "upload_document")) {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" });
+    return;
+  }
+
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;
   if (!uploadedFiles || uploadedFiles.length === 0) {
     res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." }); return;
@@ -1348,7 +1359,17 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError }); return;
   }
 
-  const orgId = req.user!.organizationId ?? null;
+  // ── Storage/quota tenant = DOCUMENT owner (B2.3a, Alternative A / ADR-011) ─
+  // A party contributor may upload from a DIFFERENT org than the one that owns
+  // the document. Storage placement, the storage-key/bucket prefix, quota
+  // accounting, and the plan/trial/upload-block gates ALL follow the org that
+  // OWNS the document (project-owner org), never the uploader's org — so the
+  // document and its bytes never split across tenants. The uploader identity
+  // (req.user.id) is preserved separately for audit attribution.
+  // Authorization to reach this handler was already enforced by the router-wide
+  // canAccessProject gate (party role + ceiling); this is purely the storage
+  // tenant selection.
+  const storageOrgId = doc.organizationId ?? null;
 
   // ── system_owner full bypass ─────────────────────────────────────────────
   // system_owner is a platform-level actor and must never be blocked by
@@ -1387,16 +1408,19 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   // Orgs that were on trial and have been downgraded to free (trialEndsAt IS
   // NOT NULL) may not upload new files. Brand-new free orgs (trialEndsAt IS
   // NULL) are not affected — they can still upload up to their storage quota.
-  if (!skipQuotaChecks && orgId) {
+  if (!skipQuotaChecks && storageOrgId) {
     const [uploadOrgCheck] = await db
       .select({ subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
       .from(organizationsTable)
-      .where(eq(organizationsTable.id, orgId))
+      .where(eq(organizationsTable.id, storageOrgId))
       .limit(1);
     if (isExpiredPlan(uploadOrgCheck?.subscriptionTier) && uploadOrgCheck?.trialEndsAt !== null) {
+      // Generic message — never leak the OWNER org's plan/quota details to a
+      // party contributor from another org. Details are logged/visible only to
+      // the owner org's admins.
       res.status(403).json({
         error: "UPLOAD_BLOCKED",
-        message: "File uploads are not available on the free plan. Upgrade your plan to continue.",
+        message: "File uploads are not available for this project right now.",
       }); return;
     }
   }
@@ -1405,25 +1429,32 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   let _quotaResult: QuotaCheckResult | null = null;
   let _totalNewBytes = 0;
 
-  if (!skipQuotaChecks && orgId) {
+  // When the uploader belongs to a DIFFERENT org than the document owner (a
+  // party contributor), plan/quota denials must NOT leak the owner org's plan
+  // name, trial status, or byte figures. Owner-org uploaders still see details.
+  const isForeignUploader = (req.user!.organizationId ?? null) !== storageOrgId;
+
+  if (!skipQuotaChecks && storageOrgId) {
     _totalNewBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
 
-    // Trial expiry gate (belt-and-suspenders for trial orgs)
+    // Trial expiry gate (belt-and-suspenders for trial orgs) — owner org.
     const [orgMeta] = await db
       .select({ subscriptionTier: organizationsTable.subscriptionTier, trialEndsAt: organizationsTable.trialEndsAt })
       .from(organizationsTable)
-      .where(eq(organizationsTable.id, orgId))
+      .where(eq(organizationsTable.id, storageOrgId))
       .limit(1);
 
     if (orgMeta?.subscriptionTier === "trial" && orgMeta.trialEndsAt && new Date() > new Date(orgMeta.trialEndsAt)) {
       res.status(403).json({
-        error: "TRIAL_EXPIRED",
-        message: "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
+        error: isForeignUploader ? "UPLOAD_BLOCKED" : "TRIAL_EXPIRED",
+        message: isForeignUploader
+          ? "File uploads are not available for this project right now."
+          : "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
       }); return;
     }
 
-    // Per-plan file size enforcement (unchanged)
-    const planId = await getOrgPlan(orgId);
+    // Per-plan file size enforcement (owner org's plan).
+    const planId = await getOrgPlan(storageOrgId);
     const plan = PLANS.find(p => p.id === planId);
     if (plan) {
       const maxFileSizeMb = plan.maxFileSizeMb ?? 1024;
@@ -1432,20 +1463,21 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
         const names = oversized.map(f => f.originalname).join(", ");
         res.status(413).json({
           error: "FILE_TOO_LARGE",
-          message: `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
+          message: isForeignUploader
+            ? "One or more files exceed the upload size limit for this project."
+            : `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
         }); return;
       }
     }
 
-    // Storage quota enforcement via StorageQuotaService (C-2)
-    _quotaResult = await storageQuota.check(orgId, _totalNewBytes, req.user!.id);
+    // Storage quota enforcement via StorageQuotaService (C-2) — owner org's quota.
+    _quotaResult = await storageQuota.check(storageOrgId, _totalNewBytes, req.user!.id);
     if (!_quotaResult.allowed) {
-      res.status(403).json({
-        error: "STORAGE_QUOTA_EXCEEDED",
-        message: _quotaResult.reason,
-        used:    _quotaResult.used,
-        quota:   _quotaResult.quota,
-      }); return;
+      res.status(403).json(
+        isForeignUploader
+          ? { error: "STORAGE_QUOTA_EXCEEDED", message: "This project has reached its storage limit. Contact the project owner." }
+          : { error: "STORAGE_QUOTA_EXCEEDED", message: _quotaResult.reason, used: _quotaResult.used, quota: _quotaResult.quota },
+      ); return;
     }
   }
   // ────────────────────────────────────────────────────────────────────────
@@ -1453,50 +1485,132 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   const uploader = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).then(r => r[0]);
   const uploadedByName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined;
 
-  const results = [];
-  let totalUploadedBytes = 0;
-  for (const multerFile of uploadedFiles) {
-    // Compute SHA-256 before upload so the hash covers the exact bytes stored.
-    const sha256 = crypto.createHash("sha256").update(multerFile.buffer).digest("hex");
+  // ── B2.3a: Document File Upload Atomicity ────────────────────────────────
+  // Storage lives outside PostgreSQL, so a DB transaction alone cannot undo a
+  // written file. We split the write into two phases with a compensation step:
+  //   Phase 1 — write every file to storage, collecting an exact descriptor
+  //             (mode + objectPath) so the whole set can be deleted on failure.
+  //   Phase 2 — ONE db.transaction inserting all document_files rows + the
+  //             success audit rows + the quota increment. Any failure rolls the
+  //             whole transaction back (zero half-written rows, no success
+  //             audit), then we compensate the Phase-1 storage objects.
+  // Residual (un-deletable) objects are logged with their storage keys as
+  // potential orphans for out-of-band reconciliation — never hidden.
+  // Internal-only log. Storage keys/paths are NEVER returned to the client —
+  // they are correlated to the client via an opaque incident id instead.
+  const logStorageResidual = (incidentId: string, residual: CompensationResidual[]): void => {
+    for (const r of residual) {
+      console.error(
+        `[B2.3a][storage-orphan] incident=${incidentId} compensation delete FAILED — ` +
+        `object may be orphaned. mode=${r.mode} key=${r.objectPath} orgId=${storageOrgId ?? "null"} ` +
+        `docId=${docId} userId=${req.user!.id} reason=${r.reason}`,
+      );
+    }
+  };
+  const writtenObjects = (written: Array<{ stored: { mode: WrittenObject["mode"]; objectPath: string } }>): WrittenObject[] =>
+    written.map((w) => ({ mode: w.stored.mode, objectPath: w.stored.objectPath, organizationId: storageOrgId }));
 
-    // Upload buffer to org-aware storage backend
-    const stored = await uploadBuffer({
-      organizationId: orgId,
-      projectId,
-      fileType: "document",
-      name: multerFile.originalname,
-      buffer: multerFile.buffer,
-      contentType: multerFile.mimetype,
+  // ── Phase 1: write all files to storage (no DB writes yet) ────────────────
+  const written: Array<{
+    stored: { mode: WrittenObject["mode"]; objectPath: string; serveUrl: string };
+    values: typeof documentFilesTable.$inferInsert;
+    size: number;
+    fileName: string;
+  }> = [];
+  try {
+    for (const multerFile of uploadedFiles) {
+      // Compute SHA-256 before upload so the hash covers the exact bytes stored.
+      const sha256 = crypto.createHash("sha256").update(multerFile.buffer).digest("hex");
+      const stored = await uploadBuffer({
+        organizationId: storageOrgId,
+        projectId,
+        fileType: "document",
+        name: multerFile.originalname,
+        buffer: multerFile.buffer,
+        contentType: multerFile.mimetype,
+      });
+      written.push({
+        stored,
+        size: multerFile.size,
+        fileName: multerFile.originalname,
+        values: {
+          documentId: docId,
+          // Tenant column follows the document OWNER (Alternative A) — the file
+          // lives in the owner's storage, so its row is owned by the owner org,
+          // not the uploader's org. (Was previously left NULL.)
+          organizationId: storageOrgId,
+          fileUrl: stored.serveUrl,
+          fileName: multerFile.originalname,
+          fileSize: multerFile.size,
+          fileType: multerFile.mimetype,
+          uploadedById: req.user!.id,
+          sha256,
+        },
+      });
+    }
+  } catch (storageErr) {
+    // A storage write failed part-way. No DB rows were written. Compensate the
+    // objects already stored for THIS request, then fail closed.
+    const residual = await compensateStorage(writtenObjects(written));
+    const incidentId = crypto.randomUUID();
+    logStorageResidual(incidentId, residual);
+    console.error(`[B2.3a] incident=${incidentId} storage write failed for docId=${docId}:`, (storageErr as Error)?.message ?? storageErr);
+    res.status(500).json({
+      error: "UPLOAD_FAILED",
+      message: "File storage failed; no changes were saved.",
+      ...(residual.length > 0 ? { incidentId } : {}),
     });
-
-    const [dbFile] = await db.insert(documentFilesTable).values({
-      documentId: docId,
-      fileUrl: stored.serveUrl,
-      fileName: multerFile.originalname,
-      fileSize: multerFile.size,
-      fileType: multerFile.mimetype,
-      uploadedById: req.user!.id,
-      sha256,
-    }).returning();
-
-    await createAuditLog({
-      userId: req.user!.id,
-      action: "update",
-      entityType: "document",
-      entityId: docId,
-      entityTitle: `${doc.title} — added file: ${multerFile.originalname}`,
-      projectId,
-    });
-
-    totalUploadedBytes += multerFile.size;
-    results.push({ ...dbFile, uploadedByName });
+    return;
   }
 
-  // Increment org storage counter via StorageQuotaService (C-2)
-  if (orgId && totalUploadedBytes > 0) {
-    await storageQuota.increment(orgId, totalUploadedBytes);
+  const totalUploadedBytes = written.reduce((sum, w) => sum + w.size, 0);
+
+  // ── Phase 2: single DB transaction — rows + audit + quota, all-or-nothing ──
+  const results: Array<Record<string, unknown>> = [];
+  try {
+    await db.transaction(async (tx) => {
+      results.length = 0; // guard against a retried transaction body double-appending
+      for (const w of written) {
+        const dbFile = await insertDocumentFileRow(tx, w.values);
+        results.push({ ...dbFile, uploadedByName });
+        // Success audit is committed atomically with the row it describes —
+        // NOT fire-and-forget: a failed audit rolls the whole upload back.
+        await createAuditLogTx(tx, {
+          userId: req.user!.id,
+          // Tenant attribution: the audit row belongs to the org that OWNS the
+          // audited document (project-owner org, per ADR-011), not necessarily
+          // the uploader's org (which may differ for a party contributor).
+          organizationId: doc.organizationId ?? undefined,
+          action: "update",
+          entityType: "document",
+          entityId: docId,
+          entityTitle: `${doc.title} — added file: ${w.fileName}`,
+          projectId,
+        });
+      }
+      if (storageOrgId && totalUploadedBytes > 0) {
+        await storageQuota.increment(storageOrgId, totalUploadedBytes, tx);
+      }
+    });
+  } catch (dbErr) {
+    // The transaction rolled back → zero rows, no audit, quota unchanged.
+    // Compensate the storage objects written in Phase 1.
+    const residual = await compensateStorage(writtenObjects(written));
+    const incidentId = crypto.randomUUID();
+    logStorageResidual(incidentId, residual);
+    console.error(`[B2.3a] incident=${incidentId} upload transaction failed for docId=${docId}:`, (dbErr as Error)?.message ?? dbErr);
+    // Never leak internal storage keys/paths to the client. When compensation
+    // leaves a residual (potential orphan), return only an opaque incident id
+    // that ties this response to the internal log for reconciliation.
+    res.status(500).json({
+      error: "UPLOAD_FAILED",
+      message: "Saving the upload failed; no changes were saved.",
+      ...(residual.length > 0 ? { incidentId } : {}),
+    });
+    return;
   }
 
+  // ── Success — the transaction committed. Only now do side effects fire. ────
   // Warning headers when approaching quota (level determined pre-upload by check())
   if (_quotaResult && _quotaResult.level !== "ok") {
     res.set("X-Storage-Level", _quotaResult.level);

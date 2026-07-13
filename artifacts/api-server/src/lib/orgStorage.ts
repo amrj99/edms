@@ -404,6 +404,146 @@ export async function uploadBuffer(params: {
   return uploadToCloud(buffer, safeFile, contentType);
 }
 
+/**
+ * B2.3a — Idempotent deletion of a previously uploaded object.
+ *
+ * Used as the COMPENSATION step when the post-upload DB transaction rolls back:
+ * every storage object written during the failed request is removed so no
+ * orphan file survives a rolled-back DB write.
+ *
+ * Contract:
+ *   - Idempotent: an already-absent object is treated as success (no throw).
+ *     This lets a retried/partial compensation run safely.
+ *   - Throws ONLY for a real backend failure (network/permission), so the
+ *     caller can record the residual object as a potential orphan needing
+ *     reconciliation instead of silently losing track of it.
+ *
+ * Takes the exact { mode, objectPath } produced by uploadBuffer plus the org id
+ * (needed to resolve per-org S3 credentials for the s3 mode).
+ */
+export async function deleteStoredObject(target: {
+  mode: StorageMode;
+  objectPath: string;
+  organizationId: number | null;
+}): Promise<void> {
+  const { mode, objectPath, organizationId } = target;
+
+  switch (mode) {
+    // ── On-premise: objectPath is an absolute filesystem path ────────────────
+    case "onpremise": {
+      // Containment: the object MUST resolve INSIDE this org's storage root.
+      // Never trust an absolute path just because it was passed internally —
+      // deleteStoredObject is a public export reused by compensation, B2.3b and
+      // the reaper, so its contract must be self-safe against traversal and
+      // cross-org paths.
+      const cfg = organizationId ? await getOrgConfig(organizationId) : null;
+      const basePath = getEffectiveOnPremPath(cfg?.storagePath || null);
+      const orgRoot = organizationId != null
+        ? path.resolve(basePath, String(organizationId))
+        : path.resolve(basePath);
+
+      const within = (root: string, p: string): boolean => {
+        const rel = path.relative(root, p);
+        return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+      };
+
+      const resolved = path.resolve(objectPath);
+      if (!within(orgRoot, resolved)) {
+        throw new Error(
+          `deleteStoredObject: onpremise path is outside org ${organizationId} storage root — refusing to delete ${objectPath}`,
+        );
+      }
+
+      // Inspect the leaf WITHOUT following it. A symlink inside the storage tree
+      // is anomalous (uploads never create one) — refuse rather than delete
+      // through it to an arbitrary target.
+      const leaf = await fs.promises.lstat(resolved).catch((err: any) => {
+        if (err?.code === "ENOENT") return null; // already gone → idempotent
+        throw err;
+      });
+      if (leaf === null) return;
+      if (leaf.isSymbolicLink()) {
+        throw new Error(`deleteStoredObject: refusing to delete a symlink in the storage tree — ${objectPath}`);
+      }
+
+      // Defend against a symlinked ANCESTOR directory: canonicalize the parent
+      // and re-check containment against the canonical org root.
+      try {
+        const realParent = await fs.promises.realpath(path.dirname(resolved));
+        const realTarget = path.join(realParent, path.basename(resolved));
+        const realRoot = await fs.promises.realpath(orgRoot);
+        if (!within(realRoot, realTarget)) {
+          throw new Error(`deleteStoredObject: onpremise path escapes org root via a symlinked parent — ${objectPath}`);
+        }
+      } catch (err: any) {
+        if (err?.code === "ENOENT") return; // root/parent vanished → nothing to delete
+        throw err;
+      }
+
+      await fs.promises.unlink(resolved);
+      return;
+    }
+
+    // ── Per-org S3: objectPath is the object key ─────────────────────────────
+    case "s3": {
+      if (organizationId == null) {
+        throw new Error(`deleteStoredObject: s3 requires an organizationId (key ${objectPath})`);
+      }
+      // Key ownership: the key MUST sit under this org's canonical prefix
+      // (uploadBuffer writes `${orgId}/${projectId}/…`). Reject cross-org keys
+      // BEFORE touching the SDK.
+      if (!objectPath.startsWith(`${organizationId}/`)) {
+        throw new Error(`deleteStoredObject: s3 key ${objectPath} is not owned by org ${organizationId} — refusing`);
+      }
+      const cfg = await getOrgConfig(organizationId);
+      if (!cfg?.s3Bucket) {
+        throw new Error(
+          `deleteStoredObject: no S3 config for org ${organizationId}; cannot compensate key ${objectPath}`,
+        );
+      }
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      const s3 = await buildS3Client(cfg);
+      // S3 DeleteObject returns 204 for a missing key → inherently idempotent.
+      await s3.send(new DeleteObjectCommand({ Bucket: cfg.s3Bucket, Key: objectPath }));
+      return;
+    }
+
+    // ── Global R2 via env: objectPath is the object key ──────────────────────
+    case "r2": {
+      if (organizationId == null) {
+        throw new Error(`deleteStoredObject: r2 requires an organizationId (key ${objectPath})`);
+      }
+      // Key ownership: R2 keys are `org_${orgId}/projects/…` (see buildR2Key).
+      if (!objectPath.startsWith(`org_${organizationId}/`)) {
+        throw new Error(`deleteStoredObject: r2 key ${objectPath} is not owned by org ${organizationId} — refusing`);
+      }
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      const r2 = await buildR2Client();
+      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET!, Key: objectPath }));
+      return;
+    }
+
+    // ── Cloud (GCS): reconstruct bucket/object from PRIVATE_OBJECT_DIR ────────
+    case "cloud": {
+      const privateObjectDir = process.env.PRIVATE_OBJECT_DIR;
+      if (!privateObjectDir) {
+        throw new Error(
+          `deleteStoredObject: PRIVATE_OBJECT_DIR unset; cannot compensate cloud object ${objectPath}`,
+        );
+      }
+      const safeFile = path.basename(objectPath);
+      const fullPath = `${privateObjectDir}/uploads/${safeFile}`;
+      const parts = fullPath.startsWith("/") ? fullPath.slice(1).split("/") : fullPath.split("/");
+      const bucketName = parts[0];
+      const objectName = parts.slice(1).join("/");
+      const { objectStorageClient } = await import("./objectStorage.js");
+      // ignoreNotFound keeps this idempotent for an already-absent object.
+      await objectStorageClient.bucket(bucketName).file(objectName).delete({ ignoreNotFound: true });
+      return;
+    }
+  }
+}
+
 async function uploadToCloud(buffer: Buffer, safeFile: string, contentType?: string): Promise<UploadBufferResult> {
   if (!isCloudStorageAvailable()) {
     const basePath = getEffectiveOnPremPath(null);

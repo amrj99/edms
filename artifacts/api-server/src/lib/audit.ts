@@ -40,7 +40,7 @@ export interface AuditDetails {
  *   Building the INSERT with sql.join() lets us include only the columns that
  *   have actual values, making the function resilient across migration states.
  */
-export async function createAuditLog(params: {
+export interface AuditLogParams {
   userId?: number;
   organizationId?: number;
   action: string;
@@ -54,44 +54,67 @@ export async function createAuditLog(params: {
   afterState?: Record<string, unknown>;
   actorRole?: string;
   userAgent?: string;
-}): Promise<void> {
+}
+
+/** A db handle or an open transaction — anything that can .execute() SQL. */
+type AuditExecutor = Pick<typeof db, "execute">;
+
+/**
+ * Build the audit INSERT with only the columns that carry a real value, so the
+ * statement succeeds across migration states (see WHY RAW SQL above). Pure —
+ * shared by the fire-and-forget and transactional variants.
+ */
+function buildAuditInsert(params: AuditLogParams) {
+  type SQLChunk = ReturnType<typeof sql>;
+  const cols: SQLChunk[] = [];
+  const vals: SQLChunk[] = [];
+
+  const add = (col: string, val: unknown) => {
+    cols.push(sql.raw(`"${col}"`));
+    vals.push(sql`${val}`);
+  };
+
+  // Base columns — always present in every audit row.
+  if (params.userId !== undefined)         add("user_id",         params.userId);
+  if (params.organizationId !== undefined) add("organization_id", params.organizationId);
+  add("action",      params.action);
+  add("entity_type", params.entityType);
+  add("entity_id",   params.entityId);
+  if (params.entityTitle !== undefined)    add("entity_title", params.entityTitle);
+  add("details", params.details ?? {});
+  if (params.projectId !== undefined)      add("project_id",  params.projectId);
+  if (params.ipAddress !== undefined)      add("ip_address",  params.ipAddress);
+
+  // 0010_audit_schema.sql columns — only included when the caller provides
+  // a value so the INSERT succeeds even if the migration has not yet been
+  // applied to the target database.
+  if (params.beforeState !== undefined) add("before_state", params.beforeState);
+  if (params.afterState  !== undefined) add("after_state",  params.afterState);
+  if (params.actorRole   !== undefined) add("actor_role",   params.actorRole);
+  if (params.userAgent   !== undefined) add("user_agent",   params.userAgent);
+
+  return sql`INSERT INTO audit_logs (${sql.join(cols, sql`, `)}) VALUES (${sql.join(vals, sql`, `)})`;
+}
+
+export async function createAuditLog(params: AuditLogParams): Promise<void> {
   try {
-    // Build column and value lists dynamically so only columns with real values
-    // appear in the INSERT statement.
-    type SQLChunk = ReturnType<typeof sql>;
-    const cols: SQLChunk[] = [];
-    const vals: SQLChunk[] = [];
-
-    const add = (col: string, val: unknown) => {
-      cols.push(sql.raw(`"${col}"`));
-      vals.push(sql`${val}`);
-    };
-
-    // Base columns — always present in every audit row.
-    if (params.userId !== undefined)         add("user_id",         params.userId);
-    if (params.organizationId !== undefined) add("organization_id", params.organizationId);
-    add("action",      params.action);
-    add("entity_type", params.entityType);
-    add("entity_id",   params.entityId);
-    if (params.entityTitle !== undefined)    add("entity_title", params.entityTitle);
-    add("details", params.details ?? {});
-    if (params.projectId !== undefined)      add("project_id",  params.projectId);
-    if (params.ipAddress !== undefined)      add("ip_address",  params.ipAddress);
-
-    // 0010_audit_schema.sql columns — only included when the caller provides
-    // a value so the INSERT succeeds even if the migration has not yet been
-    // applied to the target database.
-    if (params.beforeState !== undefined) add("before_state", params.beforeState);
-    if (params.afterState  !== undefined) add("after_state",  params.afterState);
-    if (params.actorRole   !== undefined) add("actor_role",   params.actorRole);
-    if (params.userAgent   !== undefined) add("user_agent",   params.userAgent);
-
-    await db.execute(
-      sql`INSERT INTO audit_logs (${sql.join(cols, sql`, `)}) VALUES (${sql.join(vals, sql`, `)})`,
-    );
+    await db.execute(buildAuditInsert(params));
   } catch (err) {
     // Audit logs must never break the main request flow.
     // Log so that silent INSERT failures are visible in server output.
     console.error("[audit] createAuditLog failed:", (err as Error)?.message ?? err);
   }
+}
+
+/**
+ * B2.3a — Transactional audit write.
+ *
+ * Unlike createAuditLog, this deliberately does NOT swallow errors: it runs
+ * inside the caller's db.transaction(), so a failed audit INSERT MUST propagate
+ * and roll the whole transaction back. This is what guarantees "no success
+ * audit row for a failed operation" — the audit is committed atomically with
+ * the state change it describes, or not at all.
+ */
+export async function createAuditLogTx(tx: AuditExecutor, params: AuditLogParams): Promise<void> {
+  await tx.execute(buildAuditInsert(params));
 }
