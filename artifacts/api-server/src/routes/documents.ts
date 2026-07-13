@@ -422,46 +422,63 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
     }
   }
 
-  const [doc] = await db.insert(documentsTable).values({
-    documentNumber: resolvedDocNumber, title: title.trim(), documentType, discipline,
-    revision: revision || "A",
-    status: status || "draft",
-    description, folderId,
-    projectId,
-    organizationId: projForMetadata?.organizationId ?? null,
-    createdById: req.user!.id,
-    fileUrl, fileName, fileSize,
-    metadata: metadata || {},
-    source, issuedBy,
-    direction: direction === "incoming" || direction === "outgoing" ? direction : null,
-  }).returning();
+  // ── B2.3d: atomic core write ──────────────────────────────────────────────
+  // The document, its initial revision, the create audit, and the primary
+  // document_files row are ONE transaction: a document must never exist without
+  // its initial revision (the old code wrote them separately, so a mid-write
+  // failure could leave a revision-less document). Best-effort enrichment (AI,
+  // rules, notifications, email) stays AFTER the commit — a document create must
+  // not fail because a notification did.
+  let doc!: typeof documentsTable.$inferSelect;
+  await db.transaction(async (tx) => {
+    const [inserted] = await tx.insert(documentsTable).values({
+      documentNumber: resolvedDocNumber, title: title.trim(), documentType, discipline,
+      revision: revision || "A",
+      status: status || "draft",
+      description, folderId,
+      projectId,
+      organizationId: projForMetadata?.organizationId ?? null,
+      createdById: req.user!.id,
+      fileUrl, fileName, fileSize,
+      metadata: metadata || {},
+      source, issuedBy,
+      direction: direction === "incoming" || direction === "outgoing" ? direction : null,
+    }).returning();
 
-  // Save initial revision
-  await db.insert(documentRevisionsTable).values({
-    documentId: doc.id,
-    revision: doc.revision,
-    status: doc.status,
-    fileUrl: doc.fileUrl,
-    fileName: doc.fileName,
-    comment: "Initial version",
-    createdById: req.user!.id,
-  });
+    // Initial revision — atomic with the document.
+    await tx.insert(documentRevisionsTable).values({
+      documentId: inserted.id,
+      organizationId: inserted.organizationId,
+      revision: inserted.revision,
+      status: inserted.status,
+      fileUrl: inserted.fileUrl,
+      fileName: inserted.fileName,
+      comment: "Initial version",
+      createdById: req.user!.id,
+    });
 
-  await createAuditLog({ userId: req.user!.id, action: "create", entityType: "document", entityId: doc.id, entityTitle: doc.title, projectId });
+    await createAuditLogTx(tx, {
+      userId: req.user!.id,
+      organizationId: inserted.organizationId ?? undefined,
+      action: "create", entityType: "document", entityId: inserted.id, entityTitle: inserted.title, projectId,
+    });
 
-  // Create document_files entry for the primary file (one-to-many support)
-  if (fileUrl && fileName) {
-    try {
-      await db.insert(documentFilesTable).values({
-        documentId: doc.id,
+    // Primary file's one-to-many row — atomic with the document (owner-org tenant,
+    // consistent with B2.3a; previously a swallowed best-effort insert with NULL org).
+    if (fileUrl && fileName) {
+      await tx.insert(documentFilesTable).values({
+        documentId: inserted.id,
+        organizationId: inserted.organizationId,
         fileUrl,
         fileName,
         fileSize: fileSize ?? null,
         fileType: req.body.fileType ?? null,
         uploadedById: req.user!.id,
       });
-    } catch (_) {}
-  }
+    }
+
+    doc = inserted;
+  });
 
   // AI classification (non-blocking — enhances metadata and is persisted to document record)
   let aiClassification: { category?: string; tags?: string[]; priority?: string } = {};
@@ -696,39 +713,55 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     }
   }
 
-  const [doc] = await db.update(documentsTable)
-    .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, direction: direction === "incoming" || direction === "outgoing" ? direction : (direction === null ? null : existing[0].direction), updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning();
+  // ── B2.3d: atomic edit ────────────────────────────────────────────────────
+  // The document update, its new revision row (when the revision changes), and
+  // both audits are ONE transaction: an edit must never leave the document at a
+  // new revision string with no matching revision record, nor a status change
+  // with no status_change audit (the old code wrote them separately).
+  let doc!: typeof documentsTable.$inferSelect;
+  await db.transaction(async (tx) => {
+    const [updated] = await tx.update(documentsTable)
+      .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, direction: direction === "incoming" || direction === "outgoing" ? direction : (direction === null ? null : existing[0].direction), updatedAt: new Date() })
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+      .returning();
 
-  // Save revision record if revision changed
-  if (revision && revision !== existing[0].revision) {
-    const isNewFile = !!fileUrl;
-    await db.insert(documentRevisionsTable).values({
-      documentId: id,
-      revision: revision,
-      status: status || currentStatus,
-      fileUrl: fileUrl || existing[0].fileUrl,
-      fileName: fileName || existing[0].fileName,
-      comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
-      createdById: req.user!.id,
-      fileCarriedForward: !isNewFile,
-    });
-  }
+    // Save revision record if revision changed — atomic with the update.
+    if (revision && revision !== existing[0].revision) {
+      const isNewFile = !!fileUrl;
+      await tx.insert(documentRevisionsTable).values({
+        documentId: id,
+        organizationId: updated.organizationId,
+        revision: revision,
+        status: status || currentStatus,
+        fileUrl: fileUrl || existing[0].fileUrl,
+        fileName: fileName || existing[0].fileName,
+        comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
+        createdById: req.user!.id,
+        fileCarriedForward: !isNewFile,
+      });
+    }
 
-  if (statusChanging) {
-    await createAuditLog({
+    if (statusChanging) {
+      await createAuditLogTx(tx, {
+        userId: req.user!.id,
+        organizationId: updated.organizationId ?? undefined,
+        action: "status_change",
+        entityType: "document",
+        entityId: id,
+        entityTitle: updated.title,
+        projectId,
+        details: { fromStatus: currentStatus, toStatus: status, via: "manual_edit", actorRole: effectiveRole },
+      });
+    }
+
+    await createAuditLogTx(tx, {
       userId: req.user!.id,
-      action: "status_change",
-      entityType: "document",
-      entityId: id,
-      entityTitle: doc.title,
-      projectId,
-      details: { fromStatus: currentStatus, toStatus: status, via: "manual_edit", actorRole: effectiveRole },
+      organizationId: updated.organizationId ?? undefined,
+      action: "update", entityType: "document", entityId: id, entityTitle: updated.title, projectId,
     });
-  }
 
-  await createAuditLog({ userId: req.user!.id, action: "update", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
+    doc = updated;
+  });
   res.json({ ...doc });
 });
 
