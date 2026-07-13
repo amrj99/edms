@@ -804,7 +804,9 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
     referenceNumber: correspondenceTable.referenceNumber,
     projectId: correspondenceTable.projectId,
     organizationId: correspondenceTable.organizationId,
-  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  }).from(correspondenceTable)
+    // B2.5-FIX: org-scope the lookup so a cross-org correspondence is not found.
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
 
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -917,7 +919,9 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     projectId: correspondenceTable.projectId,
     status: correspondenceTable.status,
     assignedToId: correspondenceTable.assignedToId,
-  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  }).from(correspondenceTable)
+    // B2.5-FIX: org-scope the lookup — cross-org correspondence is not found.
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
   const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
@@ -963,7 +967,7 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 
   const [corr] = await db.update(correspondenceTable)
     .set(updateData)
-    .where(eq(correspondenceTable.id, id))
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
     .returning();
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
 
@@ -1120,7 +1124,14 @@ router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res):
 
 router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const corrId = requireInt(req.params.id);
+  const caller = req.user!;
   const { fileName, fileUrl, fileSize } = req.body;
+  // B2.5-FIX: the correspondence must belong to the caller's org before we
+  // attach a file to it (was completely unscoped — any authenticated user could
+  // attach to any correspondence by id).
+  const [corr] = await db.select({ id: correspondenceTable.id }).from(correspondenceTable)
+    .where(orgScopedWhere(caller, correspondenceTable.id, corrId, correspondenceTable.organizationId)).limit(1);
+  if (!corr) { res.status(404).json({ error: "Correspondence not found" }); return; }
   const [att] = await db.insert(correspondenceAttachmentsTable).values({
     correspondenceId: corrId,
     fileName,
@@ -1162,7 +1173,9 @@ router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Pro
     projectId: correspondenceTable.projectId,
     subject: correspondenceTable.subject,
     referenceNumber: correspondenceTable.referenceNumber,
-  }).from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  }).from(correspondenceTable)
+    // B2.5-FIX: org-scope the lookup — cross-org correspondence is not found.
+    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
   // Admin+ only can delete correspondence (hard delete, no recovery)
