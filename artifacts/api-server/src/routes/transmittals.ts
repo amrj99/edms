@@ -13,7 +13,7 @@ import { TransmittalPermissions, checkAssignmentBasedPermission } from "../lib/p
 import { createAuditLog } from "../lib/audit.js";
 import crypto from "crypto";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { canAccessProject } from "../lib/can-access-project.js";
@@ -22,6 +22,48 @@ import { recipientOrganizationId } from "../lib/transmittal-recipient.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
+
+// ─── B2.4-FIX: router-wide project-access gate ────────────────────────────────
+// Every transmittal route is project-scoped (/projects/:projectId/transmittals).
+// The individual handlers historically enforced project access inconsistently —
+// several mutation handlers relied on requireRole (a caller-org role check) or
+// bare requireAuth, with lookups that were not org-scoped, so an admin/PM/DC (or
+// any authenticated user) from another org could mutate a project's transmittals
+// by id. This gate calls canAccessProject once for the whole router and
+// fail-closes non-members (403), closing the cross-org hole for every current
+// and future handler (mirrors the B2.7-FIX document router gate).
+//
+// It stashes the resolved access so downstream handlers can enforce the party
+// ceiling without re-querying, and does NOT replace the existing per-handler
+// party-ceiling / assignment checks — those still apply on top.
+interface ProjectAccessCtx { mode: string; partyRole?: string }
+router.use(async (req: Request<ProjectParams>, res: Response, next: NextFunction): Promise<void> => {
+  const caller = req.user!;
+  const projectId = requireInt(req.params.projectId);
+  const access = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+  if (!access.allowed) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
+    return;
+  }
+  (req as Request & { projectAccess?: ProjectAccessCtx }).projectAccess = { mode: access.mode, partyRole: access.partyRole };
+  next();
+});
+
+// B2.4-FIX: fail-closed party guard for DESTRUCTIVE transmittal actions that have
+// NO PARTY_CEILING_V1 capability (update, delete item, complete review, upload
+// attachment, share/revoke). PARTY_CEILING_V1 defines only create/read/
+// acknowledge; its default-allow for unlisted actions is unsafe for destructive
+// writes, so party callers are denied here rather than bound to an unrelated
+// capability. (Whether party contributors should EVER get these is a Product/
+// Policy decision — see the closure's Party Capability gate.)
+function denyPartyDestructive(req: Request, res: Response, next: NextFunction): void {
+  const mode = (req as Request & { projectAccess?: ProjectAccessCtx }).projectAccess?.mode;
+  if (mode === "party") {
+    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit this action" });
+    return;
+  }
+  next();
+}
 
 // Party-scoped transmittal predicate: sender org OR named recipient OR recipient's org.
 // system_owner bypasses the party filter and sees all transmittals in the project.
@@ -251,7 +293,7 @@ router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
 });
 
 // Update transmittal
-router.put("/:id", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.put("/:id", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode, toUserId, reference } = req.body;
@@ -475,7 +517,7 @@ router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Pr
 });
 
 // Complete review — compute rolled-up outcome, apply document statuses, create response draft
-router.post("/:id/complete-review", requireAuth, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const actor = req.user as any;
@@ -757,9 +799,19 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
 });
 
 // Add document to transmittal
-router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const transmittalId = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const { documentId, revision, copies, purpose } = req.body;
+  // Object scoping: the transmittal must belong to THIS project, and the
+  // document being attached must belong to THIS project too (no cross-project
+  // transmittal/document mixing by id).
+  const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
+  if (!trs) { res.status(404).json({ error: "Transmittal not found" }); return; }
+  const [d] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, documentId), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!d) { res.status(404).json({ error: "Document not found in this project" }); return; }
   const [item] = await db.insert(transmittalItemsTable).values({
     transmittalId, documentId, revision, copies, purpose,
   }).returning();
@@ -767,14 +819,26 @@ router.post("/:id/items", requireRole("admin", "project_manager", "document_cont
 });
 
 // Remove document from transmittal
-router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
+router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
+  const transmittalId = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
   const itemId = requireInt(req.params.itemId);
+  // Object scoping: the item must belong to THIS transmittal, which must belong
+  // to THIS project — never delete an item by bare id.
+  const [item] = await db.select({ id: transmittalItemsTable.id }).from(transmittalItemsTable)
+    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+    .where(and(
+      eq(transmittalItemsTable.id, itemId),
+      eq(transmittalItemsTable.transmittalId, transmittalId),
+      eq(transmittalsTable.projectId, projectId),
+    )).limit(1);
+  if (!item) { res.status(404).json({ error: "Item not found" }); return; }
   await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
   res.json({ success: true });
 });
 
 // Set per-item review code — assignment-based: must be the designated recipient or admin+
-router.patch("/:id/items/:itemId", requireAuth, async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
+router.patch("/:id/items/:itemId", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
   const transmittalId = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const itemId = requireInt(req.params.itemId);
@@ -807,16 +871,17 @@ router.patch("/:id/items/:itemId", requireAuth, async (req: Request<ProjectItemP
     });
   }
 
+  // Object scoping: the item must belong to the transmittal in this project.
   const [updated] = await db.update(transmittalItemsTable)
     .set({ reviewCode: reviewCode ?? null })
-    .where(eq(transmittalItemsTable.id, itemId))
+    .where(and(eq(transmittalItemsTable.id, itemId), eq(transmittalItemsTable.transmittalId, transmittalId)))
     .returning();
   if (!updated) { res.status(404).json({ error: "Item not found" }); return; }
   res.json(updated);
 });
 
 // Create / update share link
-router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
@@ -860,11 +925,18 @@ router.post("/:id/share", requireRole("admin", "project_manager", "document_cont
 });
 
 // Upload external file and add as transmittal attachment (creates a stub doc)
-router.post("/:id/upload-attachment", async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/upload-attachment", denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const transmittalId = requireInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   if (!fileName || !fileUrl) { res.status(400).json({ error: "fileName and fileUrl required" }); return; }
+
+  // Object scoping: the target transmittal must belong to THIS project before we
+  // create a document + item under it (was unscoped — any authenticated user
+  // could inject a document into any project's transmittal by id).
+  const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
+  if (!trs) { res.status(404).json({ error: "Transmittal not found" }); return; }
 
   // Create a stub document record for the external file
   const [doc] = await db.insert(documentsTable).values({
@@ -891,11 +963,13 @@ router.post("/:id/upload-attachment", async (req: Request<ProjectItemParams>, re
 });
 
 // Revoke share link
-router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+  // Object scoping: the transmittal must belong to this project (was by bare id).
   await db.update(transmittalsTable)
     .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(eq(transmittalsTable.id, id));
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
   res.json({ success: true });
 });
 
