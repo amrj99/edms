@@ -1465,12 +1465,14 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   //             audit), then we compensate the Phase-1 storage objects.
   // Residual (un-deletable) objects are logged with their storage keys as
   // potential orphans for out-of-band reconciliation — never hidden.
-  const logStorageResidual = (residual: CompensationResidual[]): void => {
+  // Internal-only log. Storage keys/paths are NEVER returned to the client —
+  // they are correlated to the client via an opaque incident id instead.
+  const logStorageResidual = (incidentId: string, residual: CompensationResidual[]): void => {
     for (const r of residual) {
       console.error(
-        `[B2.3a][storage-orphan] compensation delete FAILED — object may be orphaned. ` +
-        `mode=${r.mode} key=${r.objectPath} orgId=${orgId ?? "null"} docId=${docId} ` +
-        `userId=${req.user!.id} reason=${r.reason}`,
+        `[B2.3a][storage-orphan] incident=${incidentId} compensation delete FAILED — ` +
+        `object may be orphaned. mode=${r.mode} key=${r.objectPath} orgId=${orgId ?? "null"} ` +
+        `docId=${docId} userId=${req.user!.id} reason=${r.reason}`,
       );
     }
   };
@@ -1515,9 +1517,14 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     // A storage write failed part-way. No DB rows were written. Compensate the
     // objects already stored for THIS request, then fail closed.
     const residual = await compensateStorage(writtenObjects(written));
-    logStorageResidual(residual);
-    console.error(`[B2.3a] storage write failed for docId=${docId}:`, (storageErr as Error)?.message ?? storageErr);
-    res.status(500).json({ error: "UPLOAD_FAILED", message: "File storage failed; no changes were saved." });
+    const incidentId = crypto.randomUUID();
+    logStorageResidual(incidentId, residual);
+    console.error(`[B2.3a] incident=${incidentId} storage write failed for docId=${docId}:`, (storageErr as Error)?.message ?? storageErr);
+    res.status(500).json({
+      error: "UPLOAD_FAILED",
+      message: "File storage failed; no changes were saved.",
+      ...(residual.length > 0 ? { incidentId } : {}),
+    });
     return;
   }
 
@@ -1550,12 +1557,16 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
     // The transaction rolled back → zero rows, no audit, quota unchanged.
     // Compensate the storage objects written in Phase 1.
     const residual = await compensateStorage(writtenObjects(written));
-    logStorageResidual(residual);
-    console.error(`[B2.3a] upload transaction failed for docId=${docId}:`, (dbErr as Error)?.message ?? dbErr);
+    const incidentId = crypto.randomUUID();
+    logStorageResidual(incidentId, residual);
+    console.error(`[B2.3a] incident=${incidentId} upload transaction failed for docId=${docId}:`, (dbErr as Error)?.message ?? dbErr);
+    // Never leak internal storage keys/paths to the client. When compensation
+    // leaves a residual (potential orphan), return only an opaque incident id
+    // that ties this response to the internal log for reconciliation.
     res.status(500).json({
       error: "UPLOAD_FAILED",
       message: "Saving the upload failed; no changes were saved.",
-      ...(residual.length > 0 ? { orphanedStorageKeys: residual.map((r) => r.objectPath) } : {}),
+      ...(residual.length > 0 ? { incidentId } : {}),
     });
     return;
   }

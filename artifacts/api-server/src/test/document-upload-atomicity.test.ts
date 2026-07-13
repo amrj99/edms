@@ -33,6 +33,7 @@ import { documentsTable, documentFilesTable, organizationsTable, orgConfigTable 
 import * as storageMod from "../lib/orgStorage.js";
 import * as fileWriteMod from "../lib/document-file-write.js";
 import * as auditMod from "../lib/audit.js";
+import * as socketMod from "../lib/socket.js";
 import { storageQuota } from "../lib/storage-quota.js";
 
 // Capture real implementations BEFORE any spy so call-through wrappers can
@@ -179,38 +180,58 @@ describe("B2.3a — Document File Upload Atomicity (failure injection)", () => {
     expect(fs.existsSync(await lastStoredPath())).toBe(false);
   });
 
-  it("6) quota update fails → FULL rollback + storage deleted", async () => {
+  it("6) quota update fails → FULL rollback + storage deleted + NO socket emit", async () => {
     vi.spyOn(storageMod, "uploadBuffer");
     vi.spyOn(storageQuota, "increment").mockRejectedValueOnce(new Error("quota boom"));
+    // Side-effect ordering: nothing outside the DB may fire on a failed commit.
+    const emit = vi.spyOn(socketMod, "emitToUser");
     await expectNoStateChange(async () => {
       const res = await attach(api().post(`${P(fx.project.id)}/${fx.docId}/files`).set(auth()), "d.pdf", "DDD");
       expect(res.status).toBe(500);
     });
     expect(fs.existsSync(await lastStoredPath())).toBe(false);
+    expect(emit, "socket event must NOT fire when the transaction rolled back").not.toHaveBeenCalled();
   });
 
-  it("7) compensation delete itself fails → op fails AND residual storage key surfaced", async () => {
+  it("7) compensation delete itself fails → op fails, incident id returned, path logged internally ONLY", async () => {
     const up = vi.spyOn(storageMod, "uploadBuffer");
     vi.spyOn(storageQuota, "increment").mockRejectedValueOnce(new Error("quota boom → force rollback"));
     vi.spyOn(storageMod, "deleteStoredObject").mockRejectedValueOnce(new Error("storage delete failed"));
+    const errSpy = vi.spyOn(console, "error");
     let residualPath = "";
+    let incidentId = "";
     await expectNoStateChange(async () => {
       const res = await attach(api().post(`${P(fx.project.id)}/${fx.docId}/files`).set(auth()), "e.pdf", "EEE");
       expect(res.status).toBe(500);
-      // Clear evidence: the un-deletable object's storage key is returned.
-      expect(Array.isArray(res.body.orphanedStorageKeys)).toBe(true);
-      expect(res.body.orphanedStorageKeys.length).toBeGreaterThan(0);
       residualPath = (await up.mock.results[0].value).objectPath;
-      expect(res.body.orphanedStorageKeys).toContain(residualPath);
+
+      // The client gets an opaque incident id — NEVER an internal storage path.
+      expect(res.body.orphanedStorageKeys, "internal keys must not be exposed").toBeUndefined();
+      expect(typeof res.body.incidentId).toBe("string");
+      expect(res.body.incidentId).toMatch(/^[0-9a-f-]{36}$/i);
+      incidentId = res.body.incidentId;
+
+      // No internal storage path/segment leaks anywhere in the response body.
+      const bodyStr = JSON.stringify(res.body);
+      expect(bodyStr).not.toContain("edms-b23a");
+      expect(bodyStr).not.toContain(residualPath);
+      expect(bodyStr).not.toContain(residualPath.split(/[\\/]/).pop()!);
     });
+
+    // The residual IS recorded internally, correlated to the same incident id.
+    const logged = errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(logged).toContain(incidentId);
+    expect(logged).toContain(residualPath);
+
     // Compensation failed → the object really is still on disk. Clean up so the
     // temp dir does not accumulate this deliberate orphan.
     expect(fs.existsSync(residualPath)).toBe(true);
     try { fs.unlinkSync(residualPath); } catch { /* ignore */ }
   });
 
-  it("8) multi-file success → all rows + audits + quota committed together", async () => {
+  it("8) multi-file success → all rows + audits + quota committed together + socket emitted once", async () => {
     const up = vi.spyOn(storageMod, "uploadBuffer");
+    const emit = vi.spyOn(socketMod, "emitToUser");
     const beforeFiles = await fileCount(fx.docId);
     const beforeAudit = await auditCount(fx.docId);
     const beforeMb = await usedMb(fx.org.id);
@@ -225,6 +246,9 @@ describe("B2.3a — Document File Upload Atomicity (failure injection)", () => {
     expect(await fileCount(fx.docId)).toBe(beforeFiles + 2);
     expect(await auditCount(fx.docId)).toBe(beforeAudit + 2);
     expect(await usedMb(fx.org.id)).toBe(beforeMb + 1); // ceil(tiny total / 1MB) = 1
+    // The socket event fires exactly once, and only AFTER the commit succeeded.
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(fx.user.id, "document:updated", { documentId: fx.docId });
     // Both objects are present on disk (committed, not compensated).
     for (const r of up.mock.results) {
       const stored = await r.value;
