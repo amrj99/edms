@@ -1535,6 +1535,10 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
         fileName: multerFile.originalname,
         values: {
           documentId: docId,
+          // Tenant column follows the document OWNER (Alternative A) — the file
+          // lives in the owner's storage, so its row is owned by the owner org,
+          // not the uploader's org. (Was previously left NULL.)
+          organizationId: storageOrgId,
           fileUrl: stored.serveUrl,
           fileName: multerFile.originalname,
           fileSize: multerFile.size,

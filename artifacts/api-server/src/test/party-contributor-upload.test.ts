@@ -30,7 +30,9 @@ import { storageQuota } from "../lib/storage-quota.js";
 interface Fx {
   orgA: { id: number }; orgB: { id: number }; orgObs: { id: number }; orgOut: { id: number };
   userA: { id: number }; userB: { id: number }; userObs: { id: number }; userOut: { id: number };
-  projectA: { id: number }; docId: number; base: string;
+  projectA: { id: number }; docId: number;
+  projectOther: { id: number }; docOther: number; // Org A project where Org B is NOT a party
+  base: string;
 }
 let fx: Fx;
 
@@ -76,7 +78,17 @@ beforeAll(async () => {
     documentNumber: "OWNA-DOC", title: "Owner Document", revision: "A", status: "draft",
   }).returning();
 
-  fx = { orgA, orgB, orgObs, orgOut, userA, userB, userObs, userOut, projectA, docId: doc.id, base };
+  // A SECOND Org A project, in "parties" mode, where Org B is NOT a party at
+  // all. Used to prove authorization is per-PROJECT membership — being a
+  // contributor on projectA must NOT grant access to a different project.
+  const projectOther = await createProject({ organizationId: orgA.id, createdById: userA.id, name: "Owner Project 2", code: "OWNA-002" });
+  await db.update(projectsTable).set({ collaborationMode: "parties" }).where(eq(projectsTable.id, projectOther.id));
+  const [docOther] = await db.insert(documentsTable).values({
+    organizationId: orgA.id, projectId: projectOther.id, createdById: userA.id,
+    documentNumber: "OWNA-DOC2", title: "Owner Document 2", revision: "A", status: "draft",
+  }).returning();
+
+  fx = { orgA, orgB, orgObs, orgOut, userA, userB, userObs, userOut, projectA, docId: doc.id, projectOther, docOther: docOther.id, base };
 });
 afterAll(async () => {
   try { fs.rmSync(fx.base, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -111,6 +123,11 @@ describe("B2.3a — Party Contributor upload follows the DOCUMENT OWNER's org (A
     expect(await fileCount(fx.docId)).toBe(beforeFiles + 1);
     expect(await usedMb(fx.orgA.id)).toBe(beforeA + 1);
     expect(await usedMb(fx.orgB.id)).toBe(beforeB);
+
+    // The document_files row's tenant column = OWNER org (Org A), NOT uploader (Org B).
+    const [row] = await getTestDb().select({ orgId: documentFilesTable.organizationId })
+      .from(documentFilesTable).where(eq(documentFilesTable.documentId, fx.docId)).orderBy(sql`id DESC`).limit(1);
+    expect(row.orgId).toBe(fx.orgA.id);
 
     // Audit: attributed to Org A, actor is the Org B user.
     const a: any = await getTestDb().execute(
@@ -147,5 +164,17 @@ describe("B2.3a — Party Contributor upload follows the DOCUMENT OWNER's org (A
     const res = await upload(authHeader("admin", fx.userOut.id, fx.orgOut.id, "admin@outs.test"), "out.pdf", "OUT");
     expect(res.status).toBe(403);
     expect(await fileCount(fx.docId)).toBe(before);
+  });
+
+  it("contributor on projectA is DENIED on a different Org A project it is NOT a party of (per-project, not org-level)", async () => {
+    // Org B is a contributor on projectA, but NOT a party of projectOther.
+    // Authorization must be scoped to the specific project's membership — a
+    // party grant on one project must never leak to another project of the
+    // same owner org.
+    const before = await fileCount(fx.docOther);
+    const res = await api().post(`${P(fx.projectOther.id)}/${fx.docOther}/files`).set(asContributor())
+      .attach("files", Buffer.from("X-PROJECT"), { filename: "xproj.pdf", contentType: "application/pdf" });
+    expect(res.status).toBe(403);
+    expect(await fileCount(fx.docOther)).toBe(before);
   });
 });
