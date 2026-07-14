@@ -5,7 +5,7 @@ import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTabl
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
 import { isExpiredPlan } from "../lib/plan-normalizer.js";
-import { eq, and, or, count, asc, desc, sql, inArray, ilike, type SQL } from "drizzle-orm";
+import { eq, and, or, count, asc, desc, sql, inArray, ilike, isNull, isNotNull, type SQL } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, hashToken } from "../lib/auth.js";
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { checkStatusTransition } from "../lib/doc-status-machine.js";
@@ -24,6 +24,7 @@ import { classifyItem } from "../lib/ai-service.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
 import { insertDocumentFileRow, compensateStorage, type WrittenObject, type CompensationResidual } from "../lib/document-file-write.js";
 import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
+import { computeFilePurgeAfter } from "../lib/retention.js";
 import { resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import { fileFilter, validateUploadedFiles, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
 import { validateDocumentMetadata } from "./metadata.js";
@@ -1312,7 +1313,8 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
     uploader: usersTable,
   }).from(documentFilesTable)
     .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
-    .where(eq(documentFilesTable.documentId, docId));
+    // B2.3b-1: hide soft-deleted files from normal listings.
+    .where(and(eq(documentFilesTable.documentId, docId), isNull(documentFilesTable.deletedAt)));
 
   res.json({
     files: files.map(({ file, uploader }) => ({
@@ -1626,8 +1628,10 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
   const fileId = requireInt(req.params.fileId);
   const caller = req.user!;
 
-  // Tenant isolation: verify caller's org owns the document before allowing file deletion.
-  // documentFilesTable has no organizationId so the guard sits on the parent document.
+  // ── B2.3b-1: SOFT delete (owner-org only) ─────────────────────────────────
+  // Owner-org tenant guard: the parent document must belong to the caller's org.
+  // A party contributor from another org is denied here — file deletion is NOT
+  // granted by the upload capability; B2.3b-1 is owner-org only.
   const [doc] = await db.select().from(documentsTable)
     .where(and(
       eq(documentsTable.id, docId),
@@ -1636,29 +1640,136 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
     ));
   if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
 
-  const [file] = await db.select().from(documentFilesTable)
-    .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)));
-  if (!file) { res.status(404).json({ error: "File not found" }); return; }
-
-  await db.delete(documentFilesTable).where(eq(documentFilesTable.id, fileId));
-
-  await createAuditLog({
-    userId: req.user!.id,
-    action: "update",
-    entityType: "document",
-    entityId: docId,
-    entityTitle: `${doc.title} — removed file: ${file.fileName}`,
-    projectId,
-  });
-
-  // Decrement org storage counter via StorageQuotaService (C-2)
-  // Math.ceil used for both directions — fixes the old Math.floor asymmetry
-  const orgId = req.user!.organizationId;
-  if (orgId && file.fileSize) {
-    await storageQuota.decrement(orgId, file.fileSize);
+  // Role authorization (NOT org-match alone): use the approved, status-gated
+  // document-delete permission — same model as whole-document delete.
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+  if (!isSystemOwner(caller) && !DocumentPermissions.canDelete(effectiveRole, doc.status)) {
+    res.status(403).json({ error: "Forbidden", message: "You do not have permission to delete files on this document" });
+    return;
   }
 
+  // ── F1: ATOMIC conditional soft-delete ────────────────────────────────────
+  // The state transition is decided by the UPDATE predicate itself, NOT by a
+  // prior SELECT (no check-then-act / TOCTOU). `deletedAt IS NULL` in the WHERE
+  // means only an ACTIVE file transitions: two concurrent DELETEs → exactly one
+  // row updated → exactly one success audit → purge_after set exactly once. The
+  // second request matches no row and preserves the second-delete contract
+  // (404, no purge_after change, no extra audit, no side effect).
+  //
+  // ── TEMPORARY LEGACY EXCEPTION (not the final architecture) ───────────────
+  // The atomic predicate scopes the row by documentId only; the parent document
+  // was already verified to belong to caller's org above, so tenant isolation
+  // holds transitively. We deliberately do NOT add document_files.organization_id
+  // to the predicate *yet*.
+  //   WHY (temporary): that column is NULL for legacy (pre-B2.3a) rows in
+  //     production; including it would make those rows permanently un-deletable
+  //     (a data regression), so it is omitted only because of legacy data — this
+  //     is NOT the intended end-state.
+  //   FINAL INTENT: once organization_id is backfilled for all document_files
+  //     rows (a migration outside this batch), add
+  //     `eq(documentFilesTable.organizationId, doc.organizationId!)` to BOTH the
+  //     delete and restore predicates for defence-in-depth, and drop this note.
+  //   MEANWHILE: the parent-document org gate above is the authoritative tenant
+  //     boundary; the same exception applies to the restore handler below.
+  //
+  // NO storage delete, NO quota change, NO row delete — the object is retained
+  // for FILE_RETENTION_DAYS; physical removal + quota decrement are the (gated)
+  // B2.3b-2 purge worker.
+  const now = new Date();
+  let softDeleted: { id: number; fileName: string } | undefined;
+  await db.transaction(async (tx) => {
+    const [updated] = await tx.update(documentFilesTable)
+      .set({ deletedAt: now, deletedById: caller.id, purgeAfter: computeFilePurgeAfter(now) })
+      .where(and(
+        eq(documentFilesTable.id, fileId),
+        eq(documentFilesTable.documentId, docId),
+        isNull(documentFilesTable.deletedAt),
+      ))
+      .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
+    // No active file matched (absent, or already soft-deleted by a concurrent
+    // request) → write NOTHING (no audit) and let the tx commit as a no-op.
+    if (!updated) return;
+    softDeleted = updated;
+    await createAuditLogTx(tx, {
+      userId: caller.id,
+      organizationId: doc.organizationId ?? undefined, // owner-org attribution
+      action: "file_delete_requested",
+      entityType: "document",
+      entityId: docId,
+      entityTitle: `${doc.title} — deleted file: ${updated.fileName}`,
+      projectId,
+    });
+  });
+
+  if (!softDeleted) { res.status(404).json({ error: "File not found" }); return; }
   res.status(204).end();
+});
+
+// POST /api/projects/:projectId/documents/:id/files/:fileId/restore — B2.3b-1
+// Restore a soft-deleted file (its storage object is still present). Same
+// owner-org + role authorization as delete. Quota and storage are unchanged.
+router.post("/:id/files/:fileId/restore", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+  const projectId = requireInt(req.params.projectId);
+  const docId = requireInt(req.params.id);
+  const fileId = requireInt(req.params.fileId);
+  const caller = req.user!;
+
+  const [doc] = await db.select().from(documentsTable)
+    .where(and(
+      eq(documentsTable.id, docId),
+      eq(documentsTable.projectId, projectId),
+      isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!),
+    ));
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+
+  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+  if (!isSystemOwner(caller) && !DocumentPermissions.canDelete(effectiveRole, doc.status)) {
+    res.status(403).json({ error: "Forbidden", message: "You do not have permission to restore files on this document" });
+    return;
+  }
+
+  // ── F1: ATOMIC conditional restore ────────────────────────────────────────
+  // The transition is decided by the UPDATE predicate. `deletedAt IS NOT NULL`
+  // means only a soft-deleted file transitions: two concurrent restores →
+  // exactly one row updated → exactly one restore audit. Scoped by documentId
+  // (parent org-verified above); the same TEMPORARY LEGACY EXCEPTION documented
+  // on the delete handler applies here (organization_id omitted from the
+  // predicate only because it is NULL for legacy rows — not the final design).
+  let restored: { id: number; fileName: string } | undefined;
+  await db.transaction(async (tx) => {
+    const [updated] = await tx.update(documentFilesTable)
+      .set({ deletedAt: null, deletedById: null, purgeAfter: null })
+      .where(and(
+        eq(documentFilesTable.id, fileId),
+        eq(documentFilesTable.documentId, docId),
+        isNotNull(documentFilesTable.deletedAt),
+      ))
+      .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
+    if (!updated) return;
+    restored = updated;
+    await createAuditLogTx(tx, {
+      userId: caller.id,
+      organizationId: doc.organizationId ?? undefined,
+      action: "file_restored",
+      entityType: "document",
+      entityId: docId,
+      entityTitle: `${doc.title} — restored file: ${updated.fileName}`,
+      projectId,
+    });
+  });
+
+  if (restored) { res.status(200).json({ id: restored.id, restored: true }); return; }
+
+  // No transition happened. Distinguish 404 (file absent) from 409 (file is
+  // active — restoring an active file is a conflict, not a no-op). This read is
+  // used ONLY to pick the error code; it never decides the transition (which the
+  // conditional UPDATE above already, atomically, did not perform).
+  const [exists] = await db.select({ id: documentFilesTable.id })
+    .from(documentFilesTable)
+    .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)))
+    .limit(1);
+  if (!exists) { res.status(404).json({ error: "File not found" }); return; }
+  res.status(409).json({ error: "NOT_DELETED", message: "File is not deleted" });
 });
 
 // ─── Lifecycle transitions: archive and obsolete ──────────────────────────────

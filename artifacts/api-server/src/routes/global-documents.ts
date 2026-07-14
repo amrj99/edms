@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { documentsTable, documentFilesTable, documentRevisionsTable, foldersTable, usersTable, projectsTable, projectMembersTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
-import { eq, desc, asc, and, or, ilike, inArray, count, gte, lte, type SQL } from "drizzle-orm";
+import { eq, desc, asc, and, or, ilike, inArray, count, gte, lte, isNull, type SQL } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { shadowEvaluate, resolveAndEnforce, resolveListAndEnforce } from "../lib/access-resolver.js";
 import {param, paramInt, requireInt} from '../lib/params';
@@ -275,7 +275,8 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const files = await db.select({ file: documentFilesTable, uploader: usersTable })
     .from(documentFilesTable)
     .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
-    .where(eq(documentFilesTable.documentId, id))
+    // B2.3b-1: hide soft-deleted files from the global document view.
+    .where(and(eq(documentFilesTable.documentId, id), isNull(documentFilesTable.deletedAt)))
     .orderBy(desc(documentFilesTable.createdAt));
 
   // Fetch departments (Phase B — data only, no enforcement)
