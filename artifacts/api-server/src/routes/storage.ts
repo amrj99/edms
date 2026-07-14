@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response, type NextFunction } 
 import { Readable } from "stream";
 import path from "path";
 import fs from "fs";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, isNotNull, like } from "drizzle-orm";
 import {
   db,
   orgConfigTable,
@@ -27,6 +27,7 @@ import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
 import { shouldAuditFileAccess } from "../lib/file-access-cache.js";
 import { getEffectiveOnPremPath } from "../lib/storageConfig.js";
+import { canonicalizeStorageServeUrl } from "../lib/storage-serve-url.js";
 
 // ─── MIME type detection ──────────────────────────────────────────────────────
 const MIME_MAP: Record<string, string> = {
@@ -69,19 +70,33 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const viewToken = req.query.vt as string | undefined;
 
-    // ── B2.3b-1: uniform soft-delete download guard ──────────────────────────
+    // ── B2.3b-1 (F2): uniform soft-delete download guard ─────────────────────
     // Every file-serve route funnels through here and exposes its exact serve
     // URL via expectedPathFn. If that URL belongs to a SOFT-DELETED document
     // file, deny the download on ALL backends (onpremise/s3/r2/cloud) and for
     // BOTH auth methods (bearer + view-token) — even if the caller knows the
     // fileUrl. Non-document objects (correspondence/meeting/chat) never match
     // and are unaffected.
-    const guardPath = expectedPathFn(req);
-    const [softDeleted] = await db.select({ id: documentFilesTable.id })
-      .from(documentFilesTable)
-      .where(and(eq(documentFilesTable.fileUrl, guardPath), isNotNull(documentFilesTable.deletedAt)))
-      .limit(1);
-    if (softDeleted) { res.status(404).json({ error: "File not found" }); return; }
+    //
+    // Matching is CANONICAL, not a raw string eq: the request path
+    // (expectedPathFn) and the stored file_url describe the same object in
+    // different textual forms (S3/R2 store an encoded key + ?orgId query the
+    // request lacks). canonicalizeStorageServeUrl() is applied to both sides so
+    // the guard fires on every backend and cannot be bypassed by re-encoding or
+    // reordering query params. We first narrow candidates by the final path
+    // segment (the object filename) via LIKE — soft-deleted rows only — then
+    // confirm with the exact canonical compare (LIKE may over-match because a
+    // filename can contain '_', a LIKE wildcard; the canonical compare is the
+    // authoritative filter).
+    const canonicalReq = canonicalizeStorageServeUrl(expectedPathFn(req));
+    const token = canonicalReq.split("/").filter(Boolean).pop() ?? "";
+    if (token) {
+      const candidates = await db.select({ fileUrl: documentFilesTable.fileUrl })
+        .from(documentFilesTable)
+        .where(and(isNotNull(documentFilesTable.deletedAt), like(documentFilesTable.fileUrl, `%${token}%`)));
+      const blocked = candidates.some(c => canonicalizeStorageServeUrl(c.fileUrl) === canonicalReq);
+      if (blocked) { res.status(404).json({ error: "File not found" }); return; }
+    }
 
     if (viewToken) {
       const payload = verifyToken(viewToken) as Record<string, unknown> | null;

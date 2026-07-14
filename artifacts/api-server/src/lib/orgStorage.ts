@@ -137,9 +137,21 @@ function buildR2Key(orgId: number, projectId: number | null, filename: string): 
   return `org_${orgId}/projects/0/${safeFile}`;
 }
 
+// ─── Serve-URL builders (single source of truth for the stored file_url) ──────
+// These define the canonical STORED form for S3/R2 objects: an
+// encodeURIComponent'd key plus an ?orgId query. The download soft-delete guard
+// canonicalises against exactly these (see lib/storage-serve-url.ts), and tests
+// import them so they assert against adapter-produced URLs — never synthetic
+// strings that could drift from what the adapter actually writes.
+
 /** Build the API serve URL for an R2 object. */
-function r2ServeUrl(orgId: number, objectKey: string): string {
+export function r2ServeUrl(orgId: number, objectKey: string): string {
   return `/api/storage/r2-object/${encodeURIComponent(objectKey)}?orgId=${orgId}`;
+}
+
+/** Build the API serve URL for an S3 object. */
+export function s3ServeUrl(orgId: number, objectKey: string): string {
+  return `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${orgId}`;
 }
 
 // ─── Per-org S3 helpers (existing behaviour) ──────────────────────────────────
@@ -207,7 +219,7 @@ export async function requestUpload(params: {
         mode: "s3",
         uploadURL,
         objectPath: objectKey,
-        serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
+        serveUrl: s3ServeUrl(organizationId, objectKey),
       };
     } catch (err: any) {
       console.error("[storage] Per-org S3 presigned URL generation failed:", err.message);
@@ -356,7 +368,7 @@ export async function uploadBuffer(params: {
       return {
         mode: "s3",
         objectPath: objectKey,
-        serveUrl: `/api/storage/s3-object/${encodeURIComponent(objectKey)}?orgId=${organizationId}`,
+        serveUrl: s3ServeUrl(organizationId, objectKey),
       };
     } catch (err: any) {
       console.error("[storage] Per-org S3 upload failed:", err.message);

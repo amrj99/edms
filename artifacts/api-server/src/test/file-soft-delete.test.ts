@@ -233,3 +233,180 @@ describe("B2.3b-1 — File Soft Delete & Restore", () => {
     expect(res.status).toBe(409);
   });
 });
+
+// ─── F1: Atomic conditional state transition ──────────────────────────────────
+// The transition is decided by the UPDATE predicate (deletedAt IS NULL /
+// IS NOT NULL) + RETURNING — never by a prior SELECT. These prove the contract
+// that survives concurrency: exactly ONE transition and exactly ONE success
+// audit per file, with no purge_after regeneration. The assertions hold whether
+// the two requests truly run in parallel OR the test DB serialises them — the
+// conditional UPDATE guarantees the second request matches no row either way.
+describe("B2.3b-1 F1 — Atomic conditional transition", () => {
+  it("two concurrent soft-deletes → one 204, one 404, exactly one success audit, purge_after set once", async () => {
+    const f = await uploadFresh("f1-cdel.pdf");
+    const auditBefore = await auditCount(fx.docId, "file_delete_requested");
+
+    const [r1, r2] = await Promise.all([DEL(f.fileId, asAdmin()), DEL(f.fileId, asAdmin())]);
+    expect([r1.status, r2.status].sort((a, b) => a - b)).toEqual([204, 404]);
+
+    // Exactly one transition happened → exactly one success audit.
+    expect(await auditCount(fx.docId, "file_delete_requested")).toBe(auditBefore + 1);
+    const row = await fileRow(f.fileId);
+    expect(row.deletedAt).not.toBeNull();
+    expect(row.deletedById).toBe(fx.admin.id);
+    expect(row.purgeAfter).not.toBeNull(); // set once by the single winning UPDATE
+  });
+
+  it("two concurrent restores → one 200, one 409, exactly one restore audit", async () => {
+    const f = await uploadFresh("f1-crestore.pdf");
+    expect((await DEL(f.fileId, asAdmin())).status).toBe(204);
+    const auditBefore = await auditCount(fx.docId, "file_restored");
+
+    const [r1, r2] = await Promise.all([RESTORE(f.fileId, asAdmin()), RESTORE(f.fileId, asAdmin())]);
+    expect([r1.status, r2.status].sort((a, b) => a - b)).toEqual([200, 409]);
+
+    expect(await auditCount(fx.docId, "file_restored")).toBe(auditBefore + 1);
+    const row = await fileRow(f.fileId);
+    expect(row.deletedAt).toBeNull(); // ended active exactly once
+  });
+
+  it("interleaved delete → restore → delete stays consistent (no double-audit, correct final state)", async () => {
+    const f = await uploadFresh("f1-interleave.pdf");
+    const delBefore = await auditCount(fx.docId, "file_delete_requested");
+    const resBefore = await auditCount(fx.docId, "file_restored");
+
+    expect((await DEL(f.fileId, asAdmin())).status).toBe(204);
+    expect((await RESTORE(f.fileId, asAdmin())).status).toBe(200);
+    expect((await DEL(f.fileId, asAdmin())).status).toBe(204);
+
+    // Exactly 2 delete audits + 1 restore audit — one per real transition.
+    expect(await auditCount(fx.docId, "file_delete_requested")).toBe(delBefore + 2);
+    expect(await auditCount(fx.docId, "file_restored")).toBe(resBefore + 1);
+    expect((await fileRow(f.fileId)).deletedAt).not.toBeNull(); // final state: deleted
+  });
+
+  it("audit failure inside the restore transaction rolls back the whole transition", async () => {
+    const f = await uploadFresh("f1-restore-rollback.pdf");
+    expect((await DEL(f.fileId, asAdmin())).status).toBe(204);
+    const deletedAtBefore = (await fileRow(f.fileId)).deletedAt;
+
+    vi.spyOn(auditMod, "createAuditLogTx").mockRejectedValueOnce(new Error("audit boom"));
+    const res = await RESTORE(f.fileId, asAdmin());
+    expect(res.status).toBe(500);
+
+    // The conditional UPDATE and the audit share one tx → both rolled back:
+    // the file is still soft-deleted with its original tombstone intact.
+    const row = await fileRow(f.fileId);
+    expect(row.deletedAt).not.toBeNull();
+    expect(new Date(row.deletedAt!).getTime()).toBe(new Date(deletedAtBefore!).getTime());
+    expect(row.purgeAfter).not.toBeNull();
+  });
+
+  it("mixed-id restore through another project's path is rejected (no transition)", async () => {
+    const f = await uploadFresh("f1-mixed-restore.pdf");
+    expect((await DEL(f.fileId, asAdmin())).status).toBe(204);
+    // Restore docId's file via the OTHER project's document path.
+    const res = await api().post(`${P(fx.projectOther.id)}/${fx.docOther}/files/${f.fileId}/restore`).set(asAdmin());
+    expect([403, 404]).toContain(res.status);
+    expect((await fileRow(f.fileId)).deletedAt).not.toBeNull(); // still soft-deleted
+  });
+});
+
+// ─── F2: Canonical download guard across ALL storage backends ─────────────────
+// The download guard now matches CANONICALLY (see lib/storage-serve-url.ts), so
+// a soft-deleted file is un-downloadable on onpremise/S3/R2/cloud even though
+// S3/R2 serve URLs carry an encodeURIComponent'd key + ?orgId query the request
+// path lacks. Rows are seeded with the SAME serve-URL builders the storage
+// adapters use (s3ServeUrl / r2ServeUrl) — not synthetic strings.
+//
+// Isolation of the guard signal: the guard runs FIRST in requireAuthOrViewToken
+// and returns 404 {File not found}. When the guard does NOT fire, each backend
+// route produces a DIFFERENT deterministic status that proves we got past it:
+//   • onpremise → real round-trip already served 200 (see suite above)
+//   • s3        → 403 (assertOrgAccess) for an outsider org
+//   • r2        → 503 (R2 not configured in test) before any ownership check
+// so "active/legacy ≠ 404" cleanly means "the guard did not block".
+describe("B2.3b-1 F2 — Canonical download guard (per backend)", () => {
+  const asOutsider = () => authHeader("admin", fx.userOut.id, fx.orgOut.id, "admin@out.test");
+
+  async function seedFile(fileUrl: string, deleted: boolean): Promise<number> {
+    const now = new Date();
+    const [row] = await getTestDb().insert(documentFilesTable).values({
+      documentId: fx.docId,
+      organizationId: fx.orgA.id,
+      fileName: fileUrl.split("/").pop()!.split("?")[0],
+      fileUrl,
+      fileType: "application/pdf",
+      deletedAt: deleted ? now : null,
+      deletedById: deleted ? fx.admin.id : null,
+      purgeAfter: deleted ? new Date(now.getTime() + 86_400_000) : null,
+    }).returning({ id: documentFilesTable.id });
+    return row.id;
+  }
+
+  it("S3: soft-deleted file (encoded key + ?orgId) is blocked; active is not (was the F2 bypass)", async () => {
+    const key = `${fx.orgA.id}/1/document/s3guard.pdf`;
+    const url = storageMod.s3ServeUrl(fx.orgA.id, key); // /api/storage/s3-object/<enc>?orgId=N
+    // Soft-deleted → guard 404 (with the OLD exact-eq guard this returned 403/route → the bypass).
+    await seedFile(url, true);
+    const blocked = await api().get(url).set(asAdmin());
+    expect(blocked.status, "soft-deleted S3 file must be blocked by the canonical guard").toBe(404);
+    expect(blocked.body.error).toBe("File not found");
+
+    // Active (different key so no soft-deleted row matches) → past the guard → 403 (assertOrgAccess).
+    const activeUrl = storageMod.s3ServeUrl(fx.orgA.id, `${fx.orgA.id}/1/document/s3active.pdf`);
+    await seedFile(activeUrl, false);
+    const active = await api().get(activeUrl).set(asOutsider());
+    expect(active.status, "active S3 file must reach the route, not the guard").not.toBe(404);
+  });
+
+  it("R2: soft-deleted file (encoded key + ?orgId) is blocked; active is not (was the F2 bypass)", async () => {
+    const key = `org_${fx.orgA.id}/projects/1/r2guard.pdf`;
+    const url = storageMod.r2ServeUrl(fx.orgA.id, key);
+    await seedFile(url, true);
+    const blocked = await api().get(url).set(asAdmin());
+    expect(blocked.status, "soft-deleted R2 file must be blocked by the canonical guard").toBe(404);
+    expect(blocked.body.error).toBe("File not found");
+
+    const activeUrl = storageMod.r2ServeUrl(fx.orgA.id, `org_${fx.orgA.id}/projects/1/r2active.pdf`);
+    await seedFile(activeUrl, false);
+    const active = await api().get(activeUrl).set(asAdmin());
+    expect(active.status, "active R2 file must reach the route, not the guard").not.toBe(404);
+  });
+
+  it("Cloud/GCS: soft-deleted file is blocked by the guard", async () => {
+    const url = `/api/storage/objects/uploads/cloudguard.pdf`;
+    await seedFile(url, true);
+    const blocked = await api().get(url).set(asAdmin());
+    expect(blocked.status, "soft-deleted cloud file must be blocked by the canonical guard").toBe(404);
+    expect(blocked.body.error).toBe("File not found");
+  });
+
+  it("re-encoding / query tamper cannot bypass the guard (same object, canonical match)", async () => {
+    // Store the canonical S3 form, then request a DIFFERENTLY-encoded + reordered
+    // -query variant of the SAME object. Canonicalisation collapses them → blocked.
+    const key = `${fx.orgA.id}/1/document/tamper.pdf`;
+    await seedFile(storageMod.s3ServeUrl(fx.orgA.id, key), true);
+    // Double-slash + trailing junk query, different but equivalent path.
+    const tampered = `/api/storage/s3-object/${encodeURIComponent(key)}?foo=bar&orgId=${fx.orgA.id}`;
+    const res = await api().get(tampered).set(asAdmin());
+    expect(res.status, "re-encoded/re-ordered query must not bypass the guard").toBe(404);
+  });
+
+  it("legacy URL with no document_files row is NOT blocked (keeps current behavior)", async () => {
+    // No row seeded for this key → guard has no candidate → passes → route runs.
+    const url = storageMod.s3ServeUrl(fx.orgA.id, `${fx.orgA.id}/1/document/legacy-no-row.pdf`);
+    const res = await api().get(url).set(asOutsider());
+    expect(res.status, "a URL with no document_files row must not be guard-blocked").not.toBe(404);
+  });
+
+  it("a different file with a near-identical path is NOT wrongly blocked", async () => {
+    // Soft-delete <...>/near_a.pdf; a DIFFERENT active object <...>/near_b.pdf
+    // must not be caught by the LIKE narrowing (exact canonical compare filters).
+    await seedFile(storageMod.s3ServeUrl(fx.orgA.id, `${fx.orgA.id}/1/document/near_a.pdf`), true);
+    const otherUrl = storageMod.s3ServeUrl(fx.orgA.id, `${fx.orgA.id}/1/document/near_b.pdf`);
+    await seedFile(otherUrl, false);
+    const res = await api().get(otherUrl).set(asOutsider());
+    expect(res.status, "a different near-path file must not be blocked").not.toBe(404);
+  });
+});
