@@ -21,7 +21,12 @@ const ORG = 7;
 const s3RequestPath = (key: string) => `/api/storage/s3-object/${key}`;
 const r2RequestPath = (key: string) => `/api/storage/r2-object/${key}`;
 
-describe("canonicalizeStorageServeUrl — stored form == request form (per backend)", () => {
+// This is the CONTRACT TEST referenced by lib/storage-serve-url.ts: for every
+// backend the STORED serve URL and the route's REQUEST path must canonicalise to
+// the same identity. A future adapter that diverges (or a new backend not added
+// here) fails CI — the structural guarantee against reintroducing F2. Each case
+// derives the two sides INDEPENDENTLY (never string-vs-itself).
+describe("Adapter serve-URL ↔ canonical CONTRACT (stored form == request form, per backend)", () => {
   it("S3: encoded-key + ?orgId stored form matches the decoded request path", () => {
     const key = `${ORG}/1/document/1712000000000_report.pdf`;
     const stored = s3ServeUrl(ORG, key); // /api/storage/s3-object/<enc(key)>?orgId=7
@@ -36,14 +41,18 @@ describe("canonicalizeStorageServeUrl — stored form == request form (per backe
     expect(canonicalizeStorageServeUrl(stored)).toBe(canonicalizeStorageServeUrl(r2RequestPath(key)));
   });
 
-  it("on-premise: identical stored/request path canonicalises equal", () => {
-    const stored = `/api/storage/onpremise/${ORG}/1/general/1712000000000_spec.pdf`;
-    expect(canonicalizeStorageServeUrl(stored)).toBe(canonicalizeStorageServeUrl(stored));
+  it("on-premise: plain stored form matches a percent-encoded request path (same object)", () => {
+    // Stored (adapter): plain segments. Request (browser): the filename segment
+    // may arrive percent-encoded. Both must resolve to the same identity.
+    const stored  = `/api/storage/onpremise/${ORG}/1/general/1712000000000_spec.pdf`;
+    const request = `/api/storage/onpremise/${ORG}/1/general/${encodeURIComponent("1712000000000_spec.pdf")}`;
+    expect(canonicalizeStorageServeUrl(stored)).toBe(canonicalizeStorageServeUrl(request));
   });
 
-  it("cloud/GCS: object path canonicalises equal", () => {
-    const stored = `/api/storage/objects/uploads/1712000000000_photo.png`;
-    expect(canonicalizeStorageServeUrl(stored)).toBe(canonicalizeStorageServeUrl(stored));
+  it("cloud/GCS: plain stored form matches a percent-encoded request path (same object)", () => {
+    const stored  = `/api/storage/objects/uploads/1712000000000_photo.png`;
+    const request = `/api/storage/objects/uploads/${encodeURIComponent("1712000000000_photo.png")}`;
+    expect(canonicalizeStorageServeUrl(stored)).toBe(canonicalizeStorageServeUrl(request));
   });
 });
 

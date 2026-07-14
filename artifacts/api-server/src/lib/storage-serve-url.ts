@@ -29,6 +29,25 @@
 // It is a PURE function of the URL text — it does not trust any externally
 // supplied "this resolves to that" mapping; two URLs match iff they canonicalise
 // to the identical path. Covers on-premise, S3, R2 and Cloud/GCS serve formats.
+//
+// ─── Single source of truth (why F2 cannot silently return) ───────────────────
+// The system has TWO cooperating SSOTs, bound by a contract test:
+//   1. FORMAT   — the stored serve URL is produced ONLY by the exported builders
+//                 s3ServeUrl / r2ServeUrl (lib/orgStorage.ts). Adapters and tests
+//                 call the same builder, so no code path invents its own S3/R2
+//                 string.
+//   2. IDENTITY — this canonicaliser is the ONLY definition of "same object",
+//                 and the download guard applies it to BOTH sides (the request
+//                 path AND every candidate file_url).
+// storage-serve-url.test.ts is the CONTRACT TEST: for every backend it asserts
+// canonicalize(builder output) === canonicalize(route request path). If a future
+// adapter adds or changes a serve-URL format whose stored form no longer
+// canonicalises to its request path, that test FAILS in CI — which is the
+// structural guarantee against reintroducing F2.
+//
+// INVARIANT for future work: any NEW storage backend MUST (a) expose its stored
+// serve URL through an exported builder, and (b) be added to the contract test
+// above. Do not hand-build serve URLs at call sites.
 export function canonicalizeStorageServeUrl(raw: string): string {
   const qIdx = raw.indexOf("?");
   const path = qIdx === -1 ? raw : raw.slice(0, qIdx);

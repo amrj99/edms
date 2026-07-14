@@ -1661,11 +1661,21 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
   // second request matches no row and preserves the second-delete contract
   // (404, no purge_after change, no extra audit, no side effect).
   //
-  // Tenant isolation: the row is scoped by documentId, and the parent document
-  // was already verified to belong to caller's org above. We deliberately do
-  // NOT add document_files.organization_id to the predicate — that column is
-  // NULL for legacy (pre-B2.3a) rows and would make them permanently
-  // un-deletable; the parent-document org gate is the real tenant boundary.
+  // ── TEMPORARY LEGACY EXCEPTION (not the final architecture) ───────────────
+  // The atomic predicate scopes the row by documentId only; the parent document
+  // was already verified to belong to caller's org above, so tenant isolation
+  // holds transitively. We deliberately do NOT add document_files.organization_id
+  // to the predicate *yet*.
+  //   WHY (temporary): that column is NULL for legacy (pre-B2.3a) rows in
+  //     production; including it would make those rows permanently un-deletable
+  //     (a data regression), so it is omitted only because of legacy data — this
+  //     is NOT the intended end-state.
+  //   FINAL INTENT: once organization_id is backfilled for all document_files
+  //     rows (a migration outside this batch), add
+  //     `eq(documentFilesTable.organizationId, doc.organizationId!)` to BOTH the
+  //     delete and restore predicates for defence-in-depth, and drop this note.
+  //   MEANWHILE: the parent-document org gate above is the authoritative tenant
+  //     boundary; the same exception applies to the restore handler below.
   //
   // NO storage delete, NO quota change, NO row delete — the object is retained
   // for FILE_RETENTION_DAYS; physical removal + quota decrement are the (gated)
@@ -1727,7 +1737,9 @@ router.post("/:id/files/:fileId/restore", requireAuth, async (req: Request<Proje
   // The transition is decided by the UPDATE predicate. `deletedAt IS NOT NULL`
   // means only a soft-deleted file transitions: two concurrent restores →
   // exactly one row updated → exactly one restore audit. Scoped by documentId
-  // (parent org-verified above) for the same tenant/legacy reasons as delete.
+  // (parent org-verified above); the same TEMPORARY LEGACY EXCEPTION documented
+  // on the delete handler applies here (organization_id omitted from the
+  // predicate only because it is NULL for legacy rows — not the final design).
   let restored: { id: number; fileName: string } | undefined;
   await db.transaction(async (tx) => {
     const [updated] = await tx.update(documentFilesTable)
