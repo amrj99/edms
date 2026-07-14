@@ -17,8 +17,47 @@ import { sql, eq, and } from "drizzle-orm";
 import {
   api, authHeader, createOrg, createUser, createProject, getTestDb, truncateAllTables,
 } from "./helpers/index.js";
-import { documentsTable, documentRevisionsTable, documentFilesTable } from "@workspace/db";
+import { db, documentsTable, documentRevisionsTable, documentFilesTable } from "@workspace/db";
 import * as auditMod from "../lib/audit.js";
+
+/**
+ * Per-write-point failure seam (no production hooks).
+ *
+ * Forces a specific table's insert/update to throw at exactly one write point,
+ * on BOTH code shapes:
+ *   • transactional code  → mocks db.transaction to run the REAL transaction but
+ *     hand the handler a Proxy `tx` that throws when it reaches the target write.
+ *   • non-transactional code (legacy separate statements) → also throws at the
+ *     matching db.<op>(table) call.
+ * Because the same seam fires on both shapes, one assertion set ("nothing / left
+ * unchanged") is GREEN on the current tx code and RED on the legacy code (which
+ * leaves a partial write). afterEach → vi.restoreAllMocks() tears it down.
+ */
+function failAt(table: unknown, op: "insert" | "update", msg = "write boom"): void {
+  const realTransaction = (db as any).transaction.bind(db);
+  vi.spyOn(db as any, "transaction").mockImplementation((cb: any, ...rest: any[]) =>
+    realTransaction(async (tx: any) => {
+      const proxy = new Proxy(tx, {
+        get(t: any, prop: string) {
+          if (prop === op) {
+            return (arg: unknown) => {
+              if (arg === table) throw new Error(msg);
+              return t[op](arg);
+            };
+          }
+          const v = t[prop];
+          return typeof v === "function" ? v.bind(t) : v;
+        },
+      });
+      return cb(proxy);
+    }, ...rest));
+
+  const realOp = (db as any)[op].bind(db);
+  vi.spyOn(db as any, op).mockImplementation((arg: unknown) => {
+    if (arg === table) throw new Error(msg);
+    return realOp(arg);
+  });
+}
 
 interface Fx { org: { id: number }; admin: { id: number }; project: { id: number }; }
 let fx: Fx;
@@ -109,5 +148,75 @@ describe("B2.3d — Document create/edit write-path transaction integrity", () =
     expect(after.title).toBe("Original");          // update rolled back
     expect(after.revision).toBe("A");
     expect(await revCount(doc.id)).toBe(revBefore); // no new revision row
+  });
+
+  // ── Per-write-point rollback coverage (failAt seam) ───────────────────────
+  // Each test forces ONE write inside the transaction to throw and asserts the
+  // WHOLE write rolled back. GREEN here on the tx code; the same tests are RED
+  // on the legacy separate-statement code (partial write persists).
+
+  it("CREATE: documents.insert failure → 500, nothing written", async () => {
+    failAt(documentsTable, "insert");
+    const res = await api().post(P()).set(asAdmin()).send({
+      documentNumber: "DWTX-C-DOC", title: "x", fileUrl: "/api/storage/onpremise/1/1/document/a.pdf", fileName: "a.pdf", fileSize: 10,
+    });
+    expect(res.status).toBe(500);
+    expect(await docByNumber("DWTX-C-DOC")).toBeUndefined();
+    // documents.insert is the FIRST write → no earlier row can leak; this test
+    // confirms the write point aborts the request cleanly (partial impossible
+    // by construction, so it is GREEN on legacy too — noted in the report).
+  });
+
+  it("CREATE: documentRevisions.insert failure → 500, no document, no revision", async () => {
+    failAt(documentRevisionsTable, "insert");
+    const res = await api().post(P()).set(asAdmin()).send({
+      documentNumber: "DWTX-C-REV", title: "x", fileUrl: "/api/storage/onpremise/1/1/document/b.pdf", fileName: "b.pdf", fileSize: 10,
+    });
+    expect(res.status).toBe(500);
+    // Rollback proof: the document row (written BEFORE the failing revision)
+    // must not survive — this is RED on legacy (doc persists revision-less).
+    expect(await docByNumber("DWTX-C-REV")).toBeUndefined();
+  });
+
+  it("CREATE: documentFiles.insert failure → 500, no document, no revision, no file", async () => {
+    failAt(documentFilesTable, "insert");
+    const res = await api().post(P()).set(asAdmin()).send({
+      documentNumber: "DWTX-C-FILE", title: "x", fileUrl: "/api/storage/onpremise/1/1/document/c.pdf", fileName: "c.pdf", fileSize: 10,
+    });
+    expect(res.status).toBe(500);
+    // Strongest RED vs legacy: there the primary-file insert was swallowed in a
+    // try/catch, so legacy returned 201 with a revision-less-safe doc+revision
+    // committed. The tx code rolls the whole thing back.
+    expect(await docByNumber("DWTX-C-FILE")).toBeUndefined();
+  });
+
+  it("EDIT: documents.update failure → 500, document left unchanged", async () => {
+    const c = await api().post(P()).set(asAdmin()).send({ documentNumber: "DWTX-E-UPD", title: "Original", revision: "A" });
+    expect(c.status).toBe(201);
+    const doc = await docByNumber("DWTX-E-UPD");
+
+    failAt(documentsTable, "update");
+    const res = await api().put(`${P()}/${doc.id}`).set(asAdmin()).send({ title: "Hijacked", revision: "B" });
+    expect(res.status).toBe(500);
+    const after = await docByNumber("DWTX-E-UPD");
+    expect(after.title).toBe("Original"); // update is the FIRST edit write → clean abort (GREEN on legacy too)
+    expect(after.revision).toBe("A");
+  });
+
+  it("EDIT: documentRevisions.insert failure (new revision) → 500, document fully unchanged", async () => {
+    const c = await api().post(P()).set(asAdmin()).send({ documentNumber: "DWTX-E-REV", title: "Original", revision: "A" });
+    expect(c.status).toBe(201);
+    const doc = await docByNumber("DWTX-E-REV");
+    const revBefore = await revCount(doc.id);
+
+    failAt(documentRevisionsTable, "insert");
+    const res = await api().put(`${P()}/${doc.id}`).set(asAdmin()).send({ title: "After", revision: "B", revisionNotes: "bump" });
+    expect(res.status).toBe(500);
+    // Rollback proof: the document update (written BEFORE the failing revision
+    // insert) must be undone — RED on legacy (title/revision changed, no rev row).
+    const after = await docByNumber("DWTX-E-REV");
+    expect(after.title).toBe("Original");
+    expect(after.revision).toBe("A");
+    expect(await revCount(doc.id)).toBe(revBefore);
   });
 });
