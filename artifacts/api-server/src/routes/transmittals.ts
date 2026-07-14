@@ -17,53 +17,21 @@ import type { Request, Response, NextFunction } from "express";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { canAccessProject } from "../lib/can-access-project.js";
+import { requireProjectAccess, denyPartyDestructive, requireProjectAccessContext } from "../middlewares/project-access.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { recipientOrganizationId } from "../lib/transmittal-recipient.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-// ─── B2.4-FIX: router-wide project-access gate ────────────────────────────────
-// Every transmittal route is project-scoped (/projects/:projectId/transmittals).
-// The individual handlers historically enforced project access inconsistently —
-// several mutation handlers relied on requireRole (a caller-org role check) or
-// bare requireAuth, with lookups that were not org-scoped, so an admin/PM/DC (or
-// any authenticated user) from another org could mutate a project's transmittals
-// by id. This gate calls canAccessProject once for the whole router and
-// fail-closes non-members (403), closing the cross-org hole for every current
-// and future handler (mirrors the B2.7-FIX document router gate).
-//
-// It stashes the resolved access so downstream handlers can enforce the party
-// ceiling without re-querying, and does NOT replace the existing per-handler
-// party-ceiling / assignment checks — those still apply on top.
-interface ProjectAccessCtx { mode: string; partyRole?: string }
-router.use(async (req: Request<ProjectParams>, res: Response, next: NextFunction): Promise<void> => {
-  const caller = req.user!;
-  const projectId = requireInt(req.params.projectId);
-  const access = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!access.allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-    return;
-  }
-  (req as Request & { projectAccess?: ProjectAccessCtx }).projectAccess = { mode: access.mode, partyRole: access.partyRole };
-  next();
-});
-
-// B2.4-FIX: fail-closed party guard for DESTRUCTIVE transmittal actions that have
-// NO PARTY_CEILING_V1 capability (update, delete item, complete review, upload
-// attachment, share/revoke). PARTY_CEILING_V1 defines only create/read/
-// acknowledge; its default-allow for unlisted actions is unsafe for destructive
-// writes, so party callers are denied here rather than bound to an unrelated
-// capability. (Whether party contributors should EVER get these is a Product/
-// Policy decision — see the closure's Party Capability gate.)
-function denyPartyDestructive(req: Request, res: Response, next: NextFunction): void {
-  const mode = (req as Request & { projectAccess?: ProjectAccessCtx }).projectAccess?.mode;
-  if (mode === "party") {
-    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit this action" });
-    return;
-  }
-  next();
-}
+// ─── Router-wide project-access gate (B2.4-FIX → B2 Refactor) ─────────────────
+// Every transmittal route is project-scoped. The gate proves project access once
+// for the whole router (fail-closed 403 for non-members) and stashes the result
+// for the per-handler party-ceiling checks. Extracted verbatim to the shared
+// requireProjectAccess() primitive — same behaviour/403 as the previous inline
+// gate. denyPartyDestructive (imported) still guards destructive actions.
+// See ADR "Tenant Isolation & Object-Level Authorization Pattern v1".
+router.use(requireProjectAccess());
 
 // Party-scoped transmittal predicate: sender org OR named recipient OR recipient's org.
 // system_owner bypasses the party filter and sees all transmittals in the project.
@@ -88,8 +56,10 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   // Gate 1: project membership. Gate 2 (party): ceiling check.
   // Data filter: transmittalPartyFilter scopes results to sender-or-recipient org.
   // Invariant I-9: list and detail use the same transmittalPartyFilter predicate.
-  const { allowed, mode: accessMode, partyRole } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+  // B2 Refactor: read the access context stashed by requireProjectAccess()
+  // instead of re-querying canAccessProject (identical mode/partyRole; the gate
+  // already fail-closed non-members, so the old `if (!allowed)` was unreachable).
+  const { mode: accessMode, partyRole } = requireProjectAccessContext(req);
   if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "read_transmittal")) {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
@@ -148,9 +118,9 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
-  // Gate 1: project membership. Gate 2 (party): ceiling check.
-  const { allowed, mode: accessMode, partyRole } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+  // B2 Refactor: read the access context stashed by requireProjectAccess()
+  // (gate already proved access + fail-closed non-members). Same mode/partyRole.
+  const { mode: accessMode, partyRole } = requireProjectAccessContext(req);
   if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "read_transmittal")) {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
@@ -212,10 +182,8 @@ router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
-  const { allowed, mode: accessMode, partyRole } = await canAccessProject(
-    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
-  );
-  if (!allowed) { res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return; }
+  // B2 Refactor: read the stashed access context (gate already proved access).
+  const { mode: accessMode, partyRole } = requireProjectAccessContext(req);
 
   if (accessMode === "party") {
     if (!isWithinPartyCeiling(partyRole!, "create_transmittal")) {
@@ -423,13 +391,8 @@ router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Pr
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
-  // Gate 1: project membership
-  const { allowed, mode: accessMode, partyRole } = await canAccessProject(
-    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
-  );
-  if (!allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
-  }
+  // B2 Refactor: read the stashed access context (gate already proved access).
+  const { mode: accessMode, partyRole } = requireProjectAccessContext(req);
 
   // Gate 2 (party mode only): ceiling check
   if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "acknowledge_transmittal")) {
