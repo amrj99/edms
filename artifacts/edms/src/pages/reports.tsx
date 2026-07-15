@@ -2444,7 +2444,7 @@ export default function Reports() {
     queryKey: ["projects", activeOrgId],
     queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   const { data: dashData } = useQuery({
     queryKey: ["dashboard"],

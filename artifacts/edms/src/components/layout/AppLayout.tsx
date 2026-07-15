@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { cn } from "@/lib/utils";
 import { TermsGate } from "@/components/legal/TermsGate";
 import { TermsOfUseModal, PrivacyPolicyModal } from "@/components/legal/LegalModals";
@@ -257,7 +258,7 @@ function ProjectSwitcher() {
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   // Detect the current project from the URL
   const projectIdFromUrl = (() => {
@@ -586,7 +587,7 @@ function OrgSwitcher() {
     queryFn: async () => { const r = await fetch("/api/organizations"); return r.json(); },
     enabled: user?.role === "system_owner",
   });
-  const orgs: any[] = data?.organizations ?? [];
+  const orgs: any[] = unwrapList<any>(data, "organizations");
 
   if (user?.role !== "system_owner") return null;
 

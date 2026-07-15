@@ -173,7 +173,7 @@ export default function CorrespondencePage() {
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
-  const projects = projectsData?.projects ?? [];
+  const projects = unwrapList<any>(projectsData, "projects");
 
   // Fetch all correspondence (general + all projects)
   const { data: generalData, isLoading: genLoading, refetch: refetchGeneral } = useQuery({

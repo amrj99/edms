@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO, isAfter } from "date-fns";
 import { Users, Plus, Trash2, Loader2, UserCheck, Clock, AlertCircle, CalendarDays, CheckCircle2, XCircle } from "lucide-react";
@@ -260,7 +261,7 @@ export default function DelegationsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__org">Org-wide (all projects)</SelectItem>
-                  {(projectsData?.projects ?? []).map((p: any) => (
+                  {(unwrapList<any>(projectsData, "projects")).map((p: any) => (
                     <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>

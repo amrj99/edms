@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Users as UsersIcon, Search, Plus, ShieldAlert, Loader2, MoreHorizontal,
@@ -124,7 +125,7 @@ export default function UsersPage() {
   });
 
   const allUsers: any[] = usersData?.users ?? [];
-  const organizations: any[] = orgsData?.organizations ?? orgsData ?? [];
+  const organizations: any[] = unwrapList<any>(orgsData, "organizations");
 
   const orgUserCounts = useMemo(() => {
     const m: Record<number | string, number> = { all: allUsers.length };

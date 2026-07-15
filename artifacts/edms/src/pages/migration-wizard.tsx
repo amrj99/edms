@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
@@ -324,7 +325,7 @@ export default function MigrationWizard() {
             <SelectValue placeholder="Select a project" />
           </SelectTrigger>
           <SelectContent>
-            {(projectsData?.projects ?? []).map((p: any) => (
+            {(unwrapList<any>(projectsData, "projects")).map((p: any) => (
               <SelectItem key={p.id} value={String(p.id)}>
                 {p.name} <span className="text-muted-foreground ml-1">({p.code})</span>
               </SelectItem>

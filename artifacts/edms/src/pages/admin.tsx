@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartTooltip,
   ResponsiveContainer, Legend,
@@ -485,8 +486,8 @@ export default function Admin() {
   };
 
   const users = usersData?.users ?? [];
-  const orgs = orgsData?.organizations ?? [];
-  const projects = projectsData?.projects ?? [];
+  const orgs = unwrapList<any>(orgsData, "organizations");
+  const projects = unwrapList<any>(projectsData, "projects");
 
   const filteredUsers = users.filter((u: any) =>
     !userSearch || `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(userSearch.toLowerCase())

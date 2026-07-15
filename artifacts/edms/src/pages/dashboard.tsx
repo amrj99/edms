@@ -634,7 +634,7 @@ export default function Dashboard() {
     queryKey: ["projects", activeOrgId],
     queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
-  const projects = projectsData?.projects ?? [];
+  const projects = unwrapList<any>(projectsData, "projects");
 
   const { data: summaryData, refetch: refetchSummary } = useQuery({
     queryKey: ["notif-summary"],

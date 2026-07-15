@@ -157,7 +157,7 @@ export default function DocumentsPage() {
   });
 
   const allDocs: any[] = unwrapList<any>(docsData, "documents");
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
   const allUsers: RecipientUser[] = (usersData?.users ?? []).map((u: any) => ({
     id: u.id,
     firstName: u.firstName,
