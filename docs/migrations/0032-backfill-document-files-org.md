@@ -2,6 +2,37 @@
 
 **Type:** data-only · **Batch:** Phase 2 follow-up (Legacy-Exception prerequisite) · **Deploy:** gated, `[skip deploy]`, NOT applied to production by this PR.
 
+> ## ⛔ PRODUCTION DEPLOYMENT HOLD (active)
+>
+> ```
+> Migration 0032 is MERGED but PENDING PRODUCTION EXECUTION.
+> No production deployment from main is permitted until the 0032 Production Gate
+> is completed and EXPLICITLY approved by the owner.
+> ```
+>
+> **Why a hold is needed:** merging PR #15 with `[skip deploy]` only prevents *this commit* from deploying. The runtime migrator (`artifacts/api-server/src/migrate.ts`) applies **every pending journal migration** on the next production start — so any *later* deploy from `main` would run 0032 automatically along with whatever else is pending. This hold closes that gap **by process, without touching CI/CD**.
+>
+> **Rules while the hold is active:**
+> 1. **Every PR merged to `main` before 0032 is executed MUST carry `[skip deploy]`.** No un-gated merge to `main` is permitted until the hold is lifted.
+> 2. **Merging PR #15 grants NO authorization** to deploy to production or to run 0032.
+> 3. **The hold is lifted only by explicit owner approval** after the Production Gate below is completed.
+> 4. The runtime migrator wraps all pending migrations in one transaction; do not let 0032 ride along with an unrelated deploy — it must be its own owner-approved execution.
+>
+> **Mandatory Production Gate (all six, in order) before executing 0032:**
+> 1. Production **read-only** B1/B2/B3/D/E classification (queries below).
+> 2. **Save** the B1/B2/B3/D/E report (B2/B3/D/E are a Data-Integrity record).
+> 3. Generate the **pre-image artifact** bound to the production DB identity (`database_name` + `db_system_identifier`).
+> 4. **Match** artifact row count == B1 count from step 1.
+> 5. Take the standard **`pg_dump`** backup.
+> 6. **Explicit owner approval** to deploy — then, post-deploy, prove `rows changed == B1` and B2/B3/D/E unchanged.
+>
+> **Rollback contract (exact, unchanged behaviour — documented for operators):**
+> - Empty/missing artifact **or** a DB-identity mismatch → **full ABORT** (`RAISE`, nothing written).
+> - A row whose `organization_id` changed after 0032 (`current != target`) → **Skip + Report** in `_rb0032_diverged`; **never overwritten**.
+> - Only rows still equal to what 0032 set are reverted to their `previous_organization_id` (NULL). Idempotent.
+>
+> If production reveals **B3 / D / E**, that does **not** block B1 — those rows are **recorded and NOT repaired by 0032** (a separate, later decision/batch).
+
 ## Purpose
 Legacy (pre-B2.3a) `document_files` rows carry `organization_id = NULL`. That NULL:
 - forces the B2.3b-1 soft-delete predicate to omit `file.organization_id` (the documented **Legacy Exception**), and
