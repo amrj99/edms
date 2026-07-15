@@ -121,7 +121,9 @@ JOIN documents d ON d.id = df.document_id
 JOIN projects  p ON p.id = d.project_id
 WHERE df.organization_id IS NULL AND d.organization_id = p.organization_id;
 ```
-**Storage & ownership** — saved OUTSIDE production as `0032_preimage_<database>_<system_id>_<utc>.csv`, alongside the pre-deploy `pg_dump`, owned by the deploy/platform operator, retained per `docs/operations/BACKUP-AND-RECOVERY.md`. The `<database>_<system_id>` in the filename + the per-row identity columns make it **self-identifying** to one cluster/run. Backstop = the pre-deploy `pg_dump` (full pre-backfill state).
+**Storage & ownership** — saved OUTSIDE production as `0032_preimage_<database>_<system_id>_<utc>.csv`, alongside the pre-deploy `pg_dump`, owned by the deploy/platform operator. The `<database>_<system_id>` in the filename + the per-row identity columns make it **self-identifying** to one cluster/run. Backstop = the pre-deploy `pg_dump` (full pre-backfill state).
+
+**Retention policy** — the pre-image artifact is **retained until the 0032 production run is formally accepted as successful AND the rollback window has officially closed**. Only then may it be discarded, per `docs/operations/BACKUP-AND-RECOVERY.md`. It is the sole targeted-rollback key while that window is open, so it MUST NOT be deleted before the window closes (the full `pg_dump` remains the backstop regardless).
 
 ## Rollback — fail-closed contract (`rollback_0032_*.sql`)
 Journal-excluded, manual, never run by the migrator. It loads the artifact into a session `TEMP TABLE ... ON COMMIT DROP` (no permanent prod object) and **refuses to run** unless it is safe:
@@ -140,6 +142,7 @@ Merging PR #15 lands the migration file, its rollback, tests, and this runbook o
 
 1. Run the **read-only B1/B2/B3/D/E classification** (the Before/report queries above) against production.
 2. **Save the report** (the unresolved B2/B3/D/E detail is a Data-Integrity record).
+   - **Plan & timing check:** on a representative copy of production (or a recent snapshot), run `EXPLAIN (ANALYZE, BUFFERS)` on the forward `UPDATE` to confirm the execution plan (index/seq-scan behaviour on the `document_files → documents → projects` join) and estimate wall-clock runtime + lock footprint before touching production — especially important at large data volumes.
 3. Generate the **pre-image artifact** for every targeted B1 row (query above) and store it externally.
 4. Take the standard **`pg_dump` backup** per project policy.
 5. **Verify the artifact row count == B1 count** from step 1 before deploying.
