@@ -385,7 +385,7 @@ export function FolderSidebar({ projectId, selectedFolderId, onSelectFolder, can
               <SelectValue placeholder="Select source project" />
             </SelectTrigger>
             <SelectContent>
-              {(projectsData?.projects ?? [])
+              {(unwrapList<any>(projectsData, "projects"))
                 .filter((p: any) => p.id !== projectId)
                 .map((p: any) => (
                   <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>

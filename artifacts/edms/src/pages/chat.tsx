@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -160,7 +161,7 @@ function CreateGroupDialog({ open, onClose }: { open: boolean; onClose: () => vo
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
 
-  const projects = projectsData?.projects ?? [];
+  const projects = unwrapList<any>(projectsData, "projects");
   const users: ChatUser[] = (usersData?.users ?? []).filter((u: ChatUser) => String(u.name).toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase()));
 
   return (

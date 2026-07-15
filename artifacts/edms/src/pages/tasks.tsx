@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useListTasks, useListProjects, getListTasksQueryKey } from "@workspace/api-client-react";
@@ -97,7 +98,7 @@ export default function Tasks() {
   const [newDueDate, setNewDueDate] = useState("");
   const [newProjectId, setNewProjectId] = useState<string>("none");
 
-  const projects = projectsData?.projects ?? projectsData ?? [];
+  const projects = unwrapList<any>(projectsData, "projects");
 
   const createMutation = useMutation({
     mutationFn: createTaskApi,

@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
@@ -375,7 +376,7 @@ export default function ActivityLogPage() {
   const logs: AuditLogItem[] = logsData?.logs ?? [];
   const total: number = logsData?.total ?? 0;
   const totalPages: number = logsData?.totalPages ?? 1;
-  const projects: Project[] = projectsData?.projects ?? [];
+  const projects: Project[] = unwrapList<Project>(projectsData, "projects");
   const users: OrgUser[] = Array.isArray(usersData) ? usersData : (usersData?.users ?? []);
 
   // ─── Access Denied ─────────────────────────────────────────────────────────

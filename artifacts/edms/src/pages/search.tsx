@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useSearch } from "@workspace/api-client-react";
 import {
   FileText, Mail, Loader2, Sparkles, Search as SearchIcon,
@@ -44,7 +45,7 @@ export default function Search() {
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   const activeFilterCount = [filters.type !== "all", filters.status, filters.discipline, filters.projectId, filters.dateFrom, filters.dateTo].filter(Boolean).length;
 

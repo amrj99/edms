@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Building2, Plus, MoreHorizontal, Loader2, Trash2, Pencil, Users, FolderKanban, Mail, Phone, MapPin, X, UserPlus, UserMinus } from "lucide-react";
 import { format } from "date-fns";
@@ -138,7 +139,7 @@ export default function Organizations() {
       return r.json();
     },
   });
-  const orgs: any[] = data?.organizations ?? [];
+  const orgs: any[] = unwrapList<any>(data, "organizations");
 
   const { data: allUsersData } = useQuery({
     queryKey: ["all-users"],

@@ -81,7 +81,7 @@ export default function DeliverablesPage() {
     queryKey: ["projects", activeOrgId],
     queryFn: async () => { const r = await fetch(addOverride("/api/projects")); return r.json(); },
   });
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   const { data, isLoading, isError: isModuleError, error: queryError, refetch } = useQuery({
     queryKey: ["deliverables", projectId],

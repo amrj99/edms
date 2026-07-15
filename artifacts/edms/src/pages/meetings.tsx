@@ -140,7 +140,7 @@ export default function MeetingsPage() {
     queryKey: ["projects"],
     queryFn: async () => { const r = await fetch("/api/projects"); return r.json(); },
   });
-  const projects: any[] = projectsData?.projects ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   // ─── Mutations ────────────────────────────────────────────────────────────────
   const createMeeting = useMutation({

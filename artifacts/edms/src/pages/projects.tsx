@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { Link } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useListProjects, useCreateProject, getListProjectsQueryKey } from "@workspace/api-client-react";
@@ -68,7 +69,7 @@ export default function Projects() {
     },
     enabled: !!user,
   });
-  const organizations: any[] = orgsData?.organizations ?? [];
+  const organizations: any[] = unwrapList<any>(orgsData, "organizations");
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectSchema),
@@ -132,7 +133,7 @@ export default function Projects() {
   };
 
   const filteredProjects = useMemo(() => {
-    const projects = data?.projects ?? [];
+    const projects = unwrapList<any>(data, "projects");
     if (orgFilter === "_all") return projects;
     return projects.filter((p: any) => String(p.organizationId) === orgFilter);
   }, [data?.projects, orgFilter]);
