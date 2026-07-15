@@ -64,7 +64,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       .from(projectMembersTable)
       .where(eq(projectMembersTable.projectId, requestedProjectId));
     const memberIds = members.map(m => m.userId);
-    if (memberIds.length === 0) { res.json({ users: [], total: 0 }); return; }
+    if (memberIds.length === 0) { res.json({ items: [], total: 0 }); return; }
 
     const results = await db.select({ user: usersTable, orgName: organizationsTable.name })
       .from(usersTable)
@@ -72,7 +72,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       .where(inArray(usersTable.id, memberIds));
 
     res.json({
-      users: results.map(r => ({
+      items: results.map(r => ({
         id: r.user.id,
         firstName: r.user.firstName,
         lastName: r.user.lastName,
@@ -97,7 +97,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   // Tenant isolation: filter at DB level — never in-memory.
   // Non-sysOwner users without an org get an empty result (fail-safe).
   if (!isSystemOwner(caller) && orgId === undefined) {
-    res.json({ users: [], total: 0 }); return;
+    res.json({ items: [], total: 0 }); return;
   }
 
   const orgFilter = orgId !== undefined
@@ -112,7 +112,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     .where(orgFilter);
 
   res.json({
-    users: results.map(r => ({
+    items: results.map(r => ({
       id: r.user.id,
       email: r.user.email,
       firstName: r.user.firstName,

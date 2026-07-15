@@ -565,7 +565,7 @@ router.get("/users", async (req, res): Promise<void> => {
     .from(usersTable)
     .where(eq(usersTable.organizationId, orgId));
   const users = rawUsers.map(u => ({ ...u, name: `${u.firstName} ${u.lastName}`.trim() }));
-  res.json({ users });
+  res.json({ items: users });
 });
 
 export default router;

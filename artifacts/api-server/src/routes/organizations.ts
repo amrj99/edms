@@ -31,13 +31,13 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   }
 
   if (!user.organizationId) {
-    res.json({ organizations: [], total: 0 }); return;
+    res.json({ items: [], total: 0 }); return;
   }
   const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
-  if (!org) { res.json({ organizations: [], total: 0 }); return; }
+  if (!org) { res.json({ items: [], total: 0 }); return; }
   const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, org.id));
   const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, org.id));
-  res.json({ organizations: [{ ...org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) }], total: 1 });
+  res.json({ items: [{ ...org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) }], total: 1 });
 });
 
 // Cross-org stats for system_owner dashboard widget

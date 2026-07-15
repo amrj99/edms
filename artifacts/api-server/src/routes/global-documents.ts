@@ -57,7 +57,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   );
 
   if (!allowedProjectIds.length) {
-    res.json({ documents: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
+    res.json({ items: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
     return;
   }
 
@@ -109,7 +109,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
       ));
     const ids = matchingProjects.map(p => p.id);
     if (!ids.length) {
-      res.json({ documents: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
+      res.json({ items: [], total: 0, page: pg, totalPages: 0, limit: lim, hasMore: false });
       return;
     }
     conds.push(inArray(documentsTable.projectId, ids));
@@ -172,7 +172,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const totalPages = Math.ceil(totalCount / lim);
 
   res.json({
-    documents: finalRows.map(({ doc, createdBy, folder, project }) => ({
+    items: finalRows.map(({ doc, createdBy, folder, project }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName:   folder?.name,

@@ -120,19 +120,20 @@ describe("Response shape", () => {
   it("returns all required envelope fields", async () => {
     const res = await list({ limit: 10, page: 1 });
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty("documents");
+    expect(res.body).toHaveProperty("items");
+    expect(res.body).not.toHaveProperty("documents"); // P2-a flip: legacy key gone
     expect(res.body).toHaveProperty("total");
     expect(res.body).toHaveProperty("page");
     expect(res.body).toHaveProperty("totalPages");
     expect(res.body).toHaveProperty("limit");
     expect(res.body).toHaveProperty("hasMore");
-    expect(Array.isArray(res.body.documents)).toBe(true);
+    expect(Array.isArray(res.body.items)).toBe(true);
   });
 
   it("each document has createdByName; folderName present only for docs with a folder", async () => {
     const res = await list();
     expect(res.status).toBe(200);
-    const docs: any[] = res.body.documents;
+    const docs: any[] = res.body.items;
     expect(docs.length).toBeGreaterThan(0);
     // createdByName is always present (user exists for all seeded docs)
     for (const d of docs) {
@@ -149,7 +150,7 @@ describe("Response shape", () => {
   it("folder_doc has folderName populated", async () => {
     const res = await list({ folderId: fx.folderId });
     expect(res.status).toBe(200);
-    const doc = res.body.documents.find((d: any) => d.id === fx.docIds.folder_doc);
+    const doc = res.body.items.find((d: any) => d.id === fx.docIds.folder_doc);
     expect(doc).toBeDefined();
     expect(doc.folderName).toBe("Structural");
   });
@@ -163,7 +164,7 @@ describe("SQL pagination", () => {
     const res = await list({ limit: 2, page: 1 });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(6);
-    expect(res.body.documents.length).toBe(2);
+    expect(res.body.items.length).toBe(2);
     expect(res.body.totalPages).toBe(3);
     expect(res.body.hasMore).toBe(true);
     expect(res.body.page).toBe(1);
@@ -176,8 +177,8 @@ describe("SQL pagination", () => {
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);
 
-    const ids1: number[] = res1.body.documents.map((d: any) => d.id);
-    const ids2: number[] = res2.body.documents.map((d: any) => d.id);
+    const ids1: number[] = res1.body.items.map((d: any) => d.id);
+    const ids2: number[] = res2.body.items.map((d: any) => d.id);
 
     // No overlap between pages
     const overlap = ids1.filter(id => ids2.includes(id));
@@ -191,13 +192,13 @@ describe("SQL pagination", () => {
     const res = await list({ limit: 2, page: 3 });
     expect(res.status).toBe(200);
     expect(res.body.hasMore).toBe(false);
-    expect(res.body.documents.length).toBeLessThanOrEqual(2);
+    expect(res.body.items.length).toBeLessThanOrEqual(2);
   });
 
   it("page beyond last returns empty documents array", async () => {
     const res = await list({ limit: 10, page: 99 });
     expect(res.status).toBe(200);
-    expect(res.body.documents).toHaveLength(0);
+    expect(res.body.items).toHaveLength(0);
     expect(res.body.total).toBe(6);
     expect(res.body.hasMore).toBe(false);
   });
@@ -211,7 +212,7 @@ describe("SQL pagination", () => {
   it("all docs returned when limit >= total", async () => {
     const res = await list({ limit: 100, page: 1 });
     expect(res.status).toBe(200);
-    expect(res.body.documents.length).toBe(6);
+    expect(res.body.items.length).toBe(6);
     expect(res.body.total).toBe(6);
     expect(res.body.hasMore).toBe(false);
   });
@@ -223,7 +224,7 @@ describe("Filters (SQL WHERE)", () => {
   it("discipline filter returns only matching docs", async () => {
     const res = await list({ discipline: "civil" });
     expect(res.status).toBe(200);
-    const docs: any[] = res.body.documents;
+    const docs: any[] = res.body.items;
     expect(docs.length).toBe(3); // approved_civil, draft_civil, incoming_external
     expect(docs.every((d: any) => d.discipline === "civil")).toBe(true);
     expect(res.body.total).toBe(3);
@@ -232,7 +233,7 @@ describe("Filters (SQL WHERE)", () => {
   it("documentType filter returns only matching docs", async () => {
     const res = await list({ documentType: "drawing" });
     expect(res.status).toBe(200);
-    const docs: any[] = res.body.documents;
+    const docs: any[] = res.body.items;
     // draft_structural (drawing), issued_electrical (drawing), folder_doc (drawing)
     expect(docs.length).toBe(3);
     expect(docs.every((d: any) => d.documentType === "drawing")).toBe(true);
@@ -242,7 +243,7 @@ describe("Filters (SQL WHERE)", () => {
   it("status filter — draft returns only draft docs", async () => {
     const res = await list({ status: "draft" });
     expect(res.status).toBe(200);
-    const docs: any[] = res.body.documents;
+    const docs: any[] = res.body.items;
     expect(docs.length).toBe(4); // draft_structural, draft_civil, incoming_external, folder_doc
     expect(docs.every((d: any) => d.status === "draft")).toBe(true);
     expect(res.body.total).toBe(4);
@@ -252,14 +253,14 @@ describe("Filters (SQL WHERE)", () => {
     const res = await list({ status: "approved" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.approved_civil);
+    expect(res.body.items[0].id).toBe(fx.docIds.approved_civil);
   });
 
   it("folderId filter returns only docs in that folder", async () => {
     const res = await list({ folderId: fx.folderId });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.folder_doc);
+    expect(res.body.items[0].id).toBe(fx.docIds.folder_doc);
   });
 
   it("source filter returns only matching docs", async () => {
@@ -267,21 +268,21 @@ describe("Filters (SQL WHERE)", () => {
     expect(res.status).toBe(200);
     // issued_electrical and incoming_external
     expect(res.body.total).toBe(2);
-    expect(res.body.documents.every((d: any) => d.source === "external")).toBe(true);
+    expect(res.body.items.every((d: any) => d.source === "external")).toBe(true);
   });
 
   it("direction=incoming returns only incoming docs", async () => {
     const res = await list({ direction: "incoming" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.incoming_external);
+    expect(res.body.items[0].id).toBe(fx.docIds.incoming_external);
   });
 
   it("issuedBy filter is case-insensitive ILIKE", async () => {
     const res = await list({ issuedBy: "arcconsult" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.approved_civil);
+    expect(res.body.items[0].id).toBe(fx.docIds.approved_civil);
   });
 
   it("issuedBy filter — partial match works", async () => {
@@ -295,7 +296,7 @@ describe("Filters (SQL WHERE)", () => {
     const res = await list({ discipline: "civil", status: "draft" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(2);
-    const ids: number[] = res.body.documents.map((d: any) => d.id);
+    const ids: number[] = res.body.items.map((d: any) => d.id);
     expect(ids).toContain(fx.docIds.draft_civil);
     expect(ids).toContain(fx.docIds.incoming_external);
   });
@@ -303,7 +304,7 @@ describe("Filters (SQL WHERE)", () => {
   it("filter with no matches returns empty documents and total=0", async () => {
     const res = await list({ discipline: "nonexistent_discipline_xyz" });
     expect(res.status).toBe(200);
-    expect(res.body.documents).toHaveLength(0);
+    expect(res.body.items).toHaveLength(0);
     expect(res.body.total).toBe(0);
     expect(res.body.totalPages).toBe(0);
     expect(res.body.hasMore).toBe(false);
@@ -317,28 +318,28 @@ describe("Search (multi-field ILIKE)", () => {
     const res = await list({ search: "Foundation" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.draft_structural);
+    expect(res.body.items[0].id).toBe(fx.docIds.draft_structural);
   });
 
   it("search matches on documentNumber", async () => {
     const res = await list({ search: "CIV-001" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.approved_civil);
+    expect(res.body.items[0].id).toBe(fx.docIds.approved_civil);
   });
 
   it("search matches on discipline", async () => {
     const res = await list({ search: "electrical" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.issued_electrical);
+    expect(res.body.items[0].id).toBe(fx.docIds.issued_electrical);
   });
 
   it("search matches on issuedBy", async () => {
     const res = await list({ search: "ArcConsult" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1);
-    expect(res.body.documents[0].id).toBe(fx.docIds.approved_civil);
+    expect(res.body.items[0].id).toBe(fx.docIds.approved_civil);
   });
 
   it("search is case-insensitive", async () => {
@@ -351,7 +352,7 @@ describe("Search (multi-field ILIKE)", () => {
     const res = await list({ search: "XYZZY_NO_MATCH_9999" });
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(0);
-    expect(res.body.documents).toHaveLength(0);
+    expect(res.body.items).toHaveLength(0);
   });
 
   it("search combined with filter narrows further", async () => {
@@ -360,7 +361,7 @@ describe("Search (multi-field ILIKE)", () => {
     expect(res.status).toBe(200);
     // Matches: draft_civil (civil+draft), incoming_external (civil+draft)
     // NOT: approved_civil (civil but approved)
-    const ids: number[] = res.body.documents.map((d: any) => d.id);
+    const ids: number[] = res.body.items.map((d: any) => d.id);
     expect(ids).not.toContain(fx.docIds.approved_civil);
     expect(ids).toContain(fx.docIds.draft_civil);
   });
@@ -368,7 +369,7 @@ describe("Search (multi-field ILIKE)", () => {
   it("search on partial documentNumber returns match", async () => {
     const res = await list({ search: "ELE" });
     expect(res.status).toBe(200);
-    const ids: number[] = res.body.documents.map((d: any) => d.id);
+    const ids: number[] = res.body.items.map((d: any) => d.id);
     expect(ids).toContain(fx.docIds.issued_electrical);
   });
 });
@@ -401,7 +402,7 @@ describe("Tenant isolation", () => {
       .expect(200);
 
     expect(res.body.total).toBe(0);
-    expect(res.body.documents).toHaveLength(0);
+    expect(res.body.items).toHaveLength(0);
   });
 });
 
@@ -419,7 +420,7 @@ describe("Edge cases", () => {
       .expect(200);
 
     expect(res.body.total).toBe(0);
-    expect(res.body.documents).toHaveLength(0);
+    expect(res.body.items).toHaveLength(0);
     expect(res.body.totalPages).toBe(0);
     expect(res.body.hasMore).toBe(false);
     expect(res.body.page).toBe(1);
