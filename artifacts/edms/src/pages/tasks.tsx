@@ -136,7 +136,7 @@ export default function Tasks() {
     });
   };
 
-  const tasks = data?.tasks ?? [];
+  const tasks = unwrapList<any>(data, "tasks");
 
   const filtered = useMemo(() => {
     if (statusFilter === "all") return tasks;

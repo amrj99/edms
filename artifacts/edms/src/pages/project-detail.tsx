@@ -4024,7 +4024,7 @@ function TasksTab({ projectId }: { projectId: number }) {
       return r.json();
     },
   });
-  const tasks = tasksData?.tasks ?? [];
+  const tasks = unwrapList<any>(tasksData, "tasks");
 
   const priorityColor: Record<string, string> = {
     low: "bg-gray-100 text-gray-600", medium: "bg-blue-100 text-blue-700",

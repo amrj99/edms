@@ -122,7 +122,7 @@ export default function MeetingsPage() {
       return r.json();
     },
   });
-  const meetings: any[] = meetingsData?.meetings ?? [];
+  const meetings: any[] = unwrapList<any>(meetingsData, "meetings");
 
   const { data: detailData, refetch: refetchDetail } = useQuery({
     queryKey: ["meeting-detail", selectedId],
