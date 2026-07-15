@@ -166,7 +166,16 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
     const docIds = pendingWorkflows.map(w => w.wf.documentId);
     const workflowDocs = docIds.length > 0 ? await db.select().from(documentsTable).where(inArray(documentsTable.id, docIds)) : [];
-    const workflowUsers = await db.select().from(usersTable);
+    // Tenant isolation + scale: resolve initiator names for ONLY the users referenced by
+    // the (already org-scoped) pending workflows — never load the whole users table.
+    // The referenced IDs are authorization-bounded by buildWfFilter above; no org filter is
+    // added here on purpose, so an authorized cross-org party initiator's name still resolves.
+    const initiatorIds = [...new Set(
+      pendingWorkflows.map(w => w.wf.initiatedById).filter((id): id is number => id != null),
+    )];
+    const workflowUsers = initiatorIds.length > 0
+      ? await db.select().from(usersTable).where(inArray(usersTable.id, initiatorIds))
+      : [];
     const docMap = new Map(workflowDocs.map(d => [d.id, d]));
     const userMap = new Map(workflowUsers.map(u => [u.id, u]));
 
