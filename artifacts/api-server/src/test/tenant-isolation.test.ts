@@ -220,7 +220,7 @@ describe("Projects — cross-org isolation", () => {
       .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"))
       .expect(200);
 
-    const projects: Array<{ id: number; organizationId: number }> = res.body.projects ?? res.body;
+    const projects: Array<{ id: number; organizationId: number }> = res.body.items ?? res.body;
     const orgAProjects = (Array.isArray(projects) ? projects : []).filter(
       (p) => p.organizationId === fx.orgA.id,
     );
@@ -406,7 +406,7 @@ describe("Search — cross-org isolation (CRITICAL)", () => {
       .expect(200);
 
     const documents: Array<{ id: number; organizationId?: number }> =
-      res.body.documents ?? res.body.results?.documents ?? [];
+      res.body.items ?? res.body.results?.documents ?? [];
 
     const leaked = (Array.isArray(documents) ? documents : []).filter(
       (d) => d.id === fx.documentId,
@@ -424,7 +424,7 @@ describe("Search — cross-org isolation (CRITICAL)", () => {
       .expect(200);
 
     const projects: Array<{ id: number; organizationId?: number }> =
-      res.body.projects ?? res.body.results?.projects ?? [];
+      res.body.items ?? res.body.results?.projects ?? [];
 
     const leaked = (Array.isArray(projects) ? projects : []).filter(
       (p) => p.id === fx.projectA.id,
@@ -557,7 +557,7 @@ describe("REGRESSION: org isolation cannot be bypassed via URL manipulation", ()
       .expect(200);
 
     const projects: Array<{ id: number; organizationId: number }> =
-      res.body.projects ?? res.body ?? [];
+      res.body.items ?? res.body ?? [];
 
     const leaked = (Array.isArray(projects) ? projects : []).filter(
       (p) => p.organizationId === fx.orgA.id,

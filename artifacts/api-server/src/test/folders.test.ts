@@ -138,7 +138,7 @@ describe("[B-2-C] Folder mutation tenant isolation", () => {
       .set(authHeader("admin", fx.userAId, fx.userAOrgId, "folder-a@test.edms"));
 
     expect(res.status).toBe(200);
-    const seedFolder = res.body.folders.find((f: { id: number }) => f.id === fx.seedFolderId);
+    const seedFolder = res.body.items.find((f: { id: number }) => f.id === fx.seedFolderId);
     expect(seedFolder).toBeDefined();
     expect(seedFolder.name).toBe("Seed Folder");
   });
@@ -174,7 +174,8 @@ describe("[B-2] GET /folders — ORDER BY parentId NULLS FIRST, name ASC", () =>
       .set(authHeader("admin", fx.userAId, fx.userAOrgId, "folder-a@test.edms"));
 
     expect(res.status).toBe(200);
-    const { folders } = res.body;
+    const { items: folders } = res.body;
+    expect(res.body).not.toHaveProperty("folders"); // P2-a flip
     expect(Array.isArray(folders)).toBe(true);
 
     // Split into roots and non-roots
@@ -209,7 +210,7 @@ describe("[B-2] GET /folders — ORDER BY parentId NULLS FIRST, name ASC", () =>
       .set(authHeader("admin", fx.userAId, fx.userAOrgId, "folder-a@test.edms"));
 
     expect(res.status).toBe(200);
-    const { folders } = res.body;
+    const { items: folders } = res.body;
     expect(folders.length).toBeGreaterThan(0);
 
     const f = folders[0];
@@ -284,7 +285,7 @@ describe("[B-2] Folder CRUD — authorized user", () => {
       .set(authHeader("admin", fx.userAId, fx.userAOrgId, "folder-a@test.edms"));
 
     expect(res.status).toBe(200);
-    const ids = res.body.folders.map((f: { id: number }) => f.id);
+    const ids = res.body.items.map((f: { id: number }) => f.id);
     expect(ids).not.toContain(createdFolderId);
   });
 });

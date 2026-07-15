@@ -38,7 +38,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   // Tenant isolation: always filter at the DB level — never in-memory.
   // Non-sysOwner users MUST have an org; if somehow missing, return empty list (fail-safe).
   if (!isSystemOwner(user) && !effectiveOrgId) {
-    res.json({ projects: [], total: 0 }); return;
+    res.json({ items: [], total: 0 }); return;
   }
 
   const orgFilter = effectiveOrgId
@@ -107,7 +107,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const dcMap = new Map(docCounts.map(r => [r.projectId, Number(r.cnt)]));
 
   res.json({
-    projects: projects.map(({ project, orgName }) => ({
+    items: projects.map(({ project, orgName }) => ({
       ...project,
       organizationName: orgName,
       memberCount: mcMap.get(project.id) ?? 0,

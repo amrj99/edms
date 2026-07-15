@@ -131,7 +131,7 @@ router.get("/events", requireAuth, async (req, res): Promise<void> => {
       })),
     ];
 
-    res.json({ events });
+    res.json({ items: events });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Failed to load calendar events" });
   }

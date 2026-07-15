@@ -103,7 +103,7 @@ router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Pr
     .where(eq(documentsTable.projectId, projectId))
     .groupBy(documentsTable.folderId);
   const countMap = new Map(docCounts.filter(d => d.folderId).map(d => [d.folderId!, Number(d.cnt)]));
-  res.json({ folders: folders.map(f => ({ ...f, documentCount: countMap.get(f.id) ?? 0 })) });
+  res.json({ items: folders.map(f => ({ ...f, documentCount: countMap.get(f.id) ?? 0 })) });
 });
 
 router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -310,7 +310,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   const totalPages = Math.ceil(total / lim);
 
   res.json({
-    documents: pageDocs.map(({ doc, createdBy, folder }) => ({
+    items: pageDocs.map(({ doc, createdBy, folder }) => ({
       ...doc,
       createdByName: createdBy ? `${createdBy.firstName} ${createdBy.lastName}` : undefined,
       folderName: folder?.name,
@@ -993,7 +993,7 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   const events = [...revisionEvents, ...transmittalEvents, ...chainEvents, ...correspondenceEvents]
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  res.json({ events, total: events.length });
+  res.json({ items: events, total: events.length });
 });
 
 router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {

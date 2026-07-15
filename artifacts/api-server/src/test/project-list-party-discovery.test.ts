@@ -59,12 +59,12 @@ let projectOrgOnlyId: number;
 let projectHiddenId:  number;
 
 function listIds(body: any): number[] {
-  const items = body.projects ?? body;
+  const items = body.items ?? body;
   return (Array.isArray(items) ? items : []).map((p: any) => p.id);
 }
 
 function findProject(body: any, id: number): any {
-  const items = body.projects ?? body;
+  const items = body.items ?? body;
   return (Array.isArray(items) ? items : []).find((p: any) => p.id === id);
 }
 
@@ -163,6 +163,7 @@ describe("Phase 6C — GET /api/projects party discovery", () => {
       .set(authHeader("admin", adminOwner.id, orgOwner.id));
     expect(res.status).toBe(200);
     const ids = listIds(res.body);
+    expect(res.body).not.toHaveProperty("projects"); // P2-a flip
     expect(ids).toContain(projectMainId);
     expect(ids).toContain(projectOrgOnlyId);
     const main = findProject(res.body, projectMainId);

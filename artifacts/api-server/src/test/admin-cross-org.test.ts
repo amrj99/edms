@@ -199,9 +199,10 @@ describe("Smoke: admin within own org still works", () => {
     const res = await api().get("/api/users").set({ Authorization: `Bearer ${token}` });
 
     expect(res.status).toBe(200);
-    expect(res.body.users.length).toBeGreaterThanOrEqual(2);
+    expect(res.body.items.length).toBeGreaterThanOrEqual(2);
+      expect(res.body).not.toHaveProperty("users"); // P2-a flip
     // All users must belong to same org
-    const orgs = new Set(res.body.users.map((u: any) => u.organizationId));
+    const orgs = new Set(res.body.items.map((u: any) => u.organizationId));
     expect(orgs.size).toBe(1);
     expect(orgs.has(org.id)).toBe(true);
   });
