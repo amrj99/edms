@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isPast, parseISO } from "date-fns";
 import {
@@ -74,7 +75,7 @@ function LinkedDocuments({ projectId }: { meetingId: number; projectId: number }
       return r.json();
     },
   });
-  const docs: any[] = (data?.documents ?? []).slice(0, 5);
+  const docs: any[] = (unwrapList<any>(data, "documents")).slice(0, 5);
   if (docs.length === 0) return <p className="text-sm text-muted-foreground italic">No documents in this project.</p>;
   return (
     <div className="space-y-1.5">

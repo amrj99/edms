@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -381,7 +382,7 @@ export default function WorkflowEnginePage() {
     setDocSearchLoading(true);
     try {
       const res = await api.get(`/documents?search=${encodeURIComponent(q)}&limit=10`);
-      setDocResults(res.documents ?? res.data ?? []);
+      setDocResults(unwrapList<any>(res, "documents"));
     } catch { setDocResults([]); }
     finally { setDocSearchLoading(false); }
   }, []);

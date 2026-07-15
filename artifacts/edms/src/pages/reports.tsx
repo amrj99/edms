@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect, type ReactNode } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isBefore, isAfter } from "date-fns";
@@ -797,7 +798,7 @@ function MasterRegister({ filters }: { filters: Filters }) {
     staleTime: 30_000,
   });
 
-  const paginated: any[]   = data?.documents ?? [];
+  const paginated: any[]   = unwrapList<any>(data, "documents");
   const totalPages: number = data?.totalPages ?? 1;
   const filtered = paginated; // server already filtered — kept as alias for downstream code
 
@@ -1093,7 +1094,7 @@ function SmartLinkPanel({ transmittalId, projectId }: { transmittalId: number; p
     }
   };
 
-  const docs: any[] = data?.documents ?? [];
+  const docs: any[] = unwrapList<any>(data, "documents");
   const corr: any[] = data?.correspondence ?? [];
   const hasResults = docs.length > 0 || corr.length > 0;
 
@@ -1485,7 +1486,7 @@ function DrawingRegister({ filters }: { filters: Filters }) {
     },
     enabled: filters.projectId !== "_all",
   });
-  const allDocs: any[] = (data?.documents ?? (Array.isArray(data) ? data : []));
+  const allDocs: any[] = unwrapList<any>(data, "documents");
   const drawings = allDocs.filter(d => ["drawing","dwg","plan","section","elevation","detail"].includes((d.documentType || "").toLowerCase()));
 
   const filtered = useMemo(() => {

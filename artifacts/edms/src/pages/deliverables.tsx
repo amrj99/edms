@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
@@ -106,7 +107,7 @@ export default function DeliverablesPage() {
     },
     enabled: projectId !== "_all",
   });
-  const docs: any[] = docsData?.documents ?? [];
+  const docs: any[] = unwrapList<any>(docsData, "documents");
 
   const filtered = useMemo(() => {
     let d = all;

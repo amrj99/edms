@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useLocation } from "wouter";
 import { format, formatDistanceToNow } from "date-fns";
 import {
@@ -242,7 +243,7 @@ export function DocumentActivityTab({ documentId, projectId }: DocumentActivityT
     );
   }
 
-  const events = data?.events ?? [];
+  const events = unwrapList<ActivityEvent>(data, "events");
 
   if (events.length === 0) {
     return (

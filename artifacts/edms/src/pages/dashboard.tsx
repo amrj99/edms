@@ -1,4 +1,5 @@
 import { useGetDashboard } from "@workspace/api-client-react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -646,7 +647,7 @@ export default function Dashboard() {
     queryKey: ["global-docs-dash"],
     queryFn: async () => { const r = await fetch("/api/documents?limit=500"); return r.json(); },
   });
-  const globalDocs = globalDocsData?.documents ?? [];
+  const globalDocs = unwrapList<any>(globalDocsData, "documents");
 
   const handleSaveLayout = (newLayout: string[]) => {
     setLayout(newLayout);
