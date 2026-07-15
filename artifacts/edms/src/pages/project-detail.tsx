@@ -1131,7 +1131,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
               </button>
               <ChevronRight className="h-3 w-3" />
               <span className="text-foreground font-medium">
-                {data?.documents?.find((d: any) => d.folderId === folderViewFolderId)?.folderName ?? `Folder ${folderViewFolderId}`}
+                {unwrapList<any>(data, "documents").find((d: any) => d.folderId === folderViewFolderId)?.folderName ?? `Folder ${folderViewFolderId}`}
               </span>
             </div>
           )}
