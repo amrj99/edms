@@ -207,6 +207,26 @@ describe("Smoke: admin within own org still works", () => {
     expect(orgs.has(org.id)).toBe(true);
   });
 
+  it("system_owner lists organizations → { items } (C7 contract, legacy `organizations` key gone)", async () => {
+    // C7 P2-a completion fix: the isSystemOwner branch of GET /api/organizations
+    // previously returned { organizations } while org-scoped branches returned
+    // { items }. This asserts the branch now returns the unified `items` key with
+    // no legacy `organizations` key (no dual-key / no role-dependent shape).
+    const orgA = await createOrg();
+    const orgB = await createOrg();
+    const owner = await createUser({ organizationId: orgA.id, role: "system_owner" });
+
+    const token = makeToken({ id: owner.id, email: owner.email, role: "system_owner", organizationId: orgA.id });
+    const res = await api().get("/api/organizations").set({ Authorization: `Bearer ${token}` });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("items");
+    expect(res.body).not.toHaveProperty("organizations"); // legacy key absent
+    expect(Array.isArray(res.body.items)).toBe(true);
+    const ids = new Set(res.body.items.map((o: any) => o.id));
+    expect(ids.has(orgA.id) && ids.has(orgB.id)).toBe(true); // system_owner sees all orgs
+  });
+
   it("admin can reset-password for own org user (not blocked by cross-org check)", async () => {
     const org = await createOrg();
     const adminUser = await createUser({ organizationId: org.id, role: "admin" });

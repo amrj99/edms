@@ -20,7 +20,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     const countMap = new Map(userCounts.map((r) => [r.orgId, Number(r.cnt)]));
     const projMap = new Map(projectCounts.map((r) => [r.orgId, Number(r.cnt)]));
     res.json({
-      organizations: orgs.map((o) => ({
+      items: orgs.map((o) => ({
         ...o,
         userCount: countMap.get(o.id) ?? 0,
         projectCount: projMap.get(o.id) ?? 0,
