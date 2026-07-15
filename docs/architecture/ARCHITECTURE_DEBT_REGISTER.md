@@ -565,6 +565,22 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## Future Notification Taxonomy Unification
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `DEFERRED` — Non-blocking follow-up (NOT part of C-2 remediation) |
+| **Category** | Architecture / Data Model |
+| **Blocking** | لا — لا يمنع أي عمل حالي |
+| **اكتُشف في** | C-2 Closure (roadmap diagnosis corrected) — 2026-07-15 |
+| **المرجع** | ADR-0009 (Notification Dual Vocabularies) |
+
+**الملاحظة:** النظام يستخدم عقدين منفصلين عمداً (ADR-0009): `notification_type` enum (مركز الإشعارات، `notifications.type`) و`NotificationEvent` namespaced (أحداث التسليم/الإعدادات، `text` في `notification_logs.event_key` + `org_notification_settings.event_key`). لا mismatch غير آمن على مسارات الكتابة الحالية (حارس `notification-type-write-contract.test.ts` يثبت أن كل قيمة تُكتب في `notifications.type` ∈ الـenum).
+
+**متى يُعاد التقييم:** فقط عند الحاجة إلى (1) Analytics موحّدة عبر الإشعارات + أحداث التسليم، أو (2) آلية عامة لترقية Delivery `Event` إلى Notification Center `Type`. يندرج مستقبلاً مع D-1/D-3. **لا تغيير الآن، ولا migration.**
+
+---
+
 ## الإجراءات المطلوبة من Product
 
 | البند | الإجراء المطلوب | المسؤول |
