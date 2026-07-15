@@ -220,8 +220,11 @@ describe("Workflow Tasks — reflection pattern", () => {
       .query({ assignedToMe: "true" })
       .set("Authorization", `Bearer ${ctx.reviewerToken}`);
     expect(res.status).toBe(200);
+    // C7-P2b contract: GET /api/tasks returns { items, total } — legacy `tasks` key gone.
+    expect(res.body).toHaveProperty("items");
+    expect(res.body).not.toHaveProperty("tasks");
 
-    const wfTask = (res.body.tasks as any[]).find(
+    const wfTask = (res.body.items as any[]).find(
       (t: any) => t.sourceType === "workflow" && t.sourceId === instId
     );
     expect(wfTask).toBeDefined();

@@ -35,7 +35,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
 
   if (!isSystemOwner(user)) {
     if (!orgId) {
-      res.json({ meetings: [] });
+      res.json({ items: [] });
       return;
     }
     // Enforce tenant isolation at the database level.
@@ -89,7 +89,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
     project: r.project,
   }));
 
-  res.json({ meetings });
+  res.json({ items: meetings });
 });
 
 // ─── Cross-project action items list ──────────────────────────────────────────
@@ -107,7 +107,7 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
   const sqlConditions: SQL<unknown>[] = [];
 
   if (!isSystemOwner(user)) {
-    if (!orgId) { res.json({ actionItems: [] }); return; }
+    if (!orgId) { res.json({ items: [] }); return; }
     sqlConditions.push(eq(meetingsTable.organizationId, orgId) as SQL<unknown>);
   }
 
@@ -137,7 +137,7 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
   });
 
   res.json({
-    actionItems: filtered.map(r => ({
+    items: filtered.map(r => ({
       ...r.item,
       meetingTitle: r.meeting?.title,
       meetingRef: r.meeting?.referenceNumber,
