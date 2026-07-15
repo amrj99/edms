@@ -3414,8 +3414,8 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     queryKey: ["users"],
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
-  const corrUsers: RecipientUser[] = (usersData?.users ?? []).map((u: any) => ({
-    id: u.id, name: u.name ?? u.email, email: u.email,
+  const corrUsers: RecipientUser[] = unwrapList<RecipientUser>(usersData, "users").map((u: any) => ({
+    id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
   }));
 
   const { data: projDocsData } = useQuery({
