@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -83,7 +84,7 @@ export default function ReportsDashboard() {
     },
   });
 
-  const projects: any[] = projectsData?.items ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
   const summary = data?.summary ?? {};
 
   // Build doc status chart data

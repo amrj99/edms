@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, isPast, isToday } from "date-fns";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -129,7 +130,7 @@ export default function ActionItemsPage() {
   });
 
   const allItems: any[] = data?.actionItems ?? [];
-  const projects: any[] = projectsData?.items ?? [];
+  const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   const now = new Date();
   const filtered = allItems.filter(item => {
