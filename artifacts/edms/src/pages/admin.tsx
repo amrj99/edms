@@ -485,7 +485,7 @@ export default function Admin() {
     setForm((f: any) => ({ ...f, correspondenceTypes: (f.correspondenceTypes || []).filter((t: any) => t.id !== id) }));
   };
 
-  const users = usersData?.users ?? [];
+  const users = unwrapList<any>(usersData, "users");
   const orgs = unwrapList<any>(orgsData, "organizations");
   const projects = unwrapList<any>(projectsData, "projects");
 

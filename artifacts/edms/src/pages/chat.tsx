@@ -162,7 +162,7 @@ function CreateGroupDialog({ open, onClose }: { open: boolean; onClose: () => vo
   });
 
   const projects = unwrapList<any>(projectsData, "projects");
-  const users: ChatUser[] = (usersData?.users ?? []).filter((u: ChatUser) => String(u.name).toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase()));
+  const users: ChatUser[] = (unwrapList<ChatUser>(usersData, "users")).filter((u: ChatUser) => String(u.name).toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase()));
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -263,7 +263,7 @@ function ManageMembersDialog({ open, onClose, groupId }: { open: boolean; onClos
 
   const members: GroupMember[] = membersData?.members ?? [];
   const memberIds = new Set(members.map((m) => m.userId));
-  const nonMembers: ChatUser[] = (usersData?.users ?? []).filter((u: ChatUser) => !memberIds.has(u.id) && (u.name.toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase())));
+  const nonMembers: ChatUser[] = (unwrapList<ChatUser>(usersData, "users")).filter((u: ChatUser) => !memberIds.has(u.id) && (u.name.toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase())));
 
   const addMutation = useMutation({
     mutationFn: async () => {

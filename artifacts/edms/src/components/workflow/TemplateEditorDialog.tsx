@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useId } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery } from "@tanstack/react-query";
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors, DragEndEvent,
@@ -366,7 +367,7 @@ export function TemplateEditorDialog({
     queryFn: () => apiFetch(activeOrgId ? `/users?organizationId=${activeOrgId}` : "/users"),
     staleTime: 120_000,
   });
-  const users: OrgUser[] = usersData?.users ?? usersData ?? [];
+  const users: OrgUser[] = unwrapList<OrgUser>(usersData, "users");
 
   // ── Document types for the document type dropdown ─────────────────────────
   // queryKey includes activeOrgId so the cache is org-specific.

@@ -377,7 +377,7 @@ export default function ActivityLogPage() {
   const total: number = logsData?.total ?? 0;
   const totalPages: number = logsData?.totalPages ?? 1;
   const projects: Project[] = unwrapList<Project>(projectsData, "projects");
-  const users: OrgUser[] = Array.isArray(usersData) ? usersData : (usersData?.users ?? []);
+  const users: OrgUser[] = unwrapList<OrgUser>(usersData, "users");
 
   // ─── Access Denied ─────────────────────────────────────────────────────────
   if (!hasAccess) {

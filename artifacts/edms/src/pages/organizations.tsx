@@ -150,7 +150,7 @@ export default function Organizations() {
     },
     enabled: !!membersOrg,
   });
-  const allUsers: any[] = allUsersData?.users ?? allUsersData ?? [];
+  const allUsers: any[] = unwrapList<any>(allUsersData, "users");
 
   const orgMembers = allUsers.filter((u: any) => u.organizationId === membersOrg?.id);
   const nonOrgUsers = allUsers.filter((u: any) => u.organizationId !== membersOrg?.id);
