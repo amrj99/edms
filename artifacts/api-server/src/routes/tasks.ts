@@ -8,6 +8,7 @@ import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { triggerSkillEvent } from "../lib/skill-engine.js";
+import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
 
@@ -132,6 +133,18 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
     sourceType: "manual",
     assignedAt: effectiveAssignedToId ? new Date() : undefined,
   }).returning();
+
+  // C-3: audit the create using the existing action vocabulary ("create").
+  await createAuditLog({
+    userId: req.user!.id,
+    organizationId: req.user!.organizationId ?? undefined,
+    action: "create",
+    entityType: "task",
+    entityId: task.id,
+    entityTitle: task.title,
+    projectId: task.projectId ?? undefined,
+    details: { status: task.status, priority: task.priority, assignedToId: task.assignedToId },
+  });
 
   // Notify the assignee (if assigned to someone other than the creator)
   if (effectiveAssignedToId && effectiveAssignedToId !== req.user!.id) {
@@ -283,6 +296,26 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
     .returning();
 
   if (!task) { res.status(404).json({ error: "Not Found" }); return; }
+
+  // C-3: audit the mutation using the existing action vocabulary
+  // ("status_change" when the status changed, otherwise "update").
+  const statusChanged = status !== undefined && status !== before.status;
+  const reassigned = assignedToId !== undefined && assignedToId !== before.assignedToId;
+  await createAuditLog({
+    userId: user.id,
+    organizationId: user.organizationId ?? undefined,
+    action: statusChanged ? "status_change" : "update",
+    entityType: "task",
+    entityId: task.id,
+    entityTitle: task.title,
+    projectId: task.projectId ?? undefined,
+    details: {
+      ...(statusChanged ? { statusFrom: before.status, statusTo: task.status } : {}),
+      ...(reassigned ? { assignedFrom: before.assignedToId, assignedTo: task.assignedToId } : {}),
+    },
+    beforeState: { title: before.title, status: before.status, priority: before.priority, assignedToId: before.assignedToId },
+    afterState: { title: task.title, status: task.status, priority: task.priority, assignedToId: task.assignedToId },
+  });
 
   try {
     const actorId = req.user!.id;
