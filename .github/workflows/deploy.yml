@@ -109,6 +109,9 @@ jobs:
       - name: Run integration tests
         run: pnpm --filter api-server test
 
+      - name: Run frontend tests
+        run: pnpm --filter edms test
+
   # ─── المرحلة 2: النشر على السيرفر ────────────────────────────────────────────
   # يعمل فقط على push فعلي إلى main — لا يعمل أبداً على Pull Requests.
   deploy:
