@@ -279,7 +279,7 @@ export default function CorrespondencePage() {
     queryKey: ["users"],
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
-  const allUsers: any[] = usersData?.users ?? [];
+  const allUsers: any[] = unwrapList<any>(usersData, "users");
 
   const composeProjectId = compose.projectId && compose.projectId !== "_none" ? parseInt(compose.projectId) : null;
   const { data: projectDocsData } = useQuery({

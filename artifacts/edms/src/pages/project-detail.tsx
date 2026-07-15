@@ -721,7 +721,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     queryKey: ["users"],
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
-  const allUsers = (usersData?.users ?? []).map((u: any) => ({
+  const allUsers = unwrapList<any>(usersData, "users").map((u: any) => ({
     id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
     organizationName: u.organizationName, role: u.role,
   }));
@@ -2378,7 +2378,7 @@ function CreateTransmittalDialog({
     queryKey: ["users"],
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
-  const userList: RecipientUser[] = (usersRaw?.users ?? []).map((u: any) => ({
+  const userList: RecipientUser[] = unwrapList<RecipientUser>(usersRaw, "users").map((u: any) => ({
     id: u.id, firstName: u.firstName ?? "", lastName: u.lastName ?? "",
     email: u.email, organizationName: u.organizationName, role: u.role,
   }));
@@ -4110,7 +4110,7 @@ function MembersTab({ projectId }: { projectId: number }) {
   });
 
   const members = membersData?.members ?? [];
-  const allUsers: any[] = usersData?.users ?? [];
+  const allUsers: any[] = unwrapList<any>(usersData, "users");
   const memberUserIds = new Set(members.map((m: any) => m.userId));
   const availableUsers = allUsers.filter((u: any) => !memberUserIds.has(u.id) && u.isActive);
 

@@ -127,7 +127,7 @@ export default function DelegationsPage() {
   }
 
   const delegations = data?.delegations ?? [];
-  const otherUsers = (usersData?.users ?? []).filter((u: any) => u.id !== user?.id);
+  const otherUsers = (unwrapList<any>(usersData, "users")).filter((u: any) => u.id !== user?.id);
 
   return (
     <div className="space-y-6 max-w-4xl animate-in fade-in">

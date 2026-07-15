@@ -124,7 +124,7 @@ export default function UsersPage() {
     enabled: !!selectedUserId && detailOpen,
   });
 
-  const allUsers: any[] = usersData?.users ?? [];
+  const allUsers: any[] = unwrapList<any>(usersData, "users");
   const organizations: any[] = unwrapList<any>(orgsData, "organizations");
 
   const orgUserCounts = useMemo(() => {
