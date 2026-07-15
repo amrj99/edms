@@ -9,43 +9,36 @@
  * This guard does NOT compare the full `NotificationEvent` union to the enum — that is a
  * semantically wrong comparison (they serve different columns/responsibilities).
  *
- * It validates ONLY the actual write paths: it statically inventories every
- * `db.insert(notificationsTable)` site in the backend, extracts the `type:` string literal
- * each writer passes, and asserts every written value is a member of the DB enum. This is
- * the real safety property — an unvetted value written to `notifications.type` would fail
- * at PostgreSQL, and this catches it in CI first.
+ * It validates ONLY the actual application write paths: it statically inventories every
+ * `db.insert(notificationsTable)` site in the backend SOURCE (excluding tests), extracts the
+ * `type:` literal each writer passes, and asserts every written value is a member of the DB
+ * enum. This is the real safety property — an unvetted value written to `notifications.type`
+ * would fail at PostgreSQL, and this catches it in CI first.
+ *
+ * FAIL-CLOSED by design (any new/changed writer forces a review):
+ *   • Discovery is EXHAUSTIVE — the whole `src/` tree (minus `test/`) is walked, NOT a
+ *     hardcoded file list. A writer added in a brand-new file is discovered automatically
+ *     and bumps the site count → the count assertion fails until re-audited.
+ *   • Every discovered site MUST yield a static string literal. A dynamic type
+ *     (`type: cond ? "a" : "b"`, `type: makeType(x)`, `type: someVar`) yields no literal →
+ *     the "every site is statically classified" assertion fails, forcing either an inline
+ *     literal or an explicit guard extension. The guard never silently skips a site.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { notificationTypeEnum } from "@workspace/db";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(HERE, "..");
+const SRC = resolve(HERE, ".."); // artifacts/api-server/src
 
-// Every backend module that writes to `notifications.type` (inventoried 2026-07-15).
-// If a new writer is added, add its file here — the site-count assertion below fails
-// otherwise, forcing a conscious re-audit (ADR-0009).
-const WRITER_FILES = [
-  "lib/reminder-job.ts",
-  "lib/rule-engine.ts",
-  "lib/skill-engine.ts",
-  "routes/chat.ts",
-  "routes/correspondence.ts",
-  "routes/documents.ts",
-  "routes/meetings.ts",
-  "routes/notifications.ts",
-  "routes/tasks.ts",
-  "routes/transmittals.ts",
-  "routes/workflow-engine.ts",
-];
-
-// Audited count of `db.insert(notificationsTable)` sites across WRITER_FILES (excludes tests).
+// Audited count of application `db.insert(notificationsTable)` sites (src minus test/), 2026-07-15.
+// A new writer ANYWHERE under src (any file) changes this → forces a conscious re-audit.
 const EXPECTED_INSERT_SITES = 25;
 
-// Audited distinct values written to `notifications.type` (2026-07-15). Documented so a
-// drift in either the writers or their values forces this list — and a re-audit — to change.
+// Audited distinct values written to `notifications.type` (2026-07-15). Documented so a drift
+// in either the writers or their values forces this list — and a re-audit — to change.
 const AUDITED_WRITE_VALUES = new Set<string>([
   "task_overdue",              // reminder-job.ts, notifications.ts
   "workflow_action_required",  // reminder-job.ts, workflow-engine.ts
@@ -66,50 +59,78 @@ const AUDITED_WRITE_VALUES = new Set<string>([
   "transmittal_acknowledged",  // transmittals.ts
 ]);
 
-/**
- * Extract the `type:` string literal for each `db.insert(notificationsTable)` site.
- * Forward-scan to the first `type: "literal"` after the insert (inline object form);
- * if none within window, backward-scan (the `notifications.ts` `toInsert`-built-before form).
- */
-function scanWriter(src: string): { sites: number; types: string[] } {
-  const lines = src.split("\n");
-  const types: string[] = [];
-  let sites = 0;
-  const TYPE_RE = /\btype:\s*["'`]([a-z_]+)["'`]/;
-  const WINDOW = 25;
-  for (let i = 0; i < lines.length; i++) {
-    if (!/db\.insert\(notificationsTable\)/.test(lines[i])) continue;
-    sites++;
-    let val: string | null = null;
-    for (let j = i; j < Math.min(lines.length, i + WINDOW); j++) {
-      const m = lines[j].match(TYPE_RE);
-      if (m) { val = m[1]; break; }
+/** Recursively collect every .ts file under `dir`, excluding the `test/` subtree. */
+function collectSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "test" || entry.name === "node_modules") continue;
+      out.push(...collectSourceFiles(full));
+    } else if (entry.name.endsWith(".ts")) {
+      out.push(full);
     }
-    if (!val) {
-      for (let j = i; j >= Math.max(0, i - WINDOW); j--) {
-        const m = lines[j].match(TYPE_RE);
-        if (m) { val = m[1]; break; }
-      }
-    }
-    if (val) types.push(val);
   }
-  return { sites, types };
+  return out;
+}
+
+type Site = { file: string; line: number; value: string | null };
+
+const INSERT_RE = /\.insert\(notificationsTable\)\.values\(/;
+// Identifier argument ONLY when it's `values(ident)` — ident immediately followed by `)`.
+// `values(recipients.map(...))` is NOT an identifier arg (followed by `.`), so it stays inline.
+const IDENT_ARG_RE = /\.insert\(notificationsTable\)\.values\(\s*([A-Za-z_$][\w$]*)\s*\)/;
+const TYPE_ANY_RE = /\btype:/;
+const TYPE_LITERAL_RE = /\btype:\s*["'`]([a-z_]+)["'`]/;
+const WINDOW = 40;
+
+/**
+ * For each `db.insert(notificationsTable).values(...)` site, classify the `type:` value.
+ *  • Inline object/array (`values({...})`, `values(arr.map(...=>({...})))`): forward-scan to
+ *    the FIRST `type:` token; it must be a string literal, else the site is unclassified.
+ *  • Identifier argument (`values(toInsert)` — object built earlier): backward-scan to the
+ *    nearest `type:` token; must be a string literal, else unclassified.
+ * Stopping at the FIRST `type:` (not the first literal) prevents attributing an unrelated
+ * neighbour's literal to a site whose own type is dynamic.
+ */
+function scanFile(file: string): Site[] {
+  const lines = readFileSync(file, "utf8").split("\n");
+  const sites: Site[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!INSERT_RE.test(lines[i])) continue;
+    const isIdentifierArg = IDENT_ARG_RE.test(lines[i]); // values(toInsert) vs values({ ... }) / values(arr.map(
+    let value: string | null = null;
+    const range = isIdentifierArg
+      ? { from: i, to: Math.max(0, i - WINDOW), step: -1 }
+      : { from: i, to: Math.min(lines.length - 1, i + WINDOW), step: 1 };
+    for (let j = range.from; range.step > 0 ? j <= range.to : j >= range.to; j += range.step) {
+      if (!TYPE_ANY_RE.test(lines[j])) continue;
+      const lit = lines[j].match(TYPE_LITERAL_RE);
+      value = lit ? lit[1] : null; // first `type:` wins; non-literal → null (unclassified)
+      break;
+    }
+    sites.push({ file, line: i + 1, value });
+  }
+  return sites;
 }
 
 describe("C-2 guard — every value written to notifications.type is in the DB enum (ADR-0009)", () => {
   const enumValues = new Set<string>(notificationTypeEnum.enumValues);
 
-  const scans = WRITER_FILES.map((rel) => ({ rel, ...scanWriter(readFileSync(resolve(SRC, rel), "utf8")) }));
-  const totalSites = scans.reduce((n, s) => n + s.sites, 0);
-  const writtenValues = new Set<string>(scans.flatMap((s) => s.types));
+  const sites = collectSourceFiles(SRC).flatMap(scanFile);
+  const classified = sites.filter((s) => s.value !== null);
+  const unclassified = sites.filter((s) => s.value === null);
+  const writtenValues = new Set<string>(classified.map((s) => s.value as string));
 
-  it("inventories the expected number of notificationsTable insert sites (no writer added/removed silently)", () => {
-    expect(totalSites).toBe(EXPECTED_INSERT_SITES);
+  it("EXHAUSTIVE discovery: inventories the expected number of insert sites across all of src (minus test/)", () => {
+    expect(sites.length, `insert sites found:\n${sites.map((s) => ` ${s.file}:${s.line}`).join("\n")}`).toBe(EXPECTED_INSERT_SITES);
   });
 
-  it("extracts a type value for every insert site (no writer left unclassified)", () => {
-    const extracted = scans.reduce((n, s) => n + s.types.length, 0);
-    expect(extracted).toBe(totalSites);
+  it("FAIL-CLOSED: every insert site yields a static string literal (no dynamic/helper type silently skipped)", () => {
+    expect(
+      unclassified,
+      `these notificationsTable inserts have a non-literal/dynamic \`type:\` and must be inlined or explicitly reviewed:\n${unclassified.map((s) => ` ${s.file}:${s.line}`).join("\n")}`,
+    ).toEqual([]);
   });
 
   it("EVERY value written to notifications.type is a member of notification_type enum", () => {
