@@ -631,7 +631,7 @@ router.get("/instances", async (req, res): Promise<void> => {
   // docType filter (applied after enrichment)
   const filtered = docType ? enriched.filter(i => i.documentType === docType) : enriched;
 
-  res.json({ instances: filtered, total: filtered.length });
+  res.json({ items: filtered, total: filtered.length });
 });
 
 router.get("/instances/:id", async (req, res): Promise<void> => {
@@ -1009,7 +1009,7 @@ router.get("/instances/for-document/:docId", async (req, res): Promise<void> => 
     .orderBy(desc(wfInstancesTable.updatedAt));
   const roleCache = new Map<number | null, string>();
   const enriched = await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
-  res.json({ instances: enriched });
+  res.json({ items: enriched });
 });
 
 // ─── Seed Default Templates ───────────────────────────────────────────────────

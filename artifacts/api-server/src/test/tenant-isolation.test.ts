@@ -361,8 +361,14 @@ describe("Notifications — user-scoped isolation", () => {
       .set(authHeader("admin", fx.userB.id, fx.orgB.id, "admin@beta.test"))
       .expect(200);
 
+    // C7-P2b contract: GET /api/notifications returns { items, unreadCount } —
+    // legacy `notifications` key gone, sibling `unreadCount` preserved.
+    expect(res.body).toHaveProperty("items");
+    expect(res.body).not.toHaveProperty("notifications");
+    expect(res.body).toHaveProperty("unreadCount");
+
     const notifications: Array<{ id: number; userId: number }> =
-      res.body.notifications ?? res.body ?? [];
+      res.body.items ?? res.body ?? [];
 
     const leaked = (Array.isArray(notifications) ? notifications : []).filter(
       (n) => n.id === fx.notificationId,

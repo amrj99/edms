@@ -116,7 +116,7 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
   if (assignedToMe === "true") tasks = tasks.filter(t => t.assignedToId === user.id);
 
   const enriched = await enrichTasks(tasks);
-  res.json({ tasks: enriched, total: enriched.length });
+  res.json({ items: enriched, total: enriched.length });
 });
 
 router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {

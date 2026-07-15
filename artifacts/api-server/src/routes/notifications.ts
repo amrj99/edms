@@ -157,7 +157,7 @@ router.get("/", async (req, res): Promise<void> => {
     .from(notificationsTable)
     .where(and(eq(notificationsTable.userId, userId), eq(notificationsTable.isRead, false)));
 
-  res.json({ notifications, unreadCount: Number(total) });
+  res.json({ items: notifications, unreadCount: Number(total) });
 });
 
 // ─── Mark single notification as read ─────────────────────────────────────────
