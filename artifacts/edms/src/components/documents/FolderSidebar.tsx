@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Folder, FolderOpen, Plus, Pencil, Trash2, ChevronRight, ChevronDown,
@@ -164,7 +165,7 @@ export function FolderSidebar({ projectId, selectedFolderId, onSelectFolder, can
     enabled: copyFromOpen,
   });
 
-  const folders: FolderNode[] = data?.folders ?? [];
+  const folders: FolderNode[] = unwrapList<FolderNode>(data, "folders");
   const tree = buildTree(folders);
 
   const createMut = useMutation({

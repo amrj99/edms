@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import {
   format, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   addDays, addMonths, addWeeks, subMonths, subWeeks,
@@ -412,7 +413,7 @@ export default function CalendarPage() {
   });
 
   const events = useMemo(() => {
-    const all = data?.events ?? [];
+    const all = unwrapList<any>(data, "events");
     return typeFilter === "all" ? all : all.filter(e => e.type === typeFilter);
   }, [data, typeFilter]);
 

@@ -1,5 +1,6 @@
 ﻿import { useParams, Link, useLocation } from "wouter";
 import { useResizableColumns } from "@/hooks/useResizableColumns";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useGetProject, useListDocuments, useCreateDocument } from "@workspace/api-client-react";
 import {
   FileText, Mail, CheckSquare, GitBranch, Users, ArrowLeft, Loader2,
@@ -405,7 +406,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     },
     enabled: !!moveToFolderDoc,
   });
-  const pickerFolders: any[] = folderPickData?.folders ?? [];
+  const pickerFolders: any[] = unwrapList<any>(folderPickData, "folders");
   const moveToFolderMut = useMutation({
     mutationFn: async ({ docId, folderId }: { docId: number; folderId: number | null }) => {
       const token = localStorage.getItem("edms_token");
@@ -744,7 +745,7 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
     }
   };
 
-  const allDocs = data?.documents ?? [];
+  const allDocs = unwrapList<any>(data, "documents");
   const uniqueDisciplines = Array.from(new Set(allDocs.map((d: any) => d.discipline).filter(Boolean))) as string[];
   const uniqueDocTypes = Array.from(new Set(allDocs.map((d: any) => d.documentType).filter(Boolean))) as string[];
   const filtered = allDocs.filter((d: any) => {
@@ -2371,7 +2372,7 @@ function CreateTransmittalDialog({
   const [uploading, setUploading] = useState(false);
 
   const { data: docsData } = useListDocuments(projectId);
-  const documents: any[] = docsData?.documents ?? [];
+  const documents: any[] = unwrapList<any>(docsData, "documents");
 
   const { data: usersRaw } = useQuery({
     queryKey: ["users"],
@@ -2745,7 +2746,7 @@ function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, o
   const detailItems: any[] = detailData?.items ?? [];
 
   const { data: docsData } = useListDocuments(projectId);
-  const documents = docsData?.documents ?? [];
+  const documents = unwrapList<any>(docsData, "documents");
 
   const addItemMutation = useMutation({
     mutationFn: async ({ transmittalId, documentId }: { transmittalId: number; documentId: number }) => {
@@ -3425,7 +3426,7 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
     },
     enabled: docPickerOpen,
   });
-  const pickerDocs: any[] = (projDocsData?.documents ?? projDocsData ?? []).filter((d: any) =>
+  const pickerDocs: any[] = unwrapList<any>(projDocsData, "documents").filter((d: any) =>
     !docSearch || d.title?.toLowerCase().includes(docSearch.toLowerCase()) || d.documentNumber?.toLowerCase().includes(docSearch.toLowerCase())
   );
 
@@ -4407,7 +4408,7 @@ function ReviewTab({ projectId }: { projectId: number }) {
   const [reviewerIds, setReviewerIds] = useState<number[]>([]);
 
   const { data: docsData, isLoading: docsLoading } = useListDocuments(projectId);
-  const allDocs = docsData?.documents ?? [];
+  const allDocs = unwrapList<any>(docsData, "documents");
 
   const { data: membersData } = useQuery({
     queryKey: ["project-members", projectId],

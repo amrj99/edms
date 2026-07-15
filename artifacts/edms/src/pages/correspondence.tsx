@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow, isPast, parseISO } from "date-fns";
 import {
@@ -290,7 +291,7 @@ export default function CorrespondencePage() {
     },
     enabled: !!composeProjectId && projectPickerOpen,
   });
-  const projectDocs: any[] = projectDocsData?.documents ?? [];
+  const projectDocs: any[] = unwrapList<any>(projectDocsData, "documents");
   const filteredProjectDocs = projectPickerSearch.trim()
     ? projectDocs.filter(d =>
         d.title?.toLowerCase().includes(projectPickerSearch.toLowerCase()) ||

@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
 import { DocumentPreviewContent } from "@/components/documents/DocumentPreviewContent";
@@ -155,7 +156,7 @@ export default function DocumentsPage() {
     queryFn: async () => { const r = await fetch("/api/users"); return r.json(); },
   });
 
-  const allDocs: any[] = docsData?.documents ?? [];
+  const allDocs: any[] = unwrapList<any>(docsData, "documents");
   const projects: any[] = projectsData?.projects ?? [];
   const allUsers: RecipientUser[] = (usersData?.users ?? []).map((u: any) => ({
     id: u.id,
@@ -359,7 +360,7 @@ export default function DocumentsPage() {
     },
     enabled: !!moveToFolderDoc,
   });
-  const pickerFolders: any[] = folderPickData?.folders ?? [];
+  const pickerFolders: any[] = unwrapList<any>(folderPickData, "folders");
 
   const DOC_COLS = DOC_COLS_BASE.filter(c => c.key !== "direction" || showDirectionCol);
 
