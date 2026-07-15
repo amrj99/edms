@@ -8,6 +8,7 @@
  */
 
 import { useState, useCallback } from "react";
+import { unwrapList } from "@/lib/unwrap-list";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -482,7 +483,7 @@ export function DocumentWorkflowPanel({
     staleTime: 10_000,
   });
 
-  const instances = data?.instances ?? [];
+  const instances = unwrapList<any>(data, "instances");
   const activeInstance = instances.find(i => i.status === "active");
   const latestCompleted = instances.find(i => i.status !== "active");
 

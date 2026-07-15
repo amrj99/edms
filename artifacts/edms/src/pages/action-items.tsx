@@ -129,7 +129,7 @@ export default function ActionItemsPage() {
     onError: () => toast({ title: "Update failed", variant: "destructive" }),
   });
 
-  const allItems: any[] = data?.actionItems ?? [];
+  const allItems: any[] = unwrapList<any>(data, "actionItems");
   const projects: any[] = unwrapList<any>(projectsData, "projects");
 
   const now = new Date();

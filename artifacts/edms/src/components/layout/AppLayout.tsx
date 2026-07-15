@@ -115,7 +115,7 @@ function NotificationBell() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["notifications"] }); toast({ title: t("notifMarkAllRead") }); },
   });
 
-  const notifications: any[] = data?.notifications ?? [];
+  const notifications: any[] = unwrapList<any>(data, "notifications");
   const unreadCount: number = data?.unreadCount ?? 0;
 
   const activeGroup = NOTIF_FILTER_GROUPS.find(g => g.key === filterType);
@@ -369,7 +369,7 @@ export function AppSidebar() {
     enabled: !!user,
   });
   const pendingTaskCount: number =
-    (navTaskData?.tasks ?? []).filter(
+    (unwrapList<any>(navTaskData, "tasks")).filter(
       (t: any) => t.status === "pending" || t.status === "in_progress",
     ).length;
 

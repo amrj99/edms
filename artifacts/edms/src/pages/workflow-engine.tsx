@@ -328,7 +328,7 @@ export default function WorkflowEnginePage() {
         api.get("/workflow-engine/instances"),
         api.get("/workflow-engine/templates"),
       ]);
-      setInstances(instData.instances ?? []);
+      setInstances(unwrapList<any>(instData, "instances"));
       setTemplates(tplData.templates ?? []);
     } catch {
       toast({ title: "Failed to load workflow data", variant: "destructive" });
@@ -395,7 +395,7 @@ export default function WorkflowEnginePage() {
     setSelectedDocPriorWorkflows([]);
     try {
       const hist = await api.get(`/workflow-engine/instances/for-document/${doc.id}`);
-      setSelectedDocPriorWorkflows((hist.instances ?? []).map((i: any) => ({ status: i.status, workflowName: i.workflowName })));
+      setSelectedDocPriorWorkflows((unwrapList<any>(hist, "instances")).map((i: any) => ({ status: i.status, workflowName: i.workflowName })));
     } catch { /* non-critical — history badge is informational only */ }
   }, []);
 
