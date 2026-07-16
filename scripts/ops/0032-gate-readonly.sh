@@ -35,21 +35,24 @@ SELECT count(*) total,
 FROM f;" | tee "$RESULTS_DIR/A1_classification.txt"
 
 log "A2 — unresolved B2/B3/D/E detail (Data-Integrity record; no secrets)"
+# klass is computed in the CTE and filtered with klass IS NOT NULL. This avoids
+# SQL three-valued-logic pitfalls: a plain inequality on file_org would evaluate
+# to NULL (not TRUE) for a NULL file_org and silently omit B2/B3 rows.
 pg_tbl "
 WITH f AS (SELECT df.id file_id, df.document_id, d.project_id, df.organization_id file_org,
   d.organization_id doc_org, p.organization_id proj_owner,
   CASE WHEN df.file_url LIKE '/api/storage/onpremise/%' THEN 'onpremise'
        WHEN df.file_url LIKE '/api/storage/s3-object/%' THEN 's3'
        WHEN df.file_url LIKE '/api/storage/r2-object/%' THEN 'r2' ELSE 'cloud' END storage_mode
-  FROM document_files df JOIN documents d ON d.id=df.document_id JOIN projects p ON p.id=d.project_id)
-SELECT file_id, document_id, project_id, file_org, doc_org, proj_owner AS project_owner_org, storage_mode,
- CASE WHEN file_org IS NULL AND doc_org IS NULL THEN 'B2'
-      WHEN file_org IS NULL AND doc_org IS NOT NULL AND doc_org<>proj_owner THEN 'B3'
-      WHEN file_org IS NOT NULL AND file_org<>proj_owner THEN 'D'
-      WHEN doc_org IS NOT NULL AND doc_org<>proj_owner THEN 'E' END klass
-FROM f
-WHERE NOT (file_org IS NULL AND doc_org=proj_owner) AND NOT (file_org=proj_owner)
-ORDER BY klass, file_id;" | tee "$RESULTS_DIR/A2_unresolved.txt"
+  FROM document_files df JOIN documents d ON d.id=df.document_id JOIN projects p ON p.id=d.project_id),
+g AS (SELECT *,
+  CASE WHEN file_org IS NULL AND doc_org IS NULL THEN 'B2'
+       WHEN file_org IS NULL AND doc_org IS NOT NULL AND doc_org<>proj_owner THEN 'B3'
+       WHEN file_org IS NOT NULL AND file_org<>proj_owner THEN 'D'
+       WHEN doc_org IS NOT NULL AND doc_org<>proj_owner THEN 'E' END klass
+  FROM f)
+SELECT file_id, document_id, project_id, file_org, doc_org, proj_owner AS project_owner_org, storage_mode, klass
+FROM g WHERE klass IS NOT NULL ORDER BY klass, file_id;" | tee "$RESULTS_DIR/A2_unresolved.txt"
 
 log "A4 — EXPLAIN (PLAN ONLY, no ANALYZE — plan is computed, nothing is written)"
 pg_tbl "
