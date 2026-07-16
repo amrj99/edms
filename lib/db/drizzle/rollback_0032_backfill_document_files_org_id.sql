@@ -47,8 +47,11 @@ CREATE TEMP TABLE _rb0032_artifact (
   db_system_identifier     text
 ) ON COMMIT DROP;
 
--- Load the captured artifact (headers must match the columns above):
---   \copy _rb0032_artifact FROM '0032_preimage_<database>_<system_id>_<utc>.csv' CSV HEADER
+-- Load the captured artifact from a FIXED in-container path. The 0032-rollback.sh
+-- runner `docker cp`s the chosen pre-image CSV to exactly this path before running
+-- this file, then removes it afterwards — so there is no manual, error-prone edit.
+-- (Headers must match the columns above.)
+\copy _rb0032_artifact FROM '/tmp/_rb0032_artifact.csv' CSV HEADER
 
 -- ── Fail-closed guards ──────────────────────────────────────────────────────
 DO $$
