@@ -109,12 +109,19 @@ docker run -d \
   postgres:16-alpine
 
 echo "[restore-verify] Waiting for test container to be ready..."
+# Poll a REAL query over TCP (-h 127.0.0.1), not pg_isready. The postgres image
+# boots in two phases: a bootstrap server on the unix socket ONLY (listen_addresses='')
+# that runs initdb and THEN creates POSTGRES_DB, followed by the real TCP server.
+# pg_isready answers "up" during the bootstrap phase — before "$DB_NAME" exists —
+# which races pg_restore into "database does not exist". A TCP SELECT 1 against
+# "$DB_NAME" succeeds only once the FINAL server is up AND the database is created.
 WAIT=0
-until docker exec "$RESTORE_CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" -q 2>/dev/null; do
+until docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" \
+      psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' >/dev/null 2>&1; do
   sleep 1
   WAIT=$((WAIT + 1))
-  if [ "$WAIT" -gt 30 ]; then
-    echo "[restore-verify] FATAL: Test container did not become ready in 30 seconds."
+  if [ "$WAIT" -gt 60 ]; then
+    echo "[restore-verify] FATAL: Test container did not become ready in 60 seconds."
     exit 1
   fi
 done
@@ -127,9 +134,10 @@ echo "[restore-verify] Restoring dump..."
 # Run pg_restore INSIDE the test container (postgres:16-alpine ships the client
 # binaries); the VPS host has only Docker, no pg_restore/psql. The dump lives on
 # the host, so stream it in over stdin (docker exec -i); pg_restore reads the
-# archive from stdin when no file argument is given. Local in-container connection
-# uses the trust socket for POSTGRES_USER — no host client, no password needed.
-docker exec -i "$RESTORE_CONTAINER" pg_restore \
+# archive from stdin when no file argument is given. Connect over TCP (-h 127.0.0.1)
+# so we only ever reach the final server, never the socket-only bootstrap server.
+docker exec -i -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" pg_restore \
+  -h 127.0.0.1 \
   --username="$DB_USER" \
   --dbname="$DB_NAME" \
   --no-password \
@@ -147,7 +155,8 @@ count_live() {
 }
 
 count_restored() {
-  docker exec "$RESTORE_CONTAINER" psql \
+  docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" psql \
+    -h 127.0.0.1 \
     --username="$DB_USER" \
     --dbname="$DB_NAME" \
     --no-password \
@@ -188,7 +197,8 @@ echo "[restore-verify] Verifying file backup integrity..."
 
 # Count document_files records in the RESTORED database
 DB_FILE_COUNT=$(
-  docker exec "$RESTORE_CONTAINER" psql \
+  docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" psql \
+    -h 127.0.0.1 \
     --username="$DB_USER" \
     --dbname="$DB_NAME" \
     --no-password \
