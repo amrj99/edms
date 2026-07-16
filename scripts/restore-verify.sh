@@ -124,14 +124,17 @@ echo "[restore-verify] Test container ready."
 
 echo "[restore-verify] Restoring dump..."
 
-PGPASSWORD="$TEST_PG_PASSWORD" pg_restore \
-  --host=127.0.0.1 \
-  --port="$TEST_PORT" \
+# Run pg_restore INSIDE the test container (postgres:16-alpine ships the client
+# binaries); the VPS host has only Docker, no pg_restore/psql. The dump lives on
+# the host, so stream it in over stdin (docker exec -i); pg_restore reads the
+# archive from stdin when no file argument is given. Local in-container connection
+# uses the trust socket for POSTGRES_USER — no host client, no password needed.
+docker exec -i "$RESTORE_CONTAINER" pg_restore \
   --username="$DB_USER" \
   --dbname="$DB_NAME" \
   --no-password \
   --verbose \
-  "$TEMP_FILE" 2>&1 | tail -5
+  < "$TEMP_FILE" 2>&1 | tail -5
 
 echo "[restore-verify] Restore complete."
 
@@ -144,9 +147,7 @@ count_live() {
 }
 
 count_restored() {
-  PGPASSWORD="$TEST_PG_PASSWORD" psql \
-    --host=127.0.0.1 \
-    --port="$TEST_PORT" \
+  docker exec "$RESTORE_CONTAINER" psql \
     --username="$DB_USER" \
     --dbname="$DB_NAME" \
     --no-password \
@@ -187,9 +188,7 @@ echo "[restore-verify] Verifying file backup integrity..."
 
 # Count document_files records in the RESTORED database
 DB_FILE_COUNT=$(
-  PGPASSWORD="$TEST_PG_PASSWORD" psql \
-    --host=127.0.0.1 \
-    --port="$TEST_PORT" \
+  docker exec "$RESTORE_CONTAINER" psql \
     --username="$DB_USER" \
     --dbname="$DB_NAME" \
     --no-password \
