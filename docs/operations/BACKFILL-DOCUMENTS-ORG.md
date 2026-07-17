@@ -74,3 +74,37 @@ docker exec -i edms_postgres psql -U edms -d edms -v ON_ERROR_STOP=1 < lib/db/dr
 Reverts only rows still equal to what the backfill set; diverged rows are
 reported (`_rb_bf_diverged`) and left untouched; ABORTs on DB-identity mismatch
 or an empty artifact.
+
+---
+
+## Evidence Chain (why this backfill was trusted)
+The decision to adopt this backfill rests on a verified chain of evidence, not on
+row counts alone. For any future review:
+
+1. **Restore Verification (PASS on the VPS).** `restore-verify.sh` restored the
+   latest nightly backup into a throwaway container and matched live row counts
+   (users/orgs/documents/projects/audit_logs) — confirming backups are recoverable
+   before any change was contemplated.
+2. **Real-restore drill (PASS).** `backfill-docs-org-drill.sh` ran the entire
+   package against a real restore of the latest backup (`edms_20260717_020001.dump`),
+   not fixtures. Baseline matched production diagnosis: 64 documents, 57 NULL-org
+   under owned projects, 0 owner-less.
+3. **Forward = expected.** UPDATE 57 documents + 3 files + 4 revisions; post-check
+   `null_owned_docs_remaining = 0`, `doc_owner_mismatch = 0`.
+4. **Clean rollback = full revert.** Reverted 57/3/4 and returned `null_owned_docs`
+   to the baseline (57).
+5. **Diverged-row preservation.** A backfilled row changed to a different existing
+   org after apply is SKIPPED and reported by rollback (kept at its new value)
+   while a control row reverts to NULL.
+6. **Cross-database rejection.** The rollback artifact captured on the restored DB
+   was replayed against a *second, independent* database (distinct
+   `system_identifier`); the identity guard ABORTed — proving the artifact is bound
+   to its origin database, not merely to an editable text field. A committed
+   self-test (`backfill-docs-org-drill.selftest.sh`) proves a missing ABORT is
+   treated as a drill FAILURE (no false PASS).
+7. **0032 sequencing.** After the backfill, migration 0032 still backfills exactly
+   its 2 class-B1 files (project-14 files whose parent doc was already owned) and
+   nothing else — it remains independent and correct.
+
+Source of truth throughout: `projects.organization_id` (the project owner) — the
+same value the document create path writes and migration 0032 uses.
