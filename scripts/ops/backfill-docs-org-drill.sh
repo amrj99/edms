@@ -77,10 +77,32 @@ echo; log "===== 0032 AFTER BACKFILL (rows it still backfills, and why) ====="
 psqc -v ON_ERROR_STOP=1 < "$M0032"
 psqc -c "SELECT count(*) FILTER (WHERE organization_id IS NULL) files_still_null FROM document_files;"
 
-echo; log "===== ROLLBACK ====="
+echo; log "===== ROLLBACK (clean) — full revert to baseline ====="
 docker cp "$HOST_CSV" "$C:/tmp/_rb_backfill_docs_org.csv" >/dev/null
 psqc -v ON_ERROR_STOP=1 < "$RBK"
-psqc -c "SELECT count(*) FILTER (WHERE d.organization_id IS NULL AND p.organization_id IS NOT NULL) null_owned_docs_after_rollback FROM documents d JOIN projects p ON p.id=d.project_id;"
-log "(after rollback, null_owned_docs should return to the BASELINE value — full revert)"
+psqc -c "SELECT count(*) FILTER (WHERE d.organization_id IS NULL AND p.organization_id IS NOT NULL) null_owned_docs_after_clean_rollback FROM documents d JOIN projects p ON p.id=d.project_id;"
+log "(should equal the BASELINE null_owned_docs above — full revert)"
+
+echo; log "===== DIVERGED-ROW behavior ====="
+# Re-apply forward, change ONE backfilled doc, then roll back: that row must be
+# SKIPPED (still != NULL) while a control row reverts to NULL.
+psqc -v ON_ERROR_STOP=1 < "$FWD" >/dev/null
+DIV=$(awk -F, '$1=="doc"{print $2; exit}' "$HOST_CSV")
+CTL=$(awk -F, '$1=="doc"{c++; if(c==2){print $2; exit}}' "$HOST_CSV")
+psqc -c "UPDATE documents SET organization_id=999999 WHERE id=$DIV;" >/dev/null
+docker cp "$HOST_CSV" "$C:/tmp/_rb_backfill_docs_org.csv" >/dev/null
+psqc -v ON_ERROR_STOP=1 < "$RBK"
+psqc -c "SELECT (SELECT organization_id FROM documents WHERE id=$DIV) AS diverged_doc, (SELECT organization_id FROM documents WHERE id=$CTL) AS control_doc;"
+log "EXPECT diverged_doc=999999 (skipped/reported), control_doc=NULL (reverted)"
+
+echo; log "===== WRONG-DATABASE-IDENTITY behavior ====="
+# Tamper the artifact's system_identifier (the 15+ digit field) -> must ABORT.
+sed 's/,[0-9]\{15,\},/,9999999999999999,/' "$HOST_CSV" > "${HOST_CSV}.c"
+docker cp "${HOST_CSV}.c" "$C:/tmp/_rb_backfill_docs_org.csv" >/dev/null
+if psqc < "$RBK" 2>&1 | grep -qiE "ABORT: artifact DB identity"; then
+  log "RESULT: ABORT as expected (identity mismatch rejected — no rows changed)"
+else
+  log "RESULT: NO ABORT — INVESTIGATE"
+fi
 
 echo; log "===== DONE (throwaway torn down; production untouched) ====="
