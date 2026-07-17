@@ -89,11 +89,18 @@ echo; log "===== DIVERGED-ROW behavior ====="
 psqc -v ON_ERROR_STOP=1 < "$FWD" >/dev/null
 DIV=$(awk -F, '$1=="doc"{print $2; exit}' "$HOST_CSV")
 CTL=$(awk -F, '$1=="doc"{c++; if(c==2){print $2; exit}}' "$HOST_CSV")
-psqc -c "UPDATE documents SET organization_id=999999 WHERE id=$DIV;" >/dev/null
+DIV_TARGET=$(awk -F, -v d="$DIV" '$1=="doc" && $2==d {print $4; exit}' "$HOST_CSV")
+# Diverge to an EXISTING organization different from what the backfill set, so we
+# exercise the "current != target_org" skip path WITHOUT violating the
+# organization_id foreign key. ABORT if there is no valid alternative org.
+ALT=$(psqc -tAc "SELECT id FROM organizations WHERE id <> ${DIV_TARGET} ORDER BY id LIMIT 1" | tr -d '[:space:]')
+if [ -z "$ALT" ]; then log "DIVERGED TEST ABORT: no existing organization <> ${DIV_TARGET} available to diverge to."; exit 1; fi
+log "diverging doc $DIV from org ${DIV_TARGET} to existing org ${ALT} (FK-safe)"
+psqc -c "UPDATE documents SET organization_id=${ALT} WHERE id=$DIV;" >/dev/null
 docker cp "$HOST_CSV" "$C:/tmp/_rb_backfill_docs_org.csv" >/dev/null
 psqc -v ON_ERROR_STOP=1 < "$RBK"
 psqc -c "SELECT (SELECT organization_id FROM documents WHERE id=$DIV) AS diverged_doc, (SELECT organization_id FROM documents WHERE id=$CTL) AS control_doc;"
-log "EXPECT diverged_doc=999999 (skipped/reported), control_doc=NULL (reverted)"
+log "EXPECT diverged_doc=${ALT} (skipped/reported), control_doc=NULL (reverted)"
 
 echo; log "===== WRONG-DATABASE-IDENTITY behavior ====="
 # Tamper the artifact's system_identifier (the 15+ digit field) -> must ABORT.
