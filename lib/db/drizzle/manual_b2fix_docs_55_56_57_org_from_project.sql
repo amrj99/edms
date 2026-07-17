@@ -1,5 +1,5 @@
 -- =============================================================================
--- b2fix_docs_55_56_57_org_from_project.sql   (DATA-ONLY, MANUAL, journal-excluded)
+-- manual_b2fix_docs_55_56_57_org_from_project.sql   (DATA-ONLY, MANUAL, journal-excluded)
 -- =============================================================================
 -- Closes the limited "B2" set found by the 0032 read-only gate on production:
 -- documents 55/56/57 (project 1) whose organization_id IS NULL AND whose parent

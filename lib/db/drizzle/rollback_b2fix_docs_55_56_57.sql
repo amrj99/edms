@@ -1,7 +1,7 @@
 -- =============================================================================
 -- rollback_b2fix_docs_55_56_57.sql   (MANUAL, journal-excluded, fail-closed)
 -- =============================================================================
--- Reverts b2fix_docs_55_56_57_org_from_project.sql using the pre-image artifact
+-- Reverts manual_b2fix_docs_55_56_57_org_from_project.sql using the pre-image artifact
 -- captured immediately before it. Reverts a row (doc or file) to its NULL org
 -- ONLY IF it still holds the exact value the fix set (current == target). Any row
 -- changed after the fix is REPORTED and left untouched. Loads the artifact from a
