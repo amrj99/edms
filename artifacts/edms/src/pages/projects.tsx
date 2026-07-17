@@ -136,7 +136,7 @@ export default function Projects() {
     const projects = unwrapList<any>(data, "projects");
     if (orgFilter === "_all") return projects;
     return projects.filter((p: any) => String(p.organizationId) === orgFilter);
-  }, [data?.projects, orgFilter]);
+  }, [data, orgFilter]);
 
   return (
     <div className="space-y-6 animate-in fade-in">
