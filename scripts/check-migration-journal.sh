@@ -22,6 +22,7 @@
 #
 # Files that are intentionally excluded from the journal:
 #   rollback_*.sql  — manual rollback scripts, never run by the migrator
+#   manual_*.sql    — manual owner-run, gated data/ops fixes; never run by the migrator
 #
 # =============================================================================
 
@@ -82,9 +83,11 @@ registered=()
 while IFS= read -r sql_file; do
   filename=$(basename "$sql_file" .sql)
 
-  # Skip rollback scripts — these are manual recovery files, not migrations
-  if [[ "$filename" == rollback_* ]]; then
-    echo -e "  ${YELLOW}SKIP${RESET}  $filename.sql  (rollback script — excluded)"
+  # Skip manual owner-run scripts (rollbacks + gated data/ops fixes). These are
+  # never run by the drizzle migrator (which only executes journal entries); they
+  # are applied by hand under an operational gate, so they must NOT be journaled.
+  if [[ "$filename" == rollback_* || "$filename" == manual_* ]]; then
+    echo -e "  ${YELLOW}SKIP${RESET}  $filename.sql  (manual owner-run script — excluded)"
     continue
   fi
 
