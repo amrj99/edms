@@ -30,7 +30,26 @@ async function getOrgConfig(organizationId: number) {
   return cfg ?? null;
 }
 
-/** Build on-prem path: {storagePath}/{orgId}/{projectId}/{type}/{filename} */
+/**
+ * Build on-prem path: {storagePath}/{orgId}/{projectId}/{type}/{filename}
+ *
+ * CONSISTENCY FIX (not an architecture decision): the serve-URL builder, the
+ * upload-URL builder, the onpremise PUT handler and buildR2Key all encode a
+ * missing project as "0" (a 4-segment path). This function previously used a
+ * truthiness check (`if (projectId)`) that OMITTED the segment for null/0,
+ * producing a 3-segment path that diverged from where files are actually
+ * written and served. We align it with the other layers so no two layers
+ * produce different paths. The `?? 0` is an explicit null/undefined check (never
+ * truthiness), so a genuine 0 is not silently dropped.
+ *
+ * NOTE: "0" here only mirrors the CURRENT behaviour of the other layers; it is
+ * NOT a ratified long-term contract for representing "no project" — how "no
+ * project" should be encoded remains an open decision (storage-layer review).
+ *
+ * Kept module-internal on purpose: the stable public surface is requestUpload()/
+ * uploadBuffer(), which is what the consistency regression test drives. We do not
+ * widen the module API just to unit-test a helper.
+ */
 function buildOnPremPath(
   basePath: string,
   orgId: number,
@@ -38,10 +57,7 @@ function buildOnPremPath(
   fileType: string,
   filename: string,
 ): string {
-  const segments = [basePath, String(orgId)];
-  if (projectId) segments.push(String(projectId));
-  segments.push(fileType, filename);
-  return path.join(...segments);
+  return path.join(basePath, String(orgId), String(projectId ?? 0), fileType, filename);
 }
 
 export type StorageMode = "cloud" | "onpremise" | "s3" | "r2";
@@ -131,10 +147,10 @@ export async function getR2PresignedGetUrl(
  */
 function buildR2Key(orgId: number, projectId: number | null, filename: string): string {
   const safeFile = `${Date.now()}_${path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-  if (projectId) {
-    return `org_${orgId}/projects/${projectId}/${safeFile}`;
-  }
-  return `org_${orgId}/projects/0/${safeFile}`;
+  // Consistency with buildOnPremPath and the serve/upload-URL builders: encode a
+  // missing project via an explicit null/undefined check (not truthiness). "0"
+  // mirrors the current behaviour only; it is not a ratified "no project" contract.
+  return `org_${orgId}/projects/${projectId ?? 0}/${safeFile}`;
 }
 
 // ─── Serve-URL builders (single source of truth for the stored file_url) ──────
