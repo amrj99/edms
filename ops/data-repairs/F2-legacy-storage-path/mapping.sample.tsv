@@ -1,0 +1,11 @@
+# نموذج شكل mapping.gen.tsv كما يُصدره 00_inventory.sql (مثال توضيحي — القيم الحقيقية تأتي من DB الحيّة).
+# لا يُحرَّر يدويًا كمصدر حقيقة؛ الجرد الحيّ هو الحَكَم، وأي mapping.tsv يدوي يُقارَن به فيتوقف عند أي فرق.
+# مفصول Tab. الأعمدة: tbl  id  org_id  project_id  old_url  new_url  filename
+# 7 صفوف = 2 document_files + 4 document_revisions + 1 correspondence_attachment، 4 أسماء ملفات فريدة.
+document_files	3	1	1	/api/storage/onpremise/1/document/1699_a.pdf	/api/storage/onpremise/1/1/document/1699_a.pdf	1699_a.pdf
+document_files	4	1	1	/api/storage/onpremise/1/document/1699_b.pdf	/api/storage/onpremise/1/1/document/1699_b.pdf	1699_b.pdf
+document_revisions	11	1	1	/api/storage/onpremise/1/document/1699_a.pdf	/api/storage/onpremise/1/1/document/1699_a.pdf	1699_a.pdf
+document_revisions	12	1	1	/api/storage/onpremise/1/document/1699_b.pdf	/api/storage/onpremise/1/1/document/1699_b.pdf	1699_b.pdf
+document_revisions	13	1	1	/api/storage/onpremise/1/document/1699_c.pdf	/api/storage/onpremise/1/1/document/1699_c.pdf	1699_c.pdf
+document_revisions	14	1	1	/api/storage/onpremise/1/document/1699_c.pdf	/api/storage/onpremise/1/1/document/1699_c.pdf	1699_c.pdf
+correspondence_attachments	5	1	1	/api/storage/onpremise/1/document/1699_d.pdf	/api/storage/onpremise/1/1/document/1699_d.pdf	1699_d.pdf
