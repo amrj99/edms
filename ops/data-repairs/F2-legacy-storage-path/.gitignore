@@ -1,0 +1,9 @@
+# مخرجات حيّة لحزمة إصلاح F2 — لا تُرفع إلى Git (قد تحوي معلومات تشغيلية داخلية).
+# السكربتات والوثائق ونموذج الـmapping تبقى مُتتبَّعة؛ فقط النواتج وقت التشغيل تُستبعَد.
+mapping.gen.tsv
+mapping.mig.tsv
+preimage.tsv
+dry_run_report.txt
+dry_run.console.log
+*.log
+*.runtime.log
