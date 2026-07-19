@@ -9,11 +9,14 @@
 # سياسة العزل: يُقبل 403 أو 404 بحسب سياسة النظام الحالية.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/config.sh"
+
 BASE="${BASE_URL:?export BASE_URL=https://<host>}"
 AUTH="${AUTH_TOKEN:?export AUTH_TOKEN=<authorized org1 user token>}"
 OTHER="${OTHER_TOKEN:?export OTHER_TOKEN=<different-org user token>}"
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
-DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
+DST_DIR="$PHYSICAL_DST_DIR"
 GEN="${1:-mapping.gen.tsv}"
 AUTH_HEADER="${AUTH_HEADER_NAME:-Authorization}"   # عدّله لو النظام يستخدم Cookie بدل Bearer
 pass=0

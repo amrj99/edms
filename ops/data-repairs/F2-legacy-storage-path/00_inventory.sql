@@ -1,6 +1,10 @@
 -- 00_inventory.sql — Batch 2 (F2) — الجرد الحيّ = المصدر الموثوق الوحيد للـmapping.
 -- قراءة فقط. لا UPDATE/DELETE/DDL.
 --
+-- تزامن العقد: بادئات الـDB أدناه (/app/uploads/1/document و /api/storage/onpremise/1/1/document)
+-- يجب أن تطابق DB_OLD_URL_PREFIX و DB_NEW_URL_PREFIX في config.sh. يفرض 01_preflight هذا
+-- التطابق بحارس انحراف (grep) قبل استخدام هذا الجرد — أي اختلاف يُوقِف التشغيل.
+--
 -- العقد (Canonical Contract) — مُثبَت من الكود/التاريخ + الجرد الحيّ:
 --   • OLD (أثر تاريخي يُرحَّل): file_url مسار فيزيائي مطلق ذو 3 مقاطع، بلا مقطع مشروع:
 --       '^/app/uploads/1/document/[^/]+$'

@@ -2,45 +2,57 @@
 # 02_copy.sh — Batch 2 (F2) — نسخ الملفات الأربعة الفريدة (Copy لا Move). لا يمسّ المصدر. لا يمسّ DB.
 # يعمل على mapping.gen.tsv (مخرَج 01). idempotent وآمن للإعادة.
 #
-# ملاحظة إلزامية (طلب المالك): cp -n وحده لا يكفي.
-#   • إن كانت الوجهة غير موجودة → cp ثم ضبط الصلاحيات.
-#   • إن كانت الوجهة موجودة → نتحقق من الحجم وsha256 مقابل المصدر؛ عند أي اختلاف نتوقف فورًا (لا استبدال).
-# لا حذف لأي مصدر ضمن Batch 2 إطلاقًا.
+# المصدر/الوجهة من config.sh (PHYSICAL_SRC_DIR / PHYSICAL_DST_DIR) — لا خلط مع بادئات الـDB.
+#
+# fail-closed (طلب المالك):
+#   • فحص مسبق all-or-nothing لكل الملفات الأربعة قبل نسخ أيّ ملف:
+#       - أي مصدر مفقود/غير مقروء → توقف (لا ننسخ شيئًا).
+#       - أي وجهة موجودة بمحتوى مختلف (size/sha256) → توقف (تعارض، لا استبدال).
+#   • بعد نجاح الفحص المسبق فقط ننسخ. Copy لا Move. لا حذف لأي مصدر إطلاقًا.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/config.sh"
+
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"     # OLD contract path (source of copy)
-DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
 GEN="${1:-mapping.gen.tsv}"
-declare -A done_file
 
 fail(){ echo "COPY ABORT: $*" >&2; exit 1; }
 
-while IFS=$'\t' read -r tbl id org proj old_url new_url filename; do
-  [[ "$filename" =~ ^#|^$ ]] && continue
-  [[ -n "${done_file[$filename]:-}" ]] && continue     # ملف فريد يُنسخ مرة واحدة (7 صفوف → 4 ملفات)
-  done_file[$filename]=1
-  src="$SRC_DIR/$filename"; dst="$DST_DIR/$filename"
+# قائمة الملفات الفريدة من الـmapping
+mapfile -t FILES < <(cut -f7 "$GEN" | awk 'NF' | sort -u)
+[[ "${#FILES[@]}" -eq 4 ]] || fail "expected 4 unique files, got ${#FILES[@]}"
 
-  docker exec "$APP" test -r "$src" || fail "source unreadable: $src"
-
+echo "── فحص مسبق all-or-nothing (لا نسخ قبل نجاح الكل) ──"
+for filename in "${FILES[@]}"; do
+  src="$PHYSICAL_SRC_DIR/$filename"; dst="$PHYSICAL_DST_DIR/$filename"
+  docker exec "$APP" test -r "$src" || fail "source missing/unreadable: $src"
   if docker exec "$APP" test -e "$dst"; then
     ss=$(docker exec "$APP" stat -c %s "$src"); ds=$(docker exec "$APP" stat -c %s "$dst")
     sh=$(docker exec "$APP" sha256sum "$src" | awk '{print $1}')
     dh=$(docker exec "$APP" sha256sum "$dst" | awk '{print $1}')
     { [[ "$ss" == "$ds" ]] && [[ "$sh" == "$dh" ]]; } \
       || fail "dst exists but DIFFERS (size/sha) — refusing to overwrite: $dst"
-    echo "  = موجود ومطابق، تخطٍّ آمن: $dst"
-    continue
+    echo "  = موجود ومطابق (سيُتخطّى بأمان): $dst"
+  else
+    echo "  + جاهز للنسخ: $src → $dst"
   fi
+done
+echo "الفحص المسبق نجح (4/4)."
 
+echo "── النسخ (Copy لا Move) ──"
+for filename in "${FILES[@]}"; do
+  src="$PHYSICAL_SRC_DIR/$filename"; dst="$PHYSICAL_DST_DIR/$filename"
+  if docker exec "$APP" test -e "$dst"; then
+    echo "  = موجود ومطابق، تخطٍّ: $dst"; continue
+  fi
   docker exec "$APP" sh -c "
     set -e
-    mkdir -p '$DST_DIR' && chmod 0750 '$DST_DIR'
-    cp '$src' '$dst'            # Copy فقط — المصدر يبقى
+    mkdir -p '$PHYSICAL_DST_DIR' && chmod 0750 '$PHYSICAL_DST_DIR'
+    cp '$src' '$dst'
     chmod 0640 '$dst'
   " || fail "copy failed: $src → $dst"
   echo "  + نُسخ → $dst"
-done < "$GEN"
+done
 
 echo "COPY DONE — 4 ملفات فريدة، المصادر سليمة (Copy لا Move). التالي: 03_verify.sh"
