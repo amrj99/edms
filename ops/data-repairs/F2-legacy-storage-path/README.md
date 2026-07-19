@@ -22,17 +22,30 @@
 - الكيانات الأمّ كلها ضمن **`organization_id = 1`** و**`project_id = 1`**.
 - الاكتشاف بالعلاقات (project=1/org=1) والعقد OLD **حارس صريح** (لا regex عام).
 
+## المفاهيم الأربعة (config.sh — مصدر موحّد، لا تُخلط)
+أثبت الـdry-run + find **انفصالًا ثلاثيًا** بين مكان البايتات وما يسجّله الـDB والوجهة القانونية. لذا فُصلت المفاهيم صراحةً في `config.sh`، ويُشغَّل حارس انحراف في `01_preflight` يمنع اختلافها عن `00_inventory.sql`:
+
+| ثابت | القيمة | الدور |
+|---|---|---|
+| `DB_OLD_URL_PREFIX` | `/app/uploads/1/document` | ما يسجّله الـDB الآن (يُطابَق/يُحرَس به فقط) |
+| `DB_NEW_URL_PREFIX` | `/api/storage/onpremise/1/1/document` | عقد الخدمة القانوني بعد الترحيل |
+| `PHYSICAL_SRC_DIR` | `/app/uploads/1/0/document` | **مكان البايتات فعلًا** (مصدر النسخ) — ليس نفسه `DB_OLD_URL_PREFIX` |
+| `PHYSICAL_DST_DIR` | `/app/uploads/1/1/document` | وجهة النسخ لتُخدَم عبر `DB_NEW_URL_PREFIX` |
+
+> قرار المسار (المالك): **المسار A** — نسخ البايتات من `/1/0/` إلى `/1/1/` ثم تحديث الـDB إلى عقد `/1/1/`، لأن تثبيت ملفات `project=1` تحت بادئة `/0/` عدم اتساق يضرّ التدقيق/المصالحة مستقبلًا.
+> **نتيجة فحص الكود (serve-authz):** التفويض يشتق `project_id`/`organization_id` **من قاعدة البيانات لا من مقطع مسار الرابط** (`findPartyProjectIdForServeUrl`/`findOrgForFileUrl`)؛ فـ`project=0` في الرابط لا يكسر الصلاحيات فنّيًا — لكن المسار A يبقى الصحيح لأسباب الاتساق/التدقيق أعلاه.
+
 ## الوجهة القانونية
-- فيزيائي: `/app/uploads/1/1/document/<filename>`
-- الرابط: `/api/storage/onpremise/1/1/document/<filename>`
-- ملاحظة: مصدر النسخ هو مسار العقد القديم نفسه `/app/uploads/1/document/<f>` (`SRC_DIR` الافتراضي)؛ قسم PHYSICAL READINESS في الـdry-run يؤكّد وجود البايتات فعليًا.
+- فيزيائي: `/app/uploads/1/1/document/<filename>` (= `PHYSICAL_DST_DIR`)
+- الرابط: `/api/storage/onpremise/1/1/document/<filename>` (= `DB_NEW_URL_PREFIX`)
+- مصدر النسخ: `/app/uploads/1/0/document/<f>` (= `PHYSICAL_SRC_DIR`)؛ قسم PHYSICAL READINESS في الـdry-run يؤكّد وجود البايتات، ويفحص الوجهة **مستقلًّا عن المصدر**.
 
 ## التسلسل (Sequence) — كل خطوة خلف موافقة مستقلة
 | # | ملف | الفعل | يمسّ بيانات؟ |
 |---|---|---|---|
 | — | `00_inventory.sql` | جرد حيّ (علاقة+حارس) + توليد mapping | قراءة |
 | 1 | `00_dry_run.sh` | جرد + preflight + توليد mapping/preimage + تقرير | قراءة/التقاط (لا طفرة على الـVPS) |
-| 2 | `02_copy.sh` | نسخ 4 ملفات `/app/uploads/1/document/` → `/app/uploads/1/1/document/` (**Copy لا Move**) + بوّابة sha للهدف الموجود | ملفات (نسخ) |
+| 2 | `02_copy.sh` | نسخ 4 ملفات `/app/uploads/1/0/document/` → `/app/uploads/1/1/document/` (**Copy لا Move**) + فحص مسبق all-or-nothing + بوّابة sha للهدف الموجود | ملفات (نسخ) |
 | 3 | `03_verify.sh` | size + sha256 + `cmp` + قابلية القراءة بمستخدم التطبيق | قراءة |
 | 4 | `04_migrate.sql` | UPDATE 7 صفوف، معاملة واحدة، fail-closed، per-table + الإجمالي | DB |
 | 5 | `06_download_and_perms_test.sh` | تنزيل بجلسة مخوّلة حقيقية + عزل cross-org (403/404) | قراءة |
@@ -64,4 +77,4 @@
 المخرجات الحيّة (`mapping.gen.tsv`, `mapping.mig.tsv`, `preimage.tsv`, `dry_run_report.txt`, `*.log`) **لا تُرفع إلى Git** (انظر `.gitignore`). لا تحتوي tokens بحسب التصميم، لكنها تحوي معلومات تشغيلية داخلية (أسماء حاويات/قاعدة بيانات، معرّفات سجلات، أسماء ملفات، مسارات، روابط مستندات) — تُشارَك للمراجعة الخاصة فقط ولا تُنشر علنًا.
 
 ## المتغيّرات المطلوبة عند التشغيل (تُضبط من المشغّل)
-`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`, `SRC_DIR=/app/uploads/1/document`, `DST_DIR=/app/uploads/1/1/document` (افتراضيات قابلة للتجاوز). اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).
+`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`. مسارات العقد الأربعة تأتي من `config.sh` (`PHYSICAL_SRC_DIR=/app/uploads/1/0/document`, `PHYSICAL_DST_DIR=/app/uploads/1/1/document`, `DB_OLD_URL_PREFIX=/app/uploads/1/document`, `DB_NEW_URL_PREFIX=/api/storage/onpremise/1/1/document`) وكلها قابلة للتجاوز عبر البيئة. اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).

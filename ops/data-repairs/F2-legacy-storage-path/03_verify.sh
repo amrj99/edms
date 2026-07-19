@@ -4,9 +4,10 @@
 # (طلب المالك: لا يُحدَّث DB قبل نجاح التحقق للأربعة ملفات كلها.)
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/config.sh"
+
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"     # OLD contract path (source of copy)
-DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
 APP_UID="${APP_UID:-node}"                 # المستخدم الذي يقرأ به التطبيق الملفات
 GEN="${1:-mapping.gen.tsv}"
 declare -A done_file
@@ -18,7 +19,7 @@ while IFS=$'\t' read -r tbl id org proj old_url new_url filename; do
   [[ "$filename" =~ ^#|^$ ]] && continue
   [[ -n "${done_file[$filename]:-}" ]] && continue
   done_file[$filename]=1
-  src="$SRC_DIR/$filename"; dst="$DST_DIR/$filename"
+  src="$PHYSICAL_SRC_DIR/$filename"; dst="$PHYSICAL_DST_DIR/$filename"
 
   ss=$(docker exec "$APP" stat -c %s "$src"); ds=$(docker exec "$APP" stat -c %s "$dst")
   [[ "$ss" == "$ds" ]] || fail "size mismatch [$filename]: src=$ss dst=$ds"

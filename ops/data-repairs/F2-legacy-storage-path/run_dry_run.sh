@@ -16,6 +16,7 @@
 set -euo pipefail
 
 PKG="$(cd "$(dirname "$0")" && pwd)"
+. "$PKG/config.sh"
 REPO="$(git -C "$PKG" rev-parse --show-toplevel)"
 echo "repo=$REPO  package=$PKG  HEAD=$(git -C "$REPO" rev-parse --short HEAD)"
 
@@ -62,28 +63,29 @@ else
 fi
 
 PGDB="${PGDB:-edms}"; PGUSER="${PGUSER:-edms}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"
-DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
-export APP_CONTAINER DB_CONTAINER PGDB PGUSER SRC_DIR DST_DIR
+# PHYSICAL_SRC_DIR / PHYSICAL_DST_DIR / DB_*_URL_PREFIX come from config.sh.
+export APP_CONTAINER DB_CONTAINER PGDB PGUSER PHYSICAL_SRC_DIR PHYSICAL_DST_DIR DB_OLD_URL_PREFIX DB_NEW_URL_PREFIX SRC_DIR DST_DIR
 
 # DB connectivity is required (inventory is meaningless without it).
 docker exec "$DB_CONTAINER" psql -U "$PGUSER" -d "$PGDB" -tAc 'SELECT 1' >/dev/null 2>&1 \
   || { echo "STOP: cannot connect psql -U $PGUSER -d $PGDB inside $DB_CONTAINER. Fix PGUSER/PGDB."; exit 2; }
 
-# SRC_DIR precheck is diagnostic only (non-blocking).
-if docker exec "$APP_CONTAINER" test -d "$SRC_DIR"; then
-  echo "SRC_DIR_PRECHECK: exists ($SRC_DIR)"
+# Physical-source precheck is diagnostic only (non-blocking).
+if docker exec "$APP_CONTAINER" test -d "$PHYSICAL_SRC_DIR"; then
+  echo "SRC_DIR_PRECHECK: exists ($PHYSICAL_SRC_DIR)"
 else
-  echo "SRC_DIR_PRECHECK: MISSING ($SRC_DIR) - dry-run will record and continue"
+  echo "SRC_DIR_PRECHECK: MISSING ($PHYSICAL_SRC_DIR) - dry-run will record and continue"
 fi
 
 echo "======== FINAL VALUES (dry-run only) ========"
-echo "  APP_CONTAINER = $APP_CONTAINER"
-echo "  DB_CONTAINER  = $DB_CONTAINER"
-echo "  PGDB          = $PGDB"
-echo "  PGUSER        = $PGUSER"
-echo "  SRC_DIR       = $SRC_DIR"
-echo "  DST_DIR       = $DST_DIR"
+echo "  APP_CONTAINER    = $APP_CONTAINER"
+echo "  DB_CONTAINER     = $DB_CONTAINER"
+echo "  PGDB             = $PGDB"
+echo "  PGUSER           = $PGUSER"
+echo "  DB_OLD_URL_PREFIX= $DB_OLD_URL_PREFIX"
+echo "  DB_NEW_URL_PREFIX= $DB_NEW_URL_PREFIX"
+echo "  PHYSICAL_SRC_DIR = $PHYSICAL_SRC_DIR"
+echo "  PHYSICAL_DST_DIR = $PHYSICAL_DST_DIR"
 echo "============================================="
 
 cd "$PKG"
