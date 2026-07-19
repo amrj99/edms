@@ -11,8 +11,9 @@
 #   placeholders == argument_count
 # where placeholders = count of `%` after removing every literal `%%`.
 #
-# Hermetic: pure awk/bash, NO database needed. (A real-PostgreSQL compile smoke
-# also exists: tests/compile-check.sql — run it on a scratch PG in CI/VPS.)
+# Hermetic: pure awk/bash, NO database needed. (A real-PostgreSQL compile proof
+# of the ACTUAL files also exists: tests/compile-check-real.sh — spins a throwaway
+# PG container and runs the real 04_migrate.sql/05_rollback.sql. No replica.)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
