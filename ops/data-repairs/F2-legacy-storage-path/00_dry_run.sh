@@ -6,7 +6,7 @@ set -euo pipefail
 
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
 DB="${DB_CONTAINER:?export DB_CONTAINER=<db container>}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/0/document}"
+SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"
 DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
 MANUAL_MAP="${1:-}"
 REPORT="dry_run_report.txt"

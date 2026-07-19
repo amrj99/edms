@@ -28,7 +28,8 @@ docker(){
     psql)
       if printf '%s ' "$@" | grep -q -- '-f'; then
         # synthetic inventory: 7 rows, 4 unique files (a,b,c,d); c shared by 2 revisions
-        local b='/api/storage/onpremise/1/document'; local n='/api/storage/onpremise/1/1/document'
+        # OLD contract = /app/uploads/1/document/<f>  ->  NEW = /api/storage/onpremise/1/1/document/<f>
+        local b='/app/uploads/1/document'; local n='/api/storage/onpremise/1/1/document'
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' document_files            3  1 1 "$b/1699_a.pdf" "$n/1699_a.pdf" 1699_a.pdf
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' document_files            4  1 1 "$b/1699_b.pdf" "$n/1699_b.pdf" 1699_b.pdf
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' document_revisions        11 1 1 "$b/1699_a.pdf" "$n/1699_a.pdf" 1699_a.pdf
@@ -56,7 +57,7 @@ run_case(){ # $1=label  $2=DRY_RUN(1|0)  $3=MISSING(basename|"")
   OUT="$WORK/out.$1"
   ( cd "$WORK"
     export APP_CONTAINER=app DB_CONTAINER=db \
-           SRC_DIR=/app/uploads/1/0/document DST_DIR=/app/uploads/1/1/document \
+           SRC_DIR=/app/uploads/1/document DST_DIR=/app/uploads/1/1/document \
            DRY_RUN="$2" MISSING="$3"
     set --                 # clear positional params so sourced script sees no MANUAL_MAP ($1)
     source ./01_preflight.sh

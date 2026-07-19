@@ -6,28 +6,33 @@
 
 ---
 
-## السبب الجذري (Root Cause)
-باني المسار المحلي `buildOnPremPath` كان يستخدم فحص truthiness (`if (projectId)`) فيُسقط مقطع المشروع عند `null/0`، مُنتجًا `file_url` من **3 مقاطع** (`/api/storage/onpremise/1/document/<f>`) بينما بقية الطبقات (serve/upload URL, PUT handler, R2 key) تُرمّز المشروع المفقود كـ`0` في مسار **4 مقاطع**. النتيجة: 7 سجلات تاريخية في قاعدة الإنتاج تحمل `file_url` من 3 مقاطع لا يستطيع الـserve route حلّه → ملفات غير قابلة للاسترجاع.
+## العقد (Canonical Contract) — مُثبَت من الكود/التاريخ + الجرد الحيّ
+- **OLD (أثر تاريخي يُرحَّل):** `^/app/uploads/1/document/[^/]+$` — `file_url` مسار فيزيائي مطلق ذو 3 مقاطع بلا مقطع مشروع.
+- **NEW (العقد الرسمي الحالي، لا يُمَسّ):** `^/api/storage/onpremise/1/1/document/[^/]+$` — صيغة رابط الخدمة التي يقرؤها serve route.
+- **التحويل:** استبدال البادئة فقط `/app/uploads/1/document/` → `/api/storage/onpremise/1/1/document/` (اسم الملف يبقى).
 
-- إصلاح الكود (منع التكرار مستقبلًا) تمّ ودُمج بشكل منفصل: **F2b** — `buildOnPremPath`/`buildR2Key` موحّدتان على `projectId ?? 0` (merge SHA `207f5ce`). هذه الحزمة تعالج **البيانات التاريخية** المتبقية فقط.
-- تشخيص ميداني سابق أثبت أن البايتات موجودة فعليًا تحت `/app/uploads/1/0/document/` (ليست فقدان بيانات، بل مسار قديم في DB).
+## السبب الجذري (Root Cause) — بالأدلة
+1. **لماذا خُزِّن القديم كمسار fs؟** أقدم معالج مستندات كان يأخذ `fileUrl` من جسم الطلب، والعميل يخزّن ما تُعيده `requestUpload` القديمة: `filePath`/`objectPath` = `buildOnPremPath` (مسار فيزيائي مطلق `{basePath}/{org}/{type}/{file}`). مع `basePath=/app/uploads` وعلّة truthiness في `buildOnPremPath` (إسقاط مقطع المشروع) → `/app/uploads/1/document/<f>`.
+2. **عقد رسمي أم Bug؟** Bug تاريخي، لا عقد مُعتمَد. لاحقًا وُحِّد النظام على العقد الرسمي = صيغة رابط الخدمة (الكود الحالي يخزّن `stored.serveUrl`). إصلاح الكود لمنع التكرار تمّ ودُمج منفصلًا: **F2b** (`buildOnPremPath`/`buildR2Key` على `projectId ?? 0`, merge `207f5ce`). هذه الحزمة تعالج **البيانات التاريخية** فقط.
+3. **شكل ثالث؟** داخل النطاق (org=1/project=1) شكلان فقط: OLD و NEW. أشكال أخرى (`s3://`, `/mnt/nas/`, `seed/`, `/1/15/`, `/0/0/uploads/`) تخصّ مؤسسات/بيئات/مشاريع أخرى — خارج النطاق. العقد **fail-closed**: أي صفّ داخل النطاق بمسار `/app/uploads/%` لا يطابق OLD بالضبط → توقف (شكل مجهول)، دون توسيع الاكتشاف.
 
 ## النطاق (Scope)
-- **7 سجلات** موزّعة: `document_files` (2) + `document_revisions` (4) + `correspondence_attachments` (1).
+- **7 سجلات** (بالعقد OLD): `document_files` (2) + `document_revisions` (4) + `correspondence_attachments` (1).
 - **4 ملفات فيزيائية فريدة** (بعض السجلات تتشارك نفس الملف — مثل مراجعتين لنفس الملف).
-- الكيانات الأمّ كلها ضمن **`organization_id = 1`** و**`project_id = 1`** (الوجهة القانونية `/1/1/`).
-- الاكتشاف بالعلاقات (project=1/org=1) و`file_url` التاريخي **حارس** لا معيارًا أساسيًا.
+- الكيانات الأمّ كلها ضمن **`organization_id = 1`** و**`project_id = 1`**.
+- الاكتشاف بالعلاقات (project=1/org=1) والعقد OLD **حارس صريح** (لا regex عام).
 
 ## الوجهة القانونية
 - فيزيائي: `/app/uploads/1/1/document/<filename>`
 - الرابط: `/api/storage/onpremise/1/1/document/<filename>`
+- ملاحظة: مصدر النسخ هو مسار العقد القديم نفسه `/app/uploads/1/document/<f>` (`SRC_DIR` الافتراضي)؛ قسم PHYSICAL READINESS في الـdry-run يؤكّد وجود البايتات فعليًا.
 
 ## التسلسل (Sequence) — كل خطوة خلف موافقة مستقلة
 | # | ملف | الفعل | يمسّ بيانات؟ |
 |---|---|---|---|
 | — | `00_inventory.sql` | جرد حيّ (علاقة+حارس) + توليد mapping | قراءة |
 | 1 | `00_dry_run.sh` | جرد + preflight + توليد mapping/preimage + تقرير | قراءة/التقاط (لا طفرة على الـVPS) |
-| 2 | `02_copy.sh` | نسخ 4 ملفات `/1/0/` → `/1/1/` (**Copy لا Move**) + بوّابة sha للهدف الموجود | ملفات (نسخ) |
+| 2 | `02_copy.sh` | نسخ 4 ملفات `/app/uploads/1/document/` → `/app/uploads/1/1/document/` (**Copy لا Move**) + بوّابة sha للهدف الموجود | ملفات (نسخ) |
 | 3 | `03_verify.sh` | size + sha256 + `cmp` + قابلية القراءة بمستخدم التطبيق | قراءة |
 | 4 | `04_migrate.sql` | UPDATE 7 صفوف، معاملة واحدة، fail-closed، per-table + الإجمالي | DB |
 | 5 | `06_download_and_perms_test.sh` | تنزيل بجلسة مخوّلة حقيقية + عزل cross-org (403/404) | قراءة |
@@ -59,4 +64,4 @@
 المخرجات الحيّة (`mapping.gen.tsv`, `mapping.mig.tsv`, `preimage.tsv`, `dry_run_report.txt`, `*.log`) **لا تُرفع إلى Git** (انظر `.gitignore`). لا تحتوي tokens بحسب التصميم، لكنها تحوي معلومات تشغيلية داخلية (أسماء حاويات/قاعدة بيانات، معرّفات سجلات، أسماء ملفات، مسارات، روابط مستندات) — تُشارَك للمراجعة الخاصة فقط ولا تُنشر علنًا.
 
 ## المتغيّرات المطلوبة عند التشغيل (تُضبط من المشغّل)
-`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`, `SRC_DIR=/app/uploads/1/0/document`, `DST_DIR=/app/uploads/1/1/document` (افتراضيات قابلة للتجاوز). اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).
+`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`, `SRC_DIR=/app/uploads/1/document`, `DST_DIR=/app/uploads/1/1/document` (افتراضيات قابلة للتجاوز). اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).

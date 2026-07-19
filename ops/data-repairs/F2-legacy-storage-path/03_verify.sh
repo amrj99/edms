@@ -5,7 +5,7 @@
 set -euo pipefail
 
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/0/document}"
+SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"     # OLD contract path (source of copy)
 DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
 APP_UID="${APP_UID:-node}"                 # المستخدم الذي يقرأ به التطبيق الملفات
 GEN="${1:-mapping.gen.tsv}"

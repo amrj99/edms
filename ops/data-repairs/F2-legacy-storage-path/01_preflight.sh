@@ -18,7 +18,7 @@ set -euo pipefail
 APP="${APP_CONTAINER:?export APP_CONTAINER=<app container>}"
 DB="${DB_CONTAINER:?export DB_CONTAINER=<db container>}"
 PGUSER="${PGUSER:-edms}"; PGDB="${PGDB:-edms}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/0/document}"   # حيث توجد البايتات فعليًا (أثبته find)
+SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"     # مسار العقد القديم نفسه (fs path)؛ الفحص التشخيصي يؤكّد وجود البايتات
 DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"   # الوجهة القانونية للمشروع 1
 MANUAL_MAP="${1:-}"                                # اختياري: mapping.tsv يدوي للمقارنة
 DRY_RUN="${DRY_RUN:-0}"                            # 1 = تشخيص (سجّل ولا تُوقِف)؛ غير ذلك = صارم
