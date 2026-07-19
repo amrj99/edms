@@ -64,14 +64,24 @@ for f in 04_migrate.sql 05_rollback.sql; do
 
   bad="$(printf '%s\n' "$out" | grep -Ec "$BAD_RE")"
   guard="$(printf '%s\n' "$out" | grep -Fc "$GUARD")"
-  echo "diagnostics[$f]: bad_patterns=$bad  guard_hits=$guard"
+  # the LAST ERROR line in the output (psql prints 'psql:...: ERROR:  <msg>')
+  last_error="$(printf '%s\n' "$out" | grep -E 'ERROR:' | tail -1)"
+  echo "diagnostics[$f]: psql_exit=$psql_rc  bad_patterns=$bad  guard_hits=$guard"
+  echo "diagnostics[$f]: last_error=${last_error:-<none>}"
+
+  # Success requires ALL THREE (hardened per review):
+  #   (1) psql exited non-zero (we EXPECT to stop at the guard, not COMMIT)
+  #   (2) the LAST ERROR line is EXACTLY the guard (not merely present somewhere)
+  #   (3) none of the forbidden error patterns appear anywhere
+  last_error_is_guard=0
+  case "$last_error" in *"ERROR:  ${GUARD}") last_error_is_guard=1 ;; esac
 
   if [ "$bad" -ne 0 ]; then
     echo "RESULT[$f]: COMPILE FAIL — forbidden error present (RAISE/syntax/relation/file)"; overall=1
-  elif [ "$guard" -eq 1 ]; then
-    echo "RESULT[$f]: COMPILE OK — compiled, reached its own guard exactly once"
+  elif [ "$psql_rc" -ne 0 ] && [ "$last_error_is_guard" -eq 1 ] && [ "$guard" -eq 1 ]; then
+    echo "RESULT[$f]: COMPILE OK — compiled, entered DO, stopped exactly at its own guard"
   else
-    echo "RESULT[$f]: UNEXPECTED — guard_hits=$guard (expected exactly 1); review output"; overall=1
+    echo "RESULT[$f]: FAIL — need psql_exit!=0 (got $psql_rc), last ERROR == guard (got: ${last_error:-<none>}), guard_hits==1 (got $guard)"; overall=1
   fi
 done
 
