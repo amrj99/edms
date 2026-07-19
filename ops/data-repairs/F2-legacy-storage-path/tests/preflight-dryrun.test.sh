@@ -57,7 +57,7 @@ run_case(){ # $1=label  $2=DRY_RUN(1|0)  $3=MISSING(basename|"")
   OUT="$WORK/out.$1"
   ( cd "$WORK"
     export APP_CONTAINER=app DB_CONTAINER=db \
-           SRC_DIR=/app/uploads/1/0/document DST_DIR=/app/uploads/1/1/document \
+           SRC_DIR=/app/uploads/1/document DST_DIR=/app/uploads/1/1/document \
            DRY_RUN="$2" MISSING="$3"
     set --                 # clear positional params so sourced script sees no MANUAL_MAP ($1)
     source ./01_preflight.sh

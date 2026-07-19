@@ -64,4 +64,4 @@
 المخرجات الحيّة (`mapping.gen.tsv`, `mapping.mig.tsv`, `preimage.tsv`, `dry_run_report.txt`, `*.log`) **لا تُرفع إلى Git** (انظر `.gitignore`). لا تحتوي tokens بحسب التصميم، لكنها تحوي معلومات تشغيلية داخلية (أسماء حاويات/قاعدة بيانات، معرّفات سجلات، أسماء ملفات، مسارات، روابط مستندات) — تُشارَك للمراجعة الخاصة فقط ولا تُنشر علنًا.
 
 ## المتغيّرات المطلوبة عند التشغيل (تُضبط من المشغّل)
-`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`, `SRC_DIR=/app/uploads/1/0/document`, `DST_DIR=/app/uploads/1/1/document` (افتراضيات قابلة للتجاوز). اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).
+`APP_CONTAINER`, `DB_CONTAINER` (إلزاميان)؛ `PGDB=edms`, `PGUSER=edms`, `SRC_DIR=/app/uploads/1/document`, `DST_DIR=/app/uploads/1/1/document` (افتراضيات قابلة للتجاوز). اختبار التنزيل يتطلب `BASE_URL`, `AUTH_TOKEN`, `OTHER_TOKEN` (جلسات حقيقية يوفّرها المشغّل).
