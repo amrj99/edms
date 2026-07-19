@@ -62,7 +62,7 @@ else
 fi
 
 PGDB="${PGDB:-edms}"; PGUSER="${PGUSER:-edms}"
-SRC_DIR="${SRC_DIR:-/app/uploads/1/0/document}"
+SRC_DIR="${SRC_DIR:-/app/uploads/1/document}"
 DST_DIR="${DST_DIR:-/app/uploads/1/1/document}"
 export APP_CONTAINER DB_CONTAINER PGDB PGUSER SRC_DIR DST_DIR
 
