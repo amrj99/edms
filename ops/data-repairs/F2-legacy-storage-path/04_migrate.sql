@@ -50,7 +50,7 @@ BEGIN
 
   -- per-table (طلب المالك: لا الإجمالي وحده)
   IF u_df <> e_df OR u_dr <> e_dr OR u_ca <> e_ca THEN
-    RAISE EXCEPTION 'fail-closed per-table mismatch: df %/%%, dr %/%%, ca %/%%',
+    RAISE EXCEPTION 'fail-closed per-table mismatch: df %/%, dr %/%, ca %/%',
       u_df, e_df, u_dr, e_dr, u_ca, e_ca;
   END IF;
   IF total <> 7 THEN RAISE EXCEPTION 'fail-closed: total % (expected 7)', total; END IF;
