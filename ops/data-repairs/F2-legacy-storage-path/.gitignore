@@ -5,5 +5,7 @@ mapping.mig.tsv
 preimage.tsv
 dry_run_report.txt
 dry_run.console.log
+preflight.out
 *.log
+*.out
 *.runtime.log

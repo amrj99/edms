@@ -16,8 +16,11 @@ echo " F2 Batch 2 — DRY RUN (قراءة فقط؛ لا نسخ/تحقق/ترحي
 echo "════════════════════════════════════════════════════════════"
 
 # 01_preflight يقوم بالجرد + التوليد + الفحوص الفيزيائية + pre-image (كله قراءة/التقاط فقط).
-# نمرّر الملف اليدوي إن وُجد ليقارَن بالجرد الحيّ.
-bash 01_preflight.sh ${MANUAL_MAP:+"$MANUAL_MAP"}
+# DRY_RUN=1 يجعل الفحوص الفيزيائية تشخيصية (تُسجَّل ولا تُوقِف) كي يكتمل التشخيص حتى لو كان
+# المسار الفيزيائي نفسه هو المشكلة. سلامة الـinventory تبقى مانعة. نلتقط مخرجات preflight
+# لاستخراج ملخّص الجاهزية الفيزيائية إلى التقرير.
+PRELOG="preflight.out"
+DRY_RUN=1 bash 01_preflight.sh ${MANUAL_MAP:+"$MANUAL_MAP"} 2>&1 | tee "$PRELOG"
 
 echo ""
 echo "── تقرير الـDry Run ──" | tee "$REPORT"
@@ -37,6 +40,10 @@ echo "── تقرير الـDry Run ──" | tee "$REPORT"
   echo "أسماء الملفات الفريدة (متوقّع 4):"
   cut -f7 mapping.gen.tsv | sort -u | sed 's/^/  - /'
   echo ""
+  echo "الجاهزية الفيزيائية (تشخيص؛ لا يُوقِف الـdry-run):"
+  grep -E "SRC_DIR_EXISTS|SRC_DIR_FILE_COUNT|sources_present|dst: absent|dst_not_creatable|physical_issues|READINESS =" "$PRELOG" | sed 's/^/  /' \
+    || echo "  (لم تُلتقط أسطر الجاهزية — راجع $PRELOG)"
+  echo ""
   echo "ماذا سيحدث عند التنفيذ الفعلي (لن يحدث الآن):"
   echo "  • 02_copy    : نسخ 4 ملفات $SRC_DIR → $DST_DIR (Copy لا Move)"
   echo "  • 03_verify  : size + sha256 + cmp + قابلية القراءة"
@@ -44,7 +51,7 @@ echo "── تقرير الـDry Run ──" | tee "$REPORT"
   echo "  • 06_download: تنزيل عبر التطبيق + عزل cross-org"
   echo ""
   echo "المخرجات المكتوبة الآن (قراءة/التقاط فقط، بلا تغيير بيانات):"
-  echo "  - mapping.gen.tsv / mapping.mig.tsv / preimage.tsv"
+  echo "  - mapping.gen.tsv / mapping.mig.tsv / preimage.tsv / preflight.out"
 } | tee -a "$REPORT"
 
 echo ""
