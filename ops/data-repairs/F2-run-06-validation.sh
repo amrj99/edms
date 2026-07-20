@@ -14,6 +14,16 @@
 #
 # Lives OUTSIDE the frozen package; reads the same source of truth (mapping.gen.tsv)
 # and physical dst dir (config.sh). Run ON the VPS (needs docker for size ref).
+#
+# PLATFORM: Linux + GNU coreutils required (uses `stat -c %s`, GNU `mktemp -d`,
+#   bash `read -rs`, `docker`, `curl`). Do NOT run on macOS/BSD (BSD stat uses -f)
+#   or non-bash shells — behaviour is undefined there.
+#
+# TEMP-FILE SECURITY CAVEAT: the 0600 token config files are removed by a trap on
+#   INT/TERM/EXIT (covers Ctrl+C and normal/abnormal exit). SIGKILL (kill -9) and a
+#   hard power loss CANNOT be trapped, so in that rare case a 0600 file may remain
+#   under the mktemp dir; if that happens, delete "$TMPDIR"/tmp.* / the leftover
+#   config manually. (0600 perms still limit exposure to the running user.)
 set -uo pipefail
 umask 077
 
@@ -24,6 +34,12 @@ GEN="$PKG/mapping.gen.tsv"
 # PHYSICAL_DST_DIR from the package config (single source of truth)
 [ -f "$PKG/config.sh" ] && . "$PKG/config.sh"
 DST_DIR="${PHYSICAL_DST_DIR:-/app/uploads/1/1/document}"
+
+# early, explicit dependency checks (clear fail instead of failing mid-loop)
+command -v docker >/dev/null 2>&1 || { echo "VALIDATION ABORT: docker not found on PATH" >&2; exit 2; }
+command -v curl   >/dev/null 2>&1 || { echo "VALIDATION ABORT: curl not found on PATH" >&2; exit 2; }
+docker exec "$APP_CONTAINER" true >/dev/null 2>&1 \
+  || { echo "VALIDATION ABORT: cannot exec into app container '$APP_CONTAINER' (not running / no access)" >&2; exit 2; }
 
 WORK="$(mktemp -d)"; chmod 700 "$WORK"
 cleanup(){ rm -rf "$WORK" 2>/dev/null || true; unset AUTH_TOKEN OTHER_TOKEN 2>/dev/null || true; }
