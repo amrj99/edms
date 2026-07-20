@@ -3,6 +3,15 @@
 Immutable record of the F2 legacy storage-path data repair as executed on
 production. Documentation only — no operational script is modified by this file.
 
+## Status classification (adopted convention)
+- **F2 Data Repair → CLOSED.** All data-changing steps (physical Copy /1/0→/1/1
+  and DB file_url old→new) are complete and evidence-proven at DB + disk level.
+- **Post-Repair Functional Validation (06_download) → PENDING.** A separate,
+  read-only phase AFTER the repair; it changes/repairs nothing — it only proves
+  the end user can retrieve the files over HTTP with access control still enforced.
+- If 06 ever fails, that is a serve-layer/permissions defect (a NEW, separate item)
+  — NOT a reopening of the F2 data repair.
+
 ## Stage: 02_copy (files copied /1/0 → /1/1)
 - Result: `COPY DONE` — 4/4 unique files copied (Copy not Move); sources intact.
 
