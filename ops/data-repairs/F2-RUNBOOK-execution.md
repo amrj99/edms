@@ -84,3 +84,9 @@ Expected: `still_old = 0`, and `now_new` ≥ 7 (7 migrated + any already-correct
 ## 5. Governance
 - Package frozen at `8131401`; runbook is operational only.
 - Cleanup of `/1/0/` and the unreferenced 5th file: separate tasks, later, separate approval.
+
+## 6. Execution evidence
+- 04_migrate executed successfully on production — recorded in
+  `ops/data-repairs/F2-EXECUTION-EVIDENCE.md` (repo `8224069`; MIGRATE_EXIT=0,
+  POST_VERIFY_EXIT=0, 7 rows now under /api/storage/onpremise/1/1/document/…).
+- Not yet run: 06_download (end-to-end retrieval + isolation). Deferred: /1/0 cleanup.
