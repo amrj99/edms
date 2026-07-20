@@ -89,4 +89,15 @@ Expected: `still_old = 0`, and `now_new` ≥ 7 (7 migrated + any already-correct
 - 04_migrate executed successfully on production — recorded in
   `ops/data-repairs/F2-EXECUTION-EVIDENCE.md` (repo `8224069`; MIGRATE_EXIT=0,
   POST_VERIFY_EXIT=0, 7 rows now under /api/storage/onpremise/1/1/document/…).
-- Not yet run: 06_download (end-to-end retrieval + isolation). Deferred: /1/0 cleanup.
+- Not yet run: Post-Repair Functional Validation. Deferred: /1/0 cleanup.
+
+## 7. Post-Repair Functional Validation (06) — tool ready, NOT run
+- Hardened one-file runner: `ops/data-repairs/F2-run-06-validation.sh` (merged `6518683`).
+- READ-ONLY: authorized download of the 7 links (200 + exact size) + cross-org denial
+  (403/404 only); fail-closed; hidden interactive tokens (read -s, curl -K 0600).
+- Run (on the VPS) only when the owner decides:
+    cd /var/www/edms && git pull --ff-only origin main
+    export BASE_URL=https://<host>
+    bash ops/data-repairs/F2-run-06-validation.sh   # prompts for AUTH_TOKEN, OTHER_TOKEN (hidden)
+  Success = VALIDATION_EXIT=0 + "RESULT: PASS — 7/7". Requires two real sessions
+  (org-1 authorized user + a different-org user) supplied by the operator.
