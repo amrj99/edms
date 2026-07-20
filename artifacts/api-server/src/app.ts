@@ -64,10 +64,23 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : [];
 
+// F43 fix: fail CLOSED. Previously an empty ALLOWED_ORIGINS in production
+// blanket-allowed EVERY origin with credentials (`allowedOrigins.length === 0 ||`).
+// Now, with no origins configured, only same-origin / no-Origin requests are
+// allowed; genuine cross-origin browser requests are denied. Loud startup warning
+// below so a misconfigured deploy is noticed rather than silently wide-open.
+if (isProd && allowedOrigins.length === 0) {
+  console.error(
+    "[cors] WARNING: ALLOWED_ORIGINS is empty in production — all cross-origin " +
+      "requests will be DENIED (same-origin still works). Set ALLOWED_ORIGINS to your " +
+      "frontend origin(s) if the API is served from a different host than the UI.",
+  );
+}
+
 const corsOptions: cors.CorsOptions = {
   origin: isProd
     ? (origin, callback) => {
-        if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
           callback(new Error("Not allowed by CORS"));
