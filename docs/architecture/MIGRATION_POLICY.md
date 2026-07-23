@@ -58,3 +58,23 @@ pnpm db:check             # must PASS
 - `0030_baseline_meta_sync` fixed it: a **no-op** SQL migration carrying a fresh
   full snapshot as the new baseline. No production DB change — every object it
   records already existed live.
+
+## Journal Reconciliation (Remediation B1.1, 2026-07-10)
+
+The migration journal has **historical numeric-prefix gaps and duplicates**, verified:
+
+- **Duplicate prefixes:** `0004` (0004a/b/c manual splits), `0009` (×2), `0015` (×2).
+- **Gaps:** `0005`, `0006`, `0012`, `0029` (numbers never used).
+
+**Decision: DOCUMENT + FREEZE — do NOT renumber.** These migrations are already
+applied on production with fixed hashes recorded in `drizzle.__drizzle_migrations`.
+Renumbering an applied migration changes its identity and re-triggers the exact
+`duplicate_object` / restart-loop failure recovered from on 2026-05-08 (see
+`ARCHITECTURE_STATE.md` §2). The applied *order* is correct (journal `idx` is
+contiguous 0–30) and snapshots are synced (`0030_baseline_meta_sync`). The
+gaps/dups are **naming artifacts, not a functional defect.**
+
+**Forward rule:** new migrations MUST use the next unused prefix (currently `0031`),
+one migration per prefix, generated via `pnpm db:generate` (never hand-numbered).
+A CI guard to reject new gaps/duplicate prefixes is a follow-up batch (kept out of
+this docs-only change to avoid scope creep).
