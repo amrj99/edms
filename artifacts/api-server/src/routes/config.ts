@@ -5,6 +5,8 @@ import { eq } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
+import { getOrgSessionPolicy, invalidateOrgSessionPolicy, SESSION_BOUNDS } from "../lib/security-settings.js";
+import { seedWorkflowTemplatesForOrg, seedDocumentTypesForOrg } from "../lib/org-defaults.js";
 
 const router = Router();
 
@@ -244,6 +246,65 @@ router.put("/ai-governance", requireMinRole("admin"), async (req, res): Promise<
 
   if (!updated) { res.status(404).json({ error: "No org config found" }); return; }
   res.json(updated);
+});
+
+// ─── Per-tenant session settings (admin-only; org-scoped = isolated; bounded) ──
+router.get("/session-settings", requireMinRole("admin"), async (req, res): Promise<void> => {
+  const orgId = req.user!.organizationId;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
+  const [raw] = await db.select({
+    sessionTimeoutMinutes: orgConfigTable.sessionTimeoutMinutes,
+    idleTimeoutMinutes: orgConfigTable.idleTimeoutMinutes,
+    rememberMeEnabled: orgConfigTable.rememberMeEnabled,
+    rememberMeDays: orgConfigTable.rememberMeDays,
+  }).from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
+  const effective = await getOrgSessionPolicy(orgId);
+  res.json({ stored: raw ?? null, effective, bounds: SESSION_BOUNDS });
+});
+
+router.put("/session-settings", requireMinRole("admin"), async (req, res): Promise<void> => {
+  const orgId = req.user!.organizationId;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
+  const { sessionTimeoutMinutes, idleTimeoutMinutes, rememberMeEnabled, rememberMeDays } = req.body ?? {};
+  const clamp = (v: number, b: { min: number; max: number }) => Math.min(b.max, Math.max(b.min, Math.trunc(v)));
+  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof sessionTimeoutMinutes === "number" && Number.isFinite(sessionTimeoutMinutes)) updates.sessionTimeoutMinutes = clamp(sessionTimeoutMinutes, SESSION_BOUNDS.session);
+  if (typeof idleTimeoutMinutes === "number" && Number.isFinite(idleTimeoutMinutes)) updates.idleTimeoutMinutes = clamp(idleTimeoutMinutes, SESSION_BOUNDS.idle);
+  if (typeof rememberMeEnabled === "boolean") updates.rememberMeEnabled = rememberMeEnabled;
+  if (typeof rememberMeDays === "number" && Number.isFinite(rememberMeDays)) updates.rememberMeDays = clamp(rememberMeDays, SESSION_BOUNDS.rememberDays);
+
+  const [updated] = await db.update(orgConfigTable).set(updates)
+    .where(eq(orgConfigTable.organizationId, orgId))
+    .returning({
+      sessionTimeoutMinutes: orgConfigTable.sessionTimeoutMinutes,
+      idleTimeoutMinutes: orgConfigTable.idleTimeoutMinutes,
+      rememberMeEnabled: orgConfigTable.rememberMeEnabled,
+      rememberMeDays: orgConfigTable.rememberMeDays,
+    });
+  if (!updated) { res.status(404).json({ error: "No org config found" }); return; }
+  invalidateOrgSessionPolicy(orgId); // effective immediately for the next login/refresh
+  void createAuditLog({ userId: req.user!.id, organizationId: orgId, action: "session_settings_changed", entityType: "organization", entityId: orgId, details: updates });
+  const effective = await getOrgSessionPolicy(orgId);
+  res.json({ stored: updated, effective });
+});
+
+// ── Starter templates — OPT-IN (Product decision 2026-08-19) ──────────────────
+// A new tenant starts empty. An admin loads a starter set of document types +
+// workflow templates on demand (onboarding or Settings). Idempotent: existing
+// rows are skipped, so re-running is safe and returns how many were newly added.
+// No business logic depends on these — they are editable/soft-disableable
+// starters, not a mandatory schema.
+router.post("/starter-templates", requireMinRole("admin"), async (req, res): Promise<void> => {
+  const orgId = req.user!.organizationId;
+  if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
+  try {
+    const workflowTemplates = await seedWorkflowTemplatesForOrg(orgId, req.user!.id);
+    const documentTypes = await seedDocumentTypesForOrg(orgId);
+    void createAuditLog({ userId: req.user!.id, organizationId: orgId, action: "starter_templates_loaded", entityType: "organization", entityId: orgId, details: { workflowTemplates, documentTypes } });
+    res.json({ ok: true, workflowTemplates, documentTypes });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load starter templates" });
+  }
 });
 
 router.put("/", requireMinRole("admin"), async (req, res): Promise<void> => {

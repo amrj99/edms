@@ -342,6 +342,16 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
   if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "upload_document")) {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" }); return;
   }
+  // BUG-005 fix: intra-org callers must also clear the role gate. Creating a document
+  // is a write (canCreate = document_controller+); previously only project ACCESS +
+  // party ceiling were checked, so a read-only viewer/member could create via the API
+  // (UI hid the button but the endpoint did not enforce). Mirrors PUT/DELETE.
+  if (accessMode !== "party") {
+    const { role: effRole } = await resolveEffectiveRole(req.user!, projectId);
+    if (!DocumentPermissions.canCreate(effRole)) {
+      res.status(403).json({ error: "Forbidden", message: "Your role does not permit creating documents (requires document controller or above)" }); return;
+    }
+  }
 
   const { documentNumber, title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, source, issuedBy, direction } = req.body;
 
@@ -1376,6 +1386,14 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   if (access.mode === "party" && !isWithinPartyCeiling(access.partyRole!, "upload_document")) {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" });
     return;
+  }
+  // BUG-005 fix: intra-org callers must clear the role gate too (canCreate = DC+).
+  // Adding a file/revision is a write; a viewer/member must not upload via the API.
+  if (access.mode !== "party") {
+    const { role: effRole } = await resolveEffectiveRole(req.user!, projectId);
+    if (!DocumentPermissions.canCreate(effRole)) {
+      res.status(403).json({ error: "Forbidden", message: "Your role does not permit uploading files (requires document controller or above)" }); return;
+    }
   }
 
   const uploadedFiles = req.files as Express.Multer.File[] | undefined;

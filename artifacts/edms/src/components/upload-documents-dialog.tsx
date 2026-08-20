@@ -76,7 +76,7 @@ function defaultMeta(file: File): DocMeta {
   };
 }
 
-async function requestUploadUrl(file: File, projectId: number): Promise<{ uploadURL: string; objectPath: string }> {
+async function requestUploadUrl(file: File, projectId: number): Promise<{ uploadURL: string; objectPath: string; serveUrl?: string }> {
   const r = await fetch("/api/storage/uploads/request-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -267,17 +267,20 @@ export function UploadDocumentsDialog({ open, onOpenChange, projectId, projectCo
         : f
       ));
       try {
-        const { uploadURL, objectPath } = await requestUploadUrl(entry.file, projectId);
+        const { uploadURL, objectPath, serveUrl } = await requestUploadUrl(entry.file, projectId);
         await uploadWithProgress(entry.file, uploadURL, (pct) => {
           setFiles(prev => prev.map(f => f.id === entry.id ? { ...f, progress: pct } : f));
         });
+        // Persist the canonical serve URL, NOT objectPath (on-premise objectPath is an
+        // absolute host filesystem path → leaks server layout + breaks preview/download).
+        const persistUrl = serveUrl ?? objectPath;
         setFiles(prev => prev.map(f => f.id === entry.id
-          ? { ...f, uploadStatus: "done", progress: 100, uploadedUrl: objectPath }
+          ? { ...f, uploadStatus: "done", progress: 100, uploadedUrl: persistUrl }
           : f
         ));
         results.push({
           meta: entry.meta,
-          fileUrl: objectPath,
+          fileUrl: persistUrl,
           fileName: entry.file.name,
           fileSize: entry.file.size,
         });

@@ -19,7 +19,11 @@ export const refreshTokensTable = pgTable("refresh_tokens", {
   userId: integer("user_id").references(() => usersTable.id).notNull(),
   organizationId: integer("organization_id").references(() => organizationsTable.id),
   token: text("token").notNull().unique(),
-  expiresAt: timestamp("expires_at").notNull(),
+  // timestamptz: absolute instants — unambiguous regardless of DB/session timezone
+  // (the app writes/compares JS Dates; a plain `timestamp` skews on non-UTC clusters).
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),        // absolute session end
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }).defaultNow().notNull(), // idle clock
+  familyId: text("family_id"),                          // rotation chain id — reuse of a revoked member = theft
   revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

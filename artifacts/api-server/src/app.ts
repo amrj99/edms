@@ -1,4 +1,5 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import cookieParser from "cookie-parser";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import helmet from "helmet";
@@ -137,6 +138,7 @@ app.use(
 app.use("/api/billing/webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser()); // Session Hardening: parse the HttpOnly refresh-token cookie
 
 app.use("/api", router);
 

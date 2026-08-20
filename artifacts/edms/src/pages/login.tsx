@@ -61,11 +61,13 @@ export default function Login() {
     setAttemptsRemaining(null);
     try {
       const response = await loginMutation.mutateAsync({
-        data: { email: data.email, password: data.password },
+        // BUG-007 fix: forward rememberMe so the server can extend the refresh-token
+        // (session) lifetime. Previously it was collected but never sent.
+        data: { email: data.email, password: data.password, rememberMe: data.rememberMe } as any,
       });
-      if ((response as any).refreshToken) {
-        localStorage.setItem("edms_refresh_token", (response as any).refreshToken);
-      }
+      // Refresh token is now delivered as a Secure HttpOnly cookie by the server —
+      // nothing to persist client-side. Keep only the short-lived access token.
+      localStorage.removeItem("edms_refresh_token"); // legacy cleanup
       if (data.rememberMe) {
         localStorage.setItem("edms_remember_me", "true");
       }

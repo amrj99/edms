@@ -18,6 +18,8 @@
  */
 
 import { getSystemSettingValue } from "./ai-core.js";
+import { db, orgConfigTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 // Simple in-memory cache — TTL 60 seconds.
@@ -72,9 +74,82 @@ export async function getPasswordMinLength(): Promise<number> {
  * Default: 30 min | Min: 5 min | Max: 120 min
  */
 export async function getAccessTokenExpirySeconds(): Promise<number> {
-  const minutes = await getCachedSetting("access_token_expiry_minutes", 30, 5, 120);
+  // Session Hardening: access token is deliberately SHORT (default 15 min, max 30).
+  // Long-lived sessions are carried by the refresh token, never the access token.
+  const minutes = await getCachedSetting("access_token_expiry_minutes", 15, 5, 30);
   return minutes * 60;
 }
+
+// ─── Per-tenant session policy (Session Management Hardening) ──────────────────
+// Resolved from org_config (per-org), each value CLAMPED to system bounds so a
+// tampered org row can never widen beyond safe limits. Tenant A's row is physically
+// separate from B's → complete isolation. Cached per-org for 60s.
+export interface OrgSessionPolicy {
+  sessionTimeoutMinutes: number; // absolute session lifetime
+  idleTimeoutMinutes: number;    // inactivity cutoff (always <= session lifetime)
+  rememberMeEnabled: boolean;
+  rememberMeDays: number;
+}
+const SESSION_BOUNDS = {
+  session: { def: 480, min: 30, max: 43200 }, // 8h default, 30min .. 30d
+  idle:    { def: 30,  min: 5,  max: 43200 }, // 30min default (further clamped <= session)
+  rememberDays: { def: 7, min: 1, max: 30 },
+};
+const orgPolicyCache = new Map<number, { value: OrgSessionPolicy; expiresAt: number }>();
+const clampInt = (v: unknown, def: number, min: number, max: number): number => {
+  const n = typeof v === "number" ? v : NaN;
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+};
+
+export async function getOrgSessionPolicy(orgId: number | null | undefined): Promise<OrgSessionPolicy> {
+  const fallback: OrgSessionPolicy = {
+    sessionTimeoutMinutes: SESSION_BOUNDS.session.def,
+    idleTimeoutMinutes: SESSION_BOUNDS.idle.def,
+    rememberMeEnabled: true,
+    rememberMeDays: SESSION_BOUNDS.rememberDays.def,
+  };
+  if (!orgId) return fallback;
+  const now = Date.now();
+  const cached = orgPolicyCache.get(orgId);
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  let row: any = null;
+  try {
+    const [r] = await db
+      .select({
+        s: orgConfigTable.sessionTimeoutMinutes,
+        i: orgConfigTable.idleTimeoutMinutes,
+        e: orgConfigTable.rememberMeEnabled,
+        d: orgConfigTable.rememberMeDays,
+      })
+      .from(orgConfigTable)
+      .where(eq(orgConfigTable.organizationId, orgId))
+      .limit(1);
+    row = r ?? null;
+  } catch {
+    return fallback; // never fail closed into an insecure state — use safe defaults
+  }
+
+  const session = clampInt(row?.s, SESSION_BOUNDS.session.def, SESSION_BOUNDS.session.min, SESSION_BOUNDS.session.max);
+  // idle must never exceed the absolute session lifetime, and never below its own floor
+  const idle = Math.min(session, clampInt(row?.i, SESSION_BOUNDS.idle.def, SESSION_BOUNDS.idle.min, SESSION_BOUNDS.idle.max));
+  const policy: OrgSessionPolicy = {
+    sessionTimeoutMinutes: session,
+    idleTimeoutMinutes: idle,
+    rememberMeEnabled: typeof row?.e === "boolean" ? row.e : true,
+    rememberMeDays: clampInt(row?.d, SESSION_BOUNDS.rememberDays.def, SESSION_BOUNDS.rememberDays.min, SESSION_BOUNDS.rememberDays.max),
+  };
+  orgPolicyCache.set(orgId, { value: policy, expiresAt: now + CACHE_TTL_MS });
+  return policy;
+}
+
+/** Invalidate the per-org session-policy cache (call after a settings change). */
+export function invalidateOrgSessionPolicy(orgId: number): void {
+  orgPolicyCache.delete(orgId);
+}
+
+export { SESSION_BOUNDS };
 
 /**
  * Session (refresh token) lifetime in SECONDS.

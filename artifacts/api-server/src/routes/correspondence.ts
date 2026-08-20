@@ -6,6 +6,7 @@ import {
   correspondenceCcTable,
   correspondenceAttachmentsTable,
   correspondenceSequencesTable,
+  correspondenceTypeEnum,
   usersTable,
   projectsTable,
   projectMembersTable,
@@ -37,7 +38,10 @@ import { parseBody } from "../lib/validate.js";
 
 const createCorrespondenceSchema = z.object({
   subject:   z.string().min(1, "subject is required").max(500),
-  type:      z.string().min(1, "type is required").max(100),
+  // type MUST be a member of the correspondence_type DB enum. Previously this was a
+  // free z.string(), so any non-enum value (e.g. wrong-case "RFI") reached the INSERT
+  // and produced a 500 that leaked the SQL/schema. Constrain here → clean 400.
+  type:      z.enum(correspondenceTypeEnum.enumValues),
   toUserIds: z.array(z.number().int().positive(), { message: "toUserIds must be an array of integers" }).optional(),
   ccUserIds: z.array(z.number().int().positive()).optional(),
   direction: z.enum(["incoming", "outgoing"]).optional(),
@@ -898,7 +902,7 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res)
 router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
-  const { isRead } = req.body;
+  const { isRead } = req.body ?? {}; // tolerate a missing/empty body (was: TypeError → 500)
   const [corr] = await db.update(correspondenceTable)
     .set({ isRead: !!isRead, updatedAt: new Date() })
     .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))

@@ -27,7 +27,7 @@ interface FileDropZoneProps {
   onMultiUpload?: (files: UploadedFile[]) => void;
 }
 
-async function requestUploadUrl(file: File, projectId?: number): Promise<{ uploadURL: string; objectPath: string }> {
+async function requestUploadUrl(file: File, projectId?: number): Promise<{ uploadURL: string; objectPath: string; serveUrl?: string }> {
   const r = await fetch("/api/storage/uploads/request-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -46,9 +46,12 @@ async function requestUploadUrl(file: File, projectId?: number): Promise<{ uploa
 
 /** Public helper for uploading a single file to storage (used by other modules). */
 export async function uploadFileToStorage(file: File, projectId?: number): Promise<UploadedFile> {
-  const { uploadURL, objectPath } = await requestUploadUrl(file, projectId);
+  const { uploadURL, objectPath, serveUrl } = await requestUploadUrl(file, projectId);
   await uploadWithProgress(file, uploadURL, () => {});
-  return { url: objectPath, name: file.name, size: file.size };
+  // Persist the canonical serve URL (/api/storage/...), NOT objectPath — in
+  // on-premise mode objectPath is an absolute host filesystem path, which leaks
+  // server layout and breaks preview/download (both require the /api/storage/ prefix).
+  return { url: serveUrl ?? objectPath, name: file.name, size: file.size };
 }
 
 function uploadWithProgress(
@@ -75,9 +78,10 @@ function uploadWithProgress(
 }
 
 export async function uploadToStorage(file: File): Promise<UploadedFile> {
-  const { uploadURL, objectPath } = await requestUploadUrl(file);
+  const { uploadURL, objectPath, serveUrl } = await requestUploadUrl(file);
   await uploadWithProgress(file, uploadURL, () => {});
-  return { url: objectPath, name: file.name, size: file.size };
+  // BUG-001: persist the canonical serve URL, never the on-premise disk path.
+  return { url: serveUrl ?? objectPath, name: file.name, size: file.size };
 }
 
 function formatSize(bytes: number) {
@@ -123,10 +127,11 @@ function FileDropZone({
     const results: UploadedFile[] = [];
     for (const file of valid) {
       try {
-        const { uploadURL, objectPath } = await requestUploadUrl(file);
+        const { uploadURL, objectPath, serveUrl } = await requestUploadUrl(file);
         await uploadWithProgress(file, uploadURL, pct => updateEntry(file.name, { progress: pct }));
         const uploaded: UploadedFile = {
-          url: objectPath,
+          // BUG-001: canonical serve URL, never the on-premise disk path (objectPath).
+          url: serveUrl ?? objectPath,
           name: file.name,
           size: file.size,
         };

@@ -22,22 +22,15 @@ node --enable-source-maps /app/artifacts/api-server/dist/migrate.mjs && \
   exit 1
 }
 
-# ── Step 2: Seed document types from legacy data ──────────────────────────────
-echo "[entrypoint] Seeding document types..."
-node --enable-source-maps /app/artifacts/api-server/dist/seed-document-types.mjs && \
-  echo "[entrypoint] Document type seed complete." || {
-  echo "[entrypoint] WARNING: Document type seed returned non-zero exit — check logs above."
-  echo "[entrypoint] Continuing startup."
-}
+# ── Starter content is OPT-IN (Product decision 2026-08-19) ───────────────────
+# Document types and workflow templates are NO LONGER auto-seeded at startup.
+# A new tenant begins empty; an admin loads a starter set on demand via
+# POST /api/config/starter-templates. This keeps ArcScale industry-agnostic and
+# prevents a boot restart from re-imposing defaults on tenants that removed them.
+# The per-org seeding logic lives in lib/org-defaults.ts; the standalone scripts
+# (seed-document-types.mjs / seed-wf-defaults.mjs) remain available for manual
+# backfill if ever needed, but are intentionally NOT run automatically here.
 
-# ── Step 3: Seed default workflow templates ───────────────────────────────────
-echo "[entrypoint] Seeding default workflow templates..."
-node --enable-source-maps /app/artifacts/api-server/dist/seed-wf-defaults.mjs && \
-  echo "[entrypoint] Workflow template seed complete." || {
-  echo "[entrypoint] WARNING: Workflow template seed returned non-zero exit — check logs above."
-  echo "[entrypoint] Continuing startup."
-}
-
-# ── Step 4: Start API server ──────────────────────────────────────────────────
+# ── Start API server ──────────────────────────────────────────────────────────
 echo "[entrypoint] Starting API server..."
 exec node --enable-source-maps /app/artifacts/api-server/dist/index.mjs

@@ -3,7 +3,7 @@ import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { db } from "@workspace/db";
 import { usersTable, organizationsTable, passwordResetTokensTable, refreshTokensTable, systemSettingsTable } from "@workspace/db";
-import { eq, and, gt, isNull } from "drizzle-orm";
+import { eq, and, gt, isNull, sql } from "drizzle-orm";
 import {
   signToken,
   hashPassword,
@@ -17,8 +17,10 @@ import {
   getAccessTokenExpirySeconds,
   getRefreshTokenExpiryDate,
   getRememberMeExpiryDate,
+  getOrgSessionPolicy,
   validatePasswordPolicy,
 } from "../lib/security-settings.js";
+import type { Response } from "express";
 import { sendWelcomeEmail, sendPasswordResetEmail, sendEmailVerificationEmail, APP_URL } from "../lib/email.js";
 import { createAuditLog } from "../lib/audit.js";
 import { grantCredits } from "../lib/ai-credits.js";
@@ -28,6 +30,29 @@ import { isDisposableEmail } from "../lib/disposable-emails.js";
 import { orgConfigTable } from "@workspace/db/schema";
 
 const router = Router();
+
+// ─── Refresh-token cookie (Session Management Hardening) ──────────────────────
+// The refresh token is delivered as a Secure, HttpOnly, SameSite=Strict cookie
+// scoped to /api/auth — invisible to JavaScript (XSS cannot exfiltrate it). Same
+// origin (nginx/Vite proxy) so SameSite=Strict is fine. `secure` only in prod so
+// local http dev still works. The access token is returned in the body (short-lived,
+// held in memory by the client). The body also still returns refreshToken for
+// non-browser API clients / existing tests; browsers rely on the cookie.
+const REFRESH_COOKIE = "edms_rt";
+function refreshCookieOpts() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict" as const,
+    path: "/api/auth",
+  };
+}
+function setRefreshCookie(res: Response, token: string, maxAgeMs?: number): void {
+  res.cookie(REFRESH_COOKIE, token, { ...refreshCookieOpts(), ...(maxAgeMs != null ? { maxAge: maxAgeMs } : {}) });
+}
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie(REFRESH_COOKIE, refreshCookieOpts());
+}
 
 // ─── Progressive login lockout tracker ───────────────────────────────────────
 // 7 attempts per 15-minute window. Progressive lockout: 5 → 15 → 30 minutes.
@@ -232,15 +257,25 @@ router.post("/login", loginLimiter, async (req, res): Promise<void> => {
   const accessTokenExpiry = await getAccessTokenExpirySeconds();
   const accessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, accessTokenExpiry);
 
-  // Generate refresh token — store SHA-256 hash in DB, return plaintext to client
+  // Generate refresh token — per-tenant session policy governs lifetime.
   const refreshToken = generateSecureToken();
-  const refreshExpiry = rememberMe ? await getRememberMeExpiryDate() : await getRefreshTokenExpiryDate();
+  const familyId = generateSecureToken();
+  const policy = await getOrgSessionPolicy(user.organizationId);
+  const useRemember = Boolean(rememberMe) && policy.rememberMeEnabled;
+  const lifetimeMs = useRemember
+    ? policy.rememberMeDays * 24 * 60 * 60 * 1000
+    : policy.sessionTimeoutMinutes * 60 * 1000;
+  const refreshExpiry = new Date(Date.now() + lifetimeMs);
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
     token: hashToken(refreshToken),
     expiresAt: refreshExpiry,
+    familyId,
+    lastUsedAt: new Date(),
   });
+  // HttpOnly refresh cookie: persistent (maxAge) with Remember Me, else a session cookie.
+  setRefreshCookie(res, refreshToken, useRemember ? lifetimeMs : undefined);
 
   clearLoginAttempts(ip);
   createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "login_success", entityType: "auth", entityId: user.id, entityTitle: email, ipAddress: ip });
@@ -372,64 +407,89 @@ router.post("/require-terms-reacceptance", requireAuth, async (req, res): Promis
 });
 
 router.post("/refresh-token", async (req, res): Promise<void> => {
-  const { refreshToken } = req.body ?? {};
-  if (!refreshToken) {
+  // Prefer the HttpOnly cookie; fall back to body for non-browser API clients.
+  const presented = (req as any).cookies?.[REFRESH_COOKIE] ?? req.body?.refreshToken;
+  if (!presented) {
     res.status(400).json({ error: "Bad Request", message: "Refresh token is required" });
     return;
   }
 
-  const tokens = await db.select().from(refreshTokensTable)
-    .where(and(
-      eq(refreshTokensTable.token, hashToken(refreshToken)),
-      gt(refreshTokensTable.expiresAt, new Date())
-    ))
+  const [tokenRecord] = await db.select().from(refreshTokensTable)
+    .where(eq(refreshTokensTable.token, hashToken(presented)))
     .limit(1);
 
-  const tokenRecord = tokens[0];
-  if (!tokenRecord || tokenRecord.revokedAt) {
-    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired refresh token" });
+  if (!tokenRecord) {
+    clearRefreshCookie(res);
+    res.status(401).json({ error: "Unauthorized", message: "Invalid refresh token" });
+    return;
+  }
+
+  // Reuse detection: presenting an already-REVOKED (rotated/old) token indicates
+  // theft. Revoke the entire rotation family and force re-login.
+  if (tokenRecord.revokedAt) {
+    if (tokenRecord.familyId) {
+      await db.update(refreshTokensTable).set({ revokedAt: new Date() })
+        .where(and(eq(refreshTokensTable.familyId, tokenRecord.familyId), isNull(refreshTokensTable.revokedAt)));
+    }
+    createAuditLog({ userId: tokenRecord.userId, organizationId: tokenRecord.organizationId ?? undefined, action: "refresh_token_reuse_detected", entityType: "auth", entityId: tokenRecord.userId, details: { familyId: tokenRecord.familyId, tokenId: tokenRecord.id }, ipAddress: req.ip });
+    clearRefreshCookie(res);
+    res.status(401).json({ error: "Unauthorized", code: "REFRESH_TOKEN_REUSE", message: "Session terminated for security. Please sign in again." });
+    return;
+  }
+
+  // Absolute session expiry — compared DB-side against a JS-Date param (serialized
+  // identically to the stored value) so it is correct regardless of column/session tz.
+  const [expChk] = await db.select({ expired: sql<boolean>`${refreshTokensTable.expiresAt} <= ${new Date()}` })
+    .from(refreshTokensTable).where(eq(refreshTokensTable.id, tokenRecord.id)).limit(1);
+  if (expChk?.expired) {
+    clearRefreshCookie(res);
+    res.status(401).json({ error: "Unauthorized", code: "SESSION_EXPIRED", message: "Session expired. Please sign in again." });
     return;
   }
 
   const users = await db.select().from(usersTable).where(eq(usersTable.id, tokenRecord.userId)).limit(1);
   const user = users[0];
   if (!user || !user.isActive) {
+    clearRefreshCookie(res);
     res.status(401).json({ error: "Unauthorized", message: "User account not found or disabled" });
     return;
   }
-
-  // Verify refresh token is bound to the same organization as the user
   if (tokenRecord.organizationId !== null && tokenRecord.organizationId !== user.organizationId) {
+    clearRefreshCookie(res);
     res.status(401).json({ error: "Unauthorized", message: "Token organization mismatch" });
     return;
   }
 
-  // Revoke old token and issue new ones
-  await db.update(refreshTokensTable)
-    .set({ revokedAt: new Date() })
-    .where(eq(refreshTokensTable.id, tokenRecord.id));
+  // Idle timeout — per-tenant, resolved from the token's own org (isolation).
+  const policy = await getOrgSessionPolicy(tokenRecord.organizationId ?? user.organizationId);
+  const idleCutoff = new Date(Date.now() - policy.idleTimeoutMinutes * 60 * 1000);
+  const [idleChk] = await db.select({ idle: sql<boolean>`${refreshTokensTable.lastUsedAt} <= ${idleCutoff}` })
+    .from(refreshTokensTable).where(eq(refreshTokensTable.id, tokenRecord.id)).limit(1);
+  if (idleChk?.idle) {
+    await db.update(refreshTokensTable).set({ revokedAt: new Date() }).where(eq(refreshTokensTable.id, tokenRecord.id));
+    createAuditLog({ userId: user.id, organizationId: user.organizationId ?? undefined, action: "session_idle_timeout", entityType: "auth", entityId: user.id, entityTitle: user.email, ipAddress: req.ip });
+    clearRefreshCookie(res);
+    res.status(401).json({ error: "Unauthorized", code: "SESSION_IDLE_TIMEOUT", message: "Signed out due to inactivity. Please sign in again." });
+    return;
+  }
 
+  // Rotate: revoke old, issue new in the SAME family. Absolute expiry is PRESERVED
+  // (a refresh never extends the session); the idle clock resets via lastUsedAt.
+  await db.update(refreshTokensTable).set({ revokedAt: new Date() }).where(eq(refreshTokensTable.id, tokenRecord.id));
   const newAccessToken = signToken({ id: user.id, email: user.email, role: user.role, organizationId: user.organizationId, isReadOnlyOverride: user.isReadOnlyOverride ?? false }, await getAccessTokenExpirySeconds());
   const newRefreshToken = generateSecureToken();
-
   await db.insert(refreshTokensTable).values({
     userId: user.id,
     organizationId: user.organizationId ?? null,
     token: hashToken(newRefreshToken),
-    expiresAt: await getRefreshTokenExpiryDate(),
+    expiresAt: tokenRecord.expiresAt,   // preserve absolute session end
+    familyId: tokenRecord.familyId,
+    lastUsedAt: new Date(),             // reset idle clock
   });
-
-  createAuditLog({
-    userId: user.id,
-    organizationId: user.organizationId ?? undefined,
-    action: "token_refresh",
-    entityType: "auth",
-    entityId: user.id,
-    entityTitle: user.email,
-    details: { rotatedTokenId: tokenRecord.id },
-    ipAddress: req.ip,
-  });
-
+  const [remChk] = await db.select({ secs: sql<number>`greatest(0, extract(epoch from (${refreshTokensTable.expiresAt} - ${new Date()})))` })
+    .from(refreshTokensTable).where(eq(refreshTokensTable.id, tokenRecord.id)).limit(1);
+  const remainingMs = Number(remChk?.secs ?? 0) * 1000;
+  setRefreshCookie(res, newRefreshToken, remainingMs > 0 ? remainingMs : undefined);
   res.json({ token: newAccessToken, refreshToken: newRefreshToken });
 });
 
@@ -705,6 +765,11 @@ router.post("/register-org", registerOrgLimiter, async (req, res): Promise<void>
     entityTitle: org.name,
   });
 
+  // NOTE (Product decision 2026-08-19): a new tenant starts with NO starter
+  // document types / workflow templates. Starter content is OPT-IN — the admin
+  // loads it on demand via POST /api/config/starter-templates (onboarding or
+  // Settings). No business logic depends on any default type/template.
+
   // ── P0: never expose one-time credentials in production API responses ────────
   // The emailVerificationToken is a one-time secret. Including it in the JSON
   // response means any proxy, log aggregator, or API monitoring tool that logs
@@ -793,21 +858,25 @@ router.get("/verify-email", async (req, res): Promise<void> => {
 // The frontend clears localStorage immediately on click — this call is
 // fire-and-forget from the client's perspective.
 router.post("/logout", requireAuth, async (req, res): Promise<void> => {
-  const { refreshToken } = req.body ?? {};
+  const presented = (req as any).cookies?.[REFRESH_COOKIE] ?? req.body?.refreshToken;
   const ip = req.ip;
 
-  if (refreshToken && typeof refreshToken === "string") {
+  if (presented && typeof presented === "string") {
     try {
-      await db.update(refreshTokensTable)
-        .set({ revokedAt: new Date() })
-        .where(and(
-          eq(refreshTokensTable.token, hashToken(refreshToken)),
-          isNull(refreshTokensTable.revokedAt),
-        ));
+      const [rec] = await db.select().from(refreshTokensTable)
+        .where(eq(refreshTokensTable.token, hashToken(presented))).limit(1);
+      if (rec?.familyId) {
+        // Revoke the whole rotation family so no rotated sibling remains valid.
+        await db.update(refreshTokensTable).set({ revokedAt: new Date() })
+          .where(and(eq(refreshTokensTable.familyId, rec.familyId), isNull(refreshTokensTable.revokedAt)));
+      } else if (rec) {
+        await db.update(refreshTokensTable).set({ revokedAt: new Date() }).where(eq(refreshTokensTable.id, rec.id));
+      }
     } catch {
       // Non-fatal — logout audit and response proceed regardless.
     }
   }
+  clearRefreshCookie(res);
 
   createAuditLog({
     userId: req.user!.id,
@@ -817,7 +886,7 @@ router.post("/logout", requireAuth, async (req, res): Promise<void> => {
     entityId: req.user!.id,
     entityTitle: req.user!.email,
     details: {
-      tokenProvided: !!refreshToken,
+      tokenProvided: !!presented,
     },
     ipAddress: ip,
   });

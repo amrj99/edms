@@ -232,6 +232,13 @@
       "when": 1784500000000,
       "tag": "0032_backfill_document_files_org_id",
       "breakpoints": false
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1787111945765,
+      "tag": "0033_session_hardening",
+      "breakpoints": true
     }
   ]
 }

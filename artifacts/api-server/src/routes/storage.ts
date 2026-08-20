@@ -22,6 +22,8 @@ import { StorageNotConfiguredError } from "../lib/errors.js";
 import { requireAuth, signToken, verifyToken, isSystemOwner } from "../lib/auth.js";
 import { canAccessProjectAsParty } from "../lib/party-access.js";
 import { canAccessProject } from "../lib/can-access-project.js";
+import { resolveEffectiveRole } from "../lib/governance.js";
+import { DocumentPermissions } from "../lib/permissions.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { param } from "../lib/params.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -415,13 +417,25 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
       }
       // Redirect storage org to project owner so the file lives in the right bucket
       if (projectOrgId) effectiveOrgId = projectOrgId;
+    } else {
+      // DEBT-004 fix: intra-org callers must ALSO clear the write (canCreate) role gate.
+      // Previously only project ACCESS was checked here, so a read-only role
+      // (reviewer/member/viewer) who is a project member could obtain a presigned upload
+      // URL and write objects to the org bucket even though it cannot create a document.
+      // Mirror the canCreate gate on POST /documents (documents.ts).
+      const { role: effRole } = await resolveEffectiveRole(caller, parsedProjectId);
+      if (!DocumentPermissions.canCreate(effRole)) {
+        res.status(403).json({ error: "Forbidden", message: "Your role does not permit uploading documents" });
+        return;
+      }
     }
   } else {
-    // No projectId supplied: party members cannot request a general upload URL because
-    // there is no project scope to validate. Intra-org callers are unaffected (existing
-    // behavior — they may upload non-project files such as correspondence attachments).
-    // Detecting cross-org callers without a projectId is not possible here; the guard
-    // at POST /documents provides the final enforcement for document-scoped uploads.
+    // No projectId supplied: own-org, non-project uploads (e.g. correspondence
+    // attachments). By existing design an intra-org member may perform these, so no
+    // canCreate gate is applied here (see party-model "contributor without projectId
+    // uses own org bucket"). DEBT-004 concerned the PROJECT-SCOPED document path above.
+    // Whether to also restrict read-only roles on this general path is a separate
+    // product decision (tracked in qa/OPEN_DEBT.md), not the proven vulnerability.
   }
 
   try {

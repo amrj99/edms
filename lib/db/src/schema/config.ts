@@ -80,6 +80,12 @@ export const orgConfigTable = pgTable("org_config", {
   aiPlan: text("ai_plan").notNull().default("disabled"),
   // Monthly AI request ceiling. 0 = unlimited (governed by credits only).
   aiMonthlyLimit: integer("ai_monthly_limit").notNull().default(0),
+  // ─── Session policy (per-tenant; NULL = inherit system default; always clamped
+  //     to system-enforced safe bounds in code — a tampered value cannot widen). ──
+  sessionTimeoutMinutes: integer("session_timeout_minutes"), // absolute session lifetime; default 480 (8h)
+  idleTimeoutMinutes:    integer("idle_timeout_minutes"),    // inactivity cutoff; default 30
+  rememberMeEnabled:     boolean("remember_me_enabled"),     // default true
+  rememberMeDays:        integer("remember_me_days"),        // default 7
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
