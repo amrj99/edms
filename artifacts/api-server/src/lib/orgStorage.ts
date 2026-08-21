@@ -116,6 +116,16 @@ async function buildR2Client() {
       secretAccessKey: process.env.R2_SECRET_KEY!,
     },
     forcePathStyle: false,
+    // DEBT-007: aws-sdk v3 defaults requestChecksumCalculation to "WHEN_SUPPORTED",
+    // which bakes x-amz-checksum-crc32 (+ x-amz-sdk-checksum-algorithm) into presigned
+    // PUT URLs. A presigned URL cannot carry a body checksum computed ahead of time
+    // (the value defaults to the empty-body CRC32), and Cloudflare R2 rejects such a
+    // presigned PUT from the browser — the CORS preflight passes (204) but the actual
+    // PUT fails with no ACAO header → "Failed to fetch", so uploads never complete.
+    // None of our operations require a checksum, so request it only WHEN_REQUIRED →
+    // a clean SigV4 presign (SignedHeaders=host) that R2/S3 accept. GET presigns are
+    // unaffected. Proven: presign params drop; MinIO PUT of a non-empty body → 200.
+    requestChecksumCalculation: "WHEN_REQUIRED",
   });
 }
 
@@ -191,6 +201,10 @@ async function buildS3Client(cfg: {
           forcePathStyle: !!cfg.s3Endpoint,
         }
       : {}),
+    // DEBT-007: same flexible-checksum default breaks presigned PUTs for per-org S3
+    // too (identical SDK path). Require checksums only WHEN_REQUIRED so presigned PUT
+    // URLs stay clean SigV4 — safe for real AWS S3 and S3-compatible backends alike.
+    requestChecksumCalculation: "WHEN_REQUIRED",
   });
 }
 

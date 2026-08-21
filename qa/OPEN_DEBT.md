@@ -20,7 +20,15 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   to `400`, and have the CORS `origin` callback resolve with `false` (clean rejection, no ACAO) instead of
   throwing — yielding a 403/no-CORS response rather than 500.
 
-## DEBT-002 — ✅ ROOT CAUSE FIXED (R2 CORS) — full E2E still blocked by DEBT-005
+## DEBT-002 — 🟠 OPEN: R2 CORS origin fixed, but full upload E2E still blocked (now by DEBT-007)
+- **Status update 2026-08-21 (build `bd4658e`, live):** the CORS **origin** fix is confirmed intact — the
+  browser preflight `OPTIONS` to the R2 presigned PUT returns **204** (origin `https://www.arcscale.org`
+  allowed). However the full Upload-Document journey **still cannot complete**: the actual `PUT` fails (see
+  **DEBT-007** — R2 presigned PUT rejected due to AWS-SDK flexible-checksum params). **DEBT-002 stays OPEN**
+  until the end-to-end chain passes live: UI upload → request-url → OPTIONS 204 → PUT success → create 201 →
+  visible in UI → download 200/redirect → SHA-256 match. DEBT-005 is no longer the blocker (closed); DEBT-007 is.
+
+### DEBT-002 (original) — ✅ ROOT CAUSE FIXED (R2 CORS) — full E2E still blocked
 - **Severity:** HIGH · **Status:** **CORS FIX VERIFIED 2026-08-20** (owner added `https://www.arcscale.org` to
   the `edms-files` R2 bucket Allowed Origins, keeping `https://arcscale.org`; methods/headers unchanged). Live
   re-test on production: the browser CORS **preflight OPTIONS to R2 now returns 204** (was 403) and the file
@@ -51,9 +59,16 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   `ExposeHeaders: ["ETag"]`. Then re-test upload E2E via the browser.
 - **Note:** This is separate from R1 email. It surfaced while confirming the post-verification upload step.
 
-## DEBT-003 — 🔴 HIGH: Session Management Hardening NOT deployed to Production
-- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER (accepted by owner 2026-08-19).** Session
-  Management is closed on **staging/code only**, NOT on Production.
+## DEBT-003 — ✅ CLOSED: Session Management Hardening deployed + verified LIVE on Production
+- **Severity:** HIGH · **Status:** **CLOSED 2026-08-21** by live Production evidence (build `bd4658e`).
+- **Live proof (`https://www.arcscale.org`, real authenticated session):** `POST /api/auth/refresh-token`
+  (HttpOnly `edms_rt` cookie) → **200** with a fresh access token that then authenticates `GET /api/auth/me`
+  → silent auto-refresh works. `POST /api/auth/logout` → **200**; the subsequent `refresh-token` → **400**
+  (cookie cleared) → the session cannot be renewed after logout. Reuse-detection / rotation / idle / absolute
+  remain covered by the regression suite (`SESSION_MANAGEMENT_CLOSURE.md`). The pre-hardening behaviour
+  (access token expiring with no auto-refresh) is gone.
+- **History:** Session Management was closed on staging/code 2026-08-19 but not deployed; the current build
+  carries migration `0033_session_hardening` + the new auth and is now live.
 - **What:** Production (`https://www.arcscale.org`) still runs the **pre-hardening auth** build. Observed live:
   during the R1 journey the access token expired mid-session and **nothing auto-refreshed it** — a protected
   call (`/api/storage/uploads/request-url`) returned `401 "Invalid or expired token"` and the app did not
@@ -97,8 +112,14 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   **403** via the `canCreate` gate, so this is Production running the pre-fix build — folds into DEBT-003
   (deploy the current build).
 
-## DEBT-005 — 🔴 HIGH: document creation returns 500 on PRODUCTION for ALL roles (core function down)
-- **Severity:** HIGH · **Status:** **ROOT CAUSE FIXED + PERMANENT MIGRATION ADDED 2026-08-21.** Production was
+## DEBT-005 — ✅ CLOSED: document auto-numbering fixed + verified LIVE on Production
+- **Severity:** HIGH · **Status:** **CLOSED 2026-08-21** by live Production evidence (build `bd4658e`,
+  migration `0034`). Live proof on `https://www.arcscale.org` (project 16, org 15, admin): automatic numbering
+  `POST /api/projects/16/documents` with no documentNumber → **201** `R1-VER-ARC-DWG-001` then **201**
+  `R1-VER-ARC-DWG-002` (sequential, format `{PROJECT}-{DISCIPLINE}-{TYPE}-{SEQ}`), i.e. the `ON CONFLICT`
+  upsert works → the `doc_seq_scope_unique` constraint is present; manual numbering with an explicit number →
+  **201** stored verbatim. `0034` applied on Production (entrypoint migrate succeeded; API healthy).
+- **Historical detail (kept below):** Production was
   hot-fixed 2026-08-20 by adding the missing constraint (`ALTER TABLE ... ADD CONSTRAINT doc_seq_scope_unique`
   — safe: constraint absent + 0 duplicate rows), and doc-create then returned 201. The schema drift is now
   represented permanently in Git as migration **`0034_document_sequences_unique_repair.sql`** so every future
@@ -136,9 +157,43 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   document record (create 500'd). Harmless; in the test tenant. Not deleted (no prod-data deletion without
   approval).
 
-## DEBT-006 — 🔴 HIGH: R2 object download returns 404 (files uploaded but not retrievable)
-- **Severity:** HIGH · **Status:** **ROOT CAUSE PROVEN + FIXED IN CODE 2026-08-21** — pending production
-  verification (full upload → download → hash after deploy). Go-Live blocker until the E2E confirms.
+## DEBT-006 — ✅ CLOSED (routing/auth/isolation): R2 download route no longer 404
+- **Severity:** HIGH · **Status:** **CLOSED 2026-08-21 for the routing/authorization/isolation defect** by live
+  Production evidence (build `bd4658e`). **Note:** the *full* upload→download→SHA-256 round-trip could NOT be
+  exercised live because R2 browser **upload** is broken by a separate, pre-existing defect — see **DEBT-007**.
+  The download route itself is proven working.
+- **Live proof (`https://www.arcscale.org`):** unauthenticated `GET /api/storage/r2-object/<raw/slash/key>` →
+  **401** (route matches, guard fires) — the old build returned **404 "Cannot GET"**; a genuinely missing route
+  still → 404 (control). Authenticated owner request → **302** (opaqueredirect: route matched + presigned URL
+  generated). Cross-tenant: claiming another org's id → **403**; another org's key with own orgId (prefix
+  mismatch) → **403**. So the splat routing fix + `s3KeyBelongsToOrg` + `assertOrgAccess` all hold on Production.
+
+## DEBT-007 — 🔴 HIGH: R2 presigned PUT rejected → browser upload to R2 broken
+- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-21 during the post-deploy live
+  Upload E2E on `https://www.arcscale.org` (build `bd4658e`). **Pre-existing** (not introduced by this deploy —
+  see version note below); surfaced by careful live testing.
+- **What:** the browser `PUT` to the R2 presigned upload URL fails for **every** body (empty and non-empty,
+  with and without checksum request headers). The CORS **preflight `OPTIONS` returns 204** (origin allowed), so
+  this is NOT the DEBT-002 origin issue; the **actual `PUT`** is rejected and its response carries no
+  `Access-Control-Allow-Origin`, surfacing in the browser as *"Failed to fetch"*. Net effect: a document
+  **record** is created but the file **bytes never reach R2** → real customer uploads do not complete.
+- **Evidence (live, org 15 / project 16, admin session):** `request-url` → 200 (mode r2). Presigned PUT query
+  contains `x-amz-checksum-crc32=AAAAAA%3D%3D` (CRC32 of an **empty** body) + `x-amz-sdk-checksum-algorithm=CRC32`
+  while `X-Amz-SignedHeaders=host` only. Network trace: `OPTIONS …r2.cloudflarestorage.com/… → 204`, then the
+  `PUT` → "Failed to fetch". Reproduced 3× (empty body; 5-byte body; empty body + matching checksum headers).
+- **Hypothesised root cause (NOT yet proven — do not treat as final):** `@aws-sdk/client-s3@3.1020.0` defaults
+  `requestChecksumCalculation` to `WHEN_SUPPORTED`, so `getSignedUrl(PutObjectCommand)` bakes the flexible-checksum
+  params into the presigned URL; `buildR2Client()` in `artifacts/api-server/src/lib/orgStorage.ts` does not set
+  `requestChecksumCalculation`. Candidate fix: set `requestChecksumCalculation: "WHEN_REQUIRED"` on the S3Client.
+  **Must be proven** by reproducing the presigned URL before/after the setting in a controlled env (params
+  disappear) + a real/integration PUT of a non-empty payload succeeding, before applying.
+- **Version note (why this is not a deploy regression):** `@aws-sdk/client-s3@3.1020.0` was already pinned in
+  `pnpm-lock.yaml` at the previously-deployed build `2a20950`, i.e. the SDK version did not change with this
+  deploy. Whatever earlier report suggested "upload worked" needs re-verification; the current live evidence is
+  that browser upload does not complete.
+- **Do NOT close** DEBT-002 or DEBT-007 until the full chain passes live: UI upload → request-url → OPTIONS 204
+  → **PUT success** → create 201 → visible in UI → download 200/redirect → **SHA-256 match**; plus cross-tenant
+  download 403, unauthorized upload/presign still blocked, and an old R2 file still downloadable.
 - **What:** `GET /api/storage/r2-object/<objectKey>` returned **404 "Cannot GET …"** on Production for a valid
   R2 object (objectKey = `org_15/projects/0/<file>.png`), so an uploaded file could not be downloaded.
 - **Root cause (PROVEN, not guessed):** the R2 object key contains slashes. In front of the API, nginx
