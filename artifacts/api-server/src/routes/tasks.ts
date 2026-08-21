@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { tasksTable, usersTable, projectsTable, notificationsTable, wfInstancesTable } from "@workspace/db";
 import { eq, and, desc, isNull, or } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
@@ -78,7 +78,7 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
   // Build a scoped query using the direct organization_id column when available,
   // with a fallback to project membership for legacy rows (null organization_id).
   let tasks;
-  if (!isSysAdmin(user) && user.organizationId) {
+  if (!isSystemOwner(user) && user.organizationId) {
     const orgId = user.organizationId;
 
     // Legacy rows have no organization_id — scope them via project membership
@@ -203,7 +203,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!tasks[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Tenant isolation: non-sysAdmin users can only access tasks within their org
-  if (!isSysAdmin(user) && user.organizationId) {
+  if (!isSystemOwner(user) && user.organizationId) {
     const task = tasks[0];
     const belongsToOrg = task.organizationId === user.organizationId;
     // Legacy tasks (no organizationId) — verify via project membership
@@ -247,7 +247,7 @@ router.put("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!before) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Tenant isolation: verify the task belongs to the user's org
-  if (!isSysAdmin(user) && user.organizationId) {
+  if (!isSystemOwner(user) && user.organizationId) {
     const belongsToOrg = before.organizationId === user.organizationId;
     if (!belongsToOrg) {
       if (before.projectId) {

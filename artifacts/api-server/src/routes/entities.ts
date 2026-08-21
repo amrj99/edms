@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { entitiesTable, contactsTable } from "@workspace/db";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { parseBody } from "../lib/validate.js";
 import { requireInt } from "../lib/params.js";
@@ -15,7 +15,9 @@ router.use(requireAuth);
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getOrgId(req: any): number | null {
-  if (isSysAdmin(req.user) && req.query.orgId) return parseInt(req.query.orgId as string, 10) || null;
+  // DEBT-009: only system_owner may target another org via ?orgId (was isSysAdmin →
+  // tenant-admin cross-org IDOR on entities + contacts).
+  if (isSystemOwner(req.user) && req.query.orgId) return parseInt(req.query.orgId as string, 10) || null;
   return req.user?.organizationId ?? null;
 }
 

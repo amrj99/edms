@@ -425,7 +425,7 @@ router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
   // Tenant isolation: verify project belongs to the user's org
-  if (!isSysAdmin(user) && user.organizationId) {
+  if (!isSystemOwner(user) && user.organizationId) {
     const [project] = await db.select({ organizationId: projectsTable.organizationId })
       .from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
     if (!project) { res.status(404).json({ error: "Not Found" }); return; }
@@ -479,7 +479,7 @@ router.post("/:id/members", requireAuth, async (req, res): Promise<void> => {
   }
 
   // Verify project belongs to caller's org
-  if (!isSysAdmin(caller) && caller.organizationId && project.organizationId !== caller.organizationId) {
+  if (!isSystemOwner(caller) && caller.organizationId && project.organizationId !== caller.organizationId) {
     throw new TenantIsolationError({
       route: req.path, method: req.method,
       userId: caller.id, userOrgId: caller.organizationId,
@@ -522,6 +522,25 @@ router.post("/:id/members", requireAuth, async (req, res): Promise<void> => {
 router.delete("/:id/members/:userId", requireAuth, async (req, res): Promise<void> => {
   const projectId = requireInt(req.params.id);
   const userId = requireInt(req.params.userId);
+  const caller = req.user!;
+
+  // Verify project exists + tenant isolation (mirror POST /:id/members)
+  const [project] = await db.select({ id: projectsTable.id, organizationId: projectsTable.organizationId }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+  if (!project) {
+    res.status(404).json({ error: "Not Found", message: "Project not found" });
+    return;
+  }
+
+  // Verify project belongs to caller's org
+  if (!isSystemOwner(caller) && caller.organizationId && project.organizationId !== caller.organizationId) {
+    throw new TenantIsolationError({
+      route: req.path, method: req.method,
+      userId: caller.id, userOrgId: caller.organizationId,
+      attemptedResourceType: "project_member_remove", attemptedResourceId: projectId,
+      projectOrgId: project.organizationId, targetUserId: userId,
+    });
+  }
+
   await db.delete(projectMembersTable).where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, userId)));
   res.status(204).send();
 });

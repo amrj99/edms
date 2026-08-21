@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { eq, and, lt, count, sql, ne, isNotNull, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { assertProjectAccess } from "../lib/tenant-guards.js";
 import {param, paramInt, requireInt, type ProjectParams} from '../lib/params';
 
 const router = Router({ mergeParams: true });
@@ -20,6 +21,8 @@ const GOV_ROLES = ["system_owner", "admin", "project_manager", "document_control
 router.get("/governance/stats", requireAuth, requireRole(...GOV_ROLES), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  if (!(await assertProjectAccess(req, res, projectId, { notFoundOnDeny: true }))) return;
 
   const now = new Date();
 

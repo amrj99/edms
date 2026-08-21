@@ -5,6 +5,7 @@ import { eq, and } from "drizzle-orm";
 import { projectDepartmentsTable, departmentsTable, projectsTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
 import { isSysAdmin } from "../lib/auth.js";
+import { assertProjectAccess } from "../lib/tenant-guards.js";
 import {param, paramInt, requireInt, type ProjectParams} from '../lib/params';
 
 const router = Router({ mergeParams: true });
@@ -16,6 +17,8 @@ const router = Router({ mergeParams: true });
 router.get("/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = (req as any).user;
+
+  if (!(await assertProjectAccess(req, res, projectId, { notFoundOnDeny: true }))) return;
 
   const [project] = await db
     .select({ organizationId: projectsTable.organizationId })
@@ -47,6 +50,8 @@ router.post("/departments", requireAuth, async (req: Request<ProjectParams>, res
   const projectId = requireInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
+
+  if (!(await assertProjectAccess(req, res, projectId))) return;
 
   // Multi-tenant guard: department must belong to the same org as the project
   const [project] = await db
@@ -80,6 +85,8 @@ router.post("/departments", requireAuth, async (req: Request<ProjectParams>, res
 router.delete("/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const departmentId = requireInt(req.params.departmentId);
+
+  if (!(await assertProjectAccess(req, res, projectId))) return;
 
   await db
     .delete(projectDepartmentsTable)

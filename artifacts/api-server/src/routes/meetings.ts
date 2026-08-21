@@ -177,7 +177,7 @@ router.get("/:id", async (req: Request, res: Response): Promise<void> => {
   if (!row) { res.status(404).json({ error: "Meeting not found" }); return; }
 
   // Org isolation check
-  if (!isSysAdmin(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
+  if (!isSystemOwner(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
@@ -333,7 +333,7 @@ router.put("/:id", requireRole("admin", "project_manager", "document_controller"
     .from(meetingsTable).where(eq(meetingsTable.id, id));
 
   if (!before) { res.status(404).json({ error: "Meeting not found" }); return; }
-  if (!isSysAdmin(req.user!) && before.organizationId !== null && before.organizationId !== req.user!.organizationId) {
+  if (!isSystemOwner(req.user!) && before.organizationId !== null && before.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
@@ -417,7 +417,7 @@ router.post("/:id/action-items", requireRole("admin", "project_manager", "docume
   const [parentMeeting] = await db.select({ organizationId: meetingsTable.organizationId })
     .from(meetingsTable).where(eq(meetingsTable.id, meetingId)).limit(1);
   if (!parentMeeting) { res.status(404).json({ error: "Meeting not found" }); return; }
-  if (!isSysAdmin(req.user!) && parentMeeting.organizationId !== null && parentMeeting.organizationId !== req.user!.organizationId) {
+  if (!isSystemOwner(req.user!) && parentMeeting.organizationId !== null && parentMeeting.organizationId !== req.user!.organizationId) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
 

@@ -844,7 +844,7 @@ router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, re
   const user = req.user!;
 
   // Tenant isolation: verify the document belongs to the user's org before returning revisions
-  if (!isSysAdmin(user) && user.organizationId) {
+  if (!isSystemOwner(user) && user.organizationId) {
     const [doc] = await db.select({ organizationId: documentsTable.organizationId })
       .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
     if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
@@ -882,6 +882,14 @@ router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, re
 router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const docId   = requireInt(req.params.id);
   const projectId = parseInt(req.params.projectId ?? "0");
+
+  // Tenant isolation: the document must belong to the route projectId. The
+  // router-wide project gate validates :projectId against the caller's org, but
+  // without binding the lookup to projectId a caller could read another
+  // project's document activity by bare id (cross-project/tenant IDOR).
+  const [activityDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!activityDoc) { res.status(404).json({ error: "Not Found" }); return; }
 
   // 1 ── Revisions ───────────────────────────────────────────────────────────
   const revisionRows = await db
@@ -1008,6 +1016,14 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
 
 router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+
+  // Tenant isolation: bind the document to the route projectId before returning
+  // its review history, otherwise the bare-id lookup leaks another project's
+  // workflow transitions (cross-project/tenant IDOR).
+  const [reviewDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!reviewDoc) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Look up workflow instances for this document, then their transitions
   const instances = await db.select({ id: wfInstancesTable.id })
@@ -1066,6 +1082,13 @@ router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res
     }
   }
   const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
+
+  // Tenant isolation: the document must belong to the route projectId.
+  // applyDocumentReviewDecision updates by id only, so without this bound check
+  // an admin could approve a document in another project by bare id (IDOR).
+  const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!boundDoc) { res.status(404).json({ error: "Not Found" }); return; }
 
   const reviewer = req.user as any;
   const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
@@ -1136,6 +1159,13 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
     (rawDecision === "rejected" || rawDecision === "for_revision")
       ? rawDecision
       : "for_revision";
+
+  // Tenant isolation: the document must belong to the route projectId.
+  // applyDocumentReviewDecision updates by id only, so without this bound check
+  // an admin could reject a document in another project by bare id (IDOR).
+  const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!boundDoc) { res.status(404).json({ error: "Not Found" }); return; }
 
   const reviewer = req.user as any;
   const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
@@ -1914,6 +1944,14 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
 // GET  /api/projects/:projectId/documents/:id/departments
 router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+
+  // Tenant isolation: verify the document belongs to the route projectId before
+  // listing its departments (bare-id lookup is a cross-project/tenant IDOR).
+  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
+
   const rows = await db
     .select({
       id:           departmentsTable.id,
@@ -1933,6 +1971,12 @@ router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>,
   const projectId = requireInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
+
+  // Tenant isolation: the document must belong to the route projectId before we
+  // assign a department to it (bare-id insert is a cross-project/tenant IDOR).
+  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Multi-tenant guard: department must belong to the same org as the project
   const [project] = await db
@@ -1965,6 +2009,14 @@ router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>,
 router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const departmentId = requireInt(req.params.departmentId);
+  const projectId = requireInt(req.params.projectId);
+
+  // Tenant isolation: verify the document belongs to the route projectId before
+  // removing a department assignment (bare-id delete is a cross-tenant IDOR).
+  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
+
   await db
     .delete(documentDepartmentsTable)
     .where(and(

@@ -51,8 +51,10 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
   // ── Project-scoped query: all members of a project (cross-org collaboration) ──
   if (requestedProjectId) {
-    // Caller must be a member of the requested project (or sysAdmin)
-    if (!isSysAdmin(caller)) {
+    // DEBT-009: caller must be a member of the requested project. Only system_owner
+    // may bypass — a tenant ADMIN must NOT (isSysAdmin here let an org admin read any
+    // project's member PII across tenants by passing a foreign ?projectId).
+    if (!isSystemOwner(caller)) {
       const [selfMembership] = await db.select({ userId: projectMembersTable.userId })
         .from(projectMembersTable)
         .where(and(eq(projectMembersTable.projectId, requestedProjectId), eq(projectMembersTable.userId, caller.id)))
@@ -236,7 +238,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
 
   let limitedProfile = false;
 
-  if (!isSysAdmin(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
+  if (!isSystemOwner(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
     // Cross-org: only allowed if they share at least one project membership
     const callerProjectIds = (await db.select({ projectId: projectMembersTable.projectId })
       .from(projectMembersTable)

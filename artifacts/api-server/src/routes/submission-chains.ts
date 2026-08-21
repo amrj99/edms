@@ -12,6 +12,7 @@ import {
 import { eq, and, or, desc, asc } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
+import { assertProjectAccess } from "../lib/tenant-guards.js";
 import { requireInt } from "../lib/params.js";
 import type { Request, Response } from "express";
 import type { ProjectParams, ProjectItemParams } from "../lib/params.js";
@@ -106,6 +107,9 @@ router.post(
   requireMinRole("document_controller"),
   async (req: Request<ProjectParams>, res: Response): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
+    // DEBT-009: the project must belong to (or be accessible by) the caller — never
+    // create a chain against a client-supplied foreign projectId (cross-tenant write).
+    if (!(await assertProjectAccess(req, res, projectId))) return;
     const { title, description, type, documentIds } = req.body;
 
     if (!title) { res.status(400).json({ error: "Title is required" }); return; }
@@ -356,6 +360,17 @@ router.post(
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
     if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+
+    // Authorise: only the chain's originating org (or system_owner) may define /
+    // replace the party configuration. Prevents cross-tenant wiping of parties.
+    const caller = req.user!;
+    if (!isSystemOwner(caller) && chain.originatingOrgId !== caller.organizationId) {
+      res.status(403).json({
+        error: "Forbidden",
+        message: "Only the originating organisation can configure chain parties.",
+      });
+      return;
+    }
 
     // Reject modification once the chain has moved
     const [firstStep] = await db

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/db";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
@@ -14,7 +14,10 @@ router.use(requireAuth);
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getOrgId(req: any): number | null {
-  if (isSysAdmin(req.user) && req.query.orgId) return queryIntOrNull(req.query.orgId);
+  // DEBT-009: only the platform system_owner may target another org via ?orgId.
+  // Previously used isSysAdmin (admin||system_owner) → a tenant admin could pass
+  // ?orgId=<other> and read/mutate another tenant's departments (cross-tenant IDOR).
+  if (isSystemOwner(req.user) && req.query.orgId) return queryIntOrNull(req.query.orgId);
   return req.user?.organizationId ?? null;
 }
 
@@ -187,6 +190,18 @@ router.delete("/:id/members/:userId", requireMinRole("admin"), async (req, res):
 
   const deptId = requireInt(req.params.id);
   const userId = requireInt(req.params.userId);
+  const caller = (req as any).user;
+
+  // Tenant isolation: department must belong to caller's org (system_owner exempt)
+  const [dept] = await db
+    .select({ organizationId: departmentsTable.organizationId })
+    .from(departmentsTable)
+    .where(eq(departmentsTable.id, deptId))
+    .limit(1);
+  if (!dept) { res.status(404).json({ error: "Department not found" }); return; }
+  if (!isSystemOwner(caller) && dept.organizationId !== caller.organizationId) {
+    res.status(403).json({ error: "Forbidden" }); return;
+  }
 
   await db
     .delete(userDepartmentsTable)

@@ -20,16 +20,18 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   to `400`, and have the CORS `origin` callback resolve with `false` (clean rejection, no ACAO) instead of
   throwing — yielding a 403/no-CORS response rather than 500.
 
-## DEBT-002 — 🟠 OPEN: full Upload→Download E2E incomplete (upload works; DOWNLOAD leg blocked by DEBT-008)
-- **Status update 2026-08-21 (build `8ce1a9b`, live):** CORS **origin** fix intact (preflight `OPTIONS` → 204);
-  **upload now works** end-to-end via the real UI (DEBT-007 resolved: checksum-free presign + manual UI upload
-  succeeded → document appeared). **DEBT-002 remains OPEN** because the **download leg fails** — a real browser
-  navigation to the R2/S3 serve URL returns **401** (and the `&vt` view-token attempt returns **403**). Tracked
-  as **DEBT-008**. Close DEBT-002 only when the full live chain passes from the **real UI/navigation** (not
-  `fetch`, which injects Bearer): UI upload → PUT success → create 201 → visible in UI → **Download button →
-  valid view-token → redirect → bytes → SHA-256 match**.
-- **Earlier status (build `bd4658e`, superseded):** the PUT then failed under automated `fetch` — later shown to
-  be tooling artifacts; the real-UI upload works.
+## DEBT-002 — ✅ CLOSED: R2 upload→download full round-trip works LIVE (SHA-256 match)
+- **Severity:** HIGH · **Status:** **CLOSED 2026-08-21** by live Production evidence (build `3375200`).
+- **Journey (why closure was delayed, and how it was resolved):** the original blocker was R2 **CORS** — fixed
+  by adding `https://www.arcscale.org` to the `edms-files` bucket Allowed Origins (preflight `OPTIONS` → 204).
+  Final closure was then delayed by two further, independent defects surfaced by careful live testing:
+  first the **upload presign** (flexible-checksum → **DEBT-007**), then the **download / view-token** delivery
+  (**DEBT-008**). With both resolved, the **complete round-trip now passes on Production**.
+- **Live proof (`https://www.arcscale.org`, project 16, org 15, real UI + navigation-equivalent no-Bearer
+  requests):** R2 PUT → **200** · document create → **201** (doc 75) · appears in UI · download via view-token
+  (no Bearer) → serve **302** → R2 → **512 bytes** · **SHA-256 source == downloaded → MATCH** · an old R2 file
+  (Capture.PNG) still downloads (real PNG bytes) · token(A) cannot open file(B) → **403** · cross-tenant → **403**
+  · invalid token → **401**.
 
 ### DEBT-002 (original) — ✅ ROOT CAUSE FIXED (R2 CORS) — full E2E still blocked
 - **Severity:** HIGH · **Status:** **CORS FIX VERIFIED 2026-08-20** (owner added `https://www.arcscale.org` to
@@ -208,11 +210,28 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   download 403, unauthorized upload/presign still blocked, and an old R2 file still downloadable.
   *(Upload leg resolved 2026-08-21 — DEBT-007. Download leg → DEBT-008.)*
 
-## DEBT-008 — 🔴 HIGH: R2/S3 browser download via view-token fails
-- **Severity:** HIGH · **Status:** OPEN — Go-Live blocker (download leg of DEBT-002). Found 2026-08-21 by
-  **real browser navigation** on Production (owner clicked the UI download of a just-uploaded file). This is a
-  **pre-existing** R2/S3-specific defect, masked before by the DEBT-006 404 and exposed once routing was fixed.
-  It is NOT R2 (healthy — server-side `aws s3 ls` works), NOT CORS (preflight 204), NOT this deploy.
+## DEBT-008 — ✅ CLOSED: R2/S3 browser download via view-token
+- **Severity:** HIGH · **Status:** **CLOSED 2026-08-21** by live Production evidence (build `3375200`).
+- **Dual root cause (both proven by test before fixing):**
+  1. **Frontend** appended the view-token as `${url}?vt=${token}` onto a serve URL that already carried a query
+     (`?orgId=…`), producing a malformed `?orgId=…?vt=…` where `vt` was swallowed → a bare navigation carried no
+     usable token → **401**.
+  2. **Backend** compared the token's raw URL string (`payload.url`, encoded key + `?orgId`) against
+     `expectedPathFn` (decoded, no query) verbatim → valid R2/S3 tokens never matched → **403**.
+- **Final fix:** a single central frontend helper `withViewToken()` (correct query merge; all download/preview
+  sites routed through it, no manual concatenation left) + backend **canonical** comparison via
+  `canonicalizeStorageServeUrl` (drop query, percent-decode, normalise slashes). **Object binding and tenant
+  isolation stay proven** — the full object key remains in the canonical form, so token(A) still fails for
+  file(B) and any orgId/key change is rejected; cross-tenant, soft-delete, expiry, and `view_file` token type
+  are unchanged (negative regression tests + live 403/401 confirm).
+- **Regression:** `api-server/test/debt-008-download-view-token.test.ts` (10 — incl. R2/S3/on-premise + 4
+  negatives) and `edms/src/lib/view-url.test.ts` (5). Live round-trip: SHA-256 match (see DEBT-002).
+- **reviewer/read-only presign (context, NOT reopened):** reviewer **project-scoped `request-url` → 403** was
+  already proven LIVE on Production and has a permanent regression (`debt-004-request-url-role-gate`); this
+  release did not touch that write-gate. DEBT-004 stays as-is.
+- **Discovery context (history):** found 2026-08-21 by real browser navigation; pre-existing R2/S3-specific
+  defect, masked by the DEBT-006 404 and exposed once routing was fixed. NOT R2 (healthy — server-side
+  `aws s3 ls` works), NOT CORS (preflight 204), NOT introduced by any of these deploys.
 - **Two symptoms proven by the REAL manual test (not `fetch`, which injects Bearer):**
   1. **navigation without a valid view-token → 401 "No token provided".** The download opens the R2/S3 serve
      URL via a top-level navigation (no `Authorization` header); the serve route requires a bearer OR a `?vt=`
@@ -266,3 +285,60 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   appears in UI → download → **sha256 match**; then confirm a read-only/unauthorized role cannot download what it
   shouldn't, Tenant B cannot download Tenant A's file even with the object key/URL, and **old R2 files remain
   downloadable**. Closes DEBT-002 + DEBT-006 together.
+
+## DEBT-009 — 🔴 HIGH (SECURITY): Cross-tenant IDOR on by-id / nested-resource endpoints
+- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-21 during the Final Security /
+  Penetration Review on Production (build `3375200`). **Confirmed exploitable on Production**, read-only, by any
+  authenticated tenant admin via ID enumeration — NO code change had been made when this was observed.
+- **Confirmed live (org 15 admin `arcscaleedms@gmail.com` read org 1 / platform data):**
+  - `GET /api/users/:id` → **200** for ANY user in ANY org — returned org 1's viewer (`amr_j_99@yahoo.com`),
+    org 1's **admin** (`archscale-admin@archscale.com`), and the platform **system_owner**
+    (`amr_j_98@hotmail.com`): email, name, role, organizationId, department, projectMemberships.
+  - `GET /api/projects/:id/members` → **200** — members of another org's project (even though `GET
+    /api/projects/:id` itself correctly returns 403).
+  - `GET /api/tasks/:id` → **200** — another org's task.
+- **Scope note:** the primary resource endpoints DO enforce isolation (`projects/:id`, `documents/:id`,
+  `organizations`, `/projects/:id/documents`, list `/users` → 403/scoped). The gap is on several **by-id /
+  nested / secondary** handlers that look up by ID **without also constraining by organizationId**. Do NOT
+  assume an endpoint is safe because its list endpoint is safe.
+- **Suspected (NOT proven — was NOT executed on Production to avoid a destructive action):**
+  `POST /api/users/:id/reset-password` and other state-changing admin/account/file actions — **suspected
+  high-risk path requiring code + test review**. If the same missing tenant-scope applies to a state-changing
+  action, it could enable **cross-tenant account takeover (Critical)**. Must be tested ONLY in isolated
+  test/staging, never on Production.
+- **Required closure (post-deploy, live):** cross-tenant on `users/:id`, `projects/:id/members`, `tasks/:id`,
+  and every additional path the inventory flags → **403/404**; reset-password / action routes cross-tenant →
+  blocked (destructive test on isolated env only); own-tenant behaviour still works; **system_owner** global
+  behaviour intact.
+- **Fix direction (architectural, minimal):** a trusted central guard/helper
+  (`assertResourceBelongsToOrg` / `loadResourceInOrg` / uniform tenant-scoped query) so every tenant-user
+  resource lookup is constrained by resource ID **AND** organizationId together — never trusting a client
+  `orgId`. Preserve `system_owner` global scope. Reproducer-first (Tenant A/B), then fix, then full re-sweep.
+
+### DEBT-009 — FIX APPLIED (in code) 2026-08-21 — pending Production verification
+- **Root cause:** `isSysAdmin` (= admin || system_owner) was used as a **cross-org bypass** in several handlers
+  and in two shared `getOrgId` helpers (departments, entities) that honoured a client `?orgId`; plus a set of
+  project-scoped / by-id routes did **no** org binding at all.
+- **Fix (three-pronged, minimal, no rewrite):**
+  1. **Central helpers** `getOrgId` (departments.ts, entities.ts): `isSysAdmin`→`isSystemOwner` — closes all
+     entities + departments cross-org routes in two lines. Never trusts client `?orgId`.
+  2. **Inline bypasses** `isSysAdmin`→`isSystemOwner` at the tenant-isolation checks in users (`/:id` + the
+     `?projectId` list branch), tasks, projects (members GET/POST), meetings, general, documents `/:id/revisions`,
+     calendar. (Within-org role gates that legitimately use `isSysAdmin` were left unchanged.)
+  3. **New shared guard** `lib/tenant-guards.ts` `assertProjectAccess(req,res,projectId)` (delegates to the
+     trusted `canAccessProject`, `system_owner`-only global bypass) applied to project-departments,
+     project-governance, project-role-overrides, submission-chains create; and resource↔projectId binding
+     (`and(id, projectId)`) added to documents (activity/reviews/approve/reject/departments), transmittals
+     (history/suggest-links), global-documents (revisions); plus explicit org/originator checks on
+     projects & departments member-delete and submission-chains setup-parties.
+- **`system_owner` global scope preserved** everywhere (verified by tests + full suite).
+- **Verification (code):** typecheck 0 · build 0 · **full backend suite 836/836** (clean candidate, no billing) ·
+  **41 permanent IDOR regression tests** (`security-idor-tenant-isolation.test.ts` 11 +
+  `security-idor-tenant-isolation-extended.test.ts` 30) covering own-tenant works / cross-tenant 403-404 /
+  spoofed-orgId rejected / lower-role no escalation / system_owner global / **no-data-change after reject** for
+  WRITE/DELETE/ACCOUNT · an independent IDOR **re-sweep** re-audited all 15 files (it caught 2 misses —
+  `users.ts` `?projectId` list branch + `submission-chains` create — both then fixed and re-tested).
+- **Still OPEN until Production verification (post-deploy):** on Production confirm cross-tenant `users/:id`,
+  `projects/:id/members`, `tasks/:id`, and the full inventory list → 403/404; own-tenant works; system_owner
+  intact; account/reset-password cross-tenant blocked (destructive tests on isolated env only). Do NOT close
+  DEBT-009 (and do NOT declare GO-LIVE) until this live pass succeeds.

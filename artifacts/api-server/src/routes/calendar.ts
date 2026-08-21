@@ -5,7 +5,7 @@ import {
   usersTable, projectsTable,
 } from "@workspace/db";
 import { eq, and, gte, lte, or, inArray } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSystemOwner } from "../lib/auth.js";
 
 const router = Router();
 
@@ -22,7 +22,7 @@ router.get("/events", requireAuth, async (req, res): Promise<void> => {
   try {
     // Tenant isolation: scope meetings to user's org via project membership
     let orgMeetingFilter;
-    if (!isSysAdmin(user) && user.organizationId) {
+    if (!isSystemOwner(user) && user.organizationId) {
       const orgProjects = await db
         .select({ id: projectsTable.id })
         .from(projectsTable)

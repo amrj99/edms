@@ -674,6 +674,15 @@ router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (re
 // Get transmittal history
 router.get("/:id/history", async (req: Request<ProjectItemParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const projectId = requireInt(req.params.projectId);
+
+  // Tenant isolation: bind the transmittal to the route projectId before
+  // returning its history. The router-wide gate validates :projectId against the
+  // caller's org, but a bare-id lookup would leak another project's history.
+  const [transmittal] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+
   const rows = await db.select().from(transmittalHistoryTable)
     .where(eq(transmittalHistoryTable.transmittalId, id))
     .orderBy(desc(transmittalHistoryTable.createdAt));
@@ -706,7 +715,11 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
   const projectId = requireInt(req.params.projectId);
   const transmittalId = requireInt(req.params.id);
 
-  const [transmittal] = await db.select().from(transmittalsTable).where(eq(transmittalsTable.id, transmittalId));
+  // Tenant isolation: bind the transmittal to the route projectId. A bare-id
+  // lookup would let a caller build suggest-links against another project's
+  // transmittal (cross-project/tenant IDOR).
+  const [transmittal] = await db.select().from(transmittalsTable)
+    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)));
   if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
 
   const queryText = `${transmittal.subject ?? ""} ${transmittal.description ?? ""}`;

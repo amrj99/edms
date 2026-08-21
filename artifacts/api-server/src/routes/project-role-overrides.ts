@@ -3,8 +3,9 @@ import type { Request } from "express";
 import { db } from "@workspace/db";
 import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth, isSysAdmin } from "../lib/auth.js";
+import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
+import { assertProjectAccess } from "../lib/tenant-guards.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 
@@ -14,6 +15,7 @@ const router = Router({ mergeParams: true });
 router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
   const projectId = requireInt(req.params.projectId);
+  if (!(await assertProjectAccess(req, res, projectId))) return;
   const now = new Date();
 
   const rows = await db
@@ -56,6 +58,7 @@ router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), as
 router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
   const projectId = requireInt(req.params.projectId);
+  if (!(await assertProjectAccess(req, res, projectId))) return;
   const { userId, roleOverride, reason, expiresAt } = req.body;
 
   if (!userId || !roleOverride || !reason?.trim() || !expiresAt) {
@@ -80,7 +83,7 @@ router.post("/role-overrides", requireAuth, requireMinRole("project_manager"), a
   const [targetUser] = await db.select({ id: usersTable.id, organizationId: usersTable.organizationId })
     .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
   if (!targetUser) { res.status(404).json({ error: "User not found" }); return; }
-  if (!isSysAdmin(caller) && targetUser.organizationId !== caller.organizationId) {
+  if (!isSystemOwner(caller) && targetUser.organizationId !== caller.organizationId) {
     res.status(403).json({ error: "User must be in the same organisation" }); return;
   }
 
@@ -114,6 +117,7 @@ router.delete("/role-overrides/:overrideId", requireAuth, requireMinRole("projec
   const caller = req.user!;
   const overrideId = requireInt(req.params.overrideId);
   const projectId = requireInt(req.params.projectId);
+  if (!(await assertProjectAccess(req, res, projectId))) return;
 
   const [override] = await db.select().from(projectRoleOverridesTable)
     .where(and(eq(projectRoleOverridesTable.id, overrideId), eq(projectRoleOverridesTable.projectId, projectId)))

@@ -135,7 +135,7 @@ router.get("/correspondence/:id", async (req, res): Promise<void> => {
   }
 
   // Tenant isolation: verify org ownership (NULL organizationId = legacy record, allow access)
-  if (!isSysAdmin(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
     throw new TenantIsolationError({
       route: req.path, method: req.method,
       userId: user.id, userOrgId: user.organizationId,
@@ -223,6 +223,12 @@ router.post("/correspondence/:id/reply", async (req, res): Promise<void> => {
     return;
   }
 
+  const user = req.user!;
+  if (!isSystemOwner(user) && parent[0].organizationId !== null && parent[0].organizationId !== user.organizationId) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
+
   const [reply] = await db.insert(correspondenceTable).values({
     subject: subject || `Re: ${parent[0].subject}`,
     type: parent[0].type,
@@ -256,7 +262,7 @@ router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Tenant isolation
-  if (!isSysAdmin(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
     throw new TenantIsolationError({
       route: req.path, method: req.method,
       userId: user.id, userOrgId: user.organizationId,
@@ -276,10 +282,15 @@ router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
 // ─── GET /general/correspondence/:id/share ────────────────────────────────────
 router.get("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
+  const user = req.user!;
   const [corr] = await db
-    .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt })
+    .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt, organizationId: correspondenceTable.organizationId })
     .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+  if (!isSystemOwner(user) && corr.organizationId !== null && corr.organizationId !== user.organizationId) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
   res.json({ hasShareLink: !!corr.hasShareLink, expiresAt: corr.expiresAt });
 });
 
@@ -323,7 +334,7 @@ router.delete("/correspondence/:id", requireAuth, async (req, res): Promise<void
   if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
 
   // Tenant isolation: must belong to same org
-  if (!isSysAdmin(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
+  if (!isSystemOwner(user) && existing.organizationId !== null && existing.organizationId !== user.organizationId) {
     throw new TenantIsolationError({
       route: req.path, method: req.method,
       userId: user.id, userOrgId: user.organizationId,

@@ -308,6 +308,44 @@ router.get("/:id/revisions", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid document id" }); return; }
 
+  // Tenant isolation: this router has no project gate, so mirror GET /:id —
+  // org-boundary + project-membership check (system_owner bypasses) — before
+  // returning revisions. Otherwise revisions leak by bare id (cross-tenant IDOR).
+  const user = req.user!;
+  const [doc] = await db.select({
+    doc: documentsTable,
+    project: projectsTable,
+  })
+    .from(documentsTable)
+    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+    .where(eq(documentsTable.id, id))
+    .limit(1);
+
+  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+
+  if (!isSystemOwner(user)) {
+    // Org boundary: document's project must belong to the caller's org.
+    if (doc.project?.organizationId !== user.organizationId) {
+      res.status(403).json({ error: "Forbidden" }); return;
+    }
+    // Project membership: caller must be a member of the document's project.
+    if (doc.doc.projectId) {
+      const [membership] = await db
+        .select({ id: projectMembersTable.id })
+        .from(projectMembersTable)
+        .where(
+          and(
+            eq(projectMembersTable.projectId, doc.doc.projectId),
+            eq(projectMembersTable.userId, user.id),
+          ),
+        )
+        .limit(1);
+      if (!membership) {
+        res.status(403).json({ error: "Forbidden: not a member of this project" }); return;
+      }
+    }
+  }
+
   const revisions = await db.select({
     rev:  documentRevisionsTable,
     user: usersTable,
