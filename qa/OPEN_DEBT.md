@@ -98,8 +98,27 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   (deploy the current build).
 
 ## DEBT-005 — 🔴 HIGH: document creation returns 500 on PRODUCTION for ALL roles (core function down)
-- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-20 completing the post-CORS upload
-  re-test on `https://www.arcscale.org`.
+- **Severity:** HIGH · **Status:** **ROOT CAUSE FIXED + PERMANENT MIGRATION ADDED 2026-08-21.** Production was
+  hot-fixed 2026-08-20 by adding the missing constraint (`ALTER TABLE ... ADD CONSTRAINT doc_seq_scope_unique`
+  — safe: constraint absent + 0 duplicate rows), and doc-create then returned 201. The schema drift is now
+  represented permanently in Git as migration **`0034_document_sequences_unique_repair.sql`** so every future
+  deploy (and any other baselined DB) is repaired without manual steps. Full production Upload-Document E2E
+  (create → UI → download → hash) still to be re-confirmed post-deploy together with DEBT-002/DEBT-006.
+- **Permanent fix (migration 0034):** idempotent `DO $$ … IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE
+  conname='doc_seq_scope_unique') THEN ALTER TABLE document_sequences ADD CONSTRAINT doc_seq_scope_unique
+  UNIQUE (project_id, organization_id, discipline, doc_type); END IF; END $$;`. Additive-only, guarded, safe
+  to re-run. Journal entry `0034_document_sequences_unique_repair` added via `drizzle-kit generate --custom`.
+- **Migration proof (2026-08-21, disposable UTF-8 DB via the real runtime migrator `dist/migrate.mjs`):**
+  (1) migrate-from-clean 0000..0034 → constraint present + `contype='u'`; the exact auto-numbering
+  `INSERT … ON CONFLICT (…) DO UPDATE SET last_seq = document_sequences.last_seq + 1` returns 1 then 2;
+  (2) idempotent re-run → success; (3) re-apply 0034 with the constraint ALREADY present (the prod-after-manual
+  -ALTER state / "next deploy won't fail") → `IF NOT EXISTS` skip, constraint count stays **exactly 1**, no error.
+- **Regression (permanent):** `test/debt-005-auto-numbering.test.ts` — asserts `doc_seq_scope_unique` exists and
+  is UNIQUE on the four scope columns on a clean schema; two creates in one scope (numbering format with `{SEQ}`,
+  no explicit documentNumber → forces the ON CONFLICT path) → **201** each with an incrementing sequence; a
+  different discipline scope uses its own counter. 3/3 green; full suite 787/787.
+- **Original context (kept for history):** Found 2026-08-20 completing the post-CORS upload re-test on
+  `https://www.arcscale.org`.
 - **What:** `POST /api/projects/:id/documents` returns **500 `{"error":"INTERNAL_ERROR"}`** on Production —
   verified as **admin** (role that has `canCreate`) with a minimal payload (`{title, direction:"outgoing"}`),
   and again during the real Upload-Document dialog (3× 500 after the file uploaded to R2 successfully). So a
@@ -116,3 +135,33 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
 - **Note:** the CORS re-test left one **orphan object** in R2 (`org_15/projects/0/…_r1-cors-fixed.png`) with no
   document record (create 500'd). Harmless; in the test tenant. Not deleted (no prod-data deletion without
   approval).
+
+## DEBT-006 — 🔴 HIGH: R2 object download returns 404 (files uploaded but not retrievable)
+- **Severity:** HIGH · **Status:** **ROOT CAUSE PROVEN + FIXED IN CODE 2026-08-21** — pending production
+  verification (full upload → download → hash after deploy). Go-Live blocker until the E2E confirms.
+- **What:** `GET /api/storage/r2-object/<objectKey>` returned **404 "Cannot GET …"** on Production for a valid
+  R2 object (objectKey = `org_15/projects/0/<file>.png`), so an uploaded file could not be downloaded.
+- **Root cause (PROVEN, not guessed):** the R2 object key contains slashes. In front of the API, nginx
+  `location /api/ { proxy_pass http://api:8080/api/; }` — proxy_pass **with a URI** normalises the request and
+  **decodes `%2F` → `/`**, so the key reaches Express with **raw** slashes. The old route used a single-segment
+  param `"/r2-object/:objectKey"` (Express 5: `:param` = `[^/]+`), which **cannot match a multi-slash path** →
+  404. Verified with two throwaway Express 5.2.1 repro scripts: `:objectKey` + `%2F` (encoded) → 200, but
+  `:objectKey` + **raw** slashes → 404 "Cannot GET" (exactly the prod symptom); `*objectKey` (splat) + raw
+  slashes → 200 with the rejoined key. The first hypothesis (Express breaks the *encoded* param) was **falsified**
+  by the repro before any code change — the true cause is nginx decoding + single-segment routing.
+- **Fix (small, in code — `routes/storage.ts`):** change the download routes from a single-segment param to a
+  **splat**: `"/r2-object/*objectKey"` and `"/s3-object/*objectKey"`. Express 5 delivers the splat as a string
+  array; the handler and the `requireAuthOrViewToken` view-token binding rejoin it with `.join("/")`
+  (`Array.isArray(k) ? k.join("/") : …`). Now both encoded (`%2F`) and raw-slash requests match.
+- **Authorization / isolation reviewed AT THE SAME TIME (no IDOR opened):** the pre-existing guards are
+  **preserved** and now covered by tests — `requireAuthOrViewToken` (401 if neither), `s3KeyBelongsToOrg`
+  (403 if the key prefix ≠ the claimed org), and `assertOrgAccess` (403 real cross-tenant guard). Verified:
+  Tenant B requesting Tenant A's key **via `?orgId=A`** → 403; Tenant B requesting Tenant A's key with **no
+  orgId** (orgId derived from the `org_A/` prefix — the "attacker knows the key" case) → 403; unauthenticated →
+  401; owner → 302 redirect to a presigned GET URL (both raw-slash and encoded forms).
+- **Regression (permanent):** `test/debt-006-r2-download-route.test.ts` — 5/5 green (routing: raw-slash + encoded
+  → 302; isolation: 401 / 403×2). Typecheck 0, build 0, full suite 787/787.
+- **Production verification still required (post-deploy):** Admin upload → R2 PUT → document create (201) →
+  appears in UI → download → **sha256 match**; then confirm a read-only/unauthorized role cannot download what it
+  shouldn't, Tenant B cannot download Tenant A's file even with the object key/URL, and **old R2 files remain
+  downloadable**. Closes DEBT-002 + DEBT-006 together.

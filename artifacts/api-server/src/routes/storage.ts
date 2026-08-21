@@ -828,13 +828,17 @@ router.get(
  * Object key format: {orgId}/{projectId}/{fileType}/{filename}
  */
 router.get(
-  "/s3-object/:objectKey",
-  requireAuthOrViewToken(req => `/api/storage/s3-object/${req.params.objectKey}`),
+  // DEBT-006: splat (*objectKey) — same nginx %2F-decoding issue as /r2-object.
+  "/s3-object/*objectKey",
+  requireAuthOrViewToken(req => {
+    const k = req.params.objectKey;
+    return `/api/storage/s3-object/${Array.isArray(k) ? k.join("/") : k}`;
+  }),
   async (req: Request, res: Response): Promise<void> => {
-  const rawKey = param(req.params.objectKey);
+  const kp = req.params.objectKey;
+  const objectKeyDecoded = Array.isArray(kp) ? kp.join("/") : decodeURIComponent(param(kp));
+  const rawKey = objectKeyDecoded;
   const orgIdStr = req.query.orgId as string;
-
-  const objectKeyDecoded = decodeURIComponent(rawKey);
   // Derive orgId: query param > key prefix (format: {orgId}/...) > session user
   const keyOrgId = parseInt(objectKeyDecoded.split("/")[0]) || null;
   const orgId = orgIdStr
@@ -923,13 +927,21 @@ router.get(
  * Enforces strict org ownership — redirects (302) to a 1-hour presigned R2 URL.
  */
 router.get(
-  "/r2-object/:objectKey",
-  requireAuthOrViewToken(req => `/api/storage/r2-object/${req.params.objectKey}`),
+  // DEBT-006: splat (*objectKey), NOT a single ":objectKey" segment. Behind nginx,
+  // proxy_pass normalises the URI and decodes %2F → the object key arrives with RAW
+  // slashes, which a single-segment param can never match (→ 404 "Cannot GET"). The
+  // splat captures the full remaining path; we rejoin it below. (Encoded direct-to-API
+  // requests decode to the same segments via Express, so both paths work.)
+  "/r2-object/*objectKey",
+  requireAuthOrViewToken(req => {
+    const k = req.params.objectKey;
+    return `/api/storage/r2-object/${Array.isArray(k) ? k.join("/") : k}`;
+  }),
   async (req: Request, res: Response): Promise<void> => {
-    const rawKey = param(req.params.objectKey);
+    const kp = req.params.objectKey;
+    const objectKeyDecoded = Array.isArray(kp) ? kp.join("/") : decodeURIComponent(param(kp));
+    const rawKey = objectKeyDecoded;
     const orgIdStr = req.query.orgId as string;
-
-    const objectKeyDecoded = decodeURIComponent(rawKey);
 
     // Derive orgId: query param > key prefix (org_N/...)  > session user
     const r2PrefixMatch = objectKeyDecoded.match(/^org_(\d+)\//);
