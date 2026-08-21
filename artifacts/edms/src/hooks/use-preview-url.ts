@@ -13,6 +13,7 @@
  *                  UUID-based filename. This is critical for inline PDF rendering in iframes.
  */
 import { useState, useEffect, useRef } from "react";
+import { withViewToken } from "@/lib/view-url";
 
 type PreviewState =
   | { status: "loading" }
@@ -95,8 +96,7 @@ export function usePreviewUrl(
             return;
           }
 
-          const ctPart = mimeType ? `&ct=${encodeURIComponent(mimeType)}` : "";
-          const finalUrl = `${fileUrl}?vt=${data.token}${ctPart}`;
+          const finalUrl = withViewToken(fileUrl, data.token, mimeType ? { ct: mimeType } : {});
           console.log(`[usePreviewUrl #${callId}] FINAL PDF URL: ${finalUrl}`);
           setState({ status: "ready", url: finalUrl });
         })

@@ -12,6 +12,7 @@
  *   activeFileUrl – URL of the currently selected attachment (for highlight)
  */
 import { useState, useRef } from "react";
+import { withViewToken } from "@/lib/view-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   File, FileText, Trash2, Download, Eye, Plus, Loader2,
@@ -264,7 +265,7 @@ export function DocumentFilesPanel({
                             const tok = localStorage.getItem("edms_token");
                             try {
                               const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                              if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                              if (r.ok) { const { token } = await r.json(); window.open(withViewToken(url, token), "_blank"); }
                               else window.open(url, "_blank");
                             } catch { window.open(url, "_blank"); }
                           })();

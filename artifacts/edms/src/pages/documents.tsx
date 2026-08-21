@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { withViewToken } from "@/lib/view-url";
 import { unwrapList } from "@/lib/unwrap-list";
 import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
@@ -666,7 +667,7 @@ export default function DocumentsPage() {
                             try {
                               const vtr = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
                               const { token } = vtr.ok ? await vtr.json() : { token: null };
-                              const fetchUrl = token ? `${url}?vt=${token}` : url;
+                              const fetchUrl = token ? withViewToken(url, token) : url;
                               const r = await fetch(fetchUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
                               if (!r.ok) throw new Error();
                               const blob = await r.blob();
@@ -806,7 +807,7 @@ export default function DocumentsPage() {
                       if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
                       const tok = localStorage.getItem("edms_token");
                       const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                      if (r.ok) { const { token } = await r.json(); window.open(`${url}?vt=${token}`, "_blank"); }
+                      if (r.ok) { const { token } = await r.json(); window.open(withViewToken(url, token), "_blank"); }
                       else window.open(url, "_blank");
                     }}
                   >

@@ -122,7 +122,15 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
         res.status(401).json({ error: "Invalid or expired view token" });
         return;
       }
-      if (payload.url !== expectedPath) {
+      // DEBT-008: compare by CANONICAL identity, not raw string. The token's url is
+      // the stored serve URL (percent-encoded key + ?orgId=…, e.g. from r2ServeUrl/
+      // s3ServeUrl) while expectedPathFn yields the decoded path with no query, so a
+      // raw !== always rejected valid R2/S3 view-tokens (→ 403). canonicalizeStorageServeUrl
+      // (the same identity used by the soft-delete guard: drop query, percent-decode,
+      // normalise slashes) collapses the two representations. Binding stays strict — the
+      // full object key remains in the canonical form, so a token for file A still fails
+      // for file B, and any orgId/key change still mismatches (proven by negative tests).
+      if (canonicalizeStorageServeUrl(String(payload.url)) !== canonicalReq) {
         // Security audit: token path mismatch — could be deliberate spoofing
         createAuditLog({
           userId: payload.userId as number | undefined,

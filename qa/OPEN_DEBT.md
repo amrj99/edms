@@ -20,13 +20,16 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   to `400`, and have the CORS `origin` callback resolve with `false` (clean rejection, no ACAO) instead of
   throwing — yielding a 403/no-CORS response rather than 500.
 
-## DEBT-002 — 🟠 OPEN: R2 CORS origin fixed, but full upload E2E still blocked (now by DEBT-007)
-- **Status update 2026-08-21 (build `bd4658e`, live):** the CORS **origin** fix is confirmed intact — the
-  browser preflight `OPTIONS` to the R2 presigned PUT returns **204** (origin `https://www.arcscale.org`
-  allowed). However the full Upload-Document journey **still cannot complete**: the actual `PUT` fails (see
-  **DEBT-007** — R2 presigned PUT rejected due to AWS-SDK flexible-checksum params). **DEBT-002 stays OPEN**
-  until the end-to-end chain passes live: UI upload → request-url → OPTIONS 204 → PUT success → create 201 →
-  visible in UI → download 200/redirect → SHA-256 match. DEBT-005 is no longer the blocker (closed); DEBT-007 is.
+## DEBT-002 — 🟠 OPEN: full Upload→Download E2E incomplete (upload works; DOWNLOAD leg blocked by DEBT-008)
+- **Status update 2026-08-21 (build `8ce1a9b`, live):** CORS **origin** fix intact (preflight `OPTIONS` → 204);
+  **upload now works** end-to-end via the real UI (DEBT-007 resolved: checksum-free presign + manual UI upload
+  succeeded → document appeared). **DEBT-002 remains OPEN** because the **download leg fails** — a real browser
+  navigation to the R2/S3 serve URL returns **401** (and the `&vt` view-token attempt returns **403**). Tracked
+  as **DEBT-008**. Close DEBT-002 only when the full live chain passes from the **real UI/navigation** (not
+  `fetch`, which injects Bearer): UI upload → PUT success → create 201 → visible in UI → **Download button →
+  valid view-token → redirect → bytes → SHA-256 match**.
+- **Earlier status (build `bd4658e`, superseded):** the PUT then failed under automated `fetch` — later shown to
+  be tooling artifacts; the real-UI upload works.
 
 ### DEBT-002 (original) — ✅ ROOT CAUSE FIXED (R2 CORS) — full E2E still blocked
 - **Severity:** HIGH · **Status:** **CORS FIX VERIFIED 2026-08-20** (owner added `https://www.arcscale.org` to
@@ -168,8 +171,17 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   generated). Cross-tenant: claiming another org's id → **403**; another org's key with own orgId (prefix
   mismatch) → **403**. So the splat routing fix + `s3KeyBelongsToOrg` + `assertOrgAccess` all hold on Production.
 
-## DEBT-007 — 🔴 HIGH: R2 presigned PUT rejected → browser upload to R2 broken
-- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-21 during the post-deploy live
+## DEBT-007 — ✅ RESOLVED (upload): checksum-free presign deployed; real-UI upload works LIVE
+- **Severity:** HIGH · **Status:** **RESOLVED 2026-08-21** for the upload path. Fix `requestChecksumCalculation:
+  "WHEN_REQUIRED"` deployed in build `8ce1a9b`; the presigned PUT URL on Production is now checksum-free
+  (verified live). **Real-UI upload confirmed working on Production** (owner manually uploaded a file via the
+  ArcScale UI in project 16 → the document appeared) — this is *manual real-browser* evidence, the authoritative
+  signal. **Evidence separation (important):** the earlier automated `fetch`-based PUT "failures" were
+  **automation-tooling artifacts** (the CDP browser layer + the app's fetch interceptor injecting Bearer),
+  NOT the product — do not count them against the product now that the manual real upload has succeeded.
+- **Note:** DEBT-007 covered the *upload* leg only. The full Upload→Download journey is still not complete
+  because the *download* leg is broken — tracked separately as **DEBT-008**. DEBT-002 therefore stays OPEN.
+- **Original diagnosis (kept for history):** Found 2026-08-21 during the post-deploy live
   Upload E2E on `https://www.arcscale.org` (build `bd4658e`). **Pre-existing** (not introduced by this deploy —
   see version note below); surfaced by careful live testing.
 - **What:** the browser `PUT` to the R2 presigned upload URL fails for **every** body (empty and non-empty,
@@ -194,6 +206,40 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
 - **Do NOT close** DEBT-002 or DEBT-007 until the full chain passes live: UI upload → request-url → OPTIONS 204
   → **PUT success** → create 201 → visible in UI → download 200/redirect → **SHA-256 match**; plus cross-tenant
   download 403, unauthorized upload/presign still blocked, and an old R2 file still downloadable.
+  *(Upload leg resolved 2026-08-21 — DEBT-007. Download leg → DEBT-008.)*
+
+## DEBT-008 — 🔴 HIGH: R2/S3 browser download via view-token fails
+- **Severity:** HIGH · **Status:** OPEN — Go-Live blocker (download leg of DEBT-002). Found 2026-08-21 by
+  **real browser navigation** on Production (owner clicked the UI download of a just-uploaded file). This is a
+  **pre-existing** R2/S3-specific defect, masked before by the DEBT-006 404 and exposed once routing was fixed.
+  It is NOT R2 (healthy — server-side `aws s3 ls` works), NOT CORS (preflight 204), NOT this deploy.
+- **Two symptoms proven by the REAL manual test (not `fetch`, which injects Bearer):**
+  1. **navigation without a valid view-token → 401 "No token provided".** The download opens the R2/S3 serve
+     URL via a top-level navigation (no `Authorization` header); the serve route requires a bearer OR a `?vt=`
+     view-token, so it returns 401. Observed URL: `…/r2-object/org_15%2F…Capture.PNG?orgId=15` → 401.
+  2. **attempt with `&vt=<token>` reached view-token validation but returned 403.** The token *was* parsed, but
+     the route rejected it — **suspected** representation mismatch between the URL signed into the token
+     (`payload.url`, e.g. the serveUrl WITH `?orgId=15` and a percent-encoded key) and the path built by the
+     serve route's `expectedPathFn` (decoded, no query). **This query/encoding explanation is a HYPOTHESIS and
+     must be proven by a backend test before any code change** (per owner instruction).
+- **Contributing frontend defect (to be proven by a reproducer):** the download sites append the token as
+  `${url}?vt=${token}`, but `r2ServeUrl`/`s3ServeUrl` already end with `?orgId=…`, so the result is a malformed
+  `?orgId=15?vt=…` where `vt` is swallowed into the `orgId` value and never parsed. On-premise serve URLs have
+  no query and are unaffected. Sites: `documents.tsx`, `project-detail.tsx`, `DocumentFilesPanel.tsx`,
+  `use-preview-url.ts` (+ any others a search reveals).
+- **Fix plan (owner-approved, NOT yet applied; reproducer-first):**
+  1. Reproducer/regression BEFORE the fix — (a) frontend: a realistic serveUrl containing `?orgId=15` +
+     current concatenation → `vt` is unparseable; (b) backend: a view-token minted from the current serveUrl is
+     rejected by `expectedPathFn` comparison. Do not treat the query/encoding cause as fact until (b) proves it.
+  2. Frontend: ONE central helper that appends the view-token with correct URL/query handling; route all sites
+     through it (no manual `${url}?vt=` concatenation anywhere).
+  3. Backend: apply the **minimum** safe canonicalization to the `payload.url` vs `expectedPath` comparison ONLY
+     if the reproducer proves the mismatch — WITHOUT weakening binding: a token for file A must still fail for
+     file B, and changing `orgId`/object key must still fail. Preserve cross-tenant isolation, org validation,
+     soft-delete restrictions, expiry, and `view_file` token type. Add negative tests for all of these.
+  4. Verify R2 + per-org S3 + on-premise all still work (shared helper/auth).
+  5. Release Gate; then stop for approval before commit/push/deploy. Close only after the full live journey
+     passes from the **real UI/navigation** (not `fetch`).
 - **What:** `GET /api/storage/r2-object/<objectKey>` returned **404 "Cannot GET …"** on Production for a valid
   R2 object (objectKey = `org_15/projects/0/<file>.png`), so an uploaded file could not be downloaded.
 - **Root cause (PROVEN, not guessed):** the R2 object key contains slashes. In front of the API, nginx
