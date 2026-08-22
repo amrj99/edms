@@ -56,21 +56,32 @@ export async function initRlsPolicies(): Promise<void> {
         sql.raw(`DROP POLICY IF EXISTS "${POLICY_NAME}" ON "${table}"`)
       );
 
-      // Create the org-isolation policy (permissive = OR semantics)
+      // Create the org-isolation policy — FAIL-CLOSED (DEBT-010).
+      //
+      // Previous policy was fail-OPEN: an unset/empty `app.current_org_id` was
+      // treated as "sysadmin bypass" and `organization_id IS NULL` rows were
+      // always visible. Combined with a pooled connection that never received the
+      // context, a query could see EVERY tenant's rows. The new policy denies by
+      // default: a row is visible/writable ONLY when the request is an explicit
+      // system_owner (server-set flag `app.is_system_owner`) OR the row's org
+      // equals the request's org. Missing context ⇒ both operands are NULL ⇒
+      // NULL (not true) ⇒ zero rows. `WITH CHECK` mirrors USING so INSERT/UPDATE
+      // cannot move a row into another tenant.
+      //
+      // NOTE (prerequisite before enabling RLS enforcement in prod): tenant rows
+      // must have a non-null organization_id (see DEBT-010 backfill) — this policy
+      // intentionally does NOT grant blanket visibility to organization_id IS NULL.
+      // Only `app.is_system_owner='true'` (never client-settable) is global.
+      const predicate = `
+        current_setting('app.is_system_owner', TRUE) = 'true'
+        OR organization_id = NULLIF(current_setting('app.current_org_id', TRUE), '')::integer
+      `;
       await db.execute(
         sql.raw(`
           CREATE POLICY "${POLICY_NAME}" ON "${table}"
           AS PERMISSIVE FOR ALL
-          USING (
-            -- 1. Rows with no org assignment are always visible (system-wide data)
-            organization_id IS NULL
-            OR
-            -- 2. Empty session variable = sysadmin bypass (sees all rows)
-            COALESCE(NULLIF(current_setting('app.current_org_id', TRUE), ''), NULL) IS NULL
-            OR
-            -- 3. Row belongs to the requesting org
-            organization_id = NULLIF(current_setting('app.current_org_id', TRUE), '')::integer
-          )
+          USING (${predicate})
+          WITH CHECK (${predicate})
         `)
       );
 

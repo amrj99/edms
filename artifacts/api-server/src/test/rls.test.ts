@@ -86,8 +86,14 @@ async function withRlsClient<T>(
   await client.connect();
 
   try {
-    const value = orgId === null ? "" : String(orgId);
-    await client.query("SELECT set_config('app.current_org_id', $1, FALSE)", [value]);
+    // DEBT-010 fail-closed model: system_owner is an EXPLICIT flag, not "empty org".
+    if (orgId === null) {
+      await client.query("SELECT set_config('app.is_system_owner', 'true', FALSE)");
+      await client.query("SELECT set_config('app.current_org_id', '', FALSE)");
+    } else {
+      await client.query("SELECT set_config('app.is_system_owner', 'false', FALSE)");
+      await client.query("SELECT set_config('app.current_org_id', $1, FALSE)", [String(orgId)]);
+    }
     return await fn(client);
   } finally {
     await client.end();
@@ -332,23 +338,64 @@ describe("RLS — bypass resistance", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("unset session variable (current_setting returns empty) triggers sysadmin bypass", async () => {
-    // When app.current_org_id is not set at all (new connection, no set_config),
-    // current_setting returns '' (with missing_ok=TRUE) → sysadmin bypass applies.
-    // Use rls_tester (non-superuser) so RLS policies are actually evaluated.
+  it("FAIL-CLOSED: unset session context sees ZERO rows (DEBT-010)", async () => {
+    // When neither app.current_org_id nor app.is_system_owner is set (raw pooled
+    // connection that never received context), the fail-closed policy must deny.
+    // This is the exact scenario that was fail-OPEN before DEBT-010.
     const client = new Client({ connectionString: rlsTesterUrl() });
     await client.connect();
 
     try {
-      // Do NOT call set_config — raw new connection
+      // Do NOT call set_config — raw new connection, no context at all.
       const result = await client.query(
         "SELECT id FROM documents WHERE id = $1",
         [fx.documentId],
       );
-      // Unset session = '' = sysadmin bypass → row is visible
-      expect(result.rows).toHaveLength(1);
+      expect(result.rows).toHaveLength(0); // missing context ⇒ deny, not bypass
     } finally {
       await client.end();
     }
+  });
+
+  it("FAIL-CLOSED: a client cannot self-elevate — is_system_owner is honoured only from server context", async () => {
+    // The flag is set by trusted middleware; here we prove that WITHOUT it a
+    // tenant context sees only its own rows (no ambient bypass path exists).
+    const rows = await withRlsClient(fx.orgB.id, async (client) =>
+      (await client.query("SELECT id FROM documents WHERE id = $1", [fx.documentId])).rows);
+    expect(rows).toHaveLength(0);
+  });
+});
+
+// ─── Write isolation (WITH CHECK) ───────────────────────────────────────────────
+
+describe("RLS — write isolation (WITH CHECK)", () => {
+  it("Org B session cannot INSERT a row stamped with Org A", async () => {
+    await expect(withRlsClient(fx.orgB.id, (client) =>
+      client.query(
+        `INSERT INTO documents (organization_id, project_id, created_by_id, document_number, title, revision, status)
+         VALUES ($1, $2, $3, 'RLS-CHK-XORG', 'x', 'A', 'draft')`,
+        [fx.orgA.id, fx.projectA.id, fx.userA.id],
+      ),
+    )).rejects.toThrow(); // WITH CHECK violation — cannot create a row in another tenant
+  });
+
+  it("Org A session CAN insert a row into its own org", async () => {
+    const res = await withRlsClient(fx.orgA.id, (client) =>
+      client.query(
+        `INSERT INTO documents (organization_id, project_id, created_by_id, document_number, title, revision, status)
+         VALUES ($1, $2, $3, 'RLS-CHK-OK', 'x', 'A', 'draft') RETURNING id`,
+        [fx.orgA.id, fx.projectA.id, fx.userA.id],
+      ),
+    );
+    expect(res.rows).toHaveLength(1);
+  });
+
+  it("Org B session cannot UPDATE an Org A row into visibility (0 rows affected)", async () => {
+    const res = await withRlsClient(fx.orgB.id, (client) =>
+      client.query("UPDATE documents SET title = 'HACKED' WHERE id = $1", [fx.documentId]));
+    expect(res.rowCount).toBe(0); // row invisible to Org B ⇒ nothing updated
+    // confirm unchanged from a privileged read
+    const [row] = await getTestDb().select().from(documentsTable).where(eq(documentsTable.id, fx.documentId));
+    expect(row.title).not.toBe("HACKED");
   });
 });

@@ -78,12 +78,16 @@ export async function setup(): Promise<void> {
       await client.query(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
       await client.query(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
       await client.query(`DROP POLICY IF EXISTS "${POLICY_NAME}" ON "${table}"`);
+      // FAIL-CLOSED policy — must mirror lib/rls-init.ts exactly (DEBT-010).
       await client.query(`
         CREATE POLICY "${POLICY_NAME}" ON "${table}"
         AS PERMISSIVE FOR ALL
         USING (
-          organization_id IS NULL
-          OR COALESCE(NULLIF(current_setting('app.current_org_id', TRUE), ''), NULL) IS NULL
+          current_setting('app.is_system_owner', TRUE) = 'true'
+          OR organization_id = NULLIF(current_setting('app.current_org_id', TRUE), '')::integer
+        )
+        WITH CHECK (
+          current_setting('app.is_system_owner', TRUE) = 'true'
           OR organization_id = NULLIF(current_setting('app.current_org_id', TRUE), '')::integer
         )
       `);

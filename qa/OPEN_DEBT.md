@@ -342,3 +342,52 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   `projects/:id/members`, `tasks/:id`, and the full inventory list → 403/404; own-tenant works; system_owner
   intact; account/reset-password cross-tenant blocked (destructive tests on isolated env only). Do NOT close
   DEBT-009 (and do NOT declare GO-LIVE) until this live pass succeeds.
+
+## DEBT-SEC-A — 🔴 HIGH (SECURITY): runtime DB role is SUPERUSER + BYPASSRLS
+- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-22 (read-only diagnostic on
+  Production): `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user` → **`edms` = t / t**.
+- **Impact:** the application connects as a PostgreSQL **superuser with BYPASSRLS** that also owns all 13
+  tenant tables. Consequences: (1) **RLS is 100% inert** for the app — every RLS policy + `FORCE ROW LEVEL
+  SECURITY` is bypassed, so there is NO database-layer isolation backstop; the only tenant isolation is the
+  application layer (DEBT-009). (2) Least-privilege violation — any SQL-injection or app compromise = full DB
+  control (all tenants, DROP, `COPY PROGRAM` OS exec). Fix = least-privilege role separation (DEBT-010 step 1).
+
+## DEBT-010 — 🔴 HIGH: real DB-layer tenant isolation (RLS) + least privilege (EPIC)
+- **Severity:** HIGH · **Status:** IN PROGRESS (isolated env). Defense-in-depth so a forgotten app-layer check
+  cannot leak across tenants. **All work on isolated env; production cutover is a separate gated deploy.**
+- **① fail-closed RLS policy — ✅ DONE (in code, proven on isolated env) 2026-08-22:** the previous policy was
+  **fail-OPEN** (missing `app.current_org_id` ⇒ "sysadmin bypass" ⇒ all tenants' rows visible; `organization_id
+  IS NULL` always visible) and had **no `WITH CHECK`**. Rewritten in `lib/rls-init.ts` (+ mirror in
+  `test/global-setup.ts`) to **fail-closed**: `USING/WITH CHECK ( current_setting('app.is_system_owner',true)
+  ='true' OR organization_id = NULLIF(current_setting('app.current_org_id',true),'')::int )`. Missing context ⇒
+  both NULL ⇒ deny (0 rows). `app.is_system_owner` is server-set only (never client-settable);
+  `middlewares/rls-context.ts` now sets both vars. **Proof:** `test/rls.test.ts` — 16 tests under a
+  non-superuser `rls_tester` role: cross-tenant read 0 · own-org visible · **missing-context 0 (was fail-open)**
+  · **WITH CHECK blocks cross-org INSERT** · cross-org UPDATE affects 0 rows + data unchanged · system_owner
+  global only via the flag. typecheck 0 · full suite 847/847. **Safe to deploy (no prod behaviour change while
+  the app role is still superuser — policy is inert until the role cutover).**
+- **Remaining (gated — NOT started; production infra / bigger refactors):**
+  - **② least-privilege role separation (DEBT-SEC-A):** create `edms_migrator` (owner/DDL) + `edms_app`
+    (LOGIN, NOSUPERUSER, NOBYPASSRLS, DML-only) + GRANTs + `ALTER DEFAULT PRIVILEGES` + move table ownership;
+    move `initRlsPolicies()` from app-startup (`bootstrap.ts`, runs as app role) to the **migration step**
+    (owner role); split `DATABASE_URL`(app) vs `MIGRATION_DATABASE_URL`(migrator) in entrypoint/compose. Keep
+    `edms` as an unused rollback/bootstrap account. **Production cutover = separate approved deploy** (prepare
+    roles → verify externally → switch DATABASE_URL → smoke).
+  - **③ transaction-local RLS context:** replace the session-scoped fire-and-forget `set_config(...,FALSE)`
+    with per-request `SET LOCAL` on one connection (AsyncLocalStorage + `currentDb()`), so the context reliably
+    reaches every query. Architecture decision pending: (A) central `currentDb()` refactor vs (B) transitional
+    handler-wrapped transaction.
+  - **④ verify-security-posture** gate in entrypoint: fail the deploy if runtime role has rolsuper/rolbypassrls,
+    if `edms_app` owns any table, or if any tenant table lacks ENABLE+FORCE / has an unexpected `pg_policy` row.
+  - **⑤ organization_id backfill** for projectId-scoped hot tables (documents/transmittals/project_members) +
+    composite FK `(id, organization_id)` — prerequisite before RLS enforcement (rows must have non-null org).
+  - **⑥ RLS enforcement tests under the real `edms_app` role** (extend the existing `rls_tester` pattern).
+
+## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
+- **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
+  there is **no `auth_version`** and role/disable changes bump nothing (DEBT-003 covered refresh
+  rotation/idle/absolute/logout, NOT immediate privilege-change invalidation).
+- **Fix (planned):** `users.auth_version` column + in JWT; check `is_active` + `auth_version` against DB on every
+  authenticated request (PK lookup, no Redis yet); on role-change/disable run one transaction (`SELECT … FOR
+  UPDATE` → bump `auth_version` → revoke all refresh tokens); prefer the DB role for sensitive authorization
+  over the JWT claim. Regression: old token rejected on the next request; old refresh rejected.
