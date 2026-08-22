@@ -366,8 +366,27 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   · **WITH CHECK blocks cross-org INSERT** · cross-org UPDATE affects 0 rows + data unchanged · system_owner
   global only via the flag. typecheck 0 · full suite 847/847. **Safe to deploy (no prod behaviour change while
   the app role is still superuser — policy is inert until the role cutover).**
-- **Remaining (gated — NOT started; production infra / bigger refactors):**
-  - **② least-privilege role separation (DEBT-SEC-A):** create `edms_migrator` (owner/DDL) + `edms_app`
+- **② role separation — ✅ PROVEN on isolated env 2026-08-22:** a throwaway proof built a fresh DB (real
+  schema via the migrator), transferred table ownership to `edms_migrator`, created least-privilege `edms_app`
+  (LOGIN/NOSUPERUSER/NOBYPASSRLS), applied grants + `ALTER DEFAULT PRIVILEGES`, then connected AS `edms_app`
+  and passed the full checklist: not superuser/bypassrls · owns 0 tables · own-tenant visible · cross-tenant 0
+  · missing-context 0 (fail-closed) · system_owner global via flag · WITH CHECK blocks cross-org INSERT · no
+  DDL · default privileges give future migrator tables auto-DML. (Production cutover = still gated.)
+- **③ transaction-local RLS context (path A) — ✅ DONE on isolated env 2026-08-22:** `@workspace/db` now has
+  `AsyncLocalStorage` + `currentDb()` + `runInTenantTx()` + a `db` Proxy (all 829 `import { db }` sites route
+  into the request's tenant transaction with zero changes; pool-backed outside a request). External-I/O
+  inventory first (read-only): no AI/HTTP in handlers; storage is I/O-then-DB (Phase 1/2); email is best-effort
+  post-commit; `correspondence send` email is awaited but OUTSIDE any transaction (auto-commit) — no change
+  needed. Proof `test/db-context-a3.test.ts` (8): same-tx/context · outside-scope=pool · concurrent A/B no
+  context leak · pool-reuse clean · missing-context 0 (fail-closed, non-superuser) · own-only · **no silent
+  wider fallback**. typecheck 0 · full suite **854/854** (Proxy is transparent). *(Remaining for cutover: wire
+  a per-request middleware that calls runInTenantTx — with the few I/O handlers kept as short units-of-work.)*
+- **④ verify-security-posture — ✅ DONE 2026-08-22:** `ops/verify-security-posture.sql` fails the deploy if the
+  runtime role is superuser/bypassrls, owns a tenant table, or a required table lacks ENABLE+FORCE / its single
+  org_isolation_policy, or the fail-closed no-context smoke returns >0 rows. Proven both ways on isolated env
+  (FAILS as `postgres` superuser, POSTURE OK as non-superuser `rls_tester`).
+- **Remaining (gated — production cutover / bigger integration):**
+  - **② production cutover (DEBT-SEC-A):** create `edms_migrator` (owner/DDL) + `edms_app`
     (LOGIN, NOSUPERUSER, NOBYPASSRLS, DML-only) + GRANTs + `ALTER DEFAULT PRIVILEGES` + move table ownership;
     move `initRlsPolicies()` from app-startup (`bootstrap.ts`, runs as app role) to the **migration step**
     (owner role); split `DATABASE_URL`(app) vs `MIGRATION_DATABASE_URL`(migrator) in entrypoint/compose. Keep
