@@ -410,3 +410,13 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   authenticated request (PK lookup, no Redis yet); on role-change/disable run one transaction (`SELECT … FOR
   UPDATE` → bump `auth_version` → revoke all refresh tokens); prefer the DB role for sensitive authorization
   over the JWT claim. Regression: old token rejected on the next request; old refresh rejected.
+
+## DEBT-012 — 🔎 read-only investigation PENDING: weekly Sentry (9× document_sequences, 2× CORS)
+- **Status:** OPEN — investigation only, **not touching DEBT-010**, no fix yet (owner directive 2026-08-23).
+- **Signal:** weekly Sentry report — **9 `document_sequences` errors** + **2 CORS errors** on Production.
+- **Context/expectation:** `document_sequences` auto-numbering was fixed (DEBT-005, migration 0034) — these 9
+  may predate the fix, or be a residual edge (e.g., a race on the ON CONFLICT upsert, or a tenant/prod-data
+  case). CORS ×2 may relate to DEBT-001 (disallowed-origin → 500) or the R2 preflight. **To be confirmed by a
+  separate Root-Cause report AFTER the DEBT-010 middleware wiring is complete** — do not infer cause yet.
+- **Action:** after middleware wiring → pull the actual Sentry stack traces / timestamps / affected orgs
+  (read-only) and produce a standalone Root-Cause report. No code change attributed to this until then.

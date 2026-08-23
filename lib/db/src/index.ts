@@ -68,16 +68,37 @@ interface TenantStore { tx: TenantTx; orgId: number | null; isSystemOwner: boole
 
 export const dbContext = new AsyncLocalStorage<TenantStore>();
 
+/**
+ * Marks that execution is inside an authenticated HTTP request that MUST be
+ * tenant-scoped. Set by the request middleware. Its presence flips the `db`
+ * Proxy to FAIL-CLOSED: inside a request, DB access is only allowed via a tenant
+ * transaction (runInTenantTx) — a bare `db` call with no active tx throws rather
+ * than silently falling back to the pool (which would run with no RLS context).
+ * Non-request code (bootstrap, migrations, tests, background jobs) never sets
+ * this marker and keeps the pool-backed fallback.
+ */
+export const requestContext = new AsyncLocalStorage<{ userId: number; orgId: number | null; isSystemOwner: boolean }>();
+
 /** The DB handle for the current execution: the tenant transaction if inside a
- *  runInTenantTx scope, otherwise the pool-backed base instance. */
+ *  runInTenantTx scope, otherwise the pool-backed base instance — UNLESS we are
+ *  inside a tenant request with no tx, which is a fail-closed error. */
 export function currentDb(): TenantTx | typeof baseDb {
   const store = dbContext.getStore();
-  return store ? store.tx : baseDb;
+  if (store) return store.tx;
+  if (requestContext.getStore()) {
+    throw new Error(
+      "Fail-closed DB access: `db` used inside a tenant request without an active " +
+      "transaction. Wrap DB work in withTenant()/runInTenantTx(); never fall back to " +
+      "the pool inside a tenant scope (it would bypass the RLS tenant context).",
+    );
+  }
+  return baseDb;
 }
 
 /** `db` transparently forwards to `currentDb()` so existing `import { db }` call
  *  sites become tenant-transaction-scoped inside a request with zero changes,
- *  and remain pool-backed everywhere else. */
+ *  and remain pool-backed for explicit non-request code. Inside a request without
+ *  a tx it throws (fail-closed) — no silent pool fallback. */
 export const db = new Proxy(baseDb, {
   get(_t, prop, receiver) {
     const active = currentDb();
