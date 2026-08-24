@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { setRlsContext } from "../middlewares/rls-context.js";
+import { withTenantRequest, readAutoWrap } from "../middlewares/tenant-scope.js";
 import { tenantRateLimit } from "../middlewares/tenant-rate-limit.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
@@ -51,6 +52,8 @@ import projectPartiesRouter from "./project-parties.js";
 import externalContactsRouter from "./external-contacts.js";
 import documentTypesRouter from "./document-types.js";
 import entitiesRouter from "./entities.js";
+import billingRouter from "./billing.js";
+import billingWebhookRouter from "./billing-webhook.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 import { requireOrg } from "../middlewares/require-org.js";
@@ -62,6 +65,12 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
+
+// Stripe webhook — UNAUTHENTICATED, mounted before the JWT/org gates because
+// Stripe presents no bearer token. Its raw body is set in app.ts for signature
+// verification. Path specificity: this handles POST /api/billing/webhook, so it
+// never reaches the authenticated "/billing" router mounted further below.
+router.use("/billing/webhook", billingWebhookRouter);
 
 // ── JWT pre-parse: lightweight, non-authoritative context population ───────────
 // Purpose: populate req.user early so every subsequent global middleware
@@ -136,6 +145,9 @@ router.use(shadowPlanMiddleware);
 router.use((req, res, next) => {
   const method = req.method.toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
+  // Billing must stay reachable: upgrading/paying is precisely how a read-only
+  // (downgraded/expired) org exits read-only mode. Blocking it would trap them.
+  if (req.path.startsWith("/billing")) return next();
   if (req.user?.role === "system_owner") return next();
   if (!req.user?.isReadOnlyOverride) return next();
 
@@ -157,7 +169,9 @@ router.use((req, res, next) => {
 });
 
 router.use("/organizations", organizationsRouter);
-router.use("/users", usersRouter);
+// DEBT-010 Hybrid-Y — converted router: fail-closed tenant scope + transitional
+// read auto-wrapper (writes use explicit withTenant(); reads auto-wrapped).
+router.use("/users", withTenantRequest, readAutoWrap, usersRouter);
 router.use("/projects", projectsRouter);
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
@@ -177,6 +191,7 @@ router.use("/audit-logs", auditLogsRouter);
 router.use("/general", generalRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
+router.use("/billing", billingRouter);
 router.use("/storage", storageRouter);
 router.use("/admin", adminRouter);
 router.use("/documents", globalDocumentsRouter);

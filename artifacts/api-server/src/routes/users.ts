@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, generateSecureToken, hashToken } from "../lib/auth.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { validatePasswordPolicy } from "../lib/security-settings.js";
 import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -133,7 +134,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 // create users. Without this gate any authenticated user (viewer, member, etc.)
 // could POST to this endpoint and create accounts with elevated roles — a
 // direct privilege escalation path.
-router.post("/", requireAuth, requireMinRole("admin"), parseBody(createUserSchema), async (req, res): Promise<void> => {
+router.post("/", requireAuth, requireMinRole("admin"), parseBody(createUserSchema), async (req, res, next): Promise<void> => {
   const caller = req.user!;
 
   // ── Onboarding flow: password is not required from admin.
@@ -151,81 +152,98 @@ router.post("/", requireAuth, requireMinRole("admin"), parseBody(createUserSchem
     return;
   }
 
-  // Enforce per-plan user limit.
   const targetOrgId = organizationId ? parseInt(String(organizationId)) : caller.organizationId;
-  if (targetOrgId && !isSystemOwner(caller)) {
-    const planId = await getOrgPlan(targetOrgId);
-    const plan = PLANS.find(p => p.id === planId);
-    if (plan && plan.maxUsers !== null) {
-      const [uc] = await db
-        .select({ cnt: count() })
-        .from(usersTable)
-        .where(and(eq(usersTable.organizationId, targetOrgId), eq(usersTable.isActive, true)));
-      const currentCount = Number(uc?.cnt ?? 0);
-      if (currentCount >= plan.maxUsers) {
-        res.status(403).json({
-          error: "USER_LIMIT_REACHED",
-          message: `Your ${plan.name} plan allows up to ${plan.maxUsers} users. Please upgrade to add more.`,
-        });
-        return;
-      }
-    }
-  }
 
   // Only system_owner may create users in a different organization.
   const resolvedOrgId = isSystemOwner(caller)
     ? (organizationId ? parseInt(String(organizationId)) : null)
     : (caller.organizationId ?? null);
 
-  // Create user with a random temporary password hash (never exposed).
-  // The real password is set by the user via the onboarding link.
+  // CPU-bound work OUTSIDE the tenant transaction (never hold a connection during
+  // bcrypt hashing). Token material is generated here too.
   const tempPassword = generateSecureToken(); // random, never sent to anyone
-  const [user] = await db.insert(usersTable).values({
-    email: email.toLowerCase(),
-    passwordHash: await hashPassword(tempPassword),
-    firstName,
-    lastName,
-    role,
-    organizationId: resolvedOrgId,
-    isActive: true,
-    mustChangePassword: true,
-  }).returning();
-
-  // Generate onboarding token (48h TTL) — reuses password_reset_tokens table.
+  const passwordHash = await hashPassword(tempPassword);
   const onboardingToken = generateSecureToken();
+  const onboardingTokenHash = hashToken(onboardingToken);
   const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
-  await db.insert(passwordResetTokensTable).values({
-    userId: user.id,
-    organizationId: resolvedOrgId,
-    token: hashToken(onboardingToken),
-    expiresAt,
-  });
 
-  // Resolve org name for email
-  let orgName = "ArcScale EDMS";
-  if (resolvedOrgId) {
-    const [org] = await db.select({ name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, resolvedOrgId)).limit(1);
-    if (org) orgName = org.name;
-  }
+  try {
+    const outcome = await withTenant(async () => {
+      // Enforce per-plan user limit.
+      if (targetOrgId && !isSystemOwner(caller)) {
+        const planId = await getOrgPlan(targetOrgId);
+        const plan = PLANS.find(p => p.id === planId);
+        if (plan && plan.maxUsers !== null) {
+          const [uc] = await db
+            .select({ cnt: count() })
+            .from(usersTable)
+            .where(and(eq(usersTable.organizationId, targetOrgId), eq(usersTable.isActive, true)));
+          const currentCount = Number(uc?.cnt ?? 0);
+          if (currentCount >= plan.maxUsers) {
+            return { kind: "limit" as const, planName: plan.name, maxUsers: plan.maxUsers };
+          }
+        }
+      }
 
-  // Send onboarding email — fire and forget
-  const setPasswordUrl = `${APP_URL}/set-password?token=${onboardingToken}`;
-  sendOnboardingEmail({ to: user.email, firstName: user.firstName, organizationName: orgName, setPasswordUrl }).catch(() => {});
+      const [user] = await db.insert(usersTable).values({
+        email: email.toLowerCase(),
+        passwordHash,
+        firstName,
+        lastName,
+        role,
+        organizationId: resolvedOrgId,
+        isActive: true,
+        mustChangePassword: true,
+      }).returning();
 
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: resolvedOrgId ?? undefined,
-    action: "create",
-    entityType: "user",
-    entityId: user.id,
-    entityTitle: `${user.firstName} ${user.lastName}`,
-    details: { role: user.role, createdByRole: caller.role, onboardingEmailSent: true },
-  });
-  res.status(201).json({
-    id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
-    role: user.role, organizationId: user.organizationId, isActive: user.isActive,
-    mustChangePassword: user.mustChangePassword, createdAt: user.createdAt,
-  });
+      // Generate onboarding token (48h TTL) — reuses password_reset_tokens table.
+      await db.insert(passwordResetTokensTable).values({
+        userId: user.id,
+        organizationId: resolvedOrgId,
+        token: onboardingTokenHash,
+        expiresAt,
+      });
+
+      // Resolve org name for email
+      let orgName = "ArcScale EDMS";
+      if (resolvedOrgId) {
+        const [org] = await db.select({ name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, resolvedOrgId)).limit(1);
+        if (org) orgName = org.name;
+      }
+
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: resolvedOrgId ?? undefined,
+        action: "create",
+        entityType: "user",
+        entityId: user.id,
+        entityTitle: `${user.firstName} ${user.lastName}`,
+        details: { role: user.role, createdByRole: caller.role, onboardingEmailSent: true },
+      });
+
+      return { kind: "ok" as const, user, orgName };
+    });
+
+    if (outcome.kind === "limit") {
+      res.status(403).json({
+        error: "USER_LIMIT_REACHED",
+        message: `Your ${outcome.planName} plan allows up to ${outcome.maxUsers} users. Please upgrade to add more.`,
+      });
+      return;
+    }
+
+    // ── External I/O OUTSIDE the transaction (after commit) ──────────────────
+    // Send onboarding email — fire and forget.
+    const setPasswordUrl = `${APP_URL}/set-password?token=${onboardingToken}`;
+    sendOnboardingEmail({ to: outcome.user.email, firstName: outcome.user.firstName, organizationName: outcome.orgName, setPasswordUrl }).catch(() => {});
+
+    const { user } = outcome;
+    res.status(201).json({
+      id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
+      role: user.role, organizationId: user.organizationId, isActive: user.isActive,
+      mustChangePassword: user.mustChangePassword, createdAt: user.createdAt,
+    });
+  } catch (e) { next(e); }
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
@@ -302,7 +320,7 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   });
 });
 
-router.put("/:id", requireAuth, parseBody(updateUserSchema), async (req, res): Promise<void> => {
+router.put("/:id", requireAuth, parseBody(updateUserSchema), async (req, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const isSelf = caller.id === id;
@@ -310,21 +328,6 @@ router.put("/:id", requireAuth, parseBody(updateUserSchema), async (req, res): P
   // sysAdmins can edit any user; regular users can only edit themselves
   if (!isSysAdmin(caller) && !isSelf) {
     res.status(403).json({ error: "Forbidden" }); return;
-  }
-
-  // ── P1 security fix: org boundary for PUT ──────────────────────────────────
-  // Without this check an org admin could modify any user in any org — changing
-  // their role, disabling their account, or updating their profile. Verified
-  // exploitable in T13 live testing: admin (org1) → PUT user (org2) → 200.
-  // system_owner spans all orgs by design; org admins must stay within their org.
-  if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
-    const [target] = await db.select({ organizationId: usersTable.organizationId })
-      .from(usersTable).where(eq(usersTable.id, id)).limit(1);
-    if (!target) { res.status(404).json({ error: "Not Found" }); return; }
-    if (target.organizationId !== caller.organizationId) {
-      res.status(403).json({ error: "Forbidden", message: "Cross-organization modification denied." });
-      return;
-    }
   }
 
   // Non-admins cannot change privileged fields on their own profile
@@ -352,24 +355,48 @@ router.put("/:id", requireAuth, parseBody(updateUserSchema), async (req, res): P
   if (department !== undefined) updateSet.department = department || null;
 
   const changedFields = Object.keys(updateSet).filter(k => k !== "updatedAt");
-  const [user] = await db.update(usersTable)
-    .set(updateSet)
-    .where(eq(usersTable.id, id))
-    .returning();
-  if (!user) { res.status(404).json({ error: "Not Found" }); return; }
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId ?? undefined,
-    action: "update",
-    entityType: "user",
-    entityId: id,
-    entityTitle: `${user.firstName} ${user.lastName}`,
-    details: { callerRole: caller.role, changedFields },
-  });
-  res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, department: user.department, isActive: user.isActive, createdAt: user.createdAt });
+
+  try {
+    const outcome = await withTenant(async () => {
+      // ── P1 security fix: org boundary for PUT ──────────────────────────────
+      // Without this check an org admin could modify any user in any org. Verified
+      // exploitable in T13 live testing: admin (org1) → PUT user (org2) → 200.
+      // system_owner spans all orgs by design; org admins stay within their org.
+      if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
+        const [target] = await db.select({ organizationId: usersTable.organizationId })
+          .from(usersTable).where(eq(usersTable.id, id)).limit(1);
+        if (!target) return { kind: "notfound" as const };
+        if (target.organizationId !== caller.organizationId) return { kind: "crossorg" as const };
+      }
+
+      const [user] = await db.update(usersTable)
+        .set(updateSet)
+        .where(eq(usersTable.id, id))
+        .returning();
+      if (!user) return { kind: "notfound" as const };
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId ?? undefined,
+        action: "update",
+        entityType: "user",
+        entityId: id,
+        entityTitle: `${user.firstName} ${user.lastName}`,
+        details: { callerRole: caller.role, changedFields },
+      });
+      return { kind: "ok" as const, user };
+    });
+
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+    if (outcome.kind === "crossorg") {
+      res.status(403).json({ error: "Forbidden", message: "Cross-organization modification denied." });
+      return;
+    }
+    const { user } = outcome;
+    res.json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, organizationId: user.organizationId, department: user.department, isActive: user.isActive, createdAt: user.createdAt });
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
+router.delete("/:id", requireAuth, async (req, res, next): Promise<void> => {
   const caller = req.user!;
 
   // ── Role guard ─────────────────────────────────────────────────────────────
@@ -387,71 +414,72 @@ router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
     return;
   }
 
-  // Fetch the target user before acting on it.
-  const [target] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
-  if (!target) {
-    res.status(404).json({ error: "Not Found" });
-    return;
-  }
-
-  // ── system_owner protection (check BEFORE org boundary) ───────────────────
-  // system_owner accounts have no organizationId (null). If the org boundary
-  // check ran first, it would fire with a misleading "cross-organization"
-  // message because null !== caller.organizationId. Check role first so the
-  // correct, accurate message is returned.
-  if (target.role === "system_owner") {
-    res.status(403).json({ error: "Forbidden", message: "System owner accounts cannot be deleted via the API." });
-    return;
-  }
-
-  // ── Org boundary check ─────────────────────────────────────────────────────
-  // system_owner spans all orgs by design; org admins must stay within their org.
-  if (!isSystemOwner(caller) && target.organizationId !== caller.organizationId) {
-    res.status(403).json({ error: "Forbidden", message: "Cross-organization deletion denied." });
-    return;
-  }
-
   try {
-    await db.delete(usersTable).where(eq(usersTable.id, id));
-  } catch (err: any) {
-    // FK violations occur when the user has project memberships, tasks, or
-    // other related records. Hard deletion requires clearing those first.
-    // Return 409 so the caller understands why (rather than a 500).
-    //
-    // Drizzle-orm wraps the underlying pg error — the PostgreSQL error code
-    // (23503 = foreign_key_violation) may be on err.code, err.cause.code, or
-    // somewhere in the stringified error. Check all three to be safe.
-    const errStr = String(err?.message ?? "") + String(err?.stack ?? "");
-    const isFkViolation =
-      err?.code === "23503" ||
-      err?.cause?.code === "23503" ||
-      errStr.includes("23503") ||
-      errStr.toLowerCase().includes("foreign key");
+    const outcome = await withTenant(async () => {
+      // Fetch the target user before acting on it.
+      const [target] = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+      if (!target) return { kind: "notfound" as const };
 
-    if (isFkViolation) {
-      res.status(409).json({
-        error: "Conflict",
-        message: "This user has related records (project memberships, tasks, etc.) and cannot be hard-deleted. Deactivate the account instead: PUT /:id with { isActive: false }.",
+      // ── system_owner protection (check BEFORE org boundary) ───────────────
+      // system_owner accounts have no organizationId (null). Check role first so
+      // the correct, accurate message is returned (not a misleading cross-org one).
+      if (target.role === "system_owner") return { kind: "sysowner" as const };
+
+      // ── Org boundary check ───────────────────────────────────────────────
+      // system_owner spans all orgs by design; org admins stay within their org.
+      if (!isSystemOwner(caller) && target.organizationId !== caller.organizationId) {
+        return { kind: "crossorg" as const };
+      }
+
+      try {
+        await db.delete(usersTable).where(eq(usersTable.id, id));
+      } catch (err: any) {
+        // FK violations occur when the user has project memberships, tasks, or
+        // other related records. Hard deletion requires clearing those first.
+        // Drizzle-orm wraps the underlying pg error — the PostgreSQL error code
+        // (23503 = foreign_key_violation) may be on err.code, err.cause.code, or
+        // somewhere in the stringified error. Check all three to be safe.
+        const errStr = String(err?.message ?? "") + String(err?.stack ?? "");
+        const isFkViolation =
+          err?.code === "23503" ||
+          err?.cause?.code === "23503" ||
+          errStr.includes("23503") ||
+          errStr.toLowerCase().includes("foreign key");
+        if (isFkViolation) return { kind: "conflict" as const };
+        throw err;
+      }
+
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId ?? undefined,
+        action: "delete",
+        entityType: "user",
+        entityId: id,
+        entityTitle: `${target.firstName} ${target.lastName}`,
+        details: { deletedUserRole: target.role, deletedUserOrg: target.organizationId, deletedByRole: caller.role },
       });
-      return;
+      return { kind: "ok" as const };
+    });
+
+    switch (outcome.kind) {
+      case "notfound":
+        res.status(404).json({ error: "Not Found" }); return;
+      case "sysowner":
+        res.status(403).json({ error: "Forbidden", message: "System owner accounts cannot be deleted via the API." }); return;
+      case "crossorg":
+        res.status(403).json({ error: "Forbidden", message: "Cross-organization deletion denied." }); return;
+      case "conflict":
+        res.status(409).json({
+          error: "Conflict",
+          message: "This user has related records (project memberships, tasks, etc.) and cannot be hard-deleted. Deactivate the account instead: PUT /:id with { isActive: false }.",
+        }); return;
+      default:
+        res.status(204).send(); return;
     }
-    throw err;
-  }
-
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId ?? undefined,
-    action: "delete",
-    entityType: "user",
-    entityId: id,
-    entityTitle: `${target.firstName} ${target.lastName}`,
-    details: { deletedUserRole: target.role, deletedUserOrg: target.organizationId, deletedByRole: caller.role },
-  });
-
-  res.status(204).send();
+  } catch (e) { next(e); }
 });
 
-router.post("/:id/reset-password", requireAuth, async (req, res): Promise<void> => {
+router.post("/:id/reset-password", requireAuth, async (req, res, next): Promise<void> => {
   const caller = req.user!;
   const id = requireInt(req.params.id);
   const isSelf = caller.id === id;
@@ -461,42 +489,54 @@ router.post("/:id/reset-password", requireAuth, async (req, res): Promise<void> 
     res.status(403).json({ error: "Forbidden" }); return;
   }
 
-  // ── P1 security fix: org boundary for reset-password ─────────────────────
-  // Without this check an org admin could reset any user's password across orgs
-  // — a direct account takeover path. Verified exploitable in T12 live testing:
-  // admin (org1) → POST /users/5/reset-password (org2) → 200, password changed.
-  // system_owner spans all orgs by design; org admins must stay within their org.
-  if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
-    const [target] = await db.select({ organizationId: usersTable.organizationId })
-      .from(usersTable).where(eq(usersTable.id, id)).limit(1);
-    if (!target) { res.status(404).json({ error: "Not Found" }); return; }
-    if (target.organizationId !== caller.organizationId) {
-      res.status(403).json({ error: "Forbidden", message: "Cross-organization password reset denied." });
-      return;
-    }
-  }
-
   const { newPassword } = req.body;
   if (!newPassword || newPassword.length < 8) {
     res.status(400).json({ error: "Password must be at least 8 characters" });
     return;
   }
+
+  // bcrypt hashing is CPU-bound — do it OUTSIDE the tenant transaction.
+  const passwordHash = await hashPassword(newPassword);
   const now = new Date();
-  const [user] = await db.update(usersTable)
-    .set({ passwordHash: await hashPassword(newPassword), passwordChangedAt: now, mustChangePassword: false, updatedAt: now })
-    .where(eq(usersTable.id, id))
-    .returning();
-  if (!user) { res.status(404).json({ error: "Not Found" }); return; }
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId ?? undefined,
-    action: "reset_password",
-    entityType: "user",
-    entityId: id,
-    entityTitle: `${user.firstName} ${user.lastName}`,
-    details: { callerRole: caller.role, isSelf },
-  });
-  res.json({ message: "Password reset successfully" });
+
+  try {
+    const outcome = await withTenant(async () => {
+      // ── P1 security fix: org boundary for reset-password ─────────────────
+      // Without this an org admin could reset any user's password across orgs — a
+      // direct account takeover path. Verified exploitable in T12 live testing:
+      // admin (org1) → POST /users/5/reset-password (org2) → 200, password changed.
+      // system_owner spans all orgs by design; org admins stay within their org.
+      if (isSysAdmin(caller) && !isSystemOwner(caller) && !isSelf) {
+        const [target] = await db.select({ organizationId: usersTable.organizationId })
+          .from(usersTable).where(eq(usersTable.id, id)).limit(1);
+        if (!target) return { kind: "notfound" as const };
+        if (target.organizationId !== caller.organizationId) return { kind: "crossorg" as const };
+      }
+
+      const [user] = await db.update(usersTable)
+        .set({ passwordHash, passwordChangedAt: now, mustChangePassword: false, updatedAt: now })
+        .where(eq(usersTable.id, id))
+        .returning();
+      if (!user) return { kind: "notfound" as const };
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId ?? undefined,
+        action: "reset_password",
+        entityType: "user",
+        entityId: id,
+        entityTitle: `${user.firstName} ${user.lastName}`,
+        details: { callerRole: caller.role, isSelf },
+      });
+      return { kind: "ok" as const };
+    });
+
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+    if (outcome.kind === "crossorg") {
+      res.status(403).json({ error: "Forbidden", message: "Cross-organization password reset denied." });
+      return;
+    }
+    res.json({ message: "Password reset successfully" });
+  } catch (e) { next(e); }
 });
 
 export default router;
