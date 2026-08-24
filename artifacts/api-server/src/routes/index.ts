@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { setRlsContext } from "../middlewares/rls-context.js";
-import { withTenantRequest, readAutoWrap } from "../middlewares/tenant-scope.js";
+import { tenantScoped } from "../middlewares/tenant-scope.js";
 import { tenantRateLimit } from "../middlewares/tenant-rate-limit.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
@@ -171,7 +171,7 @@ router.use((req, res, next) => {
 router.use("/organizations", organizationsRouter);
 // DEBT-010 Hybrid-Y — converted router: fail-closed tenant scope + transitional
 // read auto-wrapper (writes use explicit withTenant(); reads auto-wrapped).
-router.use("/users", withTenantRequest, readAutoWrap, usersRouter);
+router.use("/users", tenantScoped(usersRouter));
 router.use("/projects", projectsRouter);
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);

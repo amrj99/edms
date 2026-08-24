@@ -92,3 +92,39 @@ export function makeReadAutoWrap(skip?: (req: Request) => boolean) {
 
 /** Default read auto-wrapper (no exclusions) — for routers without streaming. */
 export const readAutoWrap = makeReadAutoWrap();
+
+// ─── DEBT-010 Hybrid-Y — per-router mount primitive (leak-free) ───────────────
+// `tenantScoped(subRouter)` mounts a CONVERTED router with fail-closed tenant
+// scope: it establishes the request marker (so bare `db` fails closed) + the read
+// auto-wrapper, runs the sub-router, and — crucially — EXITS the tenant scope on
+// fall-through (requestContext.exit) so the marker never leaks to a NOT-yet-
+// converted router that shares the same mount prefix (e.g. projectsRouter at
+// "/projects" falling through to the unconverted "/projects/:projectId/documents").
+// This lets routers be converted one at a time even inside a nested prefix tree,
+// with unconverted routers behaving exactly as before (pool + session RLS).
+//
+// Public/unauthenticated requests are never scoped. `skipRead(req)` excludes
+// streaming/external-I/O GET routes from the read auto-wrapper.
+export function tenantScoped(
+  subRouter: (req: Request, res: Response, next: NextFunction) => void,
+  opts?: { skipRead?: (req: Request) => boolean },
+) {
+  const wrapRead = makeReadAutoWrap(opts?.skipRead);
+  return function tenantScopedMount(req: Request, res: Response, next: NextFunction): void {
+    const user = req.user;
+    // Unauthenticated: dispatch to the sub-router UNSCOPED (no marker) so its own
+    // requireAuth returns 401 — exactly the pre-conversion behaviour. (Returning
+    // next() here would skip the router and mis-report 404 for protected routes.)
+    if (!user) return subRouter(req, res, next);
+    requestContext.run(
+      { userId: user.id, orgId: user.organizationId ?? null, isSystemOwner: isSystemOwner(user) },
+      () => {
+        wrapRead(req, res, () => {
+          // On fall-through (this router did not handle the path) or error, LEAVE
+          // the tenant scope so downstream unconverted routers are unaffected.
+          subRouter(req, res, (err?: unknown) => requestContext.exit(() => next(err as never)));
+        });
+      },
+    );
+  };
+}

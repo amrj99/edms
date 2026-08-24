@@ -15,7 +15,7 @@ import express from "express";
 import request from "supertest";
 import { sql } from "drizzle-orm";
 import { db, pool, currentDb, dbContext } from "@workspace/db";
-import { withTenantRequest, withTenant } from "../middlewares/tenant-scope.js";
+import { withTenantRequest, withTenant, tenantScoped } from "../middlewares/tenant-scope.js";
 
 // ── fake auth: identity from headers (test only) ──────────────────────────────
 function fakeAuth(req: express.Request, _res: express.Response, next: express.NextFunction) {
@@ -114,6 +114,39 @@ describe("DEBT-010 ③ — per-request fail-closed wiring", () => {
   it("PROOF 6: external I/O runs OUTSIDE the tenant transaction", async () => {
     const r = await request(app).get("/io-after").set("x-user-id", "1").set("x-org-id", "111");
     expect(r.body.txHeldDuringIO).toBe(false);
+  });
+
+  it("PROOF 7: tenantScoped() does NOT leak the fail-closed marker to a downstream unconverted router (exit-on-fall-through)", async () => {
+    // A converted router that only handles /hit, mounted with tenantScoped, must
+    // NOT leave the marker on when it falls through to a sibling 'legacy' router
+    // that still uses bare db (pool). Without exit-on-fall-through the legacy
+    // write would throw fail-closed; with it, the legacy write runs on the pool.
+    const app2 = express();
+    app2.use(express.json());
+    app2.use(fakeAuth);
+
+    const converted = express.Router();
+    converted.get("/hit", async (_req, res, next) => {
+      try { res.json(await withTenant(async () => readCtx())); } catch (e) { next(e); }
+    });
+    app2.use(tenantScoped(converted));
+
+    // "legacy" (not yet converted) — bare db, no withTenant. Shares the request
+    // chain via fall-through from the tenantScoped mount above.
+    app2.post("/legacy-write", async (_req, res, next) => {
+      try {
+        const r = await (db as { execute: (q: unknown) => Promise<{ rows: Array<{ v: number }> }> }).execute(sql`SELECT 1 AS v`);
+        res.json({ ok: true, v: r.rows[0].v });
+      } catch (e) { next(e); }
+    });
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    app2.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      res.status(500).json({ error: err.message });
+    });
+
+    const r = await request(app2).post("/legacy-write").set("x-user-id", "1").set("x-org-id", "111");
+    expect(r.status).toBe(200);          // did NOT fail-closed → marker did not leak
+    expect(Number(r.body.v)).toBe(1);
   });
 
   it("public/unauthenticated route is not tenant-scoped (no fail-closed, pool allowed)", async () => {
