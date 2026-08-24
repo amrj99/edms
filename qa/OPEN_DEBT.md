@@ -401,6 +401,32 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   - **⑤ organization_id backfill** for projectId-scoped hot tables (documents/transmittals/project_members) +
     composite FK `(id, organization_id)` — prerequisite before RLS enforcement (rows must have non-null org).
   - **⑥ RLS enforcement tests under the real `edms_app` role** (extend the existing `rls_tester` pattern).
+- **③ Hybrid-Y per-request wiring — 🔧 IN PROGRESS (isolated env, owner-approved 2026-08-24):** progressive,
+  **per-router** conversion (fail-closed marker mounted path-scoped, so unconverted routers are unaffected).
+  Contract: **writes use explicit `withTenant()`** (BEGIN→SET LOCAL→work→COMMIT, no 2xx before commit, no tx
+  held during R2/Resend/fs I/O); **reads** use a transitional `makeReadAutoWrap()` (GET/HEAD, DB-only,
+  streaming excluded) logged in `qa/READ_AUTOWRAP_INVENTORY.md` for **Phase D** migration to explicit
+  `withTenant()`. Phases: **A** security-sensitive writes (Users/Roles/Members/Projects/Permissions/Admin) →
+  **B** Documents/Files/Transmittals/Correspondence/Tasks/Meetings → **C** Workflows/Registers/remaining →
+  **D** reads. Invariant: a marked write with no `withTenant()` throws (fail-closed Proxy) + a mount-scan test.
+  - **Phase A progress:** `users` router ✅ converted+mounted (commit `64ed976`): POST/PUT/DELETE/reset-password
+    → `withTenant()` (bcrypt + onboarding email OUTSIDE tx); reads auto-wrapped. Verified (superuser test role,
+    RLS inert — proves wiring): infra 29/29 + 170/170 (users/IDOR/cross-org/authorization/reset-password/
+    null-org). typecheck 0. Remaining Phase A: ~35 write handlers / 9 routers (projects 5, departments 5,
+    admin 10, organizations 3, project-participants/parties/departments/role-overrides/delegations;
+    project-governance read-only).
+- **🔴 FINDING (edms_app-gate blocker, tied to ⑤) — active RLS vs cross-org project collaboration:** the
+  `org_isolation_policy` is strictly `organization_id = current_org_id OR is_system_owner`. Once the app runs
+  under non-superuser `edms_app` (item-6 gate), RLS becomes ACTIVE and will **over-restrict** legitimate
+  cross-org project collaboration on the RLS tables (`projects/documents/tasks/correspondence/transmittals`):
+  a member from org B reading/writing an org-A project is filtered (read) / WITH CHECK-blocked or mis-stamped
+  (write). Masked today because prod `edms` is superuser (RLS inert) and tests default to a superuser role.
+  **Does not block the mechanical write conversion** (superuser tests pass; SET LOCAL runs, RLS inert) — it
+  blocks **“full suite green under `edms_app`.”** Decision needed BEFORE that gate (not before conversion):
+  (A) narrow audited `withSystemContext` escape hatch for reviewed cross-org read paths; (B) membership-aware
+  policy (`EXISTS project_members …`, needs `app.current_user_id` in context); (C) ⑤ owner-org denormalization;
+  (D) confirm cross-org collaboration is NOT a first-customer feature and keep the strict policy (document the
+  limit). Recommend confirming (D) vs (A/B) with product before the cutover gate.
 
 ## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
 - **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
