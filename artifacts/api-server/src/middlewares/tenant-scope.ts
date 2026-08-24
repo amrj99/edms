@@ -40,6 +40,21 @@ export function withTenant<T>(fn: () => Promise<T>): Promise<T> {
   return runInTenantTx({ orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner }, fn);
 }
 
+/**
+ * Run a genuine PLATFORM/bulk operation OUTSIDE the request's tenant scope, on
+ * the pool-backed handle (no marker → no fail-closed throw). Use ONLY for real
+ * cross-tenant platform work (e.g. full search reindex) — never as a per-request
+ * escape for ordinary tenant work.
+ *
+ * ⚠️ edms_app gate (decision B): under the non-superuser role the pool has NO RLS
+ * context, so a pure `runUnscoped` read returns 0 rows. Such platform ops must be
+ * refactored to a `withSystemContext` (a tx with is_system_owner=true) that reads
+ * under system context and does external I/O OUTSIDE the tx. Tracked for cutover.
+ */
+export function runUnscoped<T>(fn: () => Promise<T>): Promise<T> {
+  return requestContext.exit(fn);
+}
+
 // ─── DEBT-010 Hybrid-Y — transitional read auto-wrapper ───────────────────────
 // WRITE handlers must use withTenant() explicitly (fail-closed forces it). READ
 // handlers (GET/HEAD) not yet migrated to explicit withTenant() are covered by

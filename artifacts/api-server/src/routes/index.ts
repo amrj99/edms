@@ -193,7 +193,9 @@ router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
 router.use("/billing", billingRouter);
 router.use("/storage", storageRouter);
-router.use("/admin", adminRouter);
+// /admin/search/status does external I/O (Elasticsearch) on GET → exclude from the
+// read auto-wrapper so no DB transaction is held during that call.
+router.use("/admin", tenantScoped(adminRouter, { skipRead: (req) => req.path.startsWith("/search/status") }));
 router.use("/documents", globalDocumentsRouter);
 router.use("/projects/:projectId", requireModule("registers"), registersRouter);
 router.use("/projects/:projectId", requireModule("deliverables"), deliverablesRouter);
