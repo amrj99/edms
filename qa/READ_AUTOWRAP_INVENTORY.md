@@ -19,19 +19,37 @@ The live set actually exercised is available at runtime via
 
 ---
 
-## Phase A — security-sensitive routers
+## Phase A — security-sensitive routers — ✅ COMPLETE
 
-### `users` router (`/api/users`) — converted (writes → withTenant)
-Auto-wrapped reads (Phase-D backlog):
-- `GET /api/users` — org/project-scoped user list (DB-only)
-- `GET /api/users/:id` — user profile incl. project memberships (DB-only)
+All mounted via `tenantScoped()`. Writes use explicit `withTenant()`; the GET routes
+below are served through the transitional read auto-wrapper (Phase-D backlog).
 
-Writes migrated to explicit `withTenant()`:
-- `POST /api/users` — create user (+ onboarding token); email sent OUTSIDE tx
-- `PUT /api/users/:id` — update user
-- `DELETE /api/users/:id` — delete user
-- `POST /api/users/:id/reset-password` — reset password (bcrypt hash OUTSIDE tx)
+| Router | Mount | Writes → withTenant | Auto-wrapped GET reads (Phase-D) |
+|---|---|---|---|
+| users | `/api/users` | POST / · PUT/:id · DELETE/:id · POST/:id/reset-password | GET / · GET /:id |
+| projects | `/api/projects` | POST / · PUT/:id · DELETE/:id · POST/:id/members · DELETE/:id/members/:userId | GET / · GET /:id · GET /:id/members |
+| project-participants | `/api/projects/:projectId` | POST · PUT · DELETE /participants | GET /participants |
+| project-parties | `/api/projects/:projectId` | POST/parties · DELETE/parties/:orgId · PATCH/collaboration-mode | GET /available-organizations · GET /parties |
+| project-departments | `/api/projects/:projectId` | POST · DELETE /departments | GET /departments |
+| project-role-overrides | `/api/projects/:projectId` | POST · DELETE /role-overrides | GET /role-overrides |
+| project-governance | `/api/projects/:projectId` | (read-only) | GET (governance reads) |
+| departments | `/api/departments` | POST / · PUT/:id · DELETE/:id · POST/:id/members · DELETE/:id/members/:userId | GET / · GET/:id/members · GET/user/:userId |
+| organizations | `/api/organizations` | POST / · PUT/:id · DELETE/:id | GET / · GET/cross-org-stats · GET/:id |
+| delegations | `/api/delegations` | POST / · DELETE/:id | GET / |
+| admin | `/api/admin` | storage-config · restore · seed-test-data · ai-classification · ai-tier · ai-limits · change-plan | system-info · storage-usage · usage · backup · ai-quota · org-plans · shadow-log |
+
+Notes:
+- **admin `search/reindex`** (POST): cross-tenant bulk + Elasticsearch I/O → `runUnscoped()`
+  (pool, platform op). **admin `search/status`** (GET): excluded from auto-wrap (ES I/O).
+- **organizations POST**: best-effort org_config + AI-credits run in their own short
+  `withTenant()` calls (independent of org creation).
+- bcrypt hashing (users create / reset-password) and the onboarding email run OUTSIDE
+  the tenant transaction.
 
 ---
 
-_(Extended as each Phase A/B/C router is converted.)_
+## Phase B — Documents / Files / Transmittals / Correspondence / Tasks / Meetings — ⏳ NEXT
+## Phase C — Workflows / Registers / remaining mutations — ⏳
+## Phase D — migrate the auto-wrapped reads above to explicit withTenant() — ⏳
+
+_(Extended as each phase is converted.)_

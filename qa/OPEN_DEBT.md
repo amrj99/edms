@@ -409,12 +409,19 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   `withTenant()`. Phases: **A** security-sensitive writes (Users/Roles/Members/Projects/Permissions/Admin) →
   **B** Documents/Files/Transmittals/Correspondence/Tasks/Meetings → **C** Workflows/Registers/remaining →
   **D** reads. Invariant: a marked write with no `withTenant()` throws (fail-closed Proxy) + a mount-scan test.
-  - **Phase A progress:** `users` router ✅ converted+mounted (commit `64ed976`): POST/PUT/DELETE/reset-password
-    → `withTenant()` (bcrypt + onboarding email OUTSIDE tx); reads auto-wrapped. Verified (superuser test role,
-    RLS inert — proves wiring): infra 29/29 + 170/170 (users/IDOR/cross-org/authorization/reset-password/
-    null-org). typecheck 0. Remaining Phase A: ~35 write handlers / 9 routers (projects 5, departments 5,
-    admin 10, organizations 3, project-participants/parties/departments/role-overrides/delegations;
-    project-governance read-only).
+  - **Leak-free mount primitive `tenantScoped()` (commit `1455288`):** the marker leaked across Express
+    fall-through to unconverted routers sharing a prefix; `tenantScoped()` uses `requestContext.exit()` on
+    fall-through so per-router conversion is safe even inside the nested `/projects` tree. Unauthenticated
+    requests dispatch to the sub-router unscoped (requireAuth still 401). PROOF 7 added.
+  - **Phase A ✅ COMPLETE (commits `64ed976`, `e91615b`, `658cbef`):** all 11 security-sensitive routers
+    converted — users, projects, project-participants/parties/departments/role-overrides/governance,
+    departments, organizations, delegations, admin. Writes → explicit `withTenant()` (discriminated-result
+    restructuring preserves every guard/status; bcrypt + emails OUTSIDE tx; org-create best-effort side
+    effects in their own short tx). Reads via transitional auto-wrapper (see `READ_AUTOWRAP_INVENTORY.md`).
+    admin `search/reindex` uses `runUnscoped()` (cross-tenant bulk + ES I/O); admin `search/status` excluded
+    from auto-wrap. **Verified: typecheck 0 · FULL regression 861/861** (64 files, superuser test role → RLS
+    inert, proves wiring correctness). No billing committed. **Next: Phase B** (Documents/Files/Transmittals/
+    Correspondence/Tasks/Meetings — includes the streaming download routes needing `skipRead` + I/O-outside-tx).
 - **🔴 FINDING (edms_app-gate blocker, tied to ⑤) — active RLS vs cross-org project collaboration:** the
   `org_isolation_policy` is strictly `organization_id = current_org_id OR is_system_owner`. Once the app runs
   under non-superuser `edms_app` (item-6 gate), RLS becomes ACTIVE and will **over-restrict** legitimate
@@ -426,7 +433,21 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   (A) narrow audited `withSystemContext` escape hatch for reviewed cross-org read paths; (B) membership-aware
   policy (`EXISTS project_members …`, needs `app.current_user_id` in context); (C) ⑤ owner-org denormalization;
   (D) confirm cross-org collaboration is NOT a first-customer feature and keep the strict policy (document the
-  limit). Recommend confirming (D) vs (A/B) with product before the cutover gate.
+  limit).
+  - **✅ OWNER DECISION (2026-08-24): adopt (B) — membership-aware RLS** for project-collaborative tables.
+    Rationale: cross-org shared-project access is an existing Product Contract behaviour; do not break it to
+    fit RLS, and do not use `withSystemContext` as a daily escape. **Before the `edms_app` gate:** (1) add
+    `app.current_user_id` to the transaction-local context (alongside `current_org_id` + `is_system_owner`);
+    (2) inventory the 13 RLS tables → classify organization-private / project-collaborative / system-global;
+    (3) for project-collaborative tables (projects/documents/tasks/correspondence/transmittals) write a policy
+    allowing ONLY: explicit system_owner OR owner org OR a real project membership/access per the current
+    authority source; (4) membership grants VISIBILITY only — functional write authorization stays in
+    RBAC/app layer, RLS just bounds org/project; (5) `withSystemContext` reserved for real platform ops
+    (e.g. reindex), never general cross-org; (6) tests: OrgA owner OK · OrgB non-member 0/blocked · OrgB
+    authorized member sees ONLY the shared project (not OrgA's other projects) · member of Project X cannot
+    see Project Y (same owner) · removal from membership → access gone next request · spoofed
+    project/org/user context opens nothing; (7) audit `project_members` as an authorization source even if it
+    is not itself made an RLS table. **Does not block Phase A–D mechanical conversion.**
 
 ## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
 - **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
