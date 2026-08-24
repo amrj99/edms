@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable, orgConfigTable } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { grantCredits, INITIAL_FREE_CREDITS } from "../lib/ai-credits.js";
@@ -88,7 +89,7 @@ router.get("/cross-org-stats", requireAuth, async (req, res): Promise<void> => {
   res.json({ stats });
 });
 
-router.post("/", requireAuth, async (req, res): Promise<void> => {
+router.post("/", requireAuth, async (req, res, next): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;
   if (!name || !type) {
@@ -97,37 +98,50 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
   }
   // Auto-derive a short code from the name if not provided
   const resolvedCode = (code?.trim() || name.replace(/[^A-Za-z0-9]/g, "").substring(0, 6).toUpperCase()) || undefined;
-  let org: typeof organizationsTable.$inferSelect;
+
   try {
-    [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address, code: resolvedCode }).returning();
-  } catch (err: any) {
-    if (err?.code === "23505" && err?.constraint?.includes("code")) {
+    // Atomic: create org + audit. (23505 on code → conflict.)
+    const outcome = await withTenant(async () => {
+      try {
+        const [org] = await db.insert(organizationsTable).values({ name, type, contactEmail, contactPhone, address, code: resolvedCode }).returning();
+        await createAuditLog({ userId: req.user!.id, action: "create", entityType: "organization", entityId: org.id, entityTitle: org.name });
+        return { kind: "ok" as const, org };
+      } catch (err: any) {
+        if (err?.code === "23505" && err?.constraint?.includes("code")) return { kind: "conflict" as const };
+        throw err;
+      }
+    });
+    if (outcome.kind === "conflict") {
       res.status(409).json({ error: "Conflict", message: `Organization short code "${resolvedCode}" is already in use. Choose a different code.` });
       return;
     }
-    throw err;
-  }
-  await createAuditLog({ userId: req.user!.id, action: "create", entityType: "organization", entityId: org.id, entityTitle: org.name });
+    const { org } = outcome;
 
-  // Create default org_config row so the fail-closed module check never blocks this org.
-  // All modules enabled by default for new orgs; Phase 1 will enforce plan-based defaults.
-  try {
-    await db.insert(orgConfigTable).values({
-      organizationId: org.id,
-      modules: { dashboard: true, deliverables: true, registers: true, notifications: true, chat: true },
-    }).onConflictDoNothing();
-  } catch (cfgErr) {
-    logger.error({ err: cfgErr, orgId: org.id }, "[org-create] Failed to create default org_config — org created but will need manual config setup");
-  }
+    // Best-effort side effects — each in its OWN short tenant transaction so a
+    // failure here does not roll back the org creation (matches prior autocommit
+    // semantics: "org created; config/credits can be added manually").
+    try {
+      await withTenant(async () => {
+        await db.insert(orgConfigTable).values({
+          organizationId: org.id,
+          modules: { dashboard: true, deliverables: true, registers: true, notifications: true, chat: true },
+        }).onConflictDoNothing();
+      });
+    } catch (cfgErr) {
+      logger.error({ err: cfgErr, orgId: org.id }, "[org-create] Failed to create default org_config — org created but will need manual config setup");
+    }
 
-  // Grant initial free AI credits to every new organisation.
-  try {
-    await grantCredits(org.id, INITIAL_FREE_CREDITS, "grant", { reason: "initial_free_grant" });
-  } catch (credErr) {
-    logger.error({ err: credErr, orgId: org.id }, "[org-create] Failed to grant initial AI credits — org created, credits can be granted manually");
-  }
+    // Grant initial free AI credits to every new organisation.
+    try {
+      await withTenant(async () => {
+        await grantCredits(org.id, INITIAL_FREE_CREDITS, "grant", { reason: "initial_free_grant" });
+      });
+    } catch (credErr) {
+      logger.error({ err: credErr, orgId: org.id }, "[org-create] Failed to grant initial AI credits — org created, credits can be granted manually");
+    }
 
-  res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
+    res.status(201).json({ ...org, userCount: 0, projectCount: 0 });
+  } catch (e) { next(e); }
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
@@ -142,37 +156,49 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   res.json({ ...orgs[0], userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
 });
 
-router.put("/:id", requireAuth, async (req, res): Promise<void> => {
+router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   if (!isSystemOwner(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
   const { name, type, contactEmail, contactPhone, address, code } = req.body;
-  let org: typeof organizationsTable.$inferSelect | undefined;
   try {
-    [org] = await db.update(organizationsTable)
-      .set({ name, type, contactEmail, contactPhone, address, ...(code !== undefined && { code: code?.trim() || null }), updatedAt: new Date() })
-      .where(eq(organizationsTable.id, id))
-      .returning();
-  } catch (err: any) {
-    if (err?.code === "23505" && err?.constraint?.includes("code")) {
+    const outcome = await withTenant(async () => {
+      let org: typeof organizationsTable.$inferSelect | undefined;
+      try {
+        [org] = await db.update(organizationsTable)
+          .set({ name, type, contactEmail, contactPhone, address, ...(code !== undefined && { code: code?.trim() || null }), updatedAt: new Date() })
+          .where(eq(organizationsTable.id, id))
+          .returning();
+      } catch (err: any) {
+        if (err?.code === "23505" && err?.constraint?.includes("code")) return { kind: "conflict" as const };
+        throw err;
+      }
+      if (!org) return { kind: "notfound" as const };
+      await createAuditLog({ userId: req.user!.id, action: "update", entityType: "organization", entityId: org.id, entityTitle: org.name });
+      const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));
+      const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, id));
+      return { kind: "ok" as const, org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) };
+    });
+
+    if (outcome.kind === "conflict") {
       res.status(409).json({ error: "Conflict", message: `Organization short code "${code?.trim()}" is already in use by another organization.` });
       return;
     }
-    throw err;
-  }
-  if (!org) { res.status(404).json({ error: "Not Found" }); return; }
-  await createAuditLog({ userId: req.user!.id, action: "update", entityType: "organization", entityId: org.id, entityTitle: org.name });
-  const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));
-  const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, id));
-  res.json({ ...org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+    res.json({ ...outcome.org, userCount: outcome.userCount, projectCount: outcome.projectCount });
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
+router.delete("/:id", requireAuth, async (req, res, next): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
   const id = requireInt(req.params.id);
-  await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
-  res.status(204).send();
+  try {
+    await withTenant(async () => {
+      await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
+    });
+    res.status(204).send();
+  } catch (e) { next(e); }
 });
 
 export default router;

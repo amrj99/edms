@@ -168,20 +168,20 @@ router.use((req, res, next) => {
   });
 });
 
-router.use("/organizations", organizationsRouter);
+router.use("/organizations", tenantScoped(organizationsRouter));
 // DEBT-010 Hybrid-Y — converted router: fail-closed tenant scope + transitional
 // read auto-wrapper (writes use explicit withTenant(); reads auto-wrapped).
 router.use("/users", tenantScoped(usersRouter));
-router.use("/projects", projectsRouter);
+router.use("/projects", tenantScoped(projectsRouter));
 router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
 router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
 
 router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
 router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
-router.use("/projects/:projectId", projectDepartmentsRouter);
-router.use("/projects/:projectId", projectParticipantsRouter);
-router.use("/projects/:projectId", projectPartiesRouter);
+router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
+router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
+router.use("/projects/:projectId", tenantScoped(projectPartiesRouter));
 router.use("/tasks", tasksRouter);
 router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);
@@ -212,11 +212,11 @@ router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
 
 router.use("/workflow-engine", requireModule("workflow_engine"), workflowEngineRouter);
-router.use("/delegations", delegationsRouter);
-router.use("/projects/:projectId", projectRoleOverridesRouter);
-router.use("/projects/:projectId", projectGovernanceRouter);
+router.use("/delegations", tenantScoped(delegationsRouter));
+router.use("/projects/:projectId", tenantScoped(projectRoleOverridesRouter));
+router.use("/projects/:projectId", tenantScoped(projectGovernanceRouter));
 
-router.use("/departments", departmentsRouter);
+router.use("/departments", tenantScoped(departmentsRouter));
 router.use("/external-contacts", externalContactsRouter);
 router.use("/document-types", documentTypesRouter);
 router.use("/entities", entitiesRouter);

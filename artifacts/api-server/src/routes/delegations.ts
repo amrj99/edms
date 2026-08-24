@@ -4,6 +4,7 @@ import { delegationsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, or, isNull, desc, gt } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -79,7 +80,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 // ─── Create delegation ────────────────────────────────────────────────────────
 // A project manager or admin may delegate their authority to another user.
 // projectId is optional — omit for org-wide delegation.
-router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res): Promise<void> => {
+router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res, next): Promise<void> => {
   const caller = req.user!;
   const { toUserId, projectId, reason, expiresAt } = req.body;
 
@@ -96,73 +97,86 @@ router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res
     res.status(400).json({ error: "You cannot delegate to yourself" }); return;
   }
 
-  // Verify toUser exists and is in the same org (or caller is sysAdmin)
-  const [toUser] = await db.select({ id: usersTable.id, organizationId: usersTable.organizationId })
-    .from(usersTable).where(eq(usersTable.id, toUserId)).limit(1);
-  if (!toUser) { res.status(404).json({ error: "Delegate user not found" }); return; }
-  if (!isSysAdmin(caller) && toUser.organizationId !== caller.organizationId) {
-    res.status(403).json({ error: "Delegate must be in the same organisation" }); return;
-  }
+  try {
+    const outcome = await withTenant(async () => {
+      // Verify toUser exists and is in the same org (or caller is sysAdmin)
+      const [toUser] = await db.select({ id: usersTable.id, organizationId: usersTable.organizationId })
+        .from(usersTable).where(eq(usersTable.id, toUserId)).limit(1);
+      if (!toUser) return { kind: "notfound" as const };
+      if (!isSysAdmin(caller) && toUser.organizationId !== caller.organizationId) {
+        return { kind: "crossorg" as const };
+      }
 
-  const [delegation] = await db.insert(delegationsTable).values({
-    organizationId: caller.organizationId!,
-    fromUserId: caller.id,
-    toUserId,
-    projectId: projectId ?? null,
-    reason: reason.trim(),
-    expiresAt: expiry,
-    isActive: true,
-    grantedByUserId: caller.id,
-  }).returning();
+      const [delegation] = await db.insert(delegationsTable).values({
+        organizationId: caller.organizationId!,
+        fromUserId: caller.id,
+        toUserId,
+        projectId: projectId ?? null,
+        reason: reason.trim(),
+        expiresAt: expiry,
+        isActive: true,
+        grantedByUserId: caller.id,
+      }).returning();
 
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId,
-    action: "create",
-    entityType: "delegation",
-    entityId: delegation.id,
-    entityTitle: `Delegation from user ${caller.id} to user ${toUserId}`,
-    projectId: projectId ?? undefined,
-    details: { toUserId, reason: reason.trim(), expiresAt: expiry.toISOString(), projectId },
-  });
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId,
+        action: "create",
+        entityType: "delegation",
+        entityId: delegation.id,
+        entityTitle: `Delegation from user ${caller.id} to user ${toUserId}`,
+        projectId: projectId ?? undefined,
+        details: { toUserId, reason: reason.trim(), expiresAt: expiry.toISOString(), projectId },
+      });
+      return { kind: "ok" as const, delegation };
+    });
 
-  res.status(201).json(delegation);
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Delegate user not found" }); return; }
+    if (outcome.kind === "crossorg") { res.status(403).json({ error: "Delegate must be in the same organisation" }); return; }
+    res.status(201).json(outcome.delegation);
+  } catch (e) { next(e); }
 });
 
 // ─── Revoke delegation ────────────────────────────────────────────────────────
-router.delete("/:id", requireAuth, async (req, res): Promise<void> => {
+router.delete("/:id", requireAuth, async (req, res, next): Promise<void> => {
   const caller = req.user!;
   const id = requireInt(req.params.id);
 
-  const [delegation] = await db.select().from(delegationsTable)
-    .where(eq(delegationsTable.id, id)).limit(1);
+  try {
+    const outcome = await withTenant(async () => {
+      const [delegation] = await db.select().from(delegationsTable)
+        .where(eq(delegationsTable.id, id)).limit(1);
+      if (!delegation) return { kind: "notfound" as const };
 
-  if (!delegation) { res.status(404).json({ error: "Delegation not found" }); return; }
+      // Only the grantor, grantedBy, or an admin of the same org can revoke.
+      // isSysAdmin was intentionally narrowed: a system-owner bypasses all orgs,
+      // but an org-admin may only revoke delegations within their own organization.
+      const canRevoke = isSystemOwner(caller)
+        || (caller.role === "admin" && delegation.organizationId === caller.organizationId)
+        || delegation.fromUserId === caller.id
+        || delegation.grantedByUserId === caller.id;
+      if (!canRevoke) return { kind: "forbidden" as const };
 
-  // Only the grantor, grantedBy, or an admin of the same org can revoke.
-  // isSysAdmin was intentionally narrowed: a system-owner bypasses all orgs,
-  // but an org-admin may only revoke delegations within their own organization.
-  const canRevoke = isSystemOwner(caller)
-    || (caller.role === "admin" && delegation.organizationId === caller.organizationId)
-    || delegation.fromUserId === caller.id
-    || delegation.grantedByUserId === caller.id;
-  if (!canRevoke) { res.status(403).json({ error: "You do not have permission to revoke this delegation" }); return; }
+      await db.update(delegationsTable)
+        .set({ isActive: false, revokedAt: new Date(), revokedByUserId: caller.id })
+        .where(eq(delegationsTable.id, id));
 
-  await db.update(delegationsTable)
-    .set({ isActive: false, revokedAt: new Date(), revokedByUserId: caller.id })
-    .where(eq(delegationsTable.id, id));
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId,
+        action: "revoke",
+        entityType: "delegation",
+        entityId: id,
+        entityTitle: `Delegation ${id} revoked`,
+        details: { revokedByUserId: caller.id },
+      });
+      return { kind: "ok" as const };
+    });
 
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId,
-    action: "revoke",
-    entityType: "delegation",
-    entityId: id,
-    entityTitle: `Delegation ${id} revoked`,
-    details: { revokedByUserId: caller.id },
-  });
-
-  res.status(204).send();
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Delegation not found" }); return; }
+    if (outcome.kind === "forbidden") { res.status(403).json({ error: "You do not have permission to revoke this delegation" }); return; }
+    res.status(204).send();
+  } catch (e) { next(e); }
 });
 
 export default router;
