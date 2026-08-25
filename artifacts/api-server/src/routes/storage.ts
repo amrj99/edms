@@ -21,7 +21,7 @@ import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configur
 import { StorageNotConfiguredError } from "../lib/errors.js";
 import { requireAuth, signToken, verifyToken, isSystemOwner } from "../lib/auth.js";
 import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
-import { requestContext } from "@workspace/db";
+import { requestContext, withSystemContext } from "@workspace/db";
 import { canAccessProjectAsParty } from "../lib/party-access.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
@@ -256,6 +256,10 @@ async function assertOrgAccess(
  * to an entity).
  */
 async function findOrgIdForObjectServeUrl(serveUrl: string): Promise<number | null> {
+  // DEBT-010 (Category B): cross-tenant ownership resolution to drive an authz decision.
+  // Reads ONLY organizationId across orgs under an explicit platform context; the actual
+  // access decision is still enforced by canAccessProjectAsParty on the caller's identity.
+  return withSystemContext(async () => {
   const [doc] = await db.select({ organizationId: documentsTable.organizationId })
     .from(documentsTable).where(eq(documentsTable.fileUrl, serveUrl));
   if (doc?.organizationId != null) return doc.organizationId;
@@ -289,6 +293,7 @@ async function findOrgIdForObjectServeUrl(serveUrl: string): Promise<number | nu
   if (migration?.organizationId != null) return migration.organizationId;
 
   return null;
+  });
 }
 
 /**
@@ -298,6 +303,8 @@ async function findOrgIdForObjectServeUrl(serveUrl: string): Promise<number | nu
  * Returns null for non-document objects.
  */
 async function findPartyProjectIdForServeUrl(serveUrl: string): Promise<number | null> {
+  // DEBT-010 (Category B): cross-tenant projectId resolution to drive party-access authz.
+  return withSystemContext(async () => {
   const [doc] = await db
     .select({ projectId: documentsTable.projectId })
     .from(documentsTable)
@@ -322,6 +329,7 @@ async function findPartyProjectIdForServeUrl(serveUrl: string): Promise<number |
   if (file?.projectId != null) return file.projectId;
 
   return null;
+  });
 }
 
 /**

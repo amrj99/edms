@@ -20,6 +20,7 @@ const SRC = path.resolve(__dirname, "..");
 // Allowlisted call sites: "<relative path>" → why it is a legitimate platform op.
 const ALLOWLIST: Record<string, string> = {
   "lib/search-service.ts": "reindexAll — cross-tenant document read for Elasticsearch reindex (platform op; ES push outside the tx)",
+  "routes/storage.ts": "findOrgIdForObjectServeUrl / findPartyProjectIdForServeUrl — cross-tenant OWNERSHIP resolution (reads only org/project ids) to drive the authz decision; access is still enforced by canAccessProjectAsParty on the caller's identity",
 };
 
 // The definition lives in @workspace/db (lib/db), not under this SRC tree, so there
