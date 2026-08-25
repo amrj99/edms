@@ -201,7 +201,7 @@ router.use("/projects/:projectId", requireModule("registers"), registersRouter);
 router.use("/projects/:projectId", requireModule("deliverables"), deliverablesRouter);
 router.use("/user", preferencesRouter);
 router.use("/profile", profileRouter);
-router.use("/meetings", requireModule("meetings"), meetingsRouter);
+router.use("/meetings", requireModule("meetings"), tenantScoped(meetingsRouter));
 router.use("/chat", requireModule("chat"), chatRouter);
 router.use("/modules", modulesRouter);
 if (process.env.NODE_ENV !== "production") {

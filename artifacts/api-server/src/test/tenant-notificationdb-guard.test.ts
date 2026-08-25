@@ -48,7 +48,11 @@ describe("DEBT-010 — notificationDb containment (static guard)", () => {
     for (const file of files) {
       const rel = path.relative(SRC, file).replace(/\\/g, "/");
       if (rel.startsWith(NOTIF_DIR + "/")) continue; // allowed home
-      const src = readFileSync(file, "utf8");
+      // Strip block + line comments so a doc mention of the name is not a false hit;
+      // we only care about real imports/usage.
+      const src = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
       if (/\bnotificationDb\b/.test(src)) offenders.push(rel);
     }
     expect(offenders, `notificationDb used outside ${NOTIF_DIR}/ — keep it inside the notification subsystem:\n${offenders.join("\n")}`).toEqual([]);
