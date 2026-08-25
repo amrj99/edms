@@ -183,14 +183,14 @@ router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
 router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
 router.use("/projects/:projectId", tenantScoped(projectPartiesRouter));
 router.use("/tasks", tenantScoped(tasksRouter));
-router.use("/metadata-fields", metadataRouter);
-router.use("/dashboard", dashboardRouter);
-router.use("/search", searchRouter);
-router.use("/audit-logs", auditLogsRouter);
+router.use("/metadata-fields", tenantScoped(metadataRouter));
+router.use("/dashboard", tenantScoped(dashboardRouter));
+router.use("/search", tenantScoped(searchRouter));
+router.use("/audit-logs", tenantScoped(auditLogsRouter));
 
-router.use("/general", generalRouter);
+router.use("/general", tenantScoped(generalRouter));
 router.use("/notifications", notificationsRouter);
-router.use("/config", configRouter);
+router.use("/config", tenantScoped(configRouter));
 router.use("/billing", billingRouter);
 // storage download/stream routes (objects/onpremise/s3-object/r2-object/public-objects)
 // do external I/O (R2/S3/fs stream or 302 redirect) on GET — exclude them from the read
@@ -203,18 +203,18 @@ router.use("/storage", tenantScoped(storageRouter, {
 router.use("/admin", tenantScoped(adminRouter, { skipRead: (req) => req.path.startsWith("/search/status") }));
 router.use("/documents", tenantScoped(globalDocumentsRouter));
 router.use("/projects/:projectId", requireModule("registers"), registersRouter);
-router.use("/projects/:projectId", requireModule("deliverables"), deliverablesRouter);
-router.use("/user", preferencesRouter);
-router.use("/profile", profileRouter);
+router.use("/projects/:projectId", requireModule("deliverables"), tenantScoped(deliverablesRouter));
+router.use("/user", tenantScoped(preferencesRouter));
+router.use("/profile", tenantScoped(profileRouter));
 router.use("/meetings", requireModule("meetings"), tenantScoped(meetingsRouter));
 router.use("/chat", requireModule("chat"), chatRouter);
-router.use("/modules", modulesRouter);
+router.use("/modules", tenantScoped(modulesRouter));
 if (process.env.NODE_ENV !== "production") {
   router.use("/dev", devRouter);
 }
-router.use("/calendar", calendarRouter);
-router.use("/", notificationSummaryRouter);
-router.use("/rules", rulesRouter);
+router.use("/calendar", tenantScoped(calendarRouter));
+router.use("/", tenantScoped(notificationSummaryRouter));
+router.use("/rules", tenantScoped(rulesRouter));
 router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
 
@@ -224,8 +224,8 @@ router.use("/projects/:projectId", tenantScoped(projectRoleOverridesRouter));
 router.use("/projects/:projectId", tenantScoped(projectGovernanceRouter));
 
 router.use("/departments", tenantScoped(departmentsRouter));
-router.use("/external-contacts", externalContactsRouter);
-router.use("/document-types", documentTypesRouter);
-router.use("/entities", entitiesRouter);
+router.use("/external-contacts", tenantScoped(externalContactsRouter));
+router.use("/document-types", tenantScoped(documentTypesRouter));
+router.use("/entities", tenantScoped(entitiesRouter));
 
 export default router;

@@ -13,6 +13,7 @@ import { db } from "@workspace/db";
 import { rulesTable } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -143,34 +144,40 @@ router.post("/", requireAuth, requireMinRole("project_manager"), async (req, res
 
   // Enforce max 100 active rules per org
   const willBeActive = isEnabled !== false; // default true
-  if (willBeActive) {
-    const activeCount = await countActiveRules(orgId);
-    if (activeCount >= ACTIVE_RULE_LIMIT) {
-      res.status(429).json({
-        error: "Active rule limit reached",
-        message: `Organizations may have at most ${ACTIVE_RULE_LIMIT} active rules. ` +
-          `Disable or delete some rules before creating new ones. ` +
-          `You currently have ${activeCount} active rules.`,
-        currentCount: activeCount,
-        limit: ACTIVE_RULE_LIMIT,
-      })
-    return;
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    if (willBeActive) {
+      const activeCount = await countActiveRules(orgId);
+      if (activeCount >= ACTIVE_RULE_LIMIT) {
+        result = {
+          status: 429,
+          body: {
+            error: "Active rule limit reached",
+            message: `Organizations may have at most ${ACTIVE_RULE_LIMIT} active rules. ` +
+              `Disable or delete some rules before creating new ones. ` +
+              `You currently have ${activeCount} active rules.`,
+            currentCount: activeCount,
+            limit: ACTIVE_RULE_LIMIT,
+          },
+        };
+        return;
+      }
     }
-  }
 
-  const [rule] = await db.insert(rulesTable).values({
-    organizationId: orgId,
-    name: name.trim(),
-    description: description ?? null,
-    priority: priority ?? 0,
-    isEnabled: isEnabled ?? true,
-    appliesTo: appliesTo ?? "both",
-    conditions: conditions ?? {},
-    actions: actions ?? [],
-    createdById: req.user!.id,
-  }).returning();
-
-  res.status(201).json(rule);
+    const [rule] = await db.insert(rulesTable).values({
+      organizationId: orgId,
+      name: name.trim(),
+      description: description ?? null,
+      priority: priority ?? 0,
+      isEnabled: isEnabled ?? true,
+      appliesTo: appliesTo ?? "both",
+      conditions: conditions ?? {},
+      actions: actions ?? [],
+      createdById: req.user!.id,
+    }).returning();
+    result = { status: 201, body: rule };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // PUT /api/rules/:id — update rule
@@ -178,50 +185,56 @@ router.put("/:id", requireAuth, requireMinRole("project_manager"), async (req, r
   const orgId = req.user!.organizationId;
   const id = requireInt(req.params.id);
 
-  const [existing] = await db.select().from(rulesTable)
-    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!existing) { res.status(404).json({ error: "Rule not found" }); return; }
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [existing] = await db.select().from(rulesTable)
+      .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+    if (!existing) { result = { status: 404, body: { error: "Rule not found" } }; return; }
 
-  const {
-    name, description, priority, isEnabled, appliesTo, conditions, actions,
-  } = req.body;
+    const {
+      name, description, priority, isEnabled, appliesTo, conditions, actions,
+    } = req.body;
 
-  // Validate conditions + actions structure
-  const validation = validateConditionsAndActions(conditions, actions);
-  if (!validation.ok) { res.status(400).json({ error: validation.error }); return; }
+    // Validate conditions + actions structure
+    const validation = validateConditionsAndActions(conditions, actions);
+    if (!validation.ok) { result = { status: 400, body: { error: validation.error } }; return; }
 
-  // Enforce max 100 active rules when enabling a currently-disabled rule
-  const becomingActive = isEnabled === true && !existing.isEnabled;
-  if (becomingActive) {
-    const activeCount = await countActiveRules(orgId!);
-    if (activeCount >= ACTIVE_RULE_LIMIT) {
-      res.status(429).json({
-        error: "Active rule limit reached",
-        message: `Organizations may have at most ${ACTIVE_RULE_LIMIT} active rules. ` +
-          `Disable or delete some rules before enabling this one. ` +
-          `You currently have ${activeCount} active rules.`,
-        currentCount: activeCount,
-        limit: ACTIVE_RULE_LIMIT,
-      })
-    return;
+    // Enforce max 100 active rules when enabling a currently-disabled rule
+    const becomingActive = isEnabled === true && !existing.isEnabled;
+    if (becomingActive) {
+      const activeCount = await countActiveRules(orgId!);
+      if (activeCount >= ACTIVE_RULE_LIMIT) {
+        result = {
+          status: 429,
+          body: {
+            error: "Active rule limit reached",
+            message: `Organizations may have at most ${ACTIVE_RULE_LIMIT} active rules. ` +
+              `Disable or delete some rules before enabling this one. ` +
+              `You currently have ${activeCount} active rules.`,
+            currentCount: activeCount,
+            limit: ACTIVE_RULE_LIMIT,
+          },
+        };
+        return;
+      }
     }
-  }
 
-  const [updated] = await db.update(rulesTable)
-    .set({
-      name:        name?.trim()       ?? existing.name,
-      description: description        ?? existing.description,
-      priority:    priority           ?? existing.priority,
-      isEnabled:   isEnabled          ?? existing.isEnabled,
-      appliesTo:   appliesTo          ?? existing.appliesTo,
-      conditions:  conditions         ?? existing.conditions,
-      actions:     actions            ?? existing.actions,
-      updatedAt:   new Date(),
-    })
-    .where(eq(rulesTable.id, id))
-    .returning();
-
-  res.json(updated);
+    const [updated] = await db.update(rulesTable)
+      .set({
+        name:        name?.trim()       ?? existing.name,
+        description: description        ?? existing.description,
+        priority:    priority           ?? existing.priority,
+        isEnabled:   isEnabled          ?? existing.isEnabled,
+        appliesTo:   appliesTo          ?? existing.appliesTo,
+        conditions:  conditions         ?? existing.conditions,
+        actions:     actions            ?? existing.actions,
+        updatedAt:   new Date(),
+      })
+      .where(eq(rulesTable.id, id))
+      .returning();
+    result = { status: 200, body: updated };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // DELETE /api/rules/:id
@@ -229,12 +242,17 @@ router.delete("/:id", requireAuth, requireMinRole("project_manager"), async (req
   const orgId = req.user!.organizationId;
   const id = requireInt(req.params.id);
 
-  const [existing] = await db.select().from(rulesTable)
-    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!existing) { res.status(404).json({ error: "Rule not found" }); return; }
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [existing] = await db.select().from(rulesTable)
+      .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+    if (!existing) { result = { status: 404, body: { error: "Rule not found" } }; return; }
 
-  await db.delete(rulesTable).where(eq(rulesTable.id, id));
-  res.status(204).end();
+    await db.delete(rulesTable).where(eq(rulesTable.id, id));
+    result = { status: 204, body: null };
+  });
+  if (result!.status === 204) { res.status(204).end(); return; }
+  res.status(result!.status).json(result!.body);
 });
 
 // PATCH /api/rules/:id/toggle — quick enable/disable
@@ -242,30 +260,36 @@ router.patch("/:id/toggle", requireAuth, requireMinRole("project_manager"), asyn
   const orgId = req.user!.organizationId;
   const id = requireInt(req.params.id);
 
-  const [rule] = await db.select().from(rulesTable)
-    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [rule] = await db.select().from(rulesTable)
+      .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+    if (!rule) { result = { status: 404, body: { error: "Rule not found" } }; return; }
 
-  // Enforce limit when re-enabling a rule
-  if (!rule.isEnabled) {
-    const activeCount = await countActiveRules(orgId!);
-    if (activeCount >= ACTIVE_RULE_LIMIT) {
-      res.status(429).json({
-        error: "Active rule limit reached",
-        message: `Cannot enable this rule: the organization already has ${activeCount} active rules (limit: ${ACTIVE_RULE_LIMIT}).`,
-        currentCount: activeCount,
-        limit: ACTIVE_RULE_LIMIT,
-      })
-    return;
+    // Enforce limit when re-enabling a rule
+    if (!rule.isEnabled) {
+      const activeCount = await countActiveRules(orgId!);
+      if (activeCount >= ACTIVE_RULE_LIMIT) {
+        result = {
+          status: 429,
+          body: {
+            error: "Active rule limit reached",
+            message: `Cannot enable this rule: the organization already has ${activeCount} active rules (limit: ${ACTIVE_RULE_LIMIT}).`,
+            currentCount: activeCount,
+            limit: ACTIVE_RULE_LIMIT,
+          },
+        };
+        return;
+      }
     }
-  }
 
-  const [updated] = await db.update(rulesTable)
-    .set({ isEnabled: !rule.isEnabled, updatedAt: new Date() })
-    .where(eq(rulesTable.id, id))
-    .returning();
-
-  res.json(updated);
+    const [updated] = await db.update(rulesTable)
+      .set({ isEnabled: !rule.isEnabled, updatedAt: new Date() })
+      .where(eq(rulesTable.id, id))
+      .returning();
+    result = { status: 200, body: updated };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // POST /api/rules/:id/reset-circuit — manually reset the circuit breaker
@@ -273,21 +297,24 @@ router.post("/:id/reset-circuit", requireAuth, requireMinRole("project_manager")
   const orgId = req.user!.organizationId;
   const id = requireInt(req.params.id);
 
-  const [rule] = await db.select().from(rulesTable)
-    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
-  if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [rule] = await db.select().from(rulesTable)
+      .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+    if (!rule) { result = { status: 404, body: { error: "Rule not found" } }; return; }
 
-  const [updated] = await db.update(rulesTable)
-    .set({
-      consecutiveFailures: 0,
-      isCircuitOpen: false,
-      lastFailedAt: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(rulesTable.id, id))
-    .returning();
-
-  res.json(updated);
+    const [updated] = await db.update(rulesTable)
+      .set({
+        consecutiveFailures: 0,
+        isCircuitOpen: false,
+        lastFailedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(rulesTable.id, id))
+      .returning();
+    result = { status: 200, body: updated };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 export default router;

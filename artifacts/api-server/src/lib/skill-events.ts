@@ -19,7 +19,7 @@
  *   • AI / external I/O inside skill execution stays OUTSIDE any DB transaction.
  */
 import { requestContext, dbContext } from "@workspace/db";
-import { triggerSkillEvent } from "./skill-engine.js";
+import { triggerSkillEvent, executeSkill } from "./skill-engine.js";
 import { logger } from "./logger.js";
 
 export type SkillEventType = "task_completed" | "document_uploaded" | "project_status_changed";
@@ -49,6 +49,26 @@ export function dispatchSkillEventBackground(
       organizationId: ctx.organizationId,
       userId: ctx.userId,
     }).catch((err) => logger.warn({ err, eventType }, "skill-engine: background dispatch failed"));
+  });
+}
+
+/**
+ * Run a skill (manual/event trigger) as detached background work with an explicit
+ * tenant context. Same contract as dispatchSkillEventBackground: detaches from the
+ * request ALS, carries {organizationId, userId, skillId} + trigger metadata, and is
+ * fire-and-forget. The skill engine's OWN internal tenant-DB access remains deferred
+ * to the edms_app gate (background-jobs item #2) — NOT handled here.
+ */
+export function executeSkillBackground(
+  ctx: { organizationId: number; userId: number; skillId: number },
+  trigger: { triggeredByType: "manual" | "event" | "cron"; eventData?: Record<string, unknown> },
+): void {
+  runDetachedFromRequest(() => {
+    void executeSkill(ctx.skillId, {
+      triggeredByType: trigger.triggeredByType,
+      triggeredById: ctx.userId,
+      eventData: trigger.eventData,
+    }).catch((err) => logger.warn({ err, skillId: ctx.skillId, organizationId: ctx.organizationId }, "skill-engine: background execute failed"));
   });
 }
 

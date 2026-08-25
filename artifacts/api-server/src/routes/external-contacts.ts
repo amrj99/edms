@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, externalContactsTable } from "@workspace/db";
 import { eq, and, ilike, or } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { logger } from "../lib/logger.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -53,19 +54,22 @@ router.post("/", requireRole("document_controller", "project_manager", "admin", 
       return;
     }
 
-    const [row] = await db
-      .insert(externalContactsTable)
-      .values({
-        organizationId: orgId,
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        company: company?.trim() || null,
-        jobTitle: jobTitle?.trim() || null,
-        phone: phone?.trim() || null,
-      })
-      .returning();
-
-    res.status(201).json(row);
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [row] = await db
+        .insert(externalContactsTable)
+        .values({
+          organizationId: orgId,
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          company: company?.trim() || null,
+          jobTitle: jobTitle?.trim() || null,
+          phone: phone?.trim() || null,
+        })
+        .returning();
+      result = { status: 201, body: row };
+    });
+    res.status(result!.status).json(result!.body);
   } catch (err) {
     logger.error({ err }, "[external-contacts] POST / error");
     res.status(500).json({ error: "Failed to create external contact" });
@@ -83,28 +87,28 @@ router.put("/:id", requireRole("document_controller", "project_manager", "admin"
       return;
     }
 
-    const [row] = await db
-      .update(externalContactsTable)
-      .set({
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        company: company?.trim() || null,
-        jobTitle: jobTitle?.trim() || null,
-        phone: phone?.trim() || null,
-        updatedAt: new Date(),
-      })
-      .where(and(
-        eq(externalContactsTable.id, id),
-        eq(externalContactsTable.organizationId, orgId),
-      ))
-      .returning();
-
-    if (!row) {
-      res.status(404).json({ error: "Contact not found" });
-      return;
-    }
-
-    res.json(row);
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [row] = await db
+        .update(externalContactsTable)
+        .set({
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          company: company?.trim() || null,
+          jobTitle: jobTitle?.trim() || null,
+          phone: phone?.trim() || null,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(externalContactsTable.id, id),
+          eq(externalContactsTable.organizationId, orgId),
+        ))
+        .returning();
+      result = row
+        ? { status: 200, body: row }
+        : { status: 404, body: { error: "Contact not found" } };
+    });
+    res.status(result!.status).json(result!.body);
   } catch (err) {
     logger.error({ err }, "[external-contacts] PUT /:id error");
     res.status(500).json({ error: "Failed to update external contact" });
@@ -116,12 +120,14 @@ router.delete("/:id", requireRole("admin", "system_owner"), async (req, res): Pr
     const orgId = req.user!.organizationId!;
     const id = requireInt(req.params.id);
 
-    await db
-      .delete(externalContactsTable)
-      .where(and(
-        eq(externalContactsTable.id, id),
-        eq(externalContactsTable.organizationId, orgId),
-      ));
+    await withTenant(async () => {
+      await db
+        .delete(externalContactsTable)
+        .where(and(
+          eq(externalContactsTable.id, id),
+          eq(externalContactsTable.organizationId, orgId),
+        ));
+    });
 
     res.status(204).send();
   } catch (err) {

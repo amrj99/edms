@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable, organizationsTable, userPreferencesTable, auditLogsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { requireAuth, hashPassword, verifyPassword } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -65,37 +66,41 @@ router.put("/", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // Check email uniqueness (excluding current user)
-  const existing = await db
-    .select({ id: usersTable.id })
-    .from(usersTable)
-    .where(eq(usersTable.email, email.trim().toLowerCase()));
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    // Check email uniqueness (excluding current user)
+    const existing = await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.email, email.trim().toLowerCase()));
 
-  if (existing.length > 0 && existing[0].id !== userId) {
-    res.status(409).json({ error: "Conflict", message: "Email already in use by another account" })
-    return;
-  }
+    if (existing.length > 0 && existing[0].id !== userId) {
+      result = { status: 409, body: { error: "Conflict", message: "Email already in use by another account" } };
+      return;
+    }
 
-  const [updated] = await db
-    .update(usersTable)
-    .set({
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      email: email.trim().toLowerCase(),
-      department: department?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(usersTable.id, userId))
-    .returning({
-      id: usersTable.id,
-      email: usersTable.email,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      role: usersTable.role,
-      department: usersTable.department,
-    });
+    const [updated] = await db
+      .update(usersTable)
+      .set({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim().toLowerCase(),
+        department: department?.trim() || null,
+        updatedAt: new Date(),
+      })
+      .where(eq(usersTable.id, userId))
+      .returning({
+        id: usersTable.id,
+        email: usersTable.email,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        role: usersTable.role,
+        department: usersTable.department,
+      });
 
-  res.json({ user: updated });
+    result = { status: 200, body: { user: updated } };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // ─── PUT /api/profile/password ────────────────────────────────────────────────
@@ -112,10 +117,15 @@ router.put("/password", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const [user] = await db
-    .select({ passwordHash: usersTable.passwordHash })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId));
+  // Read the current hash in a short tenant read; bcrypt verify/hash run OUTSIDE
+  // any DB transaction (CPU-bound — must not hold a connection).
+  let user: { passwordHash: string } | undefined;
+  await tenantRead(async () => {
+    [user] = await db
+      .select({ passwordHash: usersTable.passwordHash })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId));
+  });
 
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
 
@@ -127,10 +137,12 @@ router.put("/password", async (req: Request, res: Response): Promise<void> => {
 
   const newHash = await hashPassword(newPassword);
   const now = new Date();
-  await db
-    .update(usersTable)
-    .set({ passwordHash: newHash, passwordChangedAt: now, updatedAt: now })
-    .where(eq(usersTable.id, userId));
+  await withTenant(async () => {
+    await db
+      .update(usersTable)
+      .set({ passwordHash: newHash, passwordChangedAt: now, updatedAt: now })
+      .where(eq(usersTable.id, userId));
+  });
 
   res.json({ message: "Password updated successfully" });
 });
@@ -145,22 +157,24 @@ router.put("/notification-prefs", async (req: Request, res: Response): Promise<v
     return;
   }
 
-  const existing = await db
-    .select({ id: userPreferencesTable.id })
-    .from(userPreferencesTable)
-    .where(eq(userPreferencesTable.userId, userId));
-
-  if (existing.length > 0) {
-    await db
-      .update(userPreferencesTable)
-      .set({ notificationPrefs, updatedAt: new Date() })
+  await withTenant(async () => {
+    const existing = await db
+      .select({ id: userPreferencesTable.id })
+      .from(userPreferencesTable)
       .where(eq(userPreferencesTable.userId, userId));
-  } else {
-    await db.insert(userPreferencesTable).values({
-      userId,
-      notificationPrefs,
-    });
-  }
+
+    if (existing.length > 0) {
+      await db
+        .update(userPreferencesTable)
+        .set({ notificationPrefs, updatedAt: new Date() })
+        .where(eq(userPreferencesTable.userId, userId));
+    } else {
+      await db.insert(userPreferencesTable).values({
+        userId,
+        notificationPrefs,
+      });
+    }
+  });
 
   res.json({ notificationPrefs });
 });

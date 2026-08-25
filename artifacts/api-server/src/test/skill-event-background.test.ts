@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { requestContext, dbContext } from "@workspace/db";
-import { __test, dispatchSkillEventBackground } from "../lib/skill-events.js";
+import { __test, dispatchSkillEventBackground, executeSkillBackground } from "../lib/skill-events.js";
 
 describe("DEBT-010 — dispatchSkillEventBackground (detached background boundary)", () => {
   it("runs detached: inside it, request marker AND tenant tx are both cleared", () => {
@@ -36,6 +36,17 @@ describe("DEBT-010 — dispatchSkillEventBackground (detached background boundar
       }),
     ).not.toThrow();
     // let the detached fire-and-forget settle
+    await new Promise((r) => setTimeout(r, 60));
+  });
+
+  it("executeSkillBackground: firing from inside a request scope does not throw fail-closed (detaches)", async () => {
+    expect(() =>
+      requestContext.run({ userId: 7, orgId: 111, isSystemOwner: false }, () => {
+        dbContext.run({ tx: {} as never, orgId: 111, isSystemOwner: false }, () => {
+          executeSkillBackground({ organizationId: 111, userId: 7, skillId: 999999 }, { triggeredByType: "manual" });
+        });
+      }),
+    ).not.toThrow();
     await new Promise((r) => setTimeout(r, 60));
   });
 });
