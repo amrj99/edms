@@ -562,7 +562,12 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   - **Tests (real edms_app):** `membership-rls.test.ts` (15) — the owner's full matrix incl. §8 shadowing
     + search_path drift, §9 removal-revokes, forged context, anti-move, concurrent A/B; and
     `membership-rls-behavior-comparison.test.ts` (6) — all six legitimate cross-org flows classify
-    **UNCHANGED** (legit works, unrelated denied; submission-chains N/A). No EXPANDED, no BROKEN.
+    **PRODUCT BEHAVIOR PRESERVED / RLS CORRECTED** (not "unchanged at the RLS layer": old RLS would
+    `deny` these cross-org flows, so enforcing `edms_app` under the OLD org-only policy would have BROKEN
+    them; the app allowed them only via the application authorization layer while the superuser role
+    bypassed RLS. The new membership policy makes RLS match that intended behavior — legit=allow,
+    unrelated=deny — so no EXPANDED, no BROKEN; submission-chains N/A). The test's internal verdict token
+    `UNCHANGED` means exactly "product behavior preserved (not BROKEN/EXPANDED)".
   - **Final Gate:** typecheck 0 · build OK · **full regression 898/898** (72 files).
   - **Isolated env ONLY:** `lib/rls-init.ts` (prod startup) still org-only — **no cutover**, no
     `DATABASE_URL` change, no Production roles, no background-job changes. Commit (unpushed): `e56666c`.
