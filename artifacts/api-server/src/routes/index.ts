@@ -189,7 +189,7 @@ router.use("/search", tenantScoped(searchRouter));
 router.use("/audit-logs", tenantScoped(auditLogsRouter));
 
 router.use("/general", tenantScoped(generalRouter));
-router.use("/notifications", notificationsRouter);
+router.use("/notifications", tenantScoped(notificationsRouter));
 router.use("/config", tenantScoped(configRouter));
 router.use("/billing", billingRouter);
 // storage download/stream routes (objects/onpremise/s3-object/r2-object/public-objects)
@@ -202,12 +202,12 @@ router.use("/storage", tenantScoped(storageRouter, {
 // read auto-wrapper so no DB transaction is held during that call.
 router.use("/admin", tenantScoped(adminRouter, { skipRead: (req) => req.path.startsWith("/search/status") }));
 router.use("/documents", tenantScoped(globalDocumentsRouter));
-router.use("/projects/:projectId", requireModule("registers"), registersRouter);
+router.use("/projects/:projectId", requireModule("registers"), tenantScoped(registersRouter));
 router.use("/projects/:projectId", requireModule("deliverables"), tenantScoped(deliverablesRouter));
 router.use("/user", tenantScoped(preferencesRouter));
 router.use("/profile", tenantScoped(profileRouter));
 router.use("/meetings", requireModule("meetings"), tenantScoped(meetingsRouter));
-router.use("/chat", requireModule("chat"), chatRouter);
+router.use("/chat", requireModule("chat"), tenantScoped(chatRouter));
 router.use("/modules", tenantScoped(modulesRouter));
 if (process.env.NODE_ENV !== "production") {
   router.use("/dev", devRouter);

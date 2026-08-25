@@ -6,6 +6,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import { sendRecordSubmittedEmail } from "../lib/email.js";
@@ -16,8 +17,11 @@ import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams}
 const router = Router({ mergeParams: true });
 
 async function checkProjectOwnership(req: Request, res: Response, projectId: number): Promise<boolean> {
-  const [project] = await db.select({ organizationId: projectsTable.organizationId })
-    .from(projectsTable).where(eq(projectsTable.id, projectId));
+  let project: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [project] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId));
+  });
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return false;
@@ -51,15 +55,18 @@ router.post("/inspection-requests", requireAuth, requireRole("admin", "project_m
   if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "passed";
   else if (reviewCode === "C") resolvedStatus = "in_progress";
   else if (reviewCode === "D") resolvedStatus = "failed";
-  const [row] = await db.insert(inspectionRequestsTable).values({
-    requestNumber, type: type ?? "itr", description, location,
-    date: date ? new Date(date) : undefined,
-    status: resolvedStatus, contractor, linkedCorrespondenceId, remarks,
-    direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
-    organizationId: req.user!.organizationId ?? null,
-    projectId, createdById: req.user!.id,
-  }).returning();
-  res.status(201).json(row);
+  let created: typeof inspectionRequestsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [created] = await db.insert(inspectionRequestsTable).values({
+      requestNumber, type: type ?? "itr", description, location,
+      date: date ? new Date(date) : undefined,
+      status: resolvedStatus, contractor, linkedCorrespondenceId, remarks,
+      direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
+      organizationId: req.user!.organizationId ?? null,
+      projectId, createdById: req.user!.id,
+    }).returning();
+  });
+  res.status(201).json(created);
 });
 
 router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -73,10 +80,13 @@ router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "projec
     else if (reviewCode === "C") resolvedStatus = "in_progress";
     else if (reviewCode === "D") resolvedStatus = "failed";
   }
-  const [row] = await db.update(inspectionRequestsTable)
-    .set({ description, location, date: date ? new Date(date) : undefined, status: resolvedStatus, contractor, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
-    .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
-    .returning();
+  let row: typeof inspectionRequestsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [row] = await db.update(inspectionRequestsTable)
+      .set({ description, location, date: date ? new Date(date) : undefined, status: resolvedStatus, contractor, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
+      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
+      .returning();
+  });
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
@@ -84,7 +94,9 @@ router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "projec
 router.delete("/inspection-requests/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  await db.delete(inspectionRequestsTable).where(and(eq(inspectionRequestsTable.id, requireInt(req.params.id)), eq(inspectionRequestsTable.projectId, projectId)));
+  await withTenant(async () => {
+    await db.delete(inspectionRequestsTable).where(and(eq(inspectionRequestsTable.id, requireInt(req.params.id)), eq(inspectionRequestsTable.projectId, projectId)));
+  });
   res.json({ ok: true });
 });
 
@@ -97,37 +109,58 @@ router.post(
     const id = requireInt(req.params.id);
     const projectId = requireInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
-    const [existing] = await db.select().from(inspectionRequestsTable)
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    const [row] = await db.update(inspectionRequestsTable)
-      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
-      .returning();
-    await createAuditLog({
-      userId: req.user!.id, action: "approval_submitted", entityType: "itr",
-      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
-    });
-    const itrSubmitterId = req.user!.id;
-    getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
-      if (!recipients.length) return;
-      const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-      const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, itrSubmitterId)).limit(1);
-      return dispatchNotification({
-        event: "itr_submitted",
-        recipients,
-        sendEmail: (to) => sendRecordSubmittedEmail({
-          to,
-          recordType: "ITR",
+    let result: { status: number; body: unknown } | undefined;
+    let notify: {
+      recipients: Awaited<ReturnType<typeof getProjectRecipientsByRole>>;
+      recordNumber: string; submittedByName: string; projectName: string; description?: string;
+    } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(inspectionRequestsTable)
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      const [row] = await db.update(inspectionRequestsTable)
+        .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
+        .returning();
+      await createAuditLog({
+        userId: req.user!.id, action: "approval_submitted", entityType: "itr",
+        entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+      });
+      // Gather notification data inside the tx (scoped reads); dispatch AFTER commit.
+      const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
+      if (recipients.length) {
+        const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+        const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
+        notify = {
+          recipients,
           recordNumber: row.requestNumber,
           submittedByName: submitter ? `${submitter.firstName} ${submitter.lastName}`.trim() : "Someone",
           projectName: project?.name ?? "Unknown Project",
           description: row.description ?? undefined,
-          projectId,
-        }),
-      });
-    }).catch(() => {});
-    res.json(row);
+        };
+      }
+      result = { status: 200, body: row };
+    });
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    // Notification delivery — OUTSIDE the tx (subsystem: notificationDb pool + email). Non-fatal.
+    if (notify) {
+      try {
+        await dispatchNotification({
+          event: "itr_submitted",
+          recipients: notify.recipients,
+          sendEmail: (to) => sendRecordSubmittedEmail({
+            to,
+            recordType: "ITR",
+            recordNumber: notify!.recordNumber,
+            submittedByName: notify!.submittedByName,
+            projectName: notify!.projectName,
+            description: notify!.description,
+            projectId,
+          }),
+        });
+      } catch { /* non-fatal */ }
+    }
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -142,40 +175,44 @@ router.post(
     const { comment, decision: rawDecision } = req.body;
     const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
-    const [existing] = await db.select().from(inspectionRequestsTable)
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(inspectionRequestsTable)
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to approve" } }; return; }
 
-    const [row] = await db.update(inspectionRequestsTable)
-      .set({
-        approvalStatus: "approved",
-        approvedById: req.user!.id,
-        approvalComment: comment ?? null,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
-      .returning();
+      const [row] = await db.update(inspectionRequestsTable)
+        .set({
+          approvalStatus: "approved",
+          approvedById: req.user!.id,
+          approvalComment: comment ?? null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
+        .returning();
 
-    if (existing.linkedDocumentId) {
-      const reviewer = req.user as any;
-      const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
-      await applyDocumentReviewDecision({
-        documentId: existing.linkedDocumentId,
-        decision,
-        reviewerId: req.user!.id,
-        reviewerName,
-        comment,
+      if (existing.linkedDocumentId) {
+        const reviewer = req.user as any;
+        const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+        await applyDocumentReviewDecision({
+          documentId: existing.linkedDocumentId,
+          decision,
+          reviewerId: req.user!.id,
+          reviewerName,
+          comment,
+        });
+      }
+
+      await createAuditLog({
+        userId: req.user!.id, action: "record_approved", entityType: "itr",
+        entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+        details: { comment, decision },
       });
-    }
-
-    await createAuditLog({
-      userId: req.user!.id, action: "record_approved", entityType: "itr",
-      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
-      details: { comment, decision },
+      result = { status: 200, body: row };
     });
-    res.json(row);
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -191,40 +228,44 @@ router.post(
     const decision: ReviewDecision =
       (rawDecision === "rejected" || rawDecision === "for_revision") ? rawDecision : "for_revision";
 
-    const [existing] = await db.select().from(inspectionRequestsTable)
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(inspectionRequestsTable)
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to reject" } }; return; }
 
-    const [row] = await db.update(inspectionRequestsTable)
-      .set({
-        approvalStatus: "rejected",
-        approvedById: req.user!.id,
-        approvalComment: comment ?? null,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
-      .returning();
+      const [row] = await db.update(inspectionRequestsTable)
+        .set({
+          approvalStatus: "rejected",
+          approvedById: req.user!.id,
+          approvalComment: comment ?? null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
+        .returning();
 
-    if (existing.linkedDocumentId) {
-      const reviewer = req.user as any;
-      const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
-      await applyDocumentReviewDecision({
-        documentId: existing.linkedDocumentId,
-        decision,
-        reviewerId: req.user!.id,
-        reviewerName,
-        comment,
+      if (existing.linkedDocumentId) {
+        const reviewer = req.user as any;
+        const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+        await applyDocumentReviewDecision({
+          documentId: existing.linkedDocumentId,
+          decision,
+          reviewerId: req.user!.id,
+          reviewerName,
+          comment,
+        });
+      }
+
+      await createAuditLog({
+        userId: req.user!.id, action: "record_rejected", entityType: "itr",
+        entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
+        details: { comment, decision },
       });
-    }
-
-    await createAuditLog({
-      userId: req.user!.id, action: "record_rejected", entityType: "itr",
-      entityId: id, entityTitle: row.requestNumber, projectId: row.projectId,
-      details: { comment, decision },
+      result = { status: 200, body: row };
     });
-    res.json(row);
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -246,15 +287,18 @@ router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager",
   let resolvedStatus = status ?? "open";
   if (reviewCode === "A") resolvedStatus = "closed";
   else if (reviewCode === "B") { resolvedStatus = "in_progress"; }
-  const [row] = await db.insert(ncrRecordsTable).values({
-    reportNumber, type: type ?? "ncr", description, location, raisedBy,
-    status: resolvedStatus, correctiveAction,
-    closeDate: closeDate ? new Date(closeDate) : undefined,
-    remarks, direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
-    organizationId: req.user!.organizationId ?? null,
-    projectId, createdById: req.user!.id,
-  }).returning();
-  res.status(201).json(row);
+  let created: typeof ncrRecordsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [created] = await db.insert(ncrRecordsTable).values({
+      reportNumber, type: type ?? "ncr", description, location, raisedBy,
+      status: resolvedStatus, correctiveAction,
+      closeDate: closeDate ? new Date(closeDate) : undefined,
+      remarks, direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
+      organizationId: req.user!.organizationId ?? null,
+      projectId, createdById: req.user!.id,
+    }).returning();
+  });
+  res.status(201).json(created);
 });
 
 router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -267,10 +311,13 @@ router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manage
     if (reviewCode === "A") resolvedStatus = "closed";
     else if (reviewCode === "B") resolvedStatus = "in_progress";
   }
-  const [row] = await db.update(ncrRecordsTable)
-    .set({ description, location, raisedBy, status: resolvedStatus, correctiveAction, closeDate: closeDate ? new Date(closeDate) : undefined, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
-    .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
-    .returning();
+  let row: typeof ncrRecordsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [row] = await db.update(ncrRecordsTable)
+      .set({ description, location, raisedBy, status: resolvedStatus, correctiveAction, closeDate: closeDate ? new Date(closeDate) : undefined, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
+      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
+      .returning();
+  });
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
@@ -278,7 +325,9 @@ router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manage
 router.delete("/ncr-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  await db.delete(ncrRecordsTable).where(and(eq(ncrRecordsTable.id, requireInt(req.params.id)), eq(ncrRecordsTable.projectId, projectId)));
+  await withTenant(async () => {
+    await db.delete(ncrRecordsTable).where(and(eq(ncrRecordsTable.id, requireInt(req.params.id)), eq(ncrRecordsTable.projectId, projectId)));
+  });
   res.json({ ok: true });
 });
 
@@ -291,37 +340,56 @@ router.post(
     const id = requireInt(req.params.id);
     const projectId = requireInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
-    const [existing] = await db.select().from(ncrRecordsTable)
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    const [row] = await db.update(ncrRecordsTable)
-      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
-      .returning();
-    await createAuditLog({
-      userId: req.user!.id, action: "approval_submitted", entityType: "ncr",
-      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
-    });
-    const ncrSubmitterId = req.user!.id;
-    getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
-      if (!recipients.length) return;
-      const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-      const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, ncrSubmitterId)).limit(1);
-      return dispatchNotification({
-        event: "ncr_submitted",
-        recipients,
-        sendEmail: (to) => sendRecordSubmittedEmail({
-          to,
-          recordType: "NCR",
+    let result: { status: number; body: unknown } | undefined;
+    let notify: {
+      recipients: Awaited<ReturnType<typeof getProjectRecipientsByRole>>;
+      recordNumber: string; submittedByName: string; projectName: string; description?: string;
+    } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(ncrRecordsTable)
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      const [row] = await db.update(ncrRecordsTable)
+        .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
+        .returning();
+      await createAuditLog({
+        userId: req.user!.id, action: "approval_submitted", entityType: "ncr",
+        entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+      });
+      const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
+      if (recipients.length) {
+        const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+        const [submitter] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
+        notify = {
+          recipients,
           recordNumber: row.reportNumber,
           submittedByName: submitter ? `${submitter.firstName} ${submitter.lastName}`.trim() : "Someone",
           projectName: project?.name ?? "Unknown Project",
           description: row.description ?? undefined,
-          projectId,
-        }),
-      });
-    }).catch(() => {});
-    res.json(row);
+        };
+      }
+      result = { status: 200, body: row };
+    });
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    if (notify) {
+      try {
+        await dispatchNotification({
+          event: "ncr_submitted",
+          recipients: notify.recipients,
+          sendEmail: (to) => sendRecordSubmittedEmail({
+            to,
+            recordType: "NCR",
+            recordNumber: notify!.recordNumber,
+            submittedByName: notify!.submittedByName,
+            projectName: notify!.projectName,
+            description: notify!.description,
+            projectId,
+          }),
+        });
+      } catch { /* non-fatal */ }
+    }
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -334,26 +402,30 @@ router.post(
     const projectId = requireInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
-    const [existing] = await db.select().from(ncrRecordsTable)
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
-    const [row] = await db.update(ncrRecordsTable)
-      .set({
-        approvalStatus: "approved",
-        approvedById: req.user!.id,
-        approvalComment: comment ?? null,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
-      .returning();
-    await createAuditLog({
-      userId: req.user!.id, action: "record_approved", entityType: "ncr",
-      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
-      details: { comment },
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(ncrRecordsTable)
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to approve" } }; return; }
+      const [row] = await db.update(ncrRecordsTable)
+        .set({
+          approvalStatus: "approved",
+          approvedById: req.user!.id,
+          approvalComment: comment ?? null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
+        .returning();
+      await createAuditLog({
+        userId: req.user!.id, action: "record_approved", entityType: "ncr",
+        entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+        details: { comment },
+      });
+      result = { status: 200, body: row };
     });
-    res.json(row);
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -366,26 +438,30 @@ router.post(
     const projectId = requireInt(req.params.projectId);
     if (!await checkProjectOwnership(req, res, projectId)) return;
     const { comment } = req.body;
-    const [existing] = await db.select().from(ncrRecordsTable)
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
-    const [row] = await db.update(ncrRecordsTable)
-      .set({
-        approvalStatus: "rejected",
-        approvedById: req.user!.id,
-        approvalComment: comment ?? null,
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
-      .returning();
-    await createAuditLog({
-      userId: req.user!.id, action: "record_rejected", entityType: "ncr",
-      entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
-      details: { comment },
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(ncrRecordsTable)
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to reject" } }; return; }
+      const [row] = await db.update(ncrRecordsTable)
+        .set({
+          approvalStatus: "rejected",
+          approvedById: req.user!.id,
+          approvalComment: comment ?? null,
+          approvedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
+        .returning();
+      await createAuditLog({
+        userId: req.user!.id, action: "record_rejected", entityType: "ncr",
+        entityId: id, entityTitle: row.reportNumber, projectId: row.projectId,
+        details: { comment },
+      });
+      result = { status: 200, body: row };
     });
-    res.json(row);
+    res.status(result!.status).json(result!.body);
   }
 );
 
@@ -404,34 +480,49 @@ router.post("/noc-records", requireAuth, requireRole("admin", "project_manager",
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { nocNumber, authority, date, status, linkedDocumentId, remarks, direction, partyType } = req.body;
   if (!nocNumber) { res.status(400).json({ error: "nocNumber is required" }); return; }
-  const [row] = await db.insert(nocRecordsTable).values({
-    nocNumber, authority,
-    date: date ? new Date(date) : undefined,
-    status: status ?? "pending", linkedDocumentId, remarks,
-    direction: direction ?? null, partyType: partyType ?? null,
-    organizationId: req.user!.organizationId ?? null,
-    projectId, createdById: req.user!.id,
-  }).returning();
-  const nocCreatorId = req.user!.id;
-  getProjectRecipientsByRole(projectId, ["admin", "project_manager"]).then(async recipients => {
-    if (!recipients.length) return;
-    const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, nocCreatorId)).limit(1);
-    return dispatchNotification({
-      event: "noc_submitted",
-      recipients,
-      sendEmail: (to) => sendRecordSubmittedEmail({
-        to,
-        recordType: "NOC",
-        recordNumber: nocNumber,
+  let created: typeof nocRecordsTable.$inferSelect | undefined;
+  let notify: {
+    recipients: Awaited<ReturnType<typeof getProjectRecipientsByRole>>;
+    submittedByName: string; projectName: string;
+  } | undefined;
+  await withTenant(async () => {
+    [created] = await db.insert(nocRecordsTable).values({
+      nocNumber, authority,
+      date: date ? new Date(date) : undefined,
+      status: status ?? "pending", linkedDocumentId, remarks,
+      direction: direction ?? null, partyType: partyType ?? null,
+      organizationId: req.user!.organizationId ?? null,
+      projectId, createdById: req.user!.id,
+    }).returning();
+    const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
+    if (recipients.length) {
+      const [project] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      const [creator] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName }).from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
+      notify = {
+        recipients,
         submittedByName: creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone",
         projectName: project?.name ?? "Unknown Project",
-        description: remarks ?? undefined,
-        projectId,
-      }),
-    });
-  }).catch(() => {});
-  res.status(201).json(row);
+      };
+    }
+  });
+  if (notify) {
+    try {
+      await dispatchNotification({
+        event: "noc_submitted",
+        recipients: notify.recipients,
+        sendEmail: (to) => sendRecordSubmittedEmail({
+          to,
+          recordType: "NOC",
+          recordNumber: nocNumber,
+          submittedByName: notify!.submittedByName,
+          projectName: notify!.projectName,
+          description: remarks ?? undefined,
+          projectId,
+        }),
+      });
+    } catch { /* non-fatal */ }
+  }
+  res.status(201).json(created);
 });
 
 router.put("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -439,10 +530,13 @@ router.put("/noc-records/:id", requireAuth, requireRole("admin", "project_manage
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { authority, date, status, linkedDocumentId, remarks, direction, partyType } = req.body;
-  const [row] = await db.update(nocRecordsTable)
-    .set({ authority, date: date ? new Date(date) : undefined, status, linkedDocumentId, remarks, direction, partyType, updatedAt: new Date() })
-    .where(and(eq(nocRecordsTable.id, id), eq(nocRecordsTable.projectId, projectId)))
-    .returning();
+  let row: typeof nocRecordsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [row] = await db.update(nocRecordsTable)
+      .set({ authority, date: date ? new Date(date) : undefined, status, linkedDocumentId, remarks, direction, partyType, updatedAt: new Date() })
+      .where(and(eq(nocRecordsTable.id, id), eq(nocRecordsTable.projectId, projectId)))
+      .returning();
+  });
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
@@ -450,7 +544,9 @@ router.put("/noc-records/:id", requireAuth, requireRole("admin", "project_manage
 router.delete("/noc-records/:id", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  await db.delete(nocRecordsTable).where(and(eq(nocRecordsTable.id, requireInt(req.params.id)), eq(nocRecordsTable.projectId, projectId)));
+  await withTenant(async () => {
+    await db.delete(nocRecordsTable).where(and(eq(nocRecordsTable.id, requireInt(req.params.id)), eq(nocRecordsTable.projectId, projectId)));
+  });
   res.json({ ok: true });
 });
 

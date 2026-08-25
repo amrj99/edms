@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { notificationsTable, tasksTable, meetingsTable, meetingAttendeesTable, usersTable } from "@workspace/db";
 import { eq, and, desc, count, lt, lte, gte, isNotNull, notInArray, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { emitToUser } from "../lib/socket.js";
 import {param, paramInt, requireInt, queryIntOr} from '../lib/params';
 
@@ -163,10 +164,13 @@ router.get("/", async (req, res): Promise<void> => {
 // ─── Mark single notification as read ─────────────────────────────────────────
 router.post("/:id/read", async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  const updated = await db.update(notificationsTable)
-    .set({ isRead: true, readAt: new Date() })
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
-    .returning({ id: notificationsTable.id });
+  let updated: { id: number }[] = [];
+  await withTenant(async () => {
+    updated = await db.update(notificationsTable)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+      .returning({ id: notificationsTable.id });
+  });
   if (updated.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
@@ -174,28 +178,36 @@ router.post("/:id/read", async (req, res): Promise<void> => {
 // ─── Mark single notification as unread ───────────────────────────────────────
 router.post("/:id/unread", async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  const updated = await db.update(notificationsTable)
-    .set({ isRead: false, readAt: null })
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
-    .returning({ id: notificationsTable.id });
+  let updated: { id: number }[] = [];
+  await withTenant(async () => {
+    updated = await db.update(notificationsTable)
+      .set({ isRead: false, readAt: null })
+      .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+      .returning({ id: notificationsTable.id });
+  });
   if (updated.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });
 
 // ─── Mark all notifications as read ───────────────────────────────────────────
 router.post("/read-all", async (req, res): Promise<void> => {
-  await db.update(notificationsTable)
-    .set({ isRead: true, readAt: new Date() })
-    .where(and(eq(notificationsTable.userId, req.user!.id), eq(notificationsTable.isRead, false)));
+  await withTenant(async () => {
+    await db.update(notificationsTable)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(eq(notificationsTable.userId, req.user!.id), eq(notificationsTable.isRead, false)));
+  });
   res.json({ success: true });
 });
 
 // ─── Delete notification ───────────────────────────────────────────────────────
 router.delete("/:id", async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
-  const deleted = await db.delete(notificationsTable)
-    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
-    .returning({ id: notificationsTable.id });
+  let deleted: { id: number }[] = [];
+  await withTenant(async () => {
+    deleted = await db.delete(notificationsTable)
+      .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.user!.id)))
+      .returning({ id: notificationsTable.id });
+  });
   if (deleted.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
   res.json({ success: true });
 });

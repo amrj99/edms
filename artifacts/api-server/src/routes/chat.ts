@@ -12,6 +12,7 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray, sql, desc, gt, or, ilike, isNull, ne } from "drizzle-orm";
 import { requireAuth, requireRole, isSystemOwner } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 import { orgScopedWhere } from "../lib/org-scope.js";
@@ -22,18 +23,24 @@ router.use(requireAuth);
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function isMember(groupId: number, userId: number): Promise<boolean> {
-  const [row] = await db
-    .select({ id: chatGroupMembersTable.id })
-    .from(chatGroupMembersTable)
-    .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, userId)));
+  let row: { id: number } | undefined;
+  await tenantRead(async () => {
+    [row] = await db
+      .select({ id: chatGroupMembersTable.id })
+      .from(chatGroupMembersTable)
+      .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, userId)));
+  });
   return !!row;
 }
 
 async function isGroupAdmin(groupId: number, userId: number): Promise<boolean> {
-  const [row] = await db
-    .select({ role: chatGroupMembersTable.role })
-    .from(chatGroupMembersTable)
-    .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, userId)));
+  let row: { role: string } | undefined;
+  await tenantRead(async () => {
+    [row] = await db
+      .select({ role: chatGroupMembersTable.role })
+      .from(chatGroupMembersTable)
+      .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, userId)));
+  });
   return row?.role === "admin";
 }
 
@@ -152,21 +159,24 @@ router.post("/groups", async (req, res): Promise<void> => {
     return;
   }
 
-  const [group] = await db
-    .insert(chatGroupsTable)
-    .values({ name: name.trim(), description, type, organizationId: orgId, projectId: projectId ?? null, department: department ?? null, createdById: userId })
-    .returning();
+  let group: typeof chatGroupsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [group] = await db
+      .insert(chatGroupsTable)
+      .values({ name: name.trim(), description, type, organizationId: orgId, projectId: projectId ?? null, department: department ?? null, createdById: userId })
+      .returning();
 
-  // Add creator as admin
-  await db.insert(chatGroupMembersTable).values({ groupId: group.id, userId, role: "admin" });
+    // Add creator as admin
+    await db.insert(chatGroupMembersTable).values({ groupId: group.id, userId, role: "admin" });
 
-  // Add other initial members
-  const otherMembers = (memberIds as number[]).filter((id) => id !== userId);
-  if (otherMembers.length > 0) {
-    await db.insert(chatGroupMembersTable).values(otherMembers.map((uid) => ({ groupId: group.id, userId: uid, role: "member" as const })));
-  }
+    // Add other initial members
+    const otherMembers = (memberIds as number[]).filter((id) => id !== userId);
+    if (otherMembers.length > 0) {
+      await db.insert(chatGroupMembersTable).values(otherMembers.map((uid) => ({ groupId: group!.id, userId: uid, role: "member" as const })));
+    }
 
-  await createAuditLog({ userId, action: "create", entityType: "chat_group", entityId: group.id, details: { name: group.name } });
+    await createAuditLog({ userId, action: "create", entityType: "chat_group", entityId: group.id, details: { name: group.name } });
+  });
 
   res.status(201).json({ group });
 });
@@ -215,8 +225,11 @@ router.put("/groups/:id", async (req, res): Promise<void> => {
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
-    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  let group: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+      .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  });
   if (!group) { res.status(404).json({ error: "Not Found" }); return; }
 
   const canEdit = (await isGroupAdmin(groupId, userId))
@@ -230,10 +243,13 @@ router.put("/groups/:id", async (req, res): Promise<void> => {
   if (description !== undefined) updates.description = description;
   if (isArchived !== undefined) updates.isArchived = isArchived;
 
-  const [updated] = await db.update(chatGroupsTable)
-    .set(updates)
-    .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId))
-    .returning();
+  let updated: typeof chatGroupsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [updated] = await db.update(chatGroupsTable)
+      .set(updates)
+      .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId))
+      .returning();
+  });
   res.json({ group: updated });
 });
 
@@ -244,8 +260,11 @@ router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manag
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
-    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  let group: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+      .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  });
   if (!group) { res.status(404).json({ error: "Not Found" }); return; }
 
   const canDelete = (await isGroupAdmin(groupId, userId))
@@ -253,9 +272,11 @@ router.delete("/groups/:id", requireRole("admin", "system_owner", "project_manag
     || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canDelete) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
-  await db.delete(chatGroupsTable)
-    .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId));
-  await createAuditLog({ userId, action: "delete", entityType: "chat_group", entityId: groupId, details: {} });
+  await withTenant(async () => {
+    await db.delete(chatGroupsTable)
+      .where(orgScopedWhere(caller, chatGroupsTable.id, groupId, chatGroupsTable.organizationId));
+    await createAuditLog({ userId, action: "delete", entityType: "chat_group", entityId: groupId, details: {} });
+  });
   res.json({ success: true });
 });
 
@@ -291,8 +312,11 @@ router.post("/groups/:id/members", async (req, res): Promise<void> => {
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
-    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  let group: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+      .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  });
   if (!group) { res.status(404).json({ error: "Not Found" }); return; }
 
   const canManage = (await isGroupAdmin(groupId, userId))
@@ -306,16 +330,19 @@ router.post("/groups/:id/members", async (req, res): Promise<void> => {
     return;
   }
 
-  const existing = await db
-    .select({ userId: chatGroupMembersTable.userId })
-    .from(chatGroupMembersTable)
-    .where(and(eq(chatGroupMembersTable.groupId, groupId), inArray(chatGroupMembersTable.userId, userIds)));
-  const existingSet = new Set(existing.map((e) => e.userId));
-  const toAdd = (userIds as number[]).filter((id) => !existingSet.has(id));
+  let toAdd: number[] = [];
+  await withTenant(async () => {
+    const existing = await db
+      .select({ userId: chatGroupMembersTable.userId })
+      .from(chatGroupMembersTable)
+      .where(and(eq(chatGroupMembersTable.groupId, groupId), inArray(chatGroupMembersTable.userId, userIds)));
+    const existingSet = new Set(existing.map((e) => e.userId));
+    toAdd = (userIds as number[]).filter((id) => !existingSet.has(id));
 
-  if (toAdd.length > 0) {
-    await db.insert(chatGroupMembersTable).values(toAdd.map((uid) => ({ groupId, userId: uid, role: "member" as const })));
-  }
+    if (toAdd.length > 0) {
+      await db.insert(chatGroupMembersTable).values(toAdd.map((uid) => ({ groupId, userId: uid, role: "member" as const })));
+    }
+  });
 
   res.json({ added: toAdd.length });
 });
@@ -327,8 +354,11 @@ router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> =
   const groupId = requireInt(req.params.id);
   const targetUserId = requireInt(req.params.memberId);
 
-  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
-    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  let group: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+      .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  });
   if (!group) { res.status(404).json({ error: "Not Found" }); return; }
 
   const canManage = currentUserId === targetUserId
@@ -337,8 +367,10 @@ router.delete("/groups/:id/members/:memberId", async (req, res): Promise<void> =
     || (caller.role === "admin" && group.organizationId === caller.organizationId);
   if (!canManage) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
-  await db.delete(chatGroupMembersTable)
-    .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, targetUserId)));
+  await withTenant(async () => {
+    await db.delete(chatGroupMembersTable)
+      .where(and(eq(chatGroupMembersTable.groupId, groupId), eq(chatGroupMembersTable.userId, targetUserId)));
+  });
   res.json({ success: true });
 });
 
@@ -394,37 +426,40 @@ router.post("/groups/:id/messages", async (req, res): Promise<void> => {
     return;
   }
 
-  const [message] = await db
-    .insert(chatMessagesTable)
-    .values({
-      groupId,
-      userId,
-      content: content?.trim() ?? "",
-      parentId: parentId ?? null,
-      messageType,
-      fileUrl: fileUrl ?? null,
-      fileName: fileName ?? null,
-      fileSize: fileSize ?? null,
-    })
-    .returning();
+  let enriched: Awaited<ReturnType<typeof enrichMessages>>[number] | undefined;
+  let notifRows: typeof notificationsTable.$inferSelect[] = [];
+  await withTenant(async () => {
+    const [message] = await db
+      .insert(chatMessagesTable)
+      .values({
+        groupId,
+        userId,
+        content: content?.trim() ?? "",
+        parentId: parentId ?? null,
+        messageType,
+        fileUrl: fileUrl ?? null,
+        fileName: fileName ?? null,
+        fileSize: fileSize ?? null,
+      })
+      .returning();
 
-  // Update group updatedAt
-  await db.update(chatGroupsTable).set({ updatedAt: new Date() }).where(eq(chatGroupsTable.id, groupId));
+    // Update group updatedAt
+    await db.update(chatGroupsTable).set({ updatedAt: new Date() }).where(eq(chatGroupsTable.id, groupId));
 
-  // Auto-read for sender
-  await db.insert(chatMessageReadsTable).values({ messageId: message.id, userId });
+    // Auto-read for sender
+    await db.insert(chatMessageReadsTable).values({ messageId: message.id, userId });
 
-  // Audit log
-  await createAuditLog({ userId, action: "create", entityType: "chat_message", entityId: message.id, details: { groupId } });
+    // Audit log
+    await createAuditLog({ userId, action: "create", entityType: "chat_message", entityId: message.id, details: { groupId } });
 
-  // Create notifications for other group members (fire-and-forget, non-blocking)
-  (async () => {
-    try {
-      const notifMembers = await db
-        .select({ userId: chatGroupMembersTable.userId })
-        .from(chatGroupMembersTable)
-        .where(and(eq(chatGroupMembersTable.groupId, groupId), ne(chatGroupMembersTable.userId, userId)));
+    // In-app notifications for other group members (RLS table — inside the tx);
+    // socket emits happen AFTER commit below.
+    const notifMembers = await db
+      .select({ userId: chatGroupMembersTable.userId })
+      .from(chatGroupMembersTable)
+      .where(and(eq(chatGroupMembersTable.groupId, groupId), ne(chatGroupMembersTable.userId, userId)));
 
+    if (notifMembers.length > 0) {
       const [sender] = await db
         .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
         .from(usersTable)
@@ -434,31 +469,25 @@ router.post("/groups/:id/messages", async (req, res): Promise<void> => {
         .from(chatGroupsTable)
         .where(eq(chatGroupsTable.id, groupId));
 
-      if (notifMembers.length > 0) {
-        const notifRows = await db.insert(notificationsTable).values(
-          notifMembers.map((m) => ({
-            userId: m.userId,
-            type: "chat_message" as const,
-            title: `New message in ${grp?.name ?? "Chat"}`,
-            message: `${sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone"}: ${(content ?? "").substring(0, 80)}`,
-            entityType: "chat_group",
-            entityId: groupId,
-            actionUrl: `/chat?group=${groupId}`,
-          }))
-        ).returning();
-        // Emit notification badge update to each member
-        for (const n of notifRows) emitToUser(n.userId, "notification:new", n);
-      }
-    } catch (err) {
-      // Notifications should never block message sending
-      console.error("Chat notification error:", err);
+      notifRows = await db.insert(notificationsTable).values(
+        notifMembers.map((m) => ({
+          userId: m.userId,
+          type: "chat_message" as const,
+          title: `New message in ${grp?.name ?? "Chat"}`,
+          message: `${sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone"}: ${(content ?? "").substring(0, 80)}`,
+          entityType: "chat_group",
+          entityId: groupId,
+          actionUrl: `/chat?group=${groupId}`,
+        }))
+      ).returning();
     }
-  })();
 
-  const [enriched] = await enrichMessages([message], userId);
+    [enriched] = await enrichMessages([message], userId);
+  });
 
-  // Real-time: broadcast the new message to all clients in the group room
+  // Real-time emits — OUTSIDE the tx (in-process socket, post-commit).
   emitToChatGroup(groupId, "chat:message", enriched);
+  for (const n of notifRows) emitToUser(n.userId, "notification:new", n);
 
   res.status(201).json({ message: enriched });
 });
@@ -470,11 +499,14 @@ router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => 
   const groupId = requireInt(req.params.id);
   const msgId = requireInt(req.params.msgId);
 
-  const [msg] = await db.select().from(chatMessagesTable).where(eq(chatMessagesTable.id, msgId));
+  let msg: typeof chatMessagesTable.$inferSelect | undefined;
+  let group: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [msg] = await db.select().from(chatMessagesTable).where(eq(chatMessagesTable.id, msgId));
+    [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
+      .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
+  });
   if (!msg) { res.status(404).json({ error: "Message not found" }); return; }
-
-  const [group] = await db.select({ organizationId: chatGroupsTable.organizationId })
-    .from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId)).limit(1);
 
   const canDelete = msg.userId === userId
     || (await isGroupAdmin(groupId, userId))
@@ -482,7 +514,9 @@ router.delete("/groups/:id/messages/:msgId", async (req, res): Promise<void> => 
     || (caller.role === "admin" && group?.organizationId === caller.organizationId);
   if (!canDelete) { res.status(403).json({ error: "Insufficient permissions" }); return; }
 
-  await db.update(chatMessagesTable).set({ isDeleted: true }).where(eq(chatMessagesTable.id, msgId));
+  await withTenant(async () => {
+    await db.update(chatMessagesTable).set({ isDeleted: true }).where(eq(chatMessagesTable.id, msgId));
+  });
   res.json({ success: true });
 });
 
@@ -491,14 +525,16 @@ router.post("/groups/:id/messages/:msgId/read", async (req, res): Promise<void> 
   const userId = req.user!.id;
   const msgId = requireInt(req.params.msgId);
 
-  const [existing] = await db
-    .select({ id: chatMessageReadsTable.id })
-    .from(chatMessageReadsTable)
-    .where(and(eq(chatMessageReadsTable.messageId, msgId), eq(chatMessageReadsTable.userId, userId)));
+  await withTenant(async () => {
+    const [existing] = await db
+      .select({ id: chatMessageReadsTable.id })
+      .from(chatMessageReadsTable)
+      .where(and(eq(chatMessageReadsTable.messageId, msgId), eq(chatMessageReadsTable.userId, userId)));
 
-  if (!existing) {
-    await db.insert(chatMessageReadsTable).values({ messageId: msgId, userId });
-  }
+    if (!existing) {
+      await db.insert(chatMessageReadsTable).values({ messageId: msgId, userId });
+    }
+  });
   res.json({ success: true });
 });
 
@@ -510,20 +546,23 @@ router.post("/groups/:id/read-all", async (req, res): Promise<void> => {
 
   if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
 
-  const unread = await db
-    .select({ id: chatMessagesTable.id })
-    .from(chatMessagesTable)
-    .where(
-      and(
-        eq(chatMessagesTable.groupId, groupId),
-        eq(chatMessagesTable.isDeleted, false),
-        sql`${chatMessagesTable.id} not in (select message_id from chat_message_reads where user_id = ${userId})`
-      )
-    );
+  let unread: { id: number }[] = [];
+  await withTenant(async () => {
+    unread = await db
+      .select({ id: chatMessagesTable.id })
+      .from(chatMessagesTable)
+      .where(
+        and(
+          eq(chatMessagesTable.groupId, groupId),
+          eq(chatMessagesTable.isDeleted, false),
+          sql`${chatMessagesTable.id} not in (select message_id from chat_message_reads where user_id = ${userId})`
+        )
+      );
 
-  if (unread.length > 0) {
-    await db.insert(chatMessageReadsTable).values(unread.map((m) => ({ messageId: m.id, userId })));
-  }
+    if (unread.length > 0) {
+      await db.insert(chatMessageReadsTable).values(unread.map((m) => ({ messageId: m.id, userId })));
+    }
+  });
 
   res.json({ marked: unread.length });
 });
