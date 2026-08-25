@@ -178,7 +178,7 @@ router.use("/projects/:projectId/correspondence", requireModule("correspondence"
 router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
 
 router.use("/projects/:projectId/transmittals", requireModule("registers"), tenantScoped(transmittalsRouter));
-router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
+router.use("/projects/:projectId/submission-chains", requireModule("registers"), tenantScoped(submissionChainsRouter));
 router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
 router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
 router.use("/projects/:projectId", tenantScoped(projectPartiesRouter));
@@ -196,7 +196,7 @@ router.use("/storage", storageRouter);
 // /admin/search/status does external I/O (Elasticsearch) on GET → exclude from the
 // read auto-wrapper so no DB transaction is held during that call.
 router.use("/admin", tenantScoped(adminRouter, { skipRead: (req) => req.path.startsWith("/search/status") }));
-router.use("/documents", globalDocumentsRouter);
+router.use("/documents", tenantScoped(globalDocumentsRouter));
 router.use("/projects/:projectId", requireModule("registers"), registersRouter);
 router.use("/projects/:projectId", requireModule("deliverables"), deliverablesRouter);
 router.use("/user", preferencesRouter);
