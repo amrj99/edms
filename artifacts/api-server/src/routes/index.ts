@@ -182,7 +182,7 @@ router.use("/projects/:projectId/submission-chains", requireModule("registers"),
 router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
 router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
 router.use("/projects/:projectId", tenantScoped(projectPartiesRouter));
-router.use("/tasks", tasksRouter);
+router.use("/tasks", tenantScoped(tasksRouter));
 router.use("/metadata-fields", metadataRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/search", searchRouter);

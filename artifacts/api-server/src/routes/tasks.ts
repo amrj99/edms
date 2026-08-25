@@ -7,7 +7,8 @@ import { requireOrgScope } from "../lib/org-scope.js";
 import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
-import { triggerSkillEvent } from "../lib/skill-engine.js";
+import { dispatchSkillEventBackground } from "../lib/skill-events.js";
+import { withTenant } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
@@ -120,80 +121,86 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
   res.json({ items: enriched, total: enriched.length });
 });
 
-router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> => {
+router.post("/", requireAuth, requireOrgScope, async (req, res, next): Promise<void> => {
   const { title, description, priority, assignedToId, projectId, dueDate } = req.body;
   const effectiveAssignedToId = assignedToId || req.user!.id;
-  const [task] = await db.insert(tasksTable).values({
-    title, description, priority,
-    assignedToId: effectiveAssignedToId,
-    createdById: req.user!.id,
-    projectId: projectId || undefined,
-    organizationId: req.user!.organizationId ?? undefined,
-    dueDate: dueDate ? new Date(dueDate) : undefined,
-    sourceType: "manual",
-    assignedAt: effectiveAssignedToId ? new Date() : undefined,
-  }).returning();
 
-  // C-3: audit the create using the existing action vocabulary ("create").
-  await createAuditLog({
-    userId: req.user!.id,
-    organizationId: req.user!.organizationId ?? undefined,
-    action: "create",
-    entityType: "task",
-    entityId: task.id,
-    entityTitle: task.title,
-    projectId: task.projectId ?? undefined,
-    details: { status: task.status, priority: task.priority, assignedToId: task.assignedToId },
-  });
-
-  // Notify the assignee (if assigned to someone other than the creator)
-  if (effectiveAssignedToId && effectiveAssignedToId !== req.user!.id) {
-    try {
-      const [creator] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
-        .from(usersTable).where(eq(usersTable.id, req.user!.id));
-      const creatorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone";
-      const [notification] = await db.insert(notificationsTable).values({
-        userId: assignedToId,
-        type: "task_assigned" as const,
-        title: `Task assigned: ${title}`,
-        message: `${creatorName} assigned you a task: "${title}"${dueDate ? ` (due ${new Date(dueDate).toLocaleDateString()})` : ""}`,
-        projectId: projectId || null,
-        entityType: "task",
-        entityId: task.id,
-        actionUrl: `/tasks`,
+  try {
+    // Business unit-of-work: task + audit (atomic).
+    const task = await withTenant(async () => {
+      const [t] = await db.insert(tasksTable).values({
+        title, description, priority,
+        assignedToId: effectiveAssignedToId,
+        createdById: req.user!.id,
+        projectId: projectId || undefined,
+        organizationId: req.user!.organizationId ?? undefined,
+        dueDate: dueDate ? new Date(dueDate) : undefined,
+        sourceType: "manual",
+        assignedAt: effectiveAssignedToId ? new Date() : undefined,
       }).returning();
-      emitToUser(assignedToId, "notification:new", notification);
+      await createAuditLog({
+        userId: req.user!.id,
+        organizationId: req.user!.organizationId ?? undefined,
+        action: "create",
+        entityType: "task",
+        entityId: t.id,
+        entityTitle: t.title,
+        projectId: t.projectId ?? undefined,
+        details: { status: t.status, priority: t.priority, assignedToId: t.assignedToId },
+      });
+      return t;
+    });
 
-      // Email the assignee
-      const [assignee] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
-        .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
-      const [project] = projectId
-        ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1)
-        : [null];
-      if (assignee?.email) {
-        dispatchNotification({
-          event: "task_assigned",
-          recipients: [{ userId: assignedToId, email: assignee.email, name: `${assignee.firstName} ${assignee.lastName}`.trim() }],
-          sendEmail: (to) => sendTaskAssignedEmail({
-            to: to[0],
-            assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
-            assignerName: creatorName,
-            taskTitle: title,
-            taskDescription: description,
-            priority,
-            dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
-            projectName: project?.name ?? null,
-            taskLink: `${process.env.APP_URL ?? ""}/tasks`,
-          }),
-        }).catch(() => {});
-      }
-    } catch (_) {}
-  }
+    // Notify the assignee (best-effort; in-app in its own short tx, email after commit)
+    if (effectiveAssignedToId && effectiveAssignedToId !== req.user!.id) {
+      try {
+        const { notification, creatorName, assignee, project } = await withTenant(async () => {
+          const [creator] = await db
+            .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+            .from(usersTable).where(eq(usersTable.id, req.user!.id));
+          const creatorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : "Someone";
+          const [notification] = await db.insert(notificationsTable).values({
+            userId: assignedToId,
+            type: "task_assigned" as const,
+            title: `Task assigned: ${title}`,
+            message: `${creatorName} assigned you a task: "${title}"${dueDate ? ` (due ${new Date(dueDate).toLocaleDateString()})` : ""}`,
+            projectId: projectId || null,
+            entityType: "task",
+            entityId: task.id,
+            actionUrl: `/tasks`,
+          }).returning();
+          const [assignee] = await db
+            .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+            .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
+          const [project] = projectId
+            ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1)
+            : [null];
+          return { notification, creatorName, assignee, project };
+        });
+        emitToUser(assignedToId, "notification:new", notification);
+        if (assignee?.email) {
+          dispatchNotification({
+            event: "task_assigned",
+            recipients: [{ userId: assignedToId, email: assignee.email, name: `${assignee.firstName} ${assignee.lastName}`.trim() }],
+            sendEmail: (to) => sendTaskAssignedEmail({
+              to: to[0],
+              assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
+              assignerName: creatorName,
+              taskTitle: title,
+              taskDescription: description,
+              priority,
+              dueDate: dueDate ? new Date(dueDate).toLocaleDateString() : null,
+              projectName: project?.name ?? null,
+              taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+            }),
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    }
 
-  const enriched = await enrichTasks([task]);
-  res.status(201).json(enriched[0]);
+    const enriched = await withTenant(() => enrichTasks([task]));
+    res.status(201).json(enriched[0]);
+  } catch (e) { next(e); }
 });
 
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
@@ -237,163 +244,179 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   res.json(enriched[0]);
 });
 
-router.put("/:id", requireAuth, async (req, res): Promise<void> => {
+router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
   const { title, description, status, priority, assignedToId, dueDate } = req.body;
 
-  // Fetch old state to detect changes + tenant isolation check
-  const [before] = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
-  if (!before) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Tenant isolation: verify the task belongs to the user's org
-  if (!isSystemOwner(user) && user.organizationId) {
-    const belongsToOrg = before.organizationId === user.organizationId;
-    if (!belongsToOrg) {
-      if (before.projectId) {
-        const orgProjects = await db.select({ id: projectsTable.id })
-          .from(projectsTable)
-          .where(eq(projectsTable.organizationId, user.organizationId));
-        const orgProjectIds = orgProjects.map(p => p.id);
-        if (!orgProjectIds.includes(before.projectId)) {
-          throw new TenantIsolationError({
-            route: req.path, method: req.method,
-            userId: user.id, userOrgId: user.organizationId,
-            attemptedResourceType: "task", attemptedResourceId: id,
-            taskProjectId: before.projectId,
-          });
-        }
-      } else if (before.createdById !== user.id && before.assignedToId !== user.id) {
-        throw new TenantIsolationError({
-          route: req.path, method: req.method,
-          userId: user.id, userOrgId: user.organizationId,
-          attemptedResourceType: "task", attemptedResourceId: id,
-          reason: "personal_task_not_owned",
-        });
-      }
-    }
-  }
-
-  // Workflow tasks: status is owned by the workflow engine, not users
-  if (before.sourceType === "workflow" && status !== undefined) {
-    res.status(403).json({
-      error: "workflow_task_immutable",
-      message: "Workflow task status is managed by the workflow engine and cannot be changed manually.",
-    });
-    return;
-  }
-
-  const completedAt = status === "completed" ? new Date() : undefined;
-  const now = new Date();
-  // assignedAt tracks WHEN the current assignee was set — only update on reassignment
-  const assignedAtUpdate = (assignedToId !== undefined && assignedToId !== before.assignedToId)
-    ? { assignedAt: now }
-    : {};
-
-  const [task] = await db.update(tasksTable)
-    .set({ title, description, status, priority, assignedToId, dueDate: dueDate ? new Date(dueDate) : undefined, completedAt, updatedAt: now, ...assignedAtUpdate })
-    .where(eq(tasksTable.id, id))
-    .returning();
-
-  if (!task) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // C-3: audit the mutation using the existing action vocabulary
-  // ("status_change" when the status changed, otherwise "update").
-  const statusChanged = status !== undefined && status !== before.status;
-  const reassigned = assignedToId !== undefined && assignedToId !== before.assignedToId;
-  await createAuditLog({
-    userId: user.id,
-    organizationId: user.organizationId ?? undefined,
-    action: statusChanged ? "status_change" : "update",
-    entityType: "task",
-    entityId: task.id,
-    entityTitle: task.title,
-    projectId: task.projectId ?? undefined,
-    details: {
-      ...(statusChanged ? { statusFrom: before.status, statusTo: task.status } : {}),
-      ...(reassigned ? { assignedFrom: before.assignedToId, assignedTo: task.assignedToId } : {}),
-    },
-    beforeState: { title: before.title, status: before.status, priority: before.priority, assignedToId: before.assignedToId },
-    afterState: { title: task.title, status: task.status, priority: task.priority, assignedToId: task.assignedToId },
-  });
-
   try {
-    const actorId = req.user!.id;
+    let result: { status: number; body: unknown } | undefined;
+    let task: typeof tasksTable.$inferSelect | undefined;
+    let before: typeof tasksTable.$inferSelect | undefined;
 
-    // Notify new assignee when task is reassigned
-    if (assignedToId && before && assignedToId !== before.assignedToId && assignedToId !== actorId) {
-      const [actor] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
-      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-      const [reassignNotif] = await db.insert(notificationsTable).values({
-        userId: assignedToId,
-        type: "task_assigned" as const,
-        title: `Task assigned: ${task.title}`,
-        message: `${actorName} assigned you a task: "${task.title}"${task.dueDate ? ` (due ${task.dueDate.toLocaleDateString()})` : ""}`,
-        projectId: task.projectId || null,
-        entityType: "task",
-        entityId: task.id,
-        actionUrl: "/tasks",
-      }).returning();
-      emitToUser(assignedToId, "notification:new", reassignNotif);
+    // Business unit-of-work: isolation checks + update + audit (atomic).
+    await withTenant(async () => {
+      const [b] = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
+      if (!b) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      before = b;
 
-      const [assignee] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
-        .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
-      const [project] = task.projectId
-        ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, task.projectId)).limit(1)
-        : [null];
-      if (assignee?.email) {
-        dispatchNotification({
-          event: "task_assigned",
-          recipients: [{ userId: assignedToId, email: assignee.email, name: `${assignee.firstName} ${assignee.lastName}`.trim() }],
-          sendEmail: (to) => sendTaskAssignedEmail({
-            to: to[0],
-            assigneeName: `${assignee.firstName} ${assignee.lastName}`.trim(),
-            assignerName: actorName,
-            taskTitle: task.title,
-            priority: task.priority,
-            dueDate: task.dueDate ? task.dueDate.toLocaleDateString() : null,
-            projectName: project?.name ?? null,
-            taskLink: `${process.env.APP_URL ?? ""}/tasks`,
-          }),
-        }).catch(() => {});
+      // Tenant isolation (throws TenantIsolationError → global handler)
+      if (!isSystemOwner(user) && user.organizationId) {
+        const belongsToOrg = b.organizationId === user.organizationId;
+        if (!belongsToOrg) {
+          if (b.projectId) {
+            const orgProjects = await db.select({ id: projectsTable.id })
+              .from(projectsTable)
+              .where(eq(projectsTable.organizationId, user.organizationId));
+            const orgProjectIds = orgProjects.map(p => p.id);
+            if (!orgProjectIds.includes(b.projectId)) {
+              throw new TenantIsolationError({
+                route: req.path, method: req.method,
+                userId: user.id, userOrgId: user.organizationId,
+                attemptedResourceType: "task", attemptedResourceId: id,
+                taskProjectId: b.projectId,
+              });
+            }
+          } else if (b.createdById !== user.id && b.assignedToId !== user.id) {
+            throw new TenantIsolationError({
+              route: req.path, method: req.method,
+              userId: user.id, userOrgId: user.organizationId,
+              attemptedResourceType: "task", attemptedResourceId: id,
+              reason: "personal_task_not_owned",
+            });
+          }
+        }
       }
-    }
 
-    // Notify task creator when status changes (by someone else)
-    if (status && before && status !== before.status && task.createdById && task.createdById !== actorId) {
-      const statusLabel: Record<string, string> = { completed: "Completed", in_progress: "In Progress", pending: "Pending", cancelled: "Cancelled" };
-      const [actor] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
-      const actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-      const [statusNotif] = await db.insert(notificationsTable).values({
-        userId: task.createdById,
-        type: "task_status_updated" as const,
-        title: `Task status updated: ${task.title}`,
-        message: `${actorName} changed the status of "${task.title}" to ${statusLabel[status] ?? status}`,
-        projectId: task.projectId || null,
+      // Workflow tasks: status is owned by the workflow engine, not users
+      if (b.sourceType === "workflow" && status !== undefined) {
+        result = { status: 403, body: { error: "workflow_task_immutable", message: "Workflow task status is managed by the workflow engine and cannot be changed manually." } };
+        return;
+      }
+
+      const completedAt = status === "completed" ? new Date() : undefined;
+      const now = new Date();
+      const assignedAtUpdate = (assignedToId !== undefined && assignedToId !== b.assignedToId)
+        ? { assignedAt: now }
+        : {};
+
+      const [t] = await db.update(tasksTable)
+        .set({ title, description, status, priority, assignedToId, dueDate: dueDate ? new Date(dueDate) : undefined, completedAt, updatedAt: now, ...assignedAtUpdate })
+        .where(eq(tasksTable.id, id))
+        .returning();
+      if (!t) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      task = t;
+
+      const statusChanged = status !== undefined && status !== b.status;
+      const reassigned = assignedToId !== undefined && assignedToId !== b.assignedToId;
+      await createAuditLog({
+        userId: user.id,
+        organizationId: user.organizationId ?? undefined,
+        action: statusChanged ? "status_change" : "update",
         entityType: "task",
-        entityId: task.id,
-        actionUrl: "/tasks",
-      }).returning();
-      emitToUser(task.createdById, "notification:new", statusNotif);
+        entityId: t.id,
+        entityTitle: t.title,
+        projectId: t.projectId ?? undefined,
+        details: {
+          ...(statusChanged ? { statusFrom: b.status, statusTo: t.status } : {}),
+          ...(reassigned ? { assignedFrom: b.assignedToId, assignedTo: t.assignedToId } : {}),
+        },
+        beforeState: { title: b.title, status: b.status, priority: b.priority, assignedToId: b.assignedToId },
+        afterState: { title: t.title, status: t.status, priority: t.priority, assignedToId: t.assignedToId },
+      });
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    const t = task!;
+    const b = before!;
+
+    // Notifications (best-effort; in-app in its own short tx, email/socket after commit)
+    try {
+      const actorId = req.user!.id;
+      const bundle = await withTenant(async () => {
+        let reassignNotif: typeof notificationsTable.$inferSelect | undefined;
+        let statusNotif: typeof notificationsTable.$inferSelect | undefined;
+        let actorName = "Someone";
+        let assignee: { firstName: string; lastName: string; email: string } | undefined;
+        let project: { name: string } | null = null;
+
+        if (assignedToId && assignedToId !== b.assignedToId && assignedToId !== actorId) {
+          const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+            .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
+          actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+          [reassignNotif] = await db.insert(notificationsTable).values({
+            userId: assignedToId,
+            type: "task_assigned" as const,
+            title: `Task assigned: ${t.title}`,
+            message: `${actorName} assigned you a task: "${t.title}"${t.dueDate ? ` (due ${t.dueDate.toLocaleDateString()})` : ""}`,
+            projectId: t.projectId || null,
+            entityType: "task",
+            entityId: t.id,
+            actionUrl: "/tasks",
+          }).returning();
+          const [a] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+            .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
+          assignee = a as any;
+          const [p] = t.projectId
+            ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, t.projectId)).limit(1)
+            : [null];
+          project = p;
+        }
+
+        if (status && status !== b.status && t.createdById && t.createdById !== actorId) {
+          const statusLabel: Record<string, string> = { completed: "Completed", in_progress: "In Progress", pending: "Pending", cancelled: "Cancelled" };
+          const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+            .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
+          const an = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
+          [statusNotif] = await db.insert(notificationsTable).values({
+            userId: t.createdById,
+            type: "task_status_updated" as const,
+            title: `Task status updated: ${t.title}`,
+            message: `${an} changed the status of "${t.title}" to ${statusLabel[status] ?? status}`,
+            projectId: t.projectId || null,
+            entityType: "task",
+            entityId: t.id,
+            actionUrl: "/tasks",
+          }).returning();
+        }
+        return { reassignNotif, statusNotif, actorName, assignee, project };
+      });
+
+      if (bundle.reassignNotif) {
+        emitToUser(assignedToId, "notification:new", bundle.reassignNotif);
+        if (bundle.assignee?.email) {
+          dispatchNotification({
+            event: "task_assigned",
+            recipients: [{ userId: assignedToId, email: bundle.assignee.email, name: `${bundle.assignee.firstName} ${bundle.assignee.lastName}`.trim() }],
+            sendEmail: (to) => sendTaskAssignedEmail({
+              to: to[0],
+              assigneeName: `${bundle.assignee!.firstName} ${bundle.assignee!.lastName}`.trim(),
+              assignerName: bundle.actorName,
+              taskTitle: t.title,
+              priority: t.priority,
+              dueDate: t.dueDate ? t.dueDate.toLocaleDateString() : null,
+              projectName: bundle.project?.name ?? null,
+              taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+            }),
+          }).catch(() => {});
+        }
+      }
+      if (bundle.statusNotif) emitToUser(t.createdById!, "notification:new", bundle.statusNotif);
+    } catch (_) {}
+
+    // Skill event (task_completed) — explicit background boundary AFTER commit.
+    if (status === "completed" && t.projectId && req.user?.organizationId) {
+      dispatchSkillEventBackground(
+        { organizationId: req.user.organizationId, userId: req.user.id },
+        "task_completed",
+        { taskId: t.id, projectId: t.projectId },
+      );
     }
-  } catch (_) {}
 
-  // Fire skill event for task_completed trigger (fire-and-forget)
-  if (status === "completed" && task.projectId && req.user?.organizationId) {
-    triggerSkillEvent("task_completed", {
-      taskId:         task.id,
-      projectId:      task.projectId,
-      organizationId: req.user.organizationId,
-    }).catch(() => {});
-  }
-
-  const enriched = await enrichTasks([task]);
-  res.json(enriched[0]);
+    const enriched = await withTenant(() => enrichTasks([t]));
+    res.json(enriched[0]);
+  } catch (e) { next(e); }
 });
 
 export default router;

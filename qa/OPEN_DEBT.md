@@ -448,6 +448,15 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
     see Project Y (same owner) · removal from membership → access gone next request · spoofed
     project/org/user context opens nothing; (7) audit `project_members` as an authorization source even if it
     is not itself made an RLS table. **Does not block Phase A–D mechanical conversion.**
+- **🔴 edms_app-gate item — background jobs need explicit tenant context (owner, 2026-08-24):**
+  request-triggered skill events now use `dispatchSkillEventBackground()` (lib/skill-events.ts) — an
+  EXPLICIT background boundary that carries `{organizationId, userId}` and does NOT inherit the request ALS
+  (proven: `skill-event-background.test.ts`). BUT the skill engine (`executeSkill`) and the scheduler
+  (`startBackgroundJobs`, notification/trial-downgrade schedulers) still access the DB via the pool-backed
+  proxy with NO tenant context. Today that is safe only because the app role is superuser (RLS inert). **Before
+  the `edms_app` cutover:** every background/skill DB access that touches an RLS table MUST run inside its own
+  `runInTenantTx(...)` with the explicit org context (never unrestricted pool), and AI/external I/O must stay
+  OUTSIDE that tx. Full list of background jobs to convert is delivered at Phase B end.
 
 ## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
 - **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
