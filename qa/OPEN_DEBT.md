@@ -541,6 +541,31 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
     (non-prod), `health`/`auth` (public/pre-auth). `runUnscoped` = 1 allowlisted site (admin reindex);
     `notificationDb` = notifications-infra only; both statically guarded.
   - **Commit (unpushed):** `8d00c64`.
+- **④ Membership-aware RLS (Decision B) ✅ IMPLEMENTED + PROVEN on the isolated env (2026-08-25):**
+  org-only RLS replaced with a membership-aware model, enforced under a REAL least-privilege role
+  (`edms_app`, LOGIN/NOSUPERUSER/NOBYPASSRLS) — not a role switch inside a superuser session. RLS =
+  visibility + tenant/project anchoring only; RBAC unchanged and never widened. Design + Security-Definer
+  Gate: `docs/architecture/DEBT-010-membership-aware-rls-design.md`.
+  - **Context:** `app.current_user_id` now threads `runInTenantTx → withTenant → tenantRead`
+    (tx-local `set_config`); missing user context ⇒ per-user/collaborative predicates fail-closed.
+  - **Security-Definer model** (`lib/rls-membership.ts`, single source of truth): schema `app` owned by
+    `edms_rls_owner` (NOLOGIN); authority predicates `SECURITY DEFINER`/`sql STABLE`/`search_path=''`/
+    fully-qualified/no dynamic SQL, EXECUTE revoked from PUBLIC → granted to `edms_app`; they read only
+    NON-RLS lookup tables (no recursion, no dependence on runtime grants). `edms_app` has USAGE-not-CREATE
+    → object shadowing impossible.
+  - **Policies:** still ONE `org_isolation_policy` FOR ALL per table (posture gate intact). Decisions
+    applied — U per-user notifications, X-a column-allowlist triggers (correspondence {is_read,
+    first_read_at,updated_at}; transmittals {status,acknowledged_at,review_outcome,updated_at}), M
+    org-party + user-member for documents, R registers stay org-only. WITH CHECK anchors organization_id
+    to the project owner (no org forge / no cross-project move); X-a triggers apply only to a genuine
+    cross-org session and leave superuser/no-context/same-org to WITH CHECK.
+  - **Tests (real edms_app):** `membership-rls.test.ts` (15) — the owner's full matrix incl. §8 shadowing
+    + search_path drift, §9 removal-revokes, forged context, anti-move, concurrent A/B; and
+    `membership-rls-behavior-comparison.test.ts` (6) — all six legitimate cross-org flows classify
+    **UNCHANGED** (legit works, unrelated denied; submission-chains N/A). No EXPANDED, no BROKEN.
+  - **Final Gate:** typecheck 0 · build OK · **full regression 898/898** (72 files).
+  - **Isolated env ONLY:** `lib/rls-init.ts` (prod startup) still org-only — **no cutover**, no
+    `DATABASE_URL` change, no Production roles, no background-job changes. Commit (unpushed): `e56666c`.
 - **🔴 edms_app-gate — background jobs / subsystems still needing tenant context (owner deliverable):**
   these run on the pool with NO tenant context today (safe only because prod app role is superuser → RLS inert).
   Before the `edms_app` cutover, each DB access that touches an RLS table MUST use its own `runInTenantTx` with
@@ -579,3 +604,18 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   separate Root-Cause report AFTER the DEBT-010 middleware wiring is complete** — do not infer cause yet.
 - **Action:** after middleware wiring → pull the actual Sentry stack traces / timestamps / affected orgs
   (read-only) and produce a standalone Root-Cause report. No code change attributed to this until then.
+
+## DEBT-013 — 🟠 MEDIUM (RBAC): `POST /projects/:id/members` has no role gate
+- **Severity:** MEDIUM · **Status:** OPEN (surfaced during DEBT-010 membership-aware RLS Security-Definer Gate).
+- **Where:** `artifacts/api-server/src/routes/projects.ts:459-517`. The handler is `requireAuth` +
+  tenant-isolation only (project must be in the caller's org, else `TenantIsolationError`). There is **no
+  `requireMinRole`/project-admin gate**, so any authenticated **same-org** user — including a `viewer` — can
+  add members (any `role`, including `admin`) to any project in their own org, unaudited. `DELETE
+  /:id/members/:userId` should be reviewed with it.
+- **Impact:** within-tenant privilege escalation (grant self/others a higher project role) + unaudited
+  membership changes. **No cross-org impact and NO effect on membership-aware RLS:** cross-org self-add is
+  blocked (`TenantIsolationError`), and same-org rows are already visible via `organization_id` — so this gap
+  does not widen RLS visibility. It is a pure application-authorization weakness.
+- **Fix (separate track — do NOT fix inside RLS):** add a `requireMinRole('project_manager')` (or
+  project-admin) gate + audit log to the member add/remove routes; keep RLS as visibility-only. Deliberately
+  NOT bundled with DEBT-010 (owner: do not mix RBAC changes into the security-layer change).
