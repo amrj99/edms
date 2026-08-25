@@ -192,7 +192,12 @@ router.use("/general", generalRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/config", configRouter);
 router.use("/billing", billingRouter);
-router.use("/storage", storageRouter);
+// storage download/stream routes (objects/onpremise/s3-object/r2-object/public-objects)
+// do external I/O (R2/S3/fs stream or 302 redirect) on GET — exclude them from the read
+// auto-wrapper. Each does its own withTenant(authz+metadata) → commit → stream/redirect.
+router.use("/storage", tenantScoped(storageRouter, {
+  skipRead: (req) => /^\/(objects|onpremise|s3-object|r2-object|public-objects)\b/.test(req.path),
+}));
 // /admin/search/status does external I/O (Elasticsearch) on GET → exclude from the
 // read auto-wrapper so no DB transaction is held during that call.
 router.use("/admin", tenantScoped(adminRouter, { skipRead: (req) => req.path.startsWith("/search/status") }));

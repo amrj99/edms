@@ -20,6 +20,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.
 import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configured } from "../lib/orgStorage.js";
 import { StorageNotConfiguredError } from "../lib/errors.js";
 import { requireAuth, signToken, verifyToken, isSystemOwner } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { canAccessProjectAsParty } from "../lib/party-access.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
@@ -93,9 +94,11 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
     const canonicalReq = canonicalizeStorageServeUrl(expectedPathFn(req));
     const token = canonicalReq.split("/").filter(Boolean).pop() ?? "";
     if (token) {
-      const candidates = await db.select({ fileUrl: documentFilesTable.fileUrl })
+      // Short read (tenantRead) — this guard runs in the request marker on file
+      // routes that are excluded from the read auto-wrapper; it must not fail closed.
+      const candidates = await tenantRead(() => db.select({ fileUrl: documentFilesTable.fileUrl })
         .from(documentFilesTable)
-        .where(and(isNotNull(documentFilesTable.deletedAt), like(documentFilesTable.fileUrl, `%${token}%`)));
+        .where(and(isNotNull(documentFilesTable.deletedAt), like(documentFilesTable.fileUrl, `%${token}%`))));
       const blocked = candidates.some(c => canonicalizeStorageServeUrl(c.fileUrl) === canonicalReq);
       if (blocked) { res.status(404).json({ error: "File not found" }); return; }
     }
@@ -105,8 +108,9 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
       const expectedPath = expectedPathFn(req);
 
       if (!payload || payload.type !== "view_file") {
-        // Security audit: invalid or expired view token presented
-        createAuditLog({
+        // Security audit: invalid or expired view token presented (unauthenticated —
+        // no tenant marker yet, so this runs on the pool via the proxy fallback).
+        void createAuditLog({
           action: "INVALID_VIEW_TOKEN",
           entityType: "file",
           entityId: 0,
@@ -118,7 +122,7 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
           },
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"] as string | undefined,
-        });
+        }).catch(() => {});
         res.status(401).json({ error: "Invalid or expired view token" });
         return;
       }
@@ -411,9 +415,9 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
   const parsedProjectId = rawProjectId != null ? parseInt(String(rawProjectId), 10) : undefined;
 
   if (parsedProjectId) {
-    const { allowed, mode: accessMode, partyRole, projectOrgId } = await canAccessProject(
+    const { allowed, mode: accessMode, partyRole, projectOrgId } = await tenantRead(() => canAccessProject(
       caller.id, caller.organizationId, parsedProjectId, isSystemOwner(caller),
-    );
+    ));
     if (!allowed) {
       res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
       return;
@@ -431,7 +435,7 @@ router.post("/uploads/request-url", requireAuth, async (req: Request, res: Respo
       // (reviewer/member/viewer) who is a project member could obtain a presigned upload
       // URL and write objects to the org bucket even though it cannot create a document.
       // Mirror the canCreate gate on POST /documents (documents.ts).
-      const { role: effRole } = await resolveEffectiveRole(caller, parsedProjectId);
+      const { role: effRole } = await tenantRead(() => resolveEffectiveRole(caller, parsedProjectId));
       if (!DocumentPermissions.canCreate(effRole)) {
         res.status(403).json({ error: "Forbidden", message: "Your role does not permit uploading documents" });
         return;
@@ -508,18 +512,21 @@ router.put(
     const filename = param(req.params.filename);
     const targetOrgId = parseInt(orgId);
 
-    // ── Ownership check ─────────────────────────────────────────────────────
-    const allowed = await assertOrgAccess(req, res, targetOrgId, {
-      route: "onpremise-upload",
-      key: `${orgId}/${projectId}/${fileType}/${filename}`,
+    // ── Ownership + config — SHORT tenant tx that COMMITS before fs write I/O ──
+    const authz = await withTenant(async () => {
+      const allowed = await assertOrgAccess(req, res, targetOrgId, {
+        route: "onpremise-upload",
+        key: `${orgId}/${projectId}/${fileType}/${filename}`,
+      });
+      if (!allowed) return { handled: true as const };
+      const [cfg] = await db
+        .select()
+        .from(orgConfigTable)
+        .where(eq(orgConfigTable.organizationId, targetOrgId));
+      return { handled: false as const, cfg };
     });
-    if (!allowed) return;
-
-    // ── Resolve storage path ─────────────────────────────────────────────────
-    const [cfg] = await db
-      .select()
-      .from(orgConfigTable)
-      .where(eq(orgConfigTable.organizationId, targetOrgId));
+    if (authz.handled) return;
+    const cfg = authz.cfg;
 
     const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
     const basePath = getEffectiveOnPremPath(cfg?.storagePath || envStoragePath);
@@ -538,7 +545,7 @@ router.put(
       return;
     }
 
-    // ── Write file ───────────────────────────────────────────────────────────
+    // ── Write file (fs I/O — OUTSIDE any DB transaction) ──────────────────────
     try {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o750 });
       const body = req.body as Buffer;
@@ -548,7 +555,8 @@ router.put(
       }
       fs.writeFileSync(targetPath, body);
 
-      await createAuditLog({
+      // Success audit — short tenant tx AFTER the fs write.
+      await withTenant(() => createAuditLog({
         userId: req.user?.id,
         organizationId: targetOrgId,
         action: "upload",
@@ -556,7 +564,7 @@ router.put(
         entityId: 0,
         entityTitle: safeFilename,
         details: { path: targetPath, size: body.length },
-      });
+      }));
 
       // Return the same shape as S3/cloud modes
       res.status(200).json({
@@ -615,25 +623,24 @@ router.get(
       const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
       const objectPath = `/objects/${wildcardPath}`;
 
-      // ── Ownership check ─────────────────────────────────────────────────
-      // If this object is referenced by a tenant-scoped entity (document,
-      // correspondence attachment, meeting attachment, chat file, migration
-      // item, ...), enforce that the requester belongs to that entity's
-      // organization (or is system_owner). Objects not yet linked to any
-      // entity are left to the existing auth check only.
+      // ── Ownership check — DB authz in a SHORT tenant tx that COMMITS before
+      //    any object storage I/O (no DB connection held during the stream). ──
       const serveUrl = `/api/storage/objects/${wildcardPath}`;
-      const ownerOrgId = await findOrgIdForObjectServeUrl(serveUrl);
-      if (ownerOrgId != null) {
-        // For cross-org callers, look up the document's projectId so party access
-        // can be checked inside assertOrgAccess (Phase 5, ADR-011).
-        let partyProjectId: number | null = null;
-        if (!isSystemOwner(req.user!) && req.user?.organizationId !== ownerOrgId) {
-          partyProjectId = await findPartyProjectIdForServeUrl(serveUrl);
+      const authz = await withTenant(async () => {
+        const ownerOrgId = await findOrgIdForObjectServeUrl(serveUrl);
+        if (ownerOrgId != null) {
+          let partyProjectId: number | null = null;
+          if (!isSystemOwner(req.user!) && req.user?.organizationId !== ownerOrgId) {
+            partyProjectId = await findPartyProjectIdForServeUrl(serveUrl);
+          }
+          const allowed = await assertOrgAccess(req, res, ownerOrgId, { route: "objects", key: wildcardPath }, partyProjectId);
+          if (!allowed) return { handled: true };
         }
-        const allowed = await assertOrgAccess(req, res, ownerOrgId, { route: "objects", key: wildcardPath }, partyProjectId);
-        if (!allowed) return;
-      }
+        return { handled: false };
+      });
+      if (authz.handled) return; // assertOrgAccess already wrote the 403
 
+      // ── tx committed — object storage I/O happens OUTSIDE any DB transaction ──
       const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
       const response = await objectStorageService.downloadObject(objectFile);
       // Set Content-Type — prefer the ?ct= hint from the client (validated against whitelist)
@@ -646,7 +653,9 @@ router.get(
       const isViewToken = !!req.query.vt;
       const accessAction = isViewToken ? "file_preview" : "file_download";
       if (!isViewToken || shouldAuditFileAccess(req.user!.id, wildcardPath)) {
-        createAuditLog({
+        // Fire-and-forget audit in its OWN short tenant tx (post-commit) — never
+        // hold a DB connection across the stream below.
+        void withTenant(() => createAuditLog({
           userId: req.user!.id,
           organizationId: req.user!.organizationId ?? undefined,
           action: accessAction,
@@ -663,7 +672,7 @@ router.get(
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"] as string | undefined,
           actorRole: req.user!.role,
-        });
+        })).catch(() => {});
       }
 
       res.setHeader("Content-Type", mimeType);
@@ -706,17 +715,21 @@ router.get(
     const filename = param(req.params.filename);
     const targetOrgId = parseInt(orgId);
 
-    // ── Ownership check ───────────────────────────────────────────────────────
-    const allowed = await assertOrgAccess(req, res, targetOrgId, {
-      route: "onpremise",
-      key: `${orgId}/${projectId}/${fileType}/${filename}`,
+    // ── Ownership check + config — SHORT tenant tx that COMMITS before fs I/O ──
+    const authz = await withTenant(async () => {
+      const allowed = await assertOrgAccess(req, res, targetOrgId, {
+        route: "onpremise",
+        key: `${orgId}/${projectId}/${fileType}/${filename}`,
+      });
+      if (!allowed) return { handled: true as const };
+      const [cfg] = await db
+        .select()
+        .from(orgConfigTable)
+        .where(eq(orgConfigTable.organizationId, targetOrgId));
+      return { handled: false as const, cfg };
     });
-    if (!allowed) return;
-
-    const [cfg] = await db
-      .select()
-      .from(orgConfigTable)
-      .where(eq(orgConfigTable.organizationId, targetOrgId));
+    if (authz.handled) return;
+    const cfg = authz.cfg;
 
     // Mirror the upload endpoint: use getEffectiveOnPremPath for consistent fallback
     const envStoragePath = process.env.DEFAULT_STORAGE_PATH || null;
@@ -731,7 +744,7 @@ router.get(
 
     const absPath = path.join(basePath, orgId, projectId, fileType, safeFilename);
     if (!absPath.startsWith(path.resolve(basePath))) {
-      await createAuditLog({
+      await withTenant(() => createAuditLog({
         userId: req.user?.id,
         organizationId: req.user?.organizationId ?? undefined,
         action: "PATH_TRAVERSAL_ATTEMPT",
@@ -740,7 +753,7 @@ router.get(
         entityTitle: filename,
         details: { attemptedPath: absPath, basePath },
         ipAddress: req.ip,
-      });
+      }));
       res.status(400).json({ error: "Invalid file path" });
       return;
     }
@@ -766,7 +779,7 @@ router.get(
     const accessAction = isViewToken ? "file_preview" : "file_download";
     const auditKey = `${orgId}/${projectId}/${fileType}/${safeFilename}`;
     if (!isViewToken || shouldAuditFileAccess(req.user!.id, auditKey)) {
-      createAuditLog({
+      void withTenant(() => createAuditLog({
         userId: req.user!.id,
         organizationId: targetOrgId,
         action: accessAction,
@@ -784,7 +797,7 @@ router.get(
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] as string | undefined,
         actorRole: req.user!.role,
-      });
+      })).catch(() => {});
     }
 
     // ── Common response headers ───────────────────────────────────────────────
@@ -861,65 +874,47 @@ router.get(
   try {
     const objectKey = objectKeyDecoded;
 
-    // ── Ownership check: key must start with orgId/ ───────────────────────────
-    if (!s3KeyBelongsToOrg(objectKey, orgId)) {
-      // Key prefix doesn't match — could be spoofing attempt; only audit-log for real users
-      if (req.user) {
-        await createAuditLog({
-          userId: req.user.id,
-          organizationId: req.user.organizationId ?? undefined,
-          action: "UNAUTHORIZED_STORAGE_ACCESS",
-          entityType: "file",
-          entityId: 0,
-          entityTitle: objectKey,
-          details: {
-            route: "s3-object",
-            claimedOrgId: orgId,
-            objectKey,
-            ip: req.ip,
-          },
-          ipAddress: req.ip,
-        });
+    // ── Ownership + access — DB authz in a SHORT tenant tx that COMMITS before
+    //    presign/redirect (no DB connection held across the redirect). ─────────
+    const authz = await withTenant(async (): Promise<{ handled: true; status?: number; body?: unknown } | { handled: false }> => {
+      if (!s3KeyBelongsToOrg(objectKey, orgId)) {
+        if (req.user) {
+          await createAuditLog({
+            userId: req.user.id,
+            organizationId: req.user.organizationId ?? undefined,
+            action: "UNAUTHORIZED_STORAGE_ACCESS",
+            entityType: "file", entityId: 0, entityTitle: objectKey,
+            details: { route: "s3-object", claimedOrgId: orgId, objectKey, ip: req.ip },
+            ipAddress: req.ip,
+          });
+        }
+        return { handled: true, status: 403, body: { error: "Access denied: object key does not belong to the specified organization" } };
       }
-      res.status(403).json({ error: "Access denied: object key does not belong to the specified organization" });
-      return;
-    }
+      // Skip assertOrgAccess for view-token requests (token already validated the path)
+      if (req.user) {
+        const allowed = await assertOrgAccess(req, res, orgId, { route: "s3-object", key: objectKey });
+        if (!allowed) return { handled: true }; // assertOrgAccess wrote the 403
+      }
+      return { handled: false };
+    });
+    if (authz.handled) { if (authz.status) res.status(authz.status).json(authz.body); return; }
 
-    // Skip assertOrgAccess for view-token requests (token already validated the path)
-    if (req.user) {
-      const allowed = await assertOrgAccess(req, res, orgId, {
-        route: "s3-object",
-        key: objectKey,
-      });
-      if (!allowed) return;
-    }
-
+    // Presign (its own short read tx for config via getOrgConfig→tenantRead) + redirect — outside the authz tx.
     const presignedUrl = await getS3PresignedGetUrl(orgId, objectKey, 600);
     if (!presignedUrl) {
       res.status(404).json({ error: "S3 not configured or object not found" });
       return;
     }
 
-    // ── File access audit ─────────────────────────────────────────────────────
-    createAuditLog({
+    // File access audit — fire-and-forget short tenant tx (post-commit).
+    void withTenant(() => createAuditLog({
       userId: req.user?.id,
       organizationId: orgId,
       action: "file_signed_access",
-      entityType: "file",
-      entityId: 0,
-      entityTitle: objectKey.split("/").pop() ?? objectKey,
-      details: {
-        objectKey,
-        storageType: "s3",
-        presignedTtlSec: 600,
-        accessMethod: req.query.vt ? "view_token" : "bearer_token",
-        accessSource: "web",
-        redirected: true,
-      },
-      ipAddress: req.ip,
-      userAgent: req.headers["user-agent"] as string | undefined,
-      actorRole: req.user?.role,
-    });
+      entityType: "file", entityId: 0, entityTitle: objectKey.split("/").pop() ?? objectKey,
+      details: { objectKey, storageType: "s3", presignedTtlSec: 600, accessMethod: req.query.vt ? "view_token" : "bearer_token", accessSource: "web", redirected: true },
+      ipAddress: req.ip, userAgent: req.headers["user-agent"] as string | undefined, actorRole: req.user?.role,
+    })).catch(() => {});
 
     res.redirect(302, presignedUrl);
   } catch (err: any) {
@@ -968,31 +963,29 @@ router.get(
       return;
     }
 
-    // ── Ownership check ────────────────────────────────────────────────────
-    if (!s3KeyBelongsToOrg(objectKeyDecoded, orgId)) {
-      if (req.user) {
-        await createAuditLog({
-          userId: req.user.id,
-          organizationId: req.user.organizationId ?? undefined,
-          action: "UNAUTHORIZED_STORAGE_ACCESS",
-          entityType: "file",
-          entityId: 0,
-          entityTitle: objectKeyDecoded,
-          details: { route: "r2-object", claimedOrgId: orgId, objectKey: objectKeyDecoded, ip: req.ip },
-          ipAddress: req.ip,
-        });
+    // ── Ownership + access — DB authz in a SHORT tenant tx that COMMITS before
+    //    presign/redirect (no DB connection held across the redirect). ─────────
+    const authz = await withTenant(async (): Promise<{ handled: true; status?: number; body?: unknown } | { handled: false }> => {
+      if (!s3KeyBelongsToOrg(objectKeyDecoded, orgId)) {
+        if (req.user) {
+          await createAuditLog({
+            userId: req.user.id,
+            organizationId: req.user.organizationId ?? undefined,
+            action: "UNAUTHORIZED_STORAGE_ACCESS",
+            entityType: "file", entityId: 0, entityTitle: objectKeyDecoded,
+            details: { route: "r2-object", claimedOrgId: orgId, objectKey: objectKeyDecoded, ip: req.ip },
+            ipAddress: req.ip,
+          });
+        }
+        return { handled: true, status: 403, body: { error: "Access denied: object key does not belong to the specified organization" } };
       }
-      res.status(403).json({ error: "Access denied: object key does not belong to the specified organization" });
-      return;
-    }
-
-    if (req.user) {
-      const allowed = await assertOrgAccess(req, res, orgId, {
-        route: "r2-object",
-        key: objectKeyDecoded,
-      });
-      if (!allowed) return;
-    }
+      if (req.user) {
+        const allowed = await assertOrgAccess(req, res, orgId, { route: "r2-object", key: objectKeyDecoded });
+        if (!allowed) return { handled: true };
+      }
+      return { handled: false };
+    });
+    if (authz.handled) { if (authz.status) res.status(authz.status).json(authz.body); return; }
 
     try {
       const presignedUrl = await getR2PresignedGetUrl(objectKeyDecoded, 3600);
@@ -1001,26 +994,15 @@ router.get(
         return;
       }
 
-      // ── File access audit ───────────────────────────────────────────────────
-      createAuditLog({
+      // File access audit — fire-and-forget short tenant tx (post-commit).
+      void withTenant(() => createAuditLog({
         userId: req.user?.id,
         organizationId: orgId,
         action: "file_signed_access",
-        entityType: "file",
-        entityId: 0,
-        entityTitle: objectKeyDecoded.split("/").pop() ?? objectKeyDecoded,
-        details: {
-          objectKey: objectKeyDecoded,
-          storageType: "r2",
-          presignedTtlSec: 3600,
-          accessMethod: req.query.vt ? "view_token" : "bearer_token",
-          accessSource: "web",
-          redirected: true,
-        },
-        ipAddress: req.ip,
-        userAgent: req.headers["user-agent"] as string | undefined,
-        actorRole: req.user?.role,
-      });
+        entityType: "file", entityId: 0, entityTitle: objectKeyDecoded.split("/").pop() ?? objectKeyDecoded,
+        details: { objectKey: objectKeyDecoded, storageType: "r2", presignedTtlSec: 3600, accessMethod: req.query.vt ? "view_token" : "bearer_token", accessSource: "web", redirected: true },
+        ipAddress: req.ip, userAgent: req.headers["user-agent"] as string | undefined, actorRole: req.user?.role,
+      })).catch(() => {});
 
       res.redirect(302, presignedUrl);
     } catch (err: any) {
