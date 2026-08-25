@@ -481,6 +481,38 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   - **Commits (unpushed, on `release/rc-session-cors-optin-debt004`):** Phase A `64ed976`,`1455288`,`e91615b`,
     `658cbef`,`00432e0`; Phase B `0944f18`,`9c545b1`,`095d4df`,`9fe66a3`,`c2c1937`,`5463ad2`,`97a63be`,
     `41f540d` + view-token fix.
+- **③ Hybrid-Y Phase C ✅ COMPLETE (2026-08-25):** every remaining tenant-facing router converted + mounted
+  via `tenantScoped()`. Same rules as A/B (writes = explicit `withTenant()` capture-result, no 2xx before
+  commit; reads auto-wrapped transitionally; DB middleware via `tenantRead()`; external I/O outside the tx;
+  no new general poolDb; no `runUnscoped` expansion).
+  - **Checkpoint 1 (DB-only + read-only)** `b93d268`: metadata, document-types, preferences, modules, profile
+    (password: bcrypt outside the tx via tenantRead+withTenant), external-contacts, deliverables, entities,
+    general (6 correspondence writes, createAuditLog kept inside the tx), config (6 system/org-config writes),
+    rules; read-only mounts dashboard/search/audit-logs/calendar/notification-summary.
+  - **Checkpoint 2A (I/O routers)** `1b69914`: notifications (GET generators run in the read-write auto-wrap
+    tx), registers (15 writes; submit-approval/NOC notifications gathered in-tx → `dispatchNotification`
+    awaited post-commit), chat (in-app notifications in-tx, `emitToChatGroup`/`emitToUser` post-commit).
+  - **Checkpoint 2B (workflow-engine)** `23aacbc`: all 13 writes in `withTenant`; `enrichInstance`/
+    `getTemplateWithStages` response builders run in-tx. Fire-and-forget helpers made tx-correct:
+    `syncDocumentStatus`/`closeOpenWorkflowTask` now atomic (swallow removed); `notifyStageReached` split into
+    `prepareStageNotification` (task lifecycle + in-app notifications in-tx, returns bundle) +
+    `dispatchStageEmail` (email post-commit, non-fatal). **Intended behavior change:** doc-status sync + task
+    lifecycle + in-app notifications are now atomic with the transition; only outbound email stays best-effort.
+  - **Checkpoint 3 (skills)** `4a8ea7c`: CRUD in `withTenant`; `PUT /:id/run` uses **`executeSkillBackground`**
+    (added earlier — detaches request ALS, explicit {org,user,skillId}+trigger, no runUnscoped/pool escape;
+    engine's internal tenant-ctx still deferred to edms_app gate). Test: skill-event-background 3/3.
+  - **Final Gate:** typecheck 0 · build OK · **full regression 872/872** (69 files) · guards passing
+    (runUnscoped, notificationDb still contained, notification-type write-contract — my new chat/registers/
+    workflow in-app inserts are static-literal `type`s).
+  - **Routes left auto-wrapped for Phase D:** the GET/HEAD reads of every `tenantScoped()` router (transitional
+    read tx via `makeReadAutoWrap`); Phase D migrates these to explicit `withTenant()` and removes the wrapper.
+  - **🔴 DEFERRED — NOT converted in Phase C (needs its own design + owner sign-off):** **`/migrations`**
+    (`migrations.ts`) left **bare**. `POST /:id/analyze` and `POST /:id/execute` run `setImmediate(...)`
+    fire-and-forget blocks doing heavy RLS-table writes + AI I/O; under a request marker those background
+    writes fail-closed. This is a genuine background subsystem (distinct from the notification/emit
+    post-commit pattern) — it belongs with the edms_app background-jobs gate below, not the mechanical sweep.
+    Also still bare (by constraint / nature): `/billing` + `/billing/webhook` (out of DEBT-010 scope), `/dev`
+    (non-prod), `health`/`auth` (public/pre-auth).
 - **🔴 edms_app-gate — background jobs / subsystems still needing tenant context (owner deliverable):**
   these run on the pool with NO tenant context today (safe only because prod app role is superuser → RLS inert).
   Before the `edms_app` cutover, each DB access that touches an RLS table MUST use its own `runInTenantTx` with
@@ -495,6 +527,10 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
      table `projects`) → per-org `runInTenantTx`.
   5. **module-sync / seeds** (`syncOrgModules`, `seedAISettings`, `seedSecuritySettings`) — org_config /
      system_settings are non-RLS; safe on pool, but confirm at cutover.
+  6. **migration-wizard background** (`migrations.ts` `analyze`/`execute` `setImmediate` blocks) — write
+     `migration_items`/`documents`/`document_revisions`/`folders` (RLS) + do AI extraction I/O. Must move to a
+     detached background boundary with explicit per-org `runInTenantTx` for the DB side and AI I/O outside the
+     tx (mirrors `dispatchClassificationBackground`). Router `/migrations` stays bare until this lands.
   `notificationDb` / `classifyDetached` infra reads use non-RLS tables and are safe on the pool under edms_app.
 
 ## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
