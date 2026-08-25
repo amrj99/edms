@@ -22,9 +22,10 @@ import { resolveEffectiveRole } from "../lib/governance.js";
 import { CorrespondencePermissions } from "../lib/permissions.js";
 import crypto from "crypto";
 import { evaluateRules } from "../lib/rule-engine.js";
-import { classifyItem } from "../lib/ai-service.js";
 import { sendCorrespondenceDeliveryEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
+import { dispatchClassificationBackground } from "../lib/ai/classification-events.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { scheduleNotification } from "../lib/notifications/scheduler.js";
 import { organizationsTable } from "@workspace/db";
 import type { Request } from 'express';
@@ -241,8 +242,8 @@ async function createCorrespondence(
 ) {
   const caller = req.user!;
 
-  // Resolve effective role (respects project member roles, overrides, delegations)
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
+  // Resolve effective role (db) — short read tx under the marker.
+  const { role: effectiveRole } = await tenantRead(() => resolveEffectiveRole(caller, contextProjectId ?? undefined));
   if (!CorrespondencePermissions.canCreate(effectiveRole)) {
     res.status(403).json({ error: "Forbidden", message: "You do not have permission to create correspondence" });
     return;
@@ -268,24 +269,20 @@ async function createCorrespondence(
 
   const requiresResponse = rawRequiresResponse === true || rawRequiresResponse === "true";
 
-  // Resolve effective project ID early so we can derive orgId from it if needed
   const effectiveProjectIdForOrg: number | null =
     contextProjectId ?? (bodyProjectId ? parseInt(bodyProjectId) : null);
 
-  // Determine org context:
-  // 1. Use the caller's own org if set (normal case)
-  // 2. Accept an explicit organizationId from the request body (system_owner override)
-  // 3. Derive from the project if the user is system_owner with no org assigned
+  // Determine org context (system_owner may derive it from the project — db read).
   let orgId: number | undefined =
     caller.organizationId ??
     (isSystemOwner(caller) && req.body.organizationId ? parseInt(req.body.organizationId) : undefined);
 
   if (!orgId && isSystemOwner(caller) && effectiveProjectIdForOrg) {
-    const [proj] = await db
+    const [proj] = await tenantRead(() => db
       .select({ organizationId: projectsTable.organizationId })
       .from(projectsTable)
       .where(eq(projectsTable.id, effectiveProjectIdForOrg))
-      .limit(1);
+      .limit(1));
     orgId = proj?.organizationId ?? undefined;
   }
 
@@ -314,152 +311,157 @@ async function createCorrespondence(
     return;
   }
 
-  const { refNum, error: refError } = await resolveReferenceNumber({
-    orgId,
-    scope,
-    projectId: scope === "project" ? effectiveProjectId : null,
-    manualRef,
+  // ─── Business unit-of-work: refNumber + corr + recipients/cc/attachments + audit ───
+  const biz = await withTenant(async () => {
+    const { refNum, error: refError } = await resolveReferenceNumber({
+      orgId: orgId!,
+      scope,
+      projectId: scope === "project" ? effectiveProjectId : null,
+      manualRef,
+    });
+    if (refError) return { kind: "refError" as const, error: refError };
+
+    const [corr] = await db.insert(correspondenceTable).values({
+      subject: subject.trim(),
+      type,
+      body: body || "",
+      organizationId: orgId,
+      fromUserId: req.user!.id,
+      projectId: effectiveProjectId,
+      scope,
+      folder: sendNow ? "sent" : "draft",
+      status: sendNow ? "sent" : "draft",
+      referenceNumber: refNum,
+      sentAt: sendNow ? new Date() : undefined,
+      priority: priority || "medium",
+      dueDate: dueDate ? new Date(dueDate) : undefined,
+      assignedToId: taskToId ? parseInt(taskToId) : undefined,
+      direction: direction === "incoming" || direction === "outgoing" ? direction : null,
+      requiresResponse,
+    }).returning();
+
+    if (toUserIds?.length > 0) {
+      await db.insert(correspondenceRecipientsTable).values(
+        (toUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
+      );
+    }
+    if (ccUserIds?.length > 0) {
+      await db.insert(correspondenceCcTable).values(
+        (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
+      );
+    }
+    if (attachments?.length > 0) {
+      await db.insert(correspondenceAttachmentsTable).values(
+        attachments.map((a: { fileName: string; fileUrl: string; fileSize?: number }) => ({
+          correspondenceId: corr.id,
+          fileName: a.fileName,
+          fileUrl: a.fileUrl,
+          fileSize: a.fileSize,
+        }))
+      );
+    }
+
+    await createAuditLog({
+      userId: req.user!.id,
+      action: "create",
+      entityType: "correspondence",
+      entityId: corr.id,
+      entityTitle: corr.subject,
+      projectId: effectiveProjectId ?? undefined,
+    });
+    return { kind: "ok" as const, corr };
   });
-  if (refError) { res.status(409).json({ error: refError }); return; }
 
-  const [corr] = await db.insert(correspondenceTable).values({
-    subject: subject.trim(),
-    type,
-    body: body || "",
-    organizationId: orgId,
-    fromUserId: req.user!.id,
-    projectId: effectiveProjectId,
-    scope,
-    folder: sendNow ? "sent" : "draft",
-    status: sendNow ? "sent" : "draft",
-    referenceNumber: refNum,
-    sentAt: sendNow ? new Date() : undefined,
-    priority: priority || "medium",
-    dueDate: dueDate ? new Date(dueDate) : undefined,
-    assignedToId: taskToId ? parseInt(taskToId) : undefined,
-    direction: direction === "incoming" || direction === "outgoing" ? direction : null,
-    requiresResponse,
-  }).returning();
+  if (biz.kind === "refError") { res.status(409).json({ error: biz.error }); return; }
+  const corr = biz.corr;
 
-  if (toUserIds?.length > 0) {
-    await db.insert(correspondenceRecipientsTable).values(
-      (toUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
-    );
-  }
+  // ─── Post-commit side effects (each in its correct boundary; no business tx held) ───
 
-  if (ccUserIds?.length > 0) {
-    await db.insert(correspondenceCcTable).values(
-      (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
-    );
-  }
+  // AI classification — explicit background boundary (AI I/O, detached from ALS).
+  dispatchClassificationBackground(
+    { organizationId: orgId, userId: req.user!.id, itemType: "correspondence", itemId: corr.id },
+    { subject: corr.subject, body: corr.body },
+  );
 
-  if (attachments?.length > 0) {
-    await db.insert(correspondenceAttachmentsTable).values(
-      attachments.map((a: { fileName: string; fileUrl: string; fileSize?: number }) => ({
-        correspondenceId: corr.id,
-        fileName: a.fileName,
-        fileUrl: a.fileUrl,
-        fileSize: a.fileSize,
-      }))
-    );
-  }
-
-  await createAuditLog({
-    userId: req.user!.id,
-    action: "create",
-    entityType: "correspondence",
-    entityId: corr.id,
-    entityTitle: corr.subject,
-    projectId: effectiveProjectId ?? undefined,
-  });
-
-  try { await classifyItem({ type: "correspondence", organizationId: orgId, subject: corr.subject, body: corr.body }); } catch (_) {}
-
+  // Rule evaluation — DB-only subsystem → its own short tenant tx (best-effort).
   try {
-    await evaluateRules({
+    await withTenant(() => evaluateRules({
       type: "correspondence",
-      orgId,
+      orgId: orgId!,
       projectId: effectiveProjectId ?? 0,
       subject: corr.subject,
       senderUserId: req.user!.id,
       entityId: corr.id,
       entityTitle: corr.subject,
       triggeredByUserId: req.user!.id,
-    });
+    }));
   } catch (_) {}
 
-  // ─── Delivery: Outlook-style email to To + CC recipients ──────────────────
+  // ─── Delivery: in-app notifications (RLS, short tx) + email (post-commit) ──────
   if (sendNow) {
-    // Deduplicate: a user in both To and CC receives one email (as To)
     const toSet = new Set<number>((toUserIds as number[] ?? []));
     const ccDeduped = (ccUserIds as number[] ?? []).filter(id => !toSet.has(id));
     const allDeliveryIds = [...toSet, ...ccDeduped];
     if (allDeliveryIds.length > 0) {
-      const [sender] = await db
-        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
-        .from(usersTable)
-        .where(eq(usersTable.id, req.user!.id));
-      const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone";
-      const senderEmail = sender?.email ?? "";
-
-      const allRecipientUsers = await db
-        .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable)
-        .where(inArray(usersTable.id, allDeliveryIds));
-
-      const project = effectiveProjectId
-        ? (await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, effectiveProjectId)).limit(1))[0]
-        : null;
-
-      const toUsers = allRecipientUsers.filter(u => (toUserIds as number[] ?? []).includes(u.id));
-      const ccUsers = allRecipientUsers.filter(u => (ccUserIds as number[] ?? []).includes(u.id));
-
-      // In-app notifications for To recipients
       try {
-        await db.insert(notificationsTable).values(
-          (toUserIds as number[] ?? []).map((uid: number) => ({
-            userId: uid,
-            type: "correspondence_received" as const,
-            title: `New correspondence: ${corr.subject}`,
-            message: `${senderName} sent you a ${corr.type} — ${corr.subject}`,
-            projectId: effectiveProjectId,
-            entityType: "correspondence",
-            entityId: corr.id,
-            actionUrl: `/correspondence`,
-          }))
-        );
-      } catch (_) {}
+        const bundle = await withTenant(async () => {
+          const [sender] = await db
+            .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
+            .from(usersTable)
+            .where(eq(usersTable.id, req.user!.id));
+          const senderName = sender ? `${sender.firstName} ${sender.lastName}`.trim() : "Someone";
+          const senderEmail = sender?.email ?? "";
 
-      // Email delivery — mandatory, direct delivery, no opt-out
-      try {
+          const allRecipientUsers = await db
+            .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
+            .from(usersTable)
+            .where(inArray(usersTable.id, allDeliveryIds));
+
+          const project = effectiveProjectId
+            ? (await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, effectiveProjectId)).limit(1))[0]
+            : null;
+
+          const toUsers = allRecipientUsers.filter(u => (toUserIds as number[] ?? []).includes(u.id));
+          const ccUsers = allRecipientUsers.filter(u => (ccUserIds as number[] ?? []).includes(u.id));
+
+          // In-app notifications for To recipients (RLS table — inside the tx)
+          await db.insert(notificationsTable).values(
+            (toUserIds as number[] ?? []).map((uid: number) => ({
+              userId: uid,
+              type: "correspondence_received" as const,
+              title: `New correspondence: ${corr.subject}`,
+              message: `${senderName} sent you a ${corr.type} — ${corr.subject}`,
+              projectId: effectiveProjectId,
+              entityType: "correspondence",
+              entityId: corr.id,
+              actionUrl: `/correspondence`,
+            }))
+          );
+          return { senderName, senderEmail, allRecipientUsers, project, toUsers, ccUsers };
+        });
+
+        // Email delivery — OUTSIDE any tenant tx (notification subsystem + network).
         await dispatchNotification({
           event: "correspondence.delivered",
           mandatory: true,
-          recipients: allRecipientUsers.map(r => ({
-            userId: r.id,
-            email: r.email,
-            name: `${r.firstName} ${r.lastName}`.trim(),
-          })),
+          recipients: bundle.allRecipientUsers.map(r => ({ userId: r.id, email: r.email, name: `${r.firstName} ${r.lastName}`.trim() })),
           sendEmail: async (toEmails) => {
-            // Build indexed maps for this email send
-            const toEmailSet = new Set(toUsers.map(u => u.email));
-            const ccEmailSet = new Set(ccUsers.map(u => u.email));
-
-            const toNames = toUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
-            const ccNames = ccUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
-
+            const toEmailSet = new Set(bundle.toUsers.map(u => u.email));
+            const ccEmailSet = new Set(bundle.ccUsers.map(u => u.email));
+            const toNames = bundle.toUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
+            const ccNames = bundle.ccUsers.map(u => `${u.firstName} ${u.lastName}`.trim());
             await sendCorrespondenceDeliveryEmail({
               to: toEmails.filter(e => toEmailSet.has(e)),
               cc: toEmails.filter(e => ccEmailSet.has(e)),
-              senderName,
-              senderEmail,
+              senderName: bundle.senderName,
+              senderEmail: bundle.senderEmail,
               toNames,
               ccNames,
               subject: corr.subject,
               correspondenceType: corr.type,
               referenceNumber: corr.referenceNumber ?? undefined,
               priority: corr.priority ?? undefined,
-              projectName: project?.name,
+              projectName: bundle.project?.name,
               bodyPreview: corr.body?.substring(0, 300),
               correspondenceId: corr.id,
               projectId: effectiveProjectId ?? undefined,
@@ -473,86 +475,67 @@ async function createCorrespondence(
     }
   }
 
-  // ─── SLA / reminder scheduling (only when requiresResponse=true and sent now) ──
+  // ─── SLA / reminder scheduling — DB writes → short tenant tx (best-effort) ──────
   if (sendNow && requiresResponse && toUserIds?.length > 0) {
     try {
-      const [org] = await db
-        .select({
-          corrUnreadReminderHours: organizationsTable.corrUnreadReminderHours,
-          corrNoResponseHours:     organizationsTable.corrNoResponseHours,
-          corrSlaDueSoonHours:     organizationsTable.corrSlaDueSoonHours,
-        })
-        .from(organizationsTable)
-        .where(eq(organizationsTable.id, orgId))
-        .limit(1);
+      await withTenant(async () => {
+        const [org] = await db
+          .select({
+            corrUnreadReminderHours: organizationsTable.corrUnreadReminderHours,
+            corrNoResponseHours:     organizationsTable.corrNoResponseHours,
+            corrSlaDueSoonHours:     organizationsTable.corrSlaDueSoonHours,
+          })
+          .from(organizationsTable)
+          .where(eq(organizationsTable.id, orgId!))
+          .limit(1);
 
-      const unreadHours  = org?.corrUnreadReminderHours ?? 48;
-      const noRespHours  = org?.corrNoResponseHours     ?? 72;
-      const dueSoonHours = org?.corrSlaDueSoonHours     ?? 24;
-      const sentAt       = corr.sentAt ?? new Date();
-      const dueDateObj   = dueDate ? new Date(dueDate) : null;
-      const now          = new Date();
+        const unreadHours  = org?.corrUnreadReminderHours ?? 48;
+        const noRespHours  = org?.corrNoResponseHours     ?? 72;
+        const dueSoonHours = org?.corrSlaDueSoonHours     ?? 24;
+        const sentAt       = corr.sentAt ?? new Date();
+        const dueDateObj   = dueDate ? new Date(dueDate) : null;
+        const now          = new Date();
 
-      const meta = {
-        subject:          corr.subject,
-        referenceNumber:  corr.referenceNumber ?? undefined,
-        correspondenceId: corr.id,
-        link:             `/correspondence?openCorr=${corr.id}`,
-      };
+        const meta = {
+          subject:          corr.subject,
+          referenceNumber:  corr.referenceNumber ?? undefined,
+          correspondenceId: corr.id,
+          link:             `/correspondence?openCorr=${corr.id}`,
+        };
 
-      for (const uid of (toUserIds as number[])) {
-        // 1. Unread reminder — fires after X hours regardless of due date
-        await scheduleNotification({
-          eventKey:       "correspondence.unread_reminder",
-          fireAt:         new Date(sentAt.getTime() + unreadHours * 60 * 60 * 1000),
-          targetUserId:   uid,
-          entityType:     "correspondence",
-          entityId:       corr.id,
-          organizationId: orgId,
-          projectId:      effectiveProjectId ?? undefined,
-          metadata:       meta,
-        });
-
-        // 2. No-response — fires at due date, or after noRespHours if no due date
-        const noRespAt = dueDateObj ?? new Date(sentAt.getTime() + noRespHours * 60 * 60 * 1000);
-        await scheduleNotification({
-          eventKey:       "correspondence.no_response",
-          fireAt:         noRespAt,
-          targetUserId:   uid,
-          entityType:     "correspondence",
-          entityId:       corr.id,
-          organizationId: orgId,
-          projectId:      effectiveProjectId ?? undefined,
-          metadata:       meta,
-        });
-
-        // 3 + 4. Due-soon and SLA-breached — only if a due date is set and still in the future
-        if (dueDateObj && dueDateObj > now) {
-          const dueSoonAt = new Date(dueDateObj.getTime() - dueSoonHours * 60 * 60 * 1000);
-          if (dueSoonAt > now) {
+        for (const uid of (toUserIds as number[])) {
+          await scheduleNotification({
+            eventKey: "correspondence.unread_reminder",
+            fireAt: new Date(sentAt.getTime() + unreadHours * 60 * 60 * 1000),
+            targetUserId: uid, entityType: "correspondence", entityId: corr.id,
+            organizationId: orgId!, projectId: effectiveProjectId ?? undefined, metadata: meta,
+          });
+          const noRespAt = dueDateObj ?? new Date(sentAt.getTime() + noRespHours * 60 * 60 * 1000);
+          await scheduleNotification({
+            eventKey: "correspondence.no_response",
+            fireAt: noRespAt,
+            targetUserId: uid, entityType: "correspondence", entityId: corr.id,
+            organizationId: orgId!, projectId: effectiveProjectId ?? undefined, metadata: meta,
+          });
+          if (dueDateObj && dueDateObj > now) {
+            const dueSoonAt = new Date(dueDateObj.getTime() - dueSoonHours * 60 * 60 * 1000);
+            if (dueSoonAt > now) {
+              await scheduleNotification({
+                eventKey: "sla.due_soon", fireAt: dueSoonAt,
+                targetUserId: uid, entityType: "correspondence", entityId: corr.id,
+                organizationId: orgId!, projectId: effectiveProjectId ?? undefined,
+                metadata: { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
+              });
+            }
             await scheduleNotification({
-              eventKey:       "sla.due_soon",
-              fireAt:         dueSoonAt,
-              targetUserId:   uid,
-              entityType:     "correspondence",
-              entityId:       corr.id,
-              organizationId: orgId,
-              projectId:      effectiveProjectId ?? undefined,
-              metadata:       { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
+              eventKey: "sla.breached", fireAt: dueDateObj,
+              targetUserId: uid, entityType: "correspondence", entityId: corr.id,
+              organizationId: orgId!, projectId: effectiveProjectId ?? undefined,
+              metadata: { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
             });
           }
-          await scheduleNotification({
-            eventKey:       "sla.breached",
-            fireAt:         dueDateObj,
-            targetUserId:   uid,
-            entityType:     "correspondence",
-            entityId:       corr.id,
-            organizationId: orgId,
-            projectId:      effectiveProjectId ?? undefined,
-            metadata:       { ...meta, title: corr.subject, dueDate: dueDateObj.toISOString() },
-          });
         }
-      }
+      });
     } catch (schedErr: any) {
       console.warn("[correspondence] Failed to schedule reminders:", schedErr?.message);
     }
@@ -561,37 +544,34 @@ async function createCorrespondence(
   // ─── Create linked Task when Task To is set and correspondence is sent ────────
   if (sendNow && corr.assignedToId) {
     try {
-      // Deduplication: never create a second task for the same correspondence
-      const [existingTask] = await db.select({ id: tasksTable.id })
-        .from(tasksTable)
-        .where(and(
-          eq(tasksTable.sourceType, "correspondence"),
-          eq(tasksTable.sourceId, corr.id),
-        ))
-        .limit(1);
-
-      if (!existingTask) {
-        await db.insert(tasksTable).values({
-          title: `[Action Required] ${corr.subject}`,
-          description: corr.referenceNumber ? `Ref: ${corr.referenceNumber}` : undefined,
-          status: "pending",
-          priority: (corr.priority as any) ?? "medium",
-          assignedToId: corr.assignedToId ?? undefined,
-          createdById: corr.fromUserId,
-          projectId: corr.projectId ?? undefined,
-          organizationId: corr.organizationId ?? undefined,
-          sourceType: "correspondence",
-          sourceId: corr.id,
-          dueDate: corr.dueDate ?? undefined,
-          assignedAt: new Date(),
-        });
-      }
+      await withTenant(async () => {
+        const [existingTask] = await db.select({ id: tasksTable.id })
+          .from(tasksTable)
+          .where(and(eq(tasksTable.sourceType, "correspondence"), eq(tasksTable.sourceId, corr.id)))
+          .limit(1);
+        if (!existingTask) {
+          await db.insert(tasksTable).values({
+            title: `[Action Required] ${corr.subject}`,
+            description: corr.referenceNumber ? `Ref: ${corr.referenceNumber}` : undefined,
+            status: "pending",
+            priority: (corr.priority as any) ?? "medium",
+            assignedToId: corr.assignedToId ?? undefined,
+            createdById: corr.fromUserId,
+            projectId: corr.projectId ?? undefined,
+            organizationId: corr.organizationId ?? undefined,
+            sourceType: "correspondence",
+            sourceId: corr.id,
+            dueDate: corr.dueDate ?? undefined,
+            assignedAt: new Date(),
+          });
+        }
+      });
     } catch (taskErr: any) {
       console.warn("[correspondence] Failed to create linked task:", taskErr?.message);
     }
   }
 
-  const enriched = await enrichCorrespondence([corr]);
+  const enriched = await withTenant(() => enrichCorrespondence([corr]));
   res.status(201).json(enriched[0]);
 }
 
@@ -794,476 +774,467 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
 
 // ─── Recall ───────────────────────────────────────────────────────────────────
 
-router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
 
-  // Fetch the correspondence to check ownership, state, and read receipt
-  const [existing] = await db.select({
-    id: correspondenceTable.id,
-    fromUserId: correspondenceTable.fromUserId,
-    status: correspondenceTable.status,
-    isRead: correspondenceTable.isRead,
-    subject: correspondenceTable.subject,
-    referenceNumber: correspondenceTable.referenceNumber,
-    projectId: correspondenceTable.projectId,
-    organizationId: correspondenceTable.organizationId,
-  }).from(correspondenceTable)
-    // B2.5-FIX: org-scope the lookup so a cross-org correspondence is not found.
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
-
-  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Only the original sender or DC+ may recall
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
-  const isSender = existing.fromUserId === caller.id;
-  if (!isSender && !CorrespondencePermissions.canClose(effectiveRole)) {
-    res.status(403).json({ error: "Forbidden", message: "Only the sender or a document controller can recall correspondence" });
-    return;
-  }
-
-  // Cannot recall a draft that was never sent
-  if (existing.status === "draft") {
-    res.status(400).json({ error: "Bad Request", message: "Draft correspondence has not been sent and cannot be recalled" });
-    return;
-  }
-
-  // Cannot recall an already-recalled item
-  if (existing.status === "recalled") {
-    res.status(409).json({ error: "Conflict", message: "This correspondence has already been recalled" });
-    return;
-  }
-
-  // Recall is only permitted if no recipient has opened the item yet
-  if (existing.isRead) {
-    res.status(409).json({
-      error: "Conflict",
-      code: "ALREADY_OPENED",
-      message: "Recall is not possible — at least one recipient has already opened this correspondence. The item remains on record for audit purposes.",
-    });
-    return;
-  }
-
-  const now = new Date();
-  const [recalled] = await db.update(correspondenceTable)
-    .set({ status: "recalled", recalledAt: now, recalledById: caller.id, updatedAt: now })
-    .where(eq(correspondenceTable.id, id))
-    .returning();
-
-  // Audit trail
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: existing.organizationId ?? undefined,
-    action: "recall",
-    entityType: "correspondence",
-    entityId: id,
-    entityTitle: existing.referenceNumber ?? existing.subject,
-    projectId: existing.projectId ?? undefined,
-    details: { recalledBy: caller.id, recalledAt: now.toISOString() },
-  });
-
-  // Cancel the linked task (Task To) when correspondence is recalled
   try {
-    const [linkedTask] = await db.select({ id: tasksTable.id })
-      .from(tasksTable)
-      .where(and(
-        eq(tasksTable.sourceType, "correspondence"),
-        eq(tasksTable.sourceId, id),
-      ))
-      .limit(1);
-    if (linkedTask) {
-      await db.update(tasksTable)
-        .set({ status: "cancelled", updatedAt: new Date() })
-        .where(eq(tasksTable.id, linkedTask.id));
+    let result: { status: number; body: unknown } | undefined;
+    let recalled: typeof correspondenceTable.$inferSelect | undefined;
+    let recipients: { userId: number }[] = [];
+    let existingOrgId: number | null | undefined;
+
+    await withTenant(async () => {
+      const [existing] = await db.select({
+        id: correspondenceTable.id,
+        fromUserId: correspondenceTable.fromUserId,
+        status: correspondenceTable.status,
+        isRead: correspondenceTable.isRead,
+        subject: correspondenceTable.subject,
+        referenceNumber: correspondenceTable.referenceNumber,
+        projectId: correspondenceTable.projectId,
+        organizationId: correspondenceTable.organizationId,
+      }).from(correspondenceTable)
+        .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
+
+      if (!existing) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      existingOrgId = existing.organizationId;
+
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+      const isSender = existing.fromUserId === caller.id;
+      if (!isSender && !CorrespondencePermissions.canClose(effectiveRole)) {
+        result = { status: 403, body: { error: "Forbidden", message: "Only the sender or a document controller can recall correspondence" } }; return;
+      }
+      if (existing.status === "draft") {
+        result = { status: 400, body: { error: "Bad Request", message: "Draft correspondence has not been sent and cannot be recalled" } }; return;
+      }
+      if (existing.status === "recalled") {
+        result = { status: 409, body: { error: "Conflict", message: "This correspondence has already been recalled" } }; return;
+      }
+      if (existing.isRead) {
+        result = { status: 409, body: { error: "Conflict", code: "ALREADY_OPENED", message: "Recall is not possible — at least one recipient has already opened this correspondence. The item remains on record for audit purposes." } }; return;
+      }
+
+      const now = new Date();
+      [recalled] = await db.update(correspondenceTable)
+        .set({ status: "recalled", recalledAt: now, recalledById: caller.id, updatedAt: now })
+        .where(eq(correspondenceTable.id, id))
+        .returning();
+
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: existing.organizationId ?? undefined,
+        action: "recall",
+        entityType: "correspondence",
+        entityId: id,
+        entityTitle: existing.referenceNumber ?? existing.subject,
+        projectId: existing.projectId ?? undefined,
+        details: { recalledBy: caller.id, recalledAt: now.toISOString() },
+      });
+
+      // Cancel the linked task (Task To) when correspondence is recalled
+      const [linkedTask] = await db.select({ id: tasksTable.id })
+        .from(tasksTable)
+        .where(and(eq(tasksTable.sourceType, "correspondence"), eq(tasksTable.sourceId, id)))
+        .limit(1);
+      if (linkedTask) {
+        await db.update(tasksTable)
+          .set({ status: "cancelled", updatedAt: new Date() })
+          .where(eq(tasksTable.id, linkedTask.id));
+      }
+
+      recipients = await db.select({ userId: correspondenceRecipientsTable.userId })
+        .from(correspondenceRecipientsTable)
+        .where(eq(correspondenceRecipientsTable.correspondenceId, id));
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+
+    // Notify all To recipients that the item was recalled — post-commit (notification subsystem).
+    for (const r of recipients) {
+      if (r.userId === caller.id) continue;
+      await dispatchNotification({
+        event: "correspondence_recalled" as any,
+        recipients: r.userId ? [{ userId: r.userId, email: "" }] : [],
+        sendEmail: async () => {},
+        organizationId: existingOrgId ?? undefined,
+        entityType: "correspondence",
+        entityId: id,
+      }).catch(() => {});
     }
-  } catch (_) {}
 
-  // Notify all To recipients that the item was recalled
-  const recipients = await db.select({ userId: correspondenceRecipientsTable.userId })
-    .from(correspondenceRecipientsTable)
-    .where(eq(correspondenceRecipientsTable.correspondenceId, id));
-
-  for (const r of recipients) {
-    if (r.userId === caller.id) continue;
-    await dispatchNotification({
-      event: "correspondence_recalled" as any,
-      recipients: r.userId ? [{ userId: r.userId, email: "" }] : [],
-      sendEmail: async () => {},
-      organizationId: existing.organizationId ?? undefined,
-      entityType: "correspondence",
-      entityId: id,
-    }).catch(() => {});
-  }
-
-  const enriched = await enrichCorrespondence([recalled]);
-  res.json(enriched[0]);
+    const enriched = await withTenant(() => enrichCorrespondence([recalled!]));
+    res.json(enriched[0]);
+  } catch (e) { next(e); }
 });
 
-router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.put("/:id/read", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const { isRead } = req.body ?? {}; // tolerate a missing/empty body (was: TypeError → 500)
-  const [corr] = await db.update(correspondenceTable)
-    .set({ isRead: !!isRead, updatedAt: new Date() })
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
-    .returning();
-  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ id: corr.id, isRead: corr.isRead });
+  try {
+    const corr = await withTenant(async () => {
+      const [c] = await db.update(correspondenceTable)
+        .set({ isRead: !!isRead, updatedAt: new Date() })
+        .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
+        .returning();
+      return c;
+    });
+    if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
+    res.json({ id: corr.id, isRead: corr.isRead });
+  } catch (e) { next(e); }
 });
 
-router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const { subject, body, folder, status, referenceNumber, taskToId } = req.body;
   const orgId = caller.organizationId;
-
-  // Fetch the existing record to check ownership and project context
-  const [existing] = await db.select({
-    fromUserId: correspondenceTable.fromUserId,
-    projectId: correspondenceTable.projectId,
-    status: correspondenceTable.status,
-    assignedToId: correspondenceTable.assignedToId,
-  }).from(correspondenceTable)
-    // B2.5-FIX: org-scope the lookup — cross-org correspondence is not found.
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
-  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
-
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
-  const isCreator = existing.fromUserId === caller.id;
-
-  // Status or folder changes (close/archive) require DC+ permission
-  const isStatusOrFolderChange = (status !== undefined && status !== existing.status) || folder !== undefined;
-  if (isStatusOrFolderChange && !CorrespondencePermissions.canClose(effectiveRole)) {
-    res.status(403).json({ error: "Forbidden", message: "Only document controllers and above can close or archive correspondence" }); return;
-  }
-
-  // Content changes (subject, body) require being the creator or DC+
-  const isContentChange = subject !== undefined || body !== undefined;
-  if (isContentChange && !isCreator && !CorrespondencePermissions.canClose(effectiveRole)) {
-    res.status(403).json({ error: "Forbidden", message: "Only the sender or a document controller can edit correspondence content" }); return;
-  }
-
-  if (referenceNumber?.trim()) {
-    const trimmed = referenceNumber.trim();
-    const duplicate = await db.select({ id: correspondenceTable.id })
-      .from(correspondenceTable)
-      .where(and(
-        eq(correspondenceTable.organizationId, orgId!),
-        eq(correspondenceTable.referenceNumber, trimmed),
-        sql`${correspondenceTable.id} != ${id}`,
-      ))
-      .limit(1);
-    if (duplicate.length > 0) {
-      res.status(409).json({ error: `Reference number "${trimmed}" already exists in this organization.` });
-      return;
-    }
-  }
-
   const newAssignedToId = taskToId ? parseInt(taskToId) : undefined;
 
-  const updateData: Record<string, unknown> = { updatedAt: new Date() };
-  if (subject !== undefined) updateData.subject = subject;
-  if (body !== undefined) updateData.body = body;
-  if (folder !== undefined) updateData.folder = folder;
-  if (status !== undefined) updateData.status = status;
-  if (referenceNumber !== undefined) updateData.referenceNumber = referenceNumber?.trim() || undefined;
-  if (newAssignedToId !== undefined) updateData.assignedToId = newAssignedToId;
-
-  const [corr] = await db.update(correspondenceTable)
-    .set(updateData)
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
-    .returning();
-  if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // ─── Sync linked task on status/assignedToId changes ──────────────────────
   try {
-    const [linkedTask] = await db.select({ id: tasksTable.id, status: tasksTable.status })
-      .from(tasksTable)
-      .where(and(
-        eq(tasksTable.sourceType, "correspondence"),
-        eq(tasksTable.sourceId, id),
-      ))
-      .limit(1);
+    let result: { status: number; body: unknown } | undefined;
+    let corr: typeof correspondenceTable.$inferSelect | undefined;
+    let prevAssignedToId: number | null | undefined;
 
-    if (linkedTask) {
-      const taskUpdate: Record<string, unknown> = { updatedAt: new Date() };
+    await withTenant(async () => {
+      const [existing] = await db.select({
+        fromUserId: correspondenceTable.fromUserId,
+        projectId: correspondenceTable.projectId,
+        status: correspondenceTable.status,
+        assignedToId: correspondenceTable.assignedToId,
+      }).from(correspondenceTable)
+        .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
+      if (!existing) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      prevAssignedToId = existing.assignedToId;
 
-      // Close correspondence → complete the linked task
-      if (status === "closed" && linkedTask.status !== "completed") {
-        taskUpdate.status = "completed";
-        taskUpdate.completedAt = new Date();
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+      const isCreator = existing.fromUserId === caller.id;
+
+      const isStatusOrFolderChange = (status !== undefined && status !== existing.status) || folder !== undefined;
+      if (isStatusOrFolderChange && !CorrespondencePermissions.canClose(effectiveRole)) {
+        result = { status: 403, body: { error: "Forbidden", message: "Only document controllers and above can close or archive correspondence" } }; return;
+      }
+      const isContentChange = subject !== undefined || body !== undefined;
+      if (isContentChange && !isCreator && !CorrespondencePermissions.canClose(effectiveRole)) {
+        result = { status: 403, body: { error: "Forbidden", message: "Only the sender or a document controller can edit correspondence content" } }; return;
       }
 
-      // Task To changed → reassign linked task + update assignedAt
-      if (newAssignedToId !== undefined && newAssignedToId !== existing.assignedToId) {
-        taskUpdate.assignedToId = newAssignedToId;
-        taskUpdate.assignedAt = new Date();
+      if (referenceNumber?.trim()) {
+        const trimmed = referenceNumber.trim();
+        const duplicate = await db.select({ id: correspondenceTable.id })
+          .from(correspondenceTable)
+          .where(and(
+            eq(correspondenceTable.organizationId, orgId!),
+            eq(correspondenceTable.referenceNumber, trimmed),
+            sql`${correspondenceTable.id} != ${id}`,
+          ))
+          .limit(1);
+        if (duplicate.length > 0) { result = { status: 409, body: { error: `Reference number "${trimmed}" already exists in this organization.` } }; return; }
       }
 
-      if (Object.keys(taskUpdate).length > 1) {
-        await db.update(tasksTable).set(taskUpdate).where(eq(tasksTable.id, linkedTask.id));
-      }
-    }
-  } catch (_) {}
+      const updateData: Record<string, unknown> = { updatedAt: new Date() };
+      if (subject !== undefined) updateData.subject = subject;
+      if (body !== undefined) updateData.body = body;
+      if (folder !== undefined) updateData.folder = folder;
+      if (status !== undefined) updateData.status = status;
+      if (referenceNumber !== undefined) updateData.referenceNumber = referenceNumber?.trim() || undefined;
+      if (newAssignedToId !== undefined) updateData.assignedToId = newAssignedToId;
 
-  const enriched = await enrichCorrespondence([corr]);
-  res.json(enriched[0]);
+      const [c] = await db.update(correspondenceTable)
+        .set(updateData)
+        .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
+        .returning();
+      if (!c) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      corr = c;
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+
+    // Sync linked task on status/assignedToId changes — best-effort, own short tx.
+    try {
+      await withTenant(async () => {
+        const [linkedTask] = await db.select({ id: tasksTable.id, status: tasksTable.status })
+          .from(tasksTable)
+          .where(and(eq(tasksTable.sourceType, "correspondence"), eq(tasksTable.sourceId, id)))
+          .limit(1);
+        if (linkedTask) {
+          const taskUpdate: Record<string, unknown> = { updatedAt: new Date() };
+          if (status === "closed" && linkedTask.status !== "completed") {
+            taskUpdate.status = "completed";
+            taskUpdate.completedAt = new Date();
+          }
+          if (newAssignedToId !== undefined && newAssignedToId !== prevAssignedToId) {
+            taskUpdate.assignedToId = newAssignedToId;
+            taskUpdate.assignedAt = new Date();
+          }
+          if (Object.keys(taskUpdate).length > 1) {
+            await db.update(tasksTable).set(taskUpdate).where(eq(tasksTable.id, linkedTask.id));
+          }
+        }
+      });
+    } catch (_) {}
+
+    const enriched = await withTenant(() => enrichCorrespondence([corr!]));
+    res.json(enriched[0]);
+  } catch (e) { next(e); }
 });
 
-router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const contextProjectId = req.params.projectId ? requireInt(req.params.projectId) : null;
   const parentId = requireInt(req.params.id);
   const caller = req.user!;
-
-  // Only member+ can reply to correspondence
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
-  if (!CorrespondencePermissions.canReply(effectiveRole)) {
-    res.status(403).json({ error: "Forbidden", message: "You do not have permission to reply to correspondence" }); return;
-  }
-
   const { subject, type, body, toUserIds, ccUserIds } = req.body;
 
-  const parent = await db.select({
-      projectId: correspondenceTable.projectId,
-      scope: correspondenceTable.scope,
-      organizationId: correspondenceTable.organizationId,
-    })
-    .from(correspondenceTable)
-    .where(eq(correspondenceTable.id, parentId))
-    .limit(1);
-
-  if (!parent[0]) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Tenant isolation: same-org callers reply freely; cross-org callers must be
-  // an explicit recipient of the parent correspondence (e.g. external contractor
-  // replying to a sent item). system_owner bypasses.
-  if (!isSystemOwner(caller) && parent[0].organizationId !== caller.organizationId) {
-    const [recipientRow] = await db
-      .select({ userId: correspondenceRecipientsTable.userId })
-      .from(correspondenceRecipientsTable)
-      .where(and(
-        eq(correspondenceRecipientsTable.correspondenceId, parentId),
-        eq(correspondenceRecipientsTable.userId, caller.id!),
-      ))
-      .limit(1);
-    if (!recipientRow) {
-      res.status(403).json({ error: "Forbidden", message: "You are not a recipient of this correspondence." }); return;
-    }
-  }
-
-  // Derive org: caller's org first, then inherit from parent correspondence (system_owner case).
-  const orgId: number | null = caller.organizationId ?? parent[0]?.organizationId ?? null;
-  if (!orgId) {
-    res.status(400).json({
-      error: "No organization context",
-      message: isSystemOwner(caller)
-        ? "This correspondence is not linked to any organization, so a reply cannot be sent. Please contact a system administrator to correct the correspondence data."
-        : "Your account is not assigned to an organization. Please contact your administrator to resolve this before sending correspondence.",
-    });
-    return;
-  }
-
-  const effectiveProjectId = contextProjectId ?? parent[0]?.projectId ?? null;
-  const scope = parent[0]?.scope ?? "project";
-
-  await db.update(correspondenceTable)
-    .set({ status: "responded", updatedAt: new Date() })
-    .where(eq(correspondenceTable.id, parentId));
-
-  // Complete the linked task when parent correspondence is responded
   try {
-    const [linkedTask] = await db.select({ id: tasksTable.id })
-      .from(tasksTable)
-      .where(and(
-        eq(tasksTable.sourceType, "correspondence"),
-        eq(tasksTable.sourceId, parentId),
-      ))
-      .limit(1);
-    if (linkedTask) {
-      await db.update(tasksTable)
-        .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
-        .where(eq(tasksTable.id, linkedTask.id));
-    }
-  } catch (_) {}
+    let result: { status: number; body: unknown } | undefined;
+    let corr: typeof correspondenceTable.$inferSelect | undefined;
 
-  const { refNum } = await resolveReferenceNumber({
-    orgId,
-    scope,
-    projectId: scope === "project" ? effectiveProjectId : null,
-    manualRef: null,
-  });
+    await withTenant(async () => {
+      // Only member+ can reply
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, contextProjectId ?? undefined);
+      if (!CorrespondencePermissions.canReply(effectiveRole)) {
+        result = { status: 403, body: { error: "Forbidden", message: "You do not have permission to reply to correspondence" } }; return;
+      }
 
-  const [corr] = await db.insert(correspondenceTable).values({
-    subject: subject || `Re: ...`,
-    type: type || "letter",
-    body: body || "",
-    organizationId: orgId,
-    fromUserId: req.user!.id,
-    projectId: effectiveProjectId,
-    scope,
-    parentId,
-    folder: "sent",
-    status: "sent",
-    referenceNumber: refNum,
-    sentAt: new Date(),
-  }).returning();
+      const parent = await db.select({
+          projectId: correspondenceTable.projectId,
+          scope: correspondenceTable.scope,
+          organizationId: correspondenceTable.organizationId,
+        })
+        .from(correspondenceTable)
+        .where(eq(correspondenceTable.id, parentId))
+        .limit(1);
+      if (!parent[0]) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  if (toUserIds?.length > 0) {
-    await db.insert(correspondenceRecipientsTable).values(
-      toUserIds.map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
-    );
-  }
+      // Tenant isolation: cross-org callers must be an explicit recipient of the parent.
+      if (!isSystemOwner(caller) && parent[0].organizationId !== caller.organizationId) {
+        const [recipientRow] = await db
+          .select({ userId: correspondenceRecipientsTable.userId })
+          .from(correspondenceRecipientsTable)
+          .where(and(
+            eq(correspondenceRecipientsTable.correspondenceId, parentId),
+            eq(correspondenceRecipientsTable.userId, caller.id!),
+          ))
+          .limit(1);
+        if (!recipientRow) { result = { status: 403, body: { error: "Forbidden", message: "You are not a recipient of this correspondence." } }; return; }
+      }
 
-  if (ccUserIds?.length > 0) {
-    await db.insert(correspondenceCcTable).values(
-      (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: corr.id, userId: uid }))
-    );
-  }
+      const orgId: number | null = caller.organizationId ?? parent[0]?.organizationId ?? null;
+      if (!orgId) {
+        result = { status: 400, body: {
+          error: "No organization context",
+          message: isSystemOwner(caller)
+            ? "This correspondence is not linked to any organization, so a reply cannot be sent. Please contact a system administrator to correct the correspondence data."
+            : "Your account is not assigned to an organization. Please contact your administrator to resolve this before sending correspondence.",
+        } }; return;
+      }
 
-  const enriched = await enrichCorrespondence([corr]);
-  res.status(201).json(enriched[0]);
+      const effectiveProjectId = contextProjectId ?? parent[0]?.projectId ?? null;
+      const scope = parent[0]?.scope ?? "project";
+
+      await db.update(correspondenceTable)
+        .set({ status: "responded", updatedAt: new Date() })
+        .where(eq(correspondenceTable.id, parentId));
+
+      // Complete the linked task when parent correspondence is responded (in-tx; part of reply)
+      const [linkedTask] = await db.select({ id: tasksTable.id })
+        .from(tasksTable)
+        .where(and(eq(tasksTable.sourceType, "correspondence"), eq(tasksTable.sourceId, parentId)))
+        .limit(1);
+      if (linkedTask) {
+        await db.update(tasksTable)
+          .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+          .where(eq(tasksTable.id, linkedTask.id));
+      }
+
+      const { refNum } = await resolveReferenceNumber({
+        orgId, scope, projectId: scope === "project" ? effectiveProjectId : null, manualRef: null,
+      });
+
+      const [c] = await db.insert(correspondenceTable).values({
+        subject: subject || `Re: ...`,
+        type: type || "letter",
+        body: body || "",
+        organizationId: orgId,
+        fromUserId: req.user!.id,
+        projectId: effectiveProjectId,
+        scope,
+        parentId,
+        folder: "sent",
+        status: "sent",
+        referenceNumber: refNum,
+        sentAt: new Date(),
+      }).returning();
+      corr = c;
+
+      if (toUserIds?.length > 0) {
+        await db.insert(correspondenceRecipientsTable).values(
+          toUserIds.map((uid: number) => ({ correspondenceId: c.id, userId: uid }))
+        );
+      }
+      if (ccUserIds?.length > 0) {
+        await db.insert(correspondenceCcTable).values(
+          (ccUserIds as number[]).map((uid: number) => ({ correspondenceId: c.id, userId: uid }))
+        );
+      }
+      result = { status: 201, body: null };
+    });
+
+    if (result!.status !== 201) { res.status(result!.status).json(result!.body); return; }
+    const enriched = await withTenant(() => enrichCorrespondence([corr!]));
+    res.status(201).json(enriched[0]);
+  } catch (e) { next(e); }
 });
 
 // ─── Attachments ──────────────────────────────────────────────────────────────
 
-router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/attachments", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const corrId = requireInt(req.params.id);
   const caller = req.user!;
   const { fileName, fileUrl, fileSize } = req.body;
-  // B2.5-FIX: the correspondence must belong to the caller's org before we
-  // attach a file to it (was completely unscoped — any authenticated user could
-  // attach to any correspondence by id).
-  const [corr] = await db.select({ id: correspondenceTable.id }).from(correspondenceTable)
-    .where(orgScopedWhere(caller, correspondenceTable.id, corrId, correspondenceTable.organizationId)).limit(1);
-  if (!corr) { res.status(404).json({ error: "Correspondence not found" }); return; }
-  const [att] = await db.insert(correspondenceAttachmentsTable).values({
-    correspondenceId: corrId,
-    fileName,
-    fileUrl,
-    fileSize,
-  }).returning();
-  res.status(201).json(att);
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [corr] = await db.select({ id: correspondenceTable.id }).from(correspondenceTable)
+        .where(orgScopedWhere(caller, correspondenceTable.id, corrId, correspondenceTable.organizationId)).limit(1);
+      if (!corr) { result = { status: 404, body: { error: "Correspondence not found" } }; return; }
+      const [att] = await db.insert(correspondenceAttachmentsTable).values({
+        correspondenceId: corrId, fileName, fileUrl, fileSize,
+      }).returning();
+      result = { status: 201, body: att };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id/attachments/:attId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id/attachments/:attId", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const attId = requireInt(req.params.attId);
   const caller = req.user!;
-  // Tenant isolation: verify the attachment belongs to a correspondence in caller's org.
-  // correspondence_attachments has no RLS — app-level check is the only guard.
-  const [att] = await db
-    .select({ orgId: correspondenceTable.organizationId })
-    .from(correspondenceAttachmentsTable)
-    .innerJoin(correspondenceTable, eq(correspondenceAttachmentsTable.correspondenceId, correspondenceTable.id))
-    .where(and(
-      eq(correspondenceAttachmentsTable.id, attId),
-      eq(correspondenceAttachmentsTable.correspondenceId, id),
-    ))
-    .limit(1);
-  if (!att) { res.status(404).json({ error: "Not Found" }); return; }
-  if (!isSystemOwner(caller) && att.orgId !== caller.organizationId) {
-    res.status(403).json({ error: "Forbidden", message: "Cross-organization access denied." }); return;
-  }
-  await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
-  res.json({ success: true });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // correspondence_attachments has no RLS — app-level check is the only guard.
+      const [att] = await db
+        .select({ orgId: correspondenceTable.organizationId })
+        .from(correspondenceAttachmentsTable)
+        .innerJoin(correspondenceTable, eq(correspondenceAttachmentsTable.correspondenceId, correspondenceTable.id))
+        .where(and(
+          eq(correspondenceAttachmentsTable.id, attId),
+          eq(correspondenceAttachmentsTable.correspondenceId, id),
+        ))
+        .limit(1);
+      if (!att) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      if (!isSystemOwner(caller) && att.orgId !== caller.organizationId) {
+        result = { status: 403, body: { error: "Forbidden", message: "Cross-organization access denied." } }; return;
+      }
+      await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.id, attId));
+      result = { status: 200, body: { success: true } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select({
+        projectId: correspondenceTable.projectId,
+        subject: correspondenceTable.subject,
+        referenceNumber: correspondenceTable.referenceNumber,
+      }).from(correspondenceTable)
+        .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  // Fetch to get project context for role resolution
-  const [existing] = await db.select({
-    projectId: correspondenceTable.projectId,
-    subject: correspondenceTable.subject,
-    referenceNumber: correspondenceTable.referenceNumber,
-  }).from(correspondenceTable)
-    // B2.5-FIX: org-scope the lookup — cross-org correspondence is not found.
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId)).limit(1);
-  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
+      if (!CorrespondencePermissions.canDelete(effectiveRole)) {
+        result = { status: 403, body: { error: "Forbidden", message: "Only administrators can delete correspondence threads" } }; return;
+      }
 
-  // Admin+ only can delete correspondence (hard delete, no recovery)
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, existing.projectId ?? undefined);
-  if (!CorrespondencePermissions.canDelete(effectiveRole)) {
-    res.status(403).json({ error: "Forbidden", message: "Only administrators can delete correspondence threads" }); return;
-  }
+      await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
+      await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
+      await db.delete(correspondenceCcTable).where(eq(correspondenceCcTable.correspondenceId, id));
+      const [deleted] = await db.delete(correspondenceTable).where(eq(correspondenceTable.id, id)).returning();
+      if (!deleted) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
-  await db.delete(correspondenceRecipientsTable).where(eq(correspondenceRecipientsTable.correspondenceId, id));
-  await db.delete(correspondenceCcTable).where(eq(correspondenceCcTable.correspondenceId, id));
-  const [deleted] = await db.delete(correspondenceTable)
-    .where(eq(correspondenceTable.id, id))
-    .returning();
-  if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
-
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId,
-    action: "delete",
-    entityType: "correspondence",
-    entityId: id,
-    entityTitle: existing.referenceNumber ?? existing.subject,
-    projectId: existing.projectId ?? undefined,
-    details: { deletedBy: caller.id },
-  });
-
-  res.json({ success: true });
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: caller.organizationId,
+        action: "delete",
+        entityType: "correspondence",
+        entityId: id,
+        entityTitle: existing.referenceNumber ?? existing.subject,
+        projectId: existing.projectId ?? undefined,
+        details: { deletedBy: caller.id },
+      });
+      result = { status: 200, body: { success: true } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // ─── Share link ───────────────────────────────────────────────────────────────
 
-router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
 
-  // Verify the project belongs to the caller's org — prevents cross-tenant share
-  // creation when the correspondence's own organizationId is NULL (legacy data).
-  const [project] = await db.select({ id: projectsTable.id })
-    .from(projectsTable)
-    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
-    .limit(1);
-  if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
+  // Token material + bcrypt OUTSIDE the tenant transaction (CPU-bound).
   const token = crypto.randomBytes(32).toString("hex");
   const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
   const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
-  const [corr] = await db.update(correspondenceTable)
-    .set({
-      shareToken: hashToken(token),
-      shareExpiresAt: expiresAt,
-      sharePasswordHash: passwordHash ?? undefined,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
-    .returning({ id: correspondenceTable.id, shareExpiresAt: correspondenceTable.shareExpiresAt });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Verify the project belongs to the caller's org — prevents cross-tenant share.
+      const [project] = await db.select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
+        .limit(1);
+      if (!project) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  if (!corr) { res.status(404).json({ error: "Not found" }); return; }
+      const [corr] = await db.update(correspondenceTable)
+        .set({
+          shareToken: hashToken(token),
+          shareExpiresAt: expiresAt,
+          sharePasswordHash: passwordHash ?? undefined,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId)))
+        .returning({ id: correspondenceTable.id, shareExpiresAt: correspondenceTable.shareExpiresAt });
+      if (!corr) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  await createAuditLog({
-    userId: req.user!.id, action: "share", entityType: "correspondence",
-    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
-  });
-
-  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
-  res.json({
-    shareUrl: `${baseUrl}/shared/correspondence/${token}`,
-    shareToken: token,
-    expiresAt,
-  });
+      await createAuditLog({
+        userId: req.user!.id, action: "share", entityType: "correspondence",
+        entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
+      });
+      const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+      result = { status: 200, body: { shareUrl: `${baseUrl}/shared/correspondence/${token}`, shareToken: token, expiresAt } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
-  const result = await db.update(correspondenceTable)
-    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
-    .returning({ id: correspondenceTable.id });
-  if (result.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
-  res.json({ success: true });
+  try {
+    const rows = await withTenant(() => db.update(correspondenceTable)
+      .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+      .where(orgScopedWhere(caller, correspondenceTable.id, id, correspondenceTable.organizationId))
+      .returning({ id: correspondenceTable.id }));
+    if (rows.length === 0) { res.status(404).json({ error: "Not Found" }); return; }
+    res.json({ success: true });
+  } catch (e) { next(e); }
 });
 
 export default router;

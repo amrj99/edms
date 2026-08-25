@@ -174,8 +174,8 @@ router.use("/organizations", tenantScoped(organizationsRouter));
 router.use("/users", tenantScoped(usersRouter));
 router.use("/projects", tenantScoped(projectsRouter));
 router.use("/projects/:projectId/documents", documentsRouter);
-router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
-router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
+router.use("/projects/:projectId/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
+router.use("/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
 
 router.use("/projects/:projectId/transmittals", requireModule("registers"), tenantScoped(transmittalsRouter));
 router.use("/projects/:projectId/submission-chains", requireModule("registers"), tenantScoped(submissionChainsRouter));
