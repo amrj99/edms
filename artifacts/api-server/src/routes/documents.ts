@@ -84,25 +84,30 @@ router.use(requireAuth, requireProjectAccess());
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
+  const loaded = await tenantRead(async () => {
+    const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+    if (!allowed) return { denied: true as const };
+    const folders = await db.select({
+      id: foldersTable.id,
+      name: foldersTable.name,
+      projectId: foldersTable.projectId,
+      organizationId: foldersTable.organizationId,
+      parentId: foldersTable.parentId,
+      createdAt: foldersTable.createdAt,
+    }).from(foldersTable)
+      .where(eq(foldersTable.projectId, projectId))
+      .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
+    const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
+      .from(documentsTable)
+      .where(eq(documentsTable.projectId, projectId))
+      .groupBy(documentsTable.folderId);
+    return { denied: false as const, folders, docCounts };
+  });
+  if (loaded.denied) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
     return;
   }
-  const folders = await db.select({
-    id: foldersTable.id,
-    name: foldersTable.name,
-    projectId: foldersTable.projectId,
-    organizationId: foldersTable.organizationId,
-    parentId: foldersTable.parentId,
-    createdAt: foldersTable.createdAt,
-  }).from(foldersTable)
-    .where(eq(foldersTable.projectId, projectId))
-    .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
-  const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
-    .from(documentsTable)
-    .where(eq(documentsTable.projectId, projectId))
-    .groupBy(documentsTable.folderId);
+  const { folders, docCounts } = loaded;
   const countMap = new Map(docCounts.filter(d => d.folderId).map(d => [d.folderId!, Number(d.cnt)]));
   res.json({ items: folders.map(f => ({ ...f, documentCount: countMap.get(f.id) ?? 0 })) });
 });
@@ -226,10 +231,6 @@ router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams
 router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!projectAccessAllowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
-  }
   const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy, direction } = req.query;
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
@@ -265,46 +266,58 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 
   const where = and(...conditions) as SQL;
 
-  // ── Query 1: total count (SQL) ─────────────────────────────────────────────
-  const [{ totalCount }] = await db
-    .select({ totalCount: count() })
-    .from(documentsTable)
-    .where(where);
+  // Project access gate + all read queries in ONE short read tx (one snapshot).
+  const loaded = await tenantRead(async () => {
+    const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+    if (!projectAccessAllowed) return { denied: true as const };
 
-  // ── Query 2: paginated page data (SQL LIMIT/OFFSET) ────────────────────────
-  const docs = await db.select({
-    doc: documentsTable,
-    createdBy: usersTable,
-    folder: foldersTable,
-  }).from(documentsTable)
-    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .where(where)
-    .orderBy(desc(documentsTable.updatedAt))
-    .limit(lim)
-    .offset((pg - 1) * lim);
+    // ── Query 1: total count (SQL) ─────────────────────────────────────────────
+    const [{ totalCount }] = await db
+      .select({ totalCount: count() })
+      .from(documentsTable)
+      .where(where);
 
-  // ── Department enforcement gate ────────────────────────────────────────────
-  // PHASE_D_ENFORCE_DEPT=false (current default): resolveListAndEnforce fires
-  // shadow logging asynchronously and returns an empty deniedDocIds — zero
-  // impact on response shape or latency.
-  //
-  // NOTE: if PHASE_D_ENFORCE_DEPT=true is ever enabled, the `total` returned
-  // here will NOT account for denied documents on OTHER pages — only the current
-  // page is evaluated. Accurate total-after-enforcement requires a separate
-  // refactor: (1) fetch all matching doc IDs in a lightweight ID-only query,
-  // (2) run enforcement on the full ID set, (3) subtract denied IDs from total,
-  // (4) re-paginate. Do NOT enable enforcement without that refactor.
-  const { deniedDocIds } = await resolveListAndEnforce({
-    userId:    caller.id,
-    userRole:  caller.role,
-    documents: docs.map(({ doc }) => ({
-      id:             doc.id,
-      projectId:      doc.projectId,
-      isConfidential: doc.isConfidential ?? false,
-    })),
-    endpoint: "GET /api/projects/:projectId/documents",
+    // ── Query 2: paginated page data (SQL LIMIT/OFFSET) ────────────────────────
+    const docs = await db.select({
+      doc: documentsTable,
+      createdBy: usersTable,
+      folder: foldersTable,
+    }).from(documentsTable)
+      .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
+      .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+      .where(where)
+      .orderBy(desc(documentsTable.updatedAt))
+      .limit(lim)
+      .offset((pg - 1) * lim);
+
+    // ── Department enforcement gate ────────────────────────────────────────────
+    // PHASE_D_ENFORCE_DEPT=false (current default): resolveListAndEnforce fires
+    // shadow logging asynchronously and returns an empty deniedDocIds — zero
+    // impact on response shape or latency.
+    //
+    // NOTE: if PHASE_D_ENFORCE_DEPT=true is ever enabled, the `total` returned
+    // here will NOT account for denied documents on OTHER pages — only the current
+    // page is evaluated. Accurate total-after-enforcement requires a separate
+    // refactor: (1) fetch all matching doc IDs in a lightweight ID-only query,
+    // (2) run enforcement on the full ID set, (3) subtract denied IDs from total,
+    // (4) re-paginate. Do NOT enable enforcement without that refactor.
+    const { deniedDocIds } = await resolveListAndEnforce({
+      userId:    caller.id,
+      userRole:  caller.role,
+      documents: docs.map(({ doc }) => ({
+        id:             doc.id,
+        projectId:      doc.projectId,
+        isConfidential: doc.isConfidential ?? false,
+      })),
+      endpoint: "GET /api/projects/:projectId/documents",
+    });
+    return { denied: false as const, totalCount, docs, deniedDocIds };
   });
+
+  if (loaded.denied) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
+  const { totalCount, docs, deniedDocIds } = loaded;
 
   const pageDocs = deniedDocIds.size > 0
     ? docs.filter(d => !deniedDocIds.has(d.doc.id))
@@ -599,7 +612,7 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
   const number = (req.query.number as string)?.trim();
   if (!number) { res.status(400).json({ error: "number query param required" }); return; }
 
-  const existing = await db.select({
+  const existing = await tenantRead(() => db.select({
     id: documentsTable.id,
     title: documentsTable.title,
     revision: documentsTable.revision,
@@ -608,7 +621,7 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
   })
     .from(documentsTable)
     .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, number)))
-    .limit(1);
+    .limit(1));
 
   if (existing.length > 0) {
     res.json({
@@ -627,49 +640,62 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
-  const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
-    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
-  );
-  if (!projectAccessAllowed) {
+
+  // Access check + all reads + enforcement gate in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
+      caller.id, caller.organizationId, projectId, isSystemOwner(caller),
+    );
+    if (!projectAccessAllowed) return { kind: "forbidden" as const };
+
+    const docs = await db.select({
+      doc: documentsTable,
+      createdBy: usersTable,
+      folder: foldersTable,
+    }).from(documentsTable)
+      .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
+      .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+      .limit(1);
+
+    if (!docs[0]) return { kind: "notfound" as const };
+
+    // Fetch active workflow engine instance (if any) for this document
+    const wfInstances = await db.select({
+      wf: wfInstancesTable,
+      stage: wfTemplateStagesTable,
+    }).from(wfInstancesTable)
+      .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
+      .where(and(eq(wfInstancesTable.documentId, id), eq(wfInstancesTable.status, "active")))
+      .limit(1);
+
+    const { doc } = docs[0];
+
+    // Resolver + enforcement gate — system allowed this project-scoped access.
+    // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
+    // MUST be awaited before res.json() so enforcement can block if flag is enabled.
+    const { enforcedDeny } = await resolveAndEnforce(
+      {
+        userId: caller.id, userRole: caller.role, documentId: id, projectId,
+        isConfidential: doc.isConfidential ?? false,
+        userOrgId:     caller.organizationId,
+        documentOrgId: projectOrgId ?? undefined,
+      },
+      true,
+    );
+    if (enforcedDeny) return { kind: "denied" as const };
+
+    return { kind: "ok" as const, docRow: docs[0], wfInstances };
+  });
+
+  if (loaded.kind === "forbidden") {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (loaded.kind === "denied") { res.status(403).json({ error: "Forbidden" }); return; }
 
-  const docs = await db.select({
-    doc: documentsTable,
-    createdBy: usersTable,
-    folder: foldersTable,
-  }).from(documentsTable)
-    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .limit(1);
-
-  if (!docs[0]) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Fetch active workflow engine instance (if any) for this document
-  const wfInstances = await db.select({
-    wf: wfInstancesTable,
-    stage: wfTemplateStagesTable,
-  }).from(wfInstancesTable)
-    .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
-    .where(and(eq(wfInstancesTable.documentId, id), eq(wfInstancesTable.status, "active")))
-    .limit(1);
-
-  const { doc, createdBy, folder } = docs[0];
-
-  // Resolver + enforcement gate — system allowed this project-scoped access.
-  // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
-  // MUST be awaited before res.json() so enforcement can block if flag is enabled.
-  const { enforcedDeny } = await resolveAndEnforce(
-    {
-      userId: caller.id, userRole: caller.role, documentId: id, projectId,
-      isConfidential: doc.isConfidential ?? false,
-      userOrgId:     caller.organizationId,
-      documentOrgId: projectOrgId ?? undefined,
-    },
-    true,
-  );
-  if (enforcedDeny) { res.status(403).json({ error: "Forbidden" }); return; }
+  const { doc, createdBy, folder } = loaded.docRow;
+  const { wfInstances } = loaded;
 
   res.json({
     ...doc,
@@ -836,28 +862,35 @@ router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, re
   const id = requireInt(req.params.id);
   const user = req.user!;
 
-  // Tenant isolation: verify the document belongs to the user's org before returning revisions
-  if (!isSystemOwner(user) && user.organizationId) {
-    const [doc] = await db.select({ organizationId: documentsTable.organizationId })
-      .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
-    if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
-    if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
-      throw new TenantIsolationError({
-        route: req.path, method: req.method,
-        userId: user.id, userOrgId: user.organizationId,
-        attemptedResourceType: "document_revisions", attemptedResourceId: id,
-        resourceOrgId: doc.organizationId,
-      });
+  // Tenant isolation + revisions read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    // Tenant isolation: verify the document belongs to the user's org before returning revisions
+    if (!isSystemOwner(user) && user.organizationId) {
+      const [doc] = await db.select({ organizationId: documentsTable.organizationId })
+        .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+      if (!doc) return { kind: "notfound" as const };
+      if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
+        throw new TenantIsolationError({
+          route: req.path, method: req.method,
+          userId: user.id, userOrgId: user.organizationId,
+          attemptedResourceType: "document_revisions", attemptedResourceId: id,
+          resourceOrgId: doc.organizationId,
+        });
+      }
     }
-  }
 
-  const revisions = await db.select({
-    rev: documentRevisionsTable,
-    user: usersTable,
-  }).from(documentRevisionsTable)
-    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
-    .where(eq(documentRevisionsTable.documentId, id))
-    .orderBy(desc(documentRevisionsTable.createdAt));
+    const revisions = await db.select({
+      rev: documentRevisionsTable,
+      user: usersTable,
+    }).from(documentRevisionsTable)
+      .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+      .where(eq(documentRevisionsTable.documentId, id))
+      .orderBy(desc(documentRevisionsTable.createdAt));
+    return { kind: "ok" as const, revisions };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  const { revisions } = loaded;
 
   res.json({
     revisions: revisions.map(({ rev, user }) => ({
@@ -880,18 +913,61 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   // router-wide project gate validates :projectId against the caller's org, but
   // without binding the lookup to projectId a caller could read another
   // project's document activity by bare id (cross-project/tenant IDOR).
-  const [activityDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!activityDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // All DB reads (tenant-isolation check + the four activity sources) run in ONE
+  // short read tx; the merge/serialization compute happens OUTSIDE it below.
+  const loaded = await tenantRead(async () => {
+    const [activityDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!activityDoc) return { kind: "notfound" as const };
+
+    // 1 ── Revisions ───────────────────────────────────────────────────────────
+    const revisionRows = await db
+      .select({ rev: documentRevisionsTable, user: usersTable })
+      .from(documentRevisionsTable)
+      .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+      .where(eq(documentRevisionsTable.documentId, docId))
+      .orderBy(desc(documentRevisionsTable.createdAt));
+
+    // 2 ── Transmittals (via transmittal_items join) ───────────────────────────
+    const txRows = await db
+      .select({
+        tx:   transmittalsTable,
+        item: transmittalItemsTable,
+      })
+      .from(transmittalItemsTable)
+      .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+      .where(eq(transmittalItemsTable.documentId, docId))
+      .orderBy(desc(transmittalsTable.createdAt));
+
+    // 3 ── Submission Chains (via submission_chain_documents join) ─────────────
+    const chainRows = await db
+      .select({
+        chain: submissionChainsTable,
+        doc:   submissionChainDocumentsTable,
+      })
+      .from(submissionChainDocumentsTable)
+      .innerJoin(submissionChainsTable, eq(submissionChainDocumentsTable.chainId, submissionChainsTable.id))
+      .where(eq(submissionChainDocumentsTable.documentId, docId))
+      .orderBy(desc(submissionChainDocumentsTable.addedAt));
+
+    // 4 ── Correspondence (via correspondence_documents join table) ───────────────
+    const corrRows = await db
+      .select({
+        corr: correspondenceTable,
+        link: correspondenceDocumentsTable,
+      })
+      .from(correspondenceDocumentsTable)
+      .innerJoin(correspondenceTable, eq(correspondenceDocumentsTable.correspondenceId, correspondenceTable.id))
+      .where(eq(correspondenceDocumentsTable.documentId, docId))
+      .orderBy(desc(correspondenceTable.createdAt));
+
+    return { kind: "ok" as const, revisionRows, txRows, chainRows, corrRows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  const { revisionRows, txRows, chainRows, corrRows } = loaded;
 
   // 1 ── Revisions ───────────────────────────────────────────────────────────
-  const revisionRows = await db
-    .select({ rev: documentRevisionsTable, user: usersTable })
-    .from(documentRevisionsTable)
-    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
-    .where(eq(documentRevisionsTable.documentId, docId))
-    .orderBy(desc(documentRevisionsTable.createdAt));
-
   const revisionEvents = revisionRows.map(({ rev, user }) => ({
     id:     `rev-${rev.id}`,
     type:   "revision" as const,
@@ -908,16 +984,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   }));
 
   // 2 ── Transmittals (via transmittal_items join) ───────────────────────────
-  const txRows = await db
-    .select({
-      tx:   transmittalsTable,
-      item: transmittalItemsTable,
-    })
-    .from(transmittalItemsTable)
-    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
-    .where(eq(transmittalItemsTable.documentId, docId))
-    .orderBy(desc(transmittalsTable.createdAt));
-
   // Deduplicate by transmittal ID (a document may appear multiple times in one transmittal)
   const seenTx = new Set<number>();
   const transmittalEvents = txRows
@@ -941,16 +1007,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
     }));
 
   // 3 ── Submission Chains (via submission_chain_documents join) ─────────────
-  const chainRows = await db
-    .select({
-      chain: submissionChainsTable,
-      doc:   submissionChainDocumentsTable,
-    })
-    .from(submissionChainDocumentsTable)
-    .innerJoin(submissionChainsTable, eq(submissionChainDocumentsTable.chainId, submissionChainsTable.id))
-    .where(eq(submissionChainDocumentsTable.documentId, docId))
-    .orderBy(desc(submissionChainDocumentsTable.addedAt));
-
   // Deduplicate by chain ID
   const seenChain = new Set<number>();
   const chainEvents = chainRows
@@ -970,16 +1026,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
     }));
 
   // 4 ── Correspondence (via correspondence_documents join table) ───────────────
-  const corrRows = await db
-    .select({
-      corr: correspondenceTable,
-      link: correspondenceDocumentsTable,
-    })
-    .from(correspondenceDocumentsTable)
-    .innerJoin(correspondenceTable, eq(correspondenceDocumentsTable.correspondenceId, correspondenceTable.id))
-    .where(eq(correspondenceDocumentsTable.documentId, docId))
-    .orderBy(desc(correspondenceTable.createdAt));
-
   const seenCorr = new Set<number>();
   const correspondenceEvents = corrRows
     .filter(({ corr }) => { if (seenCorr.has(corr.id)) return false; seenCorr.add(corr.id); return true; })
@@ -1014,30 +1060,36 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
   // Tenant isolation: bind the document to the route projectId before returning
   // its review history, otherwise the bare-id lookup leaks another project's
   // workflow transitions (cross-project/tenant IDOR).
-  const [reviewDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!reviewDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // Tenant-isolation check + workflow instance/transition reads in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [reviewDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!reviewDoc) return { kind: "notfound" as const };
 
-  // Look up workflow instances for this document, then their transitions
-  const instances = await db.select({ id: wfInstancesTable.id })
-    .from(wfInstancesTable)
-    .where(eq(wfInstancesTable.documentId, id));
+    // Look up workflow instances for this document, then their transitions
+    const instances = await db.select({ id: wfInstancesTable.id })
+      .from(wfInstancesTable)
+      .where(eq(wfInstancesTable.documentId, id));
 
-  if (instances.length === 0) {
-    res.json({ history: [] }); return;
-  }
+    if (instances.length === 0) return { kind: "empty" as const };
 
-  const instanceIds = instances.map(i => i.id);
+    const instanceIds = instances.map(i => i.id);
 
-  const transitions = await db.select({
-    transition: wfInstanceTransitionsTable,
-    actor: usersTable,
-    toStage: wfTemplateStagesTable,
-  }).from(wfInstanceTransitionsTable)
-    .leftJoin(usersTable, eq(wfInstanceTransitionsTable.actorId, usersTable.id))
-    .leftJoin(wfTemplateStagesTable, eq(wfInstanceTransitionsTable.toStageId, wfTemplateStagesTable.id))
-    .where(inArray(wfInstanceTransitionsTable.instanceId, instanceIds))
-    .orderBy(desc(wfInstanceTransitionsTable.createdAt));
+    const transitions = await db.select({
+      transition: wfInstanceTransitionsTable,
+      actor: usersTable,
+      toStage: wfTemplateStagesTable,
+    }).from(wfInstanceTransitionsTable)
+      .leftJoin(usersTable, eq(wfInstanceTransitionsTable.actorId, usersTable.id))
+      .leftJoin(wfTemplateStagesTable, eq(wfInstanceTransitionsTable.toStageId, wfTemplateStagesTable.id))
+      .where(inArray(wfInstanceTransitionsTable.instanceId, instanceIds))
+      .orderBy(desc(wfInstanceTransitionsTable.createdAt));
+    return { kind: "ok" as const, transitions };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (loaded.kind === "empty") { res.json({ history: [] }); return; }
+  const { transitions } = loaded;
 
   res.json({
     history: transitions.map(({ transition, actor, toStage }) => ({
@@ -1374,18 +1426,24 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
 
-  // Verify document belongs to project
-  const [doc] = await db.select().from(documentsTable)
-    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+  // Verify document belongs to project + fetch files in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [doc] = await db.select().from(documentsTable)
+      .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+    if (!doc) return { kind: "notfound" as const };
 
-  const files = await db.select({
-    file: documentFilesTable,
-    uploader: usersTable,
-  }).from(documentFilesTable)
-    .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
-    // B2.3b-1: hide soft-deleted files from normal listings.
-    .where(and(eq(documentFilesTable.documentId, docId), isNull(documentFilesTable.deletedAt)));
+    const files = await db.select({
+      file: documentFilesTable,
+      uploader: usersTable,
+    }).from(documentFilesTable)
+      .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
+      // B2.3b-1: hide soft-deleted files from normal listings.
+      .where(and(eq(documentFilesTable.documentId, docId), isNull(documentFilesTable.deletedAt)));
+    return { kind: "ok" as const, files };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Document not found" }); return; }
+  const { files } = loaded;
 
   res.json({
     files: files.map(({ file, uploader }) => ({
@@ -1953,21 +2011,27 @@ router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, 
 
   // Tenant isolation: verify the document belongs to the route projectId before
   // listing its departments (bare-id lookup is a cross-project/tenant IDOR).
-  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // Tenant-isolation check + departments read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!deptDoc) return { kind: "notfound" as const };
 
-  const rows = await db
-    .select({
-      id:           departmentsTable.id,
-      code:         departmentsTable.code,
-      name:         departmentsTable.name,
-      assignedAt:   documentDepartmentsTable.assignedAt,
-    })
-    .from(documentDepartmentsTable)
-    .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
-    .where(eq(documentDepartmentsTable.documentId, id));
-  res.json(rows);
+    const rows = await db
+      .select({
+        id:           departmentsTable.id,
+        code:         departmentsTable.code,
+        name:         departmentsTable.name,
+        assignedAt:   documentDepartmentsTable.assignedAt,
+      })
+      .from(documentDepartmentsTable)
+      .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
+      .where(eq(documentDepartmentsTable.documentId, id));
+    return { kind: "ok" as const, rows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  res.json(loaded.rows);
 });
 
 // POST /api/projects/:projectId/documents/:id/departments  { departmentId }

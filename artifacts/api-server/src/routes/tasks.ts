@@ -8,7 +8,7 @@ import { sendTaskAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { emitToUser } from "../lib/socket.js";
 import { dispatchSkillEventBackground } from "../lib/skill-events.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 import { TenantIsolationError } from '../lib/errors.js';
@@ -78,46 +78,49 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
 
   // Build a scoped query using the direct organization_id column when available,
   // with a fallback to project membership for legacy rows (null organization_id).
-  let tasks;
-  if (!isSystemOwner(user) && user.organizationId) {
-    const orgId = user.organizationId;
+  // Scoped list read runs in a short read tx; JS filtering sits BETWEEN this and
+  // the enrichment read, so enrichTasks gets its own short read tx below.
+  let tasks = await tenantRead(async () => {
+    if (!isSystemOwner(user) && user.organizationId) {
+      const orgId = user.organizationId;
 
-    // Legacy rows have no organization_id — scope them via project membership
-    const orgProjects = await db.select({ id: projectsTable.id })
-      .from(projectsTable)
-      .where(eq(projectsTable.organizationId, orgId));
-    const orgProjectIds = orgProjects.map(p => p.id);
+      // Legacy rows have no organization_id — scope them via project membership
+      const orgProjects = await db.select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(eq(projectsTable.organizationId, orgId));
+      const orgProjectIds = orgProjects.map(p => p.id);
 
-    tasks = await db.select().from(tasksTable)
-      .where(
-        or(
-          // New rows: direct org column
-          eq(tasksTable.organizationId, orgId),
-          // Legacy rows: scoped by project
-          and(
-            isNull(tasksTable.organizationId),
-            orgProjectIds.length > 0
-              ? (await import("drizzle-orm")).inArray(tasksTable.projectId, orgProjectIds)
-              : eq(tasksTable.id, -1),
-          ),
-          // Tasks with no project and no org (personal tasks created by this user)
-          and(
-            isNull(tasksTable.organizationId),
-            isNull(tasksTable.projectId),
-            eq(tasksTable.createdById, user.id),
-          ),
+      return await db.select().from(tasksTable)
+        .where(
+          or(
+            // New rows: direct org column
+            eq(tasksTable.organizationId, orgId),
+            // Legacy rows: scoped by project
+            and(
+              isNull(tasksTable.organizationId),
+              orgProjectIds.length > 0
+                ? (await import("drizzle-orm")).inArray(tasksTable.projectId, orgProjectIds)
+                : eq(tasksTable.id, -1),
+            ),
+            // Tasks with no project and no org (personal tasks created by this user)
+            and(
+              isNull(tasksTable.organizationId),
+              isNull(tasksTable.projectId),
+              eq(tasksTable.createdById, user.id),
+            ),
+          )
         )
-      )
-      .orderBy(desc(tasksTable.updatedAt));
-  } else {
-    tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt));
-  }
+        .orderBy(desc(tasksTable.updatedAt));
+    } else {
+      return await db.select().from(tasksTable).orderBy(desc(tasksTable.updatedAt));
+    }
+  });
 
   if (projectId) tasks = tasks.filter(t => t.projectId === parseInt(projectId as string));
   if (status) tasks = tasks.filter(t => t.status === status);
   if (assignedToMe === "true") tasks = tasks.filter(t => t.assignedToId === user.id);
 
-  const enriched = await enrichTasks(tasks);
+  const enriched = await tenantRead(() => enrichTasks(tasks));
   res.json({ items: enriched, total: enriched.length });
 });
 
@@ -206,42 +209,49 @@ router.post("/", requireAuth, requireOrgScope, async (req, res, next): Promise<v
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
-  const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
-  if (!tasks[0]) { res.status(404).json({ error: "Not Found" }); return; }
 
-  // Tenant isolation: non-sysAdmin users can only access tasks within their org
-  if (!isSystemOwner(user) && user.organizationId) {
-    const task = tasks[0];
-    const belongsToOrg = task.organizationId === user.organizationId;
-    // Legacy tasks (no organizationId) — verify via project membership
-    if (!belongsToOrg) {
-      if (task.projectId) {
-        const { inArray: drizzleInArray } = await import("drizzle-orm");
-        const orgProjects = await db.select({ id: projectsTable.id })
-          .from(projectsTable)
-          .where(eq(projectsTable.organizationId, user.organizationId));
-        const orgProjectIds = orgProjects.map(p => p.id);
-        if (!orgProjectIds.includes(task.projectId)) {
+  // Task lookup + tenant-isolation checks + enrichment in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const tasks = await db.select().from(tasksTable).where(eq(tasksTable.id, id)).limit(1);
+    if (!tasks[0]) return { kind: "notfound" as const };
+
+    // Tenant isolation: non-sysAdmin users can only access tasks within their org
+    if (!isSystemOwner(user) && user.organizationId) {
+      const task = tasks[0];
+      const belongsToOrg = task.organizationId === user.organizationId;
+      // Legacy tasks (no organizationId) — verify via project membership
+      if (!belongsToOrg) {
+        if (task.projectId) {
+          const { inArray: drizzleInArray } = await import("drizzle-orm");
+          const orgProjects = await db.select({ id: projectsTable.id })
+            .from(projectsTable)
+            .where(eq(projectsTable.organizationId, user.organizationId));
+          const orgProjectIds = orgProjects.map(p => p.id);
+          if (!orgProjectIds.includes(task.projectId)) {
+            throw new TenantIsolationError({
+              route: req.path, method: req.method,
+              userId: user.id, userOrgId: user.organizationId,
+              attemptedResourceType: "task", attemptedResourceId: id,
+              taskProjectId: task.projectId,
+            });
+          }
+        } else if (task.createdById !== user.id && task.assignedToId !== user.id) {
           throw new TenantIsolationError({
             route: req.path, method: req.method,
             userId: user.id, userOrgId: user.organizationId,
             attemptedResourceType: "task", attemptedResourceId: id,
-            taskProjectId: task.projectId,
+            reason: "personal_task_not_owned",
           });
         }
-      } else if (task.createdById !== user.id && task.assignedToId !== user.id) {
-        throw new TenantIsolationError({
-          route: req.path, method: req.method,
-          userId: user.id, userOrgId: user.organizationId,
-          attemptedResourceType: "task", attemptedResourceId: id,
-          reason: "personal_task_not_owned",
-        });
       }
     }
-  }
 
-  const enriched = await enrichTasks(tasks);
-  res.json(enriched[0]);
+    const enriched = await enrichTasks(tasks);
+    return { kind: "ok" as const, task: enriched[0] };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  res.json(loaded.task);
 });
 
 router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, documentTypesTable, normalizeDocTypeCode } from "@workspace/db";
 import { eq, and, asc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { logger } from "../lib/logger.js";
 import { requireInt } from "../lib/params";
 
@@ -13,11 +13,14 @@ router.use(requireAuth);
 router.get("/", async (req, res): Promise<void> => {
   try {
     const orgId = req.user!.organizationId!;
-    const rows = await db
-      .select()
-      .from(documentTypesTable)
-      .where(eq(documentTypesTable.organizationId, orgId))
-      .orderBy(asc(documentTypesTable.name));
+    let rows: typeof documentTypesTable.$inferSelect[] | undefined;
+    await tenantRead(async () => {
+      rows = await db
+        .select()
+        .from(documentTypesTable)
+        .where(eq(documentTypesTable.organizationId, orgId))
+        .orderBy(asc(documentTypesTable.name));
+    });
 
     res.json(rows);
   } catch (err) {

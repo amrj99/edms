@@ -5,7 +5,7 @@ import { projectRoleOverridesTable, usersTable, projectMembersTable } from "@wor
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { assertProjectAccess } from "../lib/tenant-guards.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
@@ -16,43 +16,49 @@ const router = Router({ mergeParams: true });
 router.get("/role-overrides", requireAuth, requireMinRole("project_manager"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const caller = req.user!;
   const projectId = requireInt(req.params.projectId);
-  if (!(await assertProjectAccess(req, res, projectId))) return;
   const now = new Date();
 
-  const rows = await db
-    .select({
-      override: projectRoleOverridesTable,
-    })
-    .from(projectRoleOverridesTable)
-    .where(eq(projectRoleOverridesTable.projectId, projectId))
-    .orderBy(desc(projectRoleOverridesTable.grantedAt))
-    .limit(200);
+  const result = await tenantRead(async () => {
+    if (!(await assertProjectAccess(req, res, projectId))) return { kind: "denied" as const };
 
-  const enriched = await Promise.all(
-    rows.map(async (r) => {
-      const [user] = await db
-        .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })
-        .from(usersTable)
-        .where(eq(usersTable.id, r.override.userId))
-        .limit(1);
-      const [grantedBy] = await db
-        .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable)
-        .where(eq(usersTable.id, r.override.grantedByUserId))
-        .limit(1);
+    const rows = await db
+      .select({
+        override: projectRoleOverridesTable,
+      })
+      .from(projectRoleOverridesTable)
+      .where(eq(projectRoleOverridesTable.projectId, projectId))
+      .orderBy(desc(projectRoleOverridesTable.grantedAt))
+      .limit(200);
 
-      const isExpired = r.override.expiresAt < now;
-      return {
-        ...r.override,
-        user: user ?? null,
-        grantedBy: grantedBy ?? null,
-        isExpired,
-        isEffectivelyActive: r.override.isActive && !isExpired,
-      };
-    }),
-  );
+    const enriched = await Promise.all(
+      rows.map(async (r) => {
+        const [user] = await db
+          .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })
+          .from(usersTable)
+          .where(eq(usersTable.id, r.override.userId))
+          .limit(1);
+        const [grantedBy] = await db
+          .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable)
+          .where(eq(usersTable.id, r.override.grantedByUserId))
+          .limit(1);
 
-  res.json({ overrides: enriched });
+        const isExpired = r.override.expiresAt < now;
+        return {
+          ...r.override,
+          user: user ?? null,
+          grantedBy: grantedBy ?? null,
+          isExpired,
+          isEffectivelyActive: r.override.isActive && !isExpired,
+        };
+      }),
+    );
+
+    return { kind: "ok" as const, enriched };
+  });
+
+  if (result.kind === "denied") return;
+  res.json({ overrides: result.enriched });
 });
 
 // ─── Create project role override ─────────────────────────────────────────────

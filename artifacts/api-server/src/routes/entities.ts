@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { entitiesTable, contactsTable } from "@workspace/db";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { parseBody } from "../lib/validate.js";
 import { requireInt } from "../lib/params.js";
@@ -52,11 +52,14 @@ router.get("/", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   if (!orgId) { res.status(400).json({ error: "Organization required" }); return; }
 
-  const rows = await db
-    .select()
-    .from(entitiesTable)
-    .where(eq(entitiesTable.organizationId, orgId))
-    .orderBy(entitiesTable.name);
+  let rows: typeof entitiesTable.$inferSelect[] | undefined;
+  await tenantRead(async () => {
+    rows = await db
+      .select()
+      .from(entitiesTable)
+      .where(eq(entitiesTable.organizationId, orgId))
+      .orderBy(entitiesTable.name);
+  });
 
   res.json(rows);
 });
@@ -67,10 +70,13 @@ router.get("/:id", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const entityId = requireInt(req.params.id);
 
-  const [entity] = await db
-    .select()
-    .from(entitiesTable)
-    .where(and(eq(entitiesTable.id, entityId), eq(entitiesTable.organizationId, orgId!)));
+  let entity: typeof entitiesTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    [entity] = await db
+      .select()
+      .from(entitiesTable)
+      .where(and(eq(entitiesTable.id, entityId), eq(entitiesTable.organizationId, orgId!)));
+  });
 
   if (!entity) { res.status(404).json({ error: "Entity not found" }); return; }
   res.json(entity);
@@ -180,18 +186,24 @@ router.get("/:id/contacts", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const entityId = requireInt(req.params.id);
 
-  const [entity] = await db
-    .select({ id: entitiesTable.id })
-    .from(entitiesTable)
-    .where(and(eq(entitiesTable.id, entityId), eq(entitiesTable.organizationId, orgId!)));
+  let entity: { id: number } | undefined;
+  let contacts: typeof contactsTable.$inferSelect[] | undefined;
+  await tenantRead(async () => {
+    [entity] = await db
+      .select({ id: entitiesTable.id })
+      .from(entitiesTable)
+      .where(and(eq(entitiesTable.id, entityId), eq(entitiesTable.organizationId, orgId!)));
+
+    if (!entity) return;
+
+    contacts = await db
+      .select()
+      .from(contactsTable)
+      .where(eq(contactsTable.entityId, entityId))
+      .orderBy(contactsTable.name);
+  });
 
   if (!entity) { res.status(404).json({ error: "Entity not found" }); return; }
-
-  const contacts = await db
-    .select()
-    .from(contactsTable)
-    .where(eq(contactsTable.entityId, entityId))
-    .orderBy(contactsTable.name);
 
   res.json(contacts);
 });

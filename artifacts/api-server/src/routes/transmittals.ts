@@ -18,7 +18,7 @@ import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams}
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { requireProjectAccess, denyPartyDestructive, requireProjectAccessContext } from "../middlewares/project-access.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { recipientOrganizationId } from "../lib/transmittal-recipient.js";
 
@@ -65,7 +65,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
 
-  const transmittals = await db
+  const transmittals = await tenantRead(() => db
     .select({
       id: transmittalsTable.id,
       transmittalNumber: transmittalsTable.transmittalNumber,
@@ -107,7 +107,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
     .from(transmittalsTable)
     .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
     .where(transmittalPartyFilter(caller, projectId))
-    .orderBy(desc(transmittalsTable.createdAt));
+    .orderBy(desc(transmittalsTable.createdAt)));
   res.json(transmittals);
 });
 
@@ -126,51 +126,59 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
 
-  const [transmittal] = await db
-    .select()
-    .from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), transmittalPartyFilter(caller, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
-
-  const items = await db
-    .select({
-      id: transmittalItemsTable.id,
-      documentId: transmittalItemsTable.documentId,
-      revision: transmittalItemsTable.revision,
-      copies: transmittalItemsTable.copies,
-      purpose: transmittalItemsTable.purpose,
-      reviewCode: transmittalItemsTable.reviewCode,
-      documentNumber: documentsTable.documentNumber,
-      documentTitle: documentsTable.title,
-      documentType: documentsTable.documentType,
-      discipline: documentsTable.discipline,
-      documentStatus: documentsTable.status,
-    })
-    .from(transmittalItemsTable)
-    .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
-    .where(eq(transmittalItemsTable.transmittalId, id));
-
-  // Linked transmittal numbers
-  let sourceTransmittalNumber: string | null = null;
-  let responseTransmittalNumber: string | null = null;
-  let responseTransmittalId: number | null = null;
-
-  if (transmittal.responseToTransmittalId) {
-    const [src] = await db
-      .select({ transmittalNumber: transmittalsTable.transmittalNumber })
+  // Transmittal + items + linked-number lookups in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db
+      .select()
       .from(transmittalsTable)
-      .where(eq(transmittalsTable.id, transmittal.responseToTransmittalId));
-    sourceTransmittalNumber = src?.transmittalNumber ?? null;
-  }
+      .where(and(eq(transmittalsTable.id, id), transmittalPartyFilter(caller, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
 
-  const [resp] = await db
-    .select({ transmittalNumber: transmittalsTable.transmittalNumber, id: transmittalsTable.id })
-    .from(transmittalsTable)
-    .where(eq(transmittalsTable.responseToTransmittalId, id));
-  if (resp) {
-    responseTransmittalNumber = resp.transmittalNumber;
-    responseTransmittalId = resp.id;
-  }
+    const items = await db
+      .select({
+        id: transmittalItemsTable.id,
+        documentId: transmittalItemsTable.documentId,
+        revision: transmittalItemsTable.revision,
+        copies: transmittalItemsTable.copies,
+        purpose: transmittalItemsTable.purpose,
+        reviewCode: transmittalItemsTable.reviewCode,
+        documentNumber: documentsTable.documentNumber,
+        documentTitle: documentsTable.title,
+        documentType: documentsTable.documentType,
+        discipline: documentsTable.discipline,
+        documentStatus: documentsTable.status,
+      })
+      .from(transmittalItemsTable)
+      .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
+      .where(eq(transmittalItemsTable.transmittalId, id));
+
+    // Linked transmittal numbers
+    let sourceTransmittalNumber: string | null = null;
+    let responseTransmittalNumber: string | null = null;
+    let responseTransmittalId: number | null = null;
+
+    if (transmittal.responseToTransmittalId) {
+      const [src] = await db
+        .select({ transmittalNumber: transmittalsTable.transmittalNumber })
+        .from(transmittalsTable)
+        .where(eq(transmittalsTable.id, transmittal.responseToTransmittalId));
+      sourceTransmittalNumber = src?.transmittalNumber ?? null;
+    }
+
+    const [resp] = await db
+      .select({ transmittalNumber: transmittalsTable.transmittalNumber, id: transmittalsTable.id })
+      .from(transmittalsTable)
+      .where(eq(transmittalsTable.responseToTransmittalId, id));
+    if (resp) {
+      responseTransmittalNumber = resp.transmittalNumber;
+      responseTransmittalId = resp.id;
+    }
+
+    return { kind: "ok" as const, transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  const { transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId } = loaded;
 
   res.json({ ...transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId });
 });
@@ -708,14 +716,20 @@ router.get("/:id/history", async (req: Request<ProjectItemParams>, res): Promise
   // Tenant isolation: bind the transmittal to the route projectId before
   // returning its history. The router-wide gate validates :projectId against the
   // caller's org, but a bare-id lookup would leak another project's history.
-  const [transmittal] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+  // Tenant-isolation check + history read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
 
-  const rows = await db.select().from(transmittalHistoryTable)
-    .where(eq(transmittalHistoryTable.transmittalId, id))
-    .orderBy(desc(transmittalHistoryTable.createdAt));
-  res.json({ history: rows });
+    const rows = await db.select().from(transmittalHistoryTable)
+      .where(eq(transmittalHistoryTable.transmittalId, id))
+      .orderBy(desc(transmittalHistoryTable.createdAt));
+    return { kind: "ok" as const, rows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ history: loaded.rows });
 });
 
 // ─── AI-assisted suggest-links ────────────────────────────────────────────────
@@ -747,29 +761,50 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
   // Tenant isolation: bind the transmittal to the route projectId. A bare-id
   // lookup would let a caller build suggest-links against another project's
   // transmittal (cross-project/tenant IDOR).
-  const [transmittal] = await db.select().from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+  // ALL DB reads (transmittal check + linked items + candidate document/
+  // correspondence sets) run in ONE short read tx; the Jaccard/lexical scoring
+  // compute happens OUTSIDE the tx below.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db.select().from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
+
+    // Already-linked document IDs (exclude from suggestions)
+    const linkedItems = await db.select({ documentId: transmittalItemsTable.documentId })
+      .from(transmittalItemsTable)
+      .where(eq(transmittalItemsTable.transmittalId, transmittalId));
+
+    // Candidate documents
+    const docs = await db.select({
+      id: documentsTable.id,
+      documentNumber: documentsTable.documentNumber,
+      title: documentsTable.title,
+      description: documentsTable.description,
+      status: documentsTable.status,
+      revision: documentsTable.revision,
+      documentType: documentsTable.documentType,
+    }).from(documentsTable).where(eq(documentsTable.projectId, projectId));
+
+    // Candidate correspondence
+    const corrRows = await db.select({
+      id: correspondenceTable.id,
+      referenceNumber: correspondenceTable.referenceNumber,
+      subject: correspondenceTable.subject,
+      status: correspondenceTable.status,
+      createdAt: correspondenceTable.createdAt,
+      direction: correspondenceTable.direction,
+    }).from(correspondenceTable).where(eq(correspondenceTable.projectId, projectId));
+
+    return { kind: "ok" as const, transmittal, linkedItems, docs, corrRows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  const { transmittal, linkedItems, docs, corrRows } = loaded;
 
   const queryText = `${transmittal.subject ?? ""} ${transmittal.description ?? ""}`;
   const queryTokens = tokenize(queryText);
 
-  // Already-linked document IDs (exclude from suggestions)
-  const linkedItems = await db.select({ documentId: transmittalItemsTable.documentId })
-    .from(transmittalItemsTable)
-    .where(eq(transmittalItemsTable.transmittalId, transmittalId));
   const linkedDocIds = new Set(linkedItems.map(i => i.documentId));
-
-  // Candidate documents
-  const docs = await db.select({
-    id: documentsTable.id,
-    documentNumber: documentsTable.documentNumber,
-    title: documentsTable.title,
-    description: documentsTable.description,
-    status: documentsTable.status,
-    revision: documentsTable.revision,
-    documentType: documentsTable.documentType,
-  }).from(documentsTable).where(eq(documentsTable.projectId, projectId));
 
   const docSuggestions = docs
     .filter(d => !linkedDocIds.has(d.id))
@@ -782,15 +817,6 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
     .slice(0, 8);
 
   // Candidate correspondence
-  const corrRows = await db.select({
-    id: correspondenceTable.id,
-    referenceNumber: correspondenceTable.referenceNumber,
-    subject: correspondenceTable.subject,
-    status: correspondenceTable.status,
-    createdAt: correspondenceTable.createdAt,
-    direction: correspondenceTable.direction,
-  }).from(correspondenceTable).where(eq(correspondenceTable.projectId, projectId));
-
   const corrSuggestions = corrRows
     .map(c => ({
       ...c,

@@ -5,7 +5,7 @@ import { eq, and } from "drizzle-orm";
 import { projectDepartmentsTable, departmentsTable, projectsTable } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
 import { isSysAdmin } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { assertProjectAccess } from "../lib/tenant-guards.js";
 import {param, paramInt, requireInt, type ProjectParams} from '../lib/params';
 
@@ -19,31 +19,37 @@ router.get("/departments", requireAuth, async (req: Request<ProjectParams>, res)
   const projectId = requireInt(req.params.projectId);
   const caller = (req as any).user;
 
-  if (!(await assertProjectAccess(req, res, projectId, { notFoundOnDeny: true }))) return;
+  const result = await tenantRead(async () => {
+    if (!(await assertProjectAccess(req, res, projectId, { notFoundOnDeny: true }))) return { kind: "denied" as const };
 
-  const [project] = await db
-    .select({ organizationId: projectsTable.organizationId })
-    .from(projectsTable)
-    .where(eq(projectsTable.id, projectId))
-    .limit(1);
+    const [project] = await db
+      .select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, projectId))
+      .limit(1);
 
-  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (!project) return { kind: "notfound" as const };
 
-  const orgId = isSysAdmin(caller) ? project.organizationId : (caller.organizationId ?? null);
+    const orgId = isSysAdmin(caller) ? project.organizationId : (caller.organizationId ?? null);
 
-  const assigned = await db
-    .select({
-      id:           departmentsTable.id,
-      code:         departmentsTable.code,
-      name:         departmentsTable.name,
-      description:  departmentsTable.description,
-      assignedAt:   projectDepartmentsTable.assignedAt,
-    })
-    .from(projectDepartmentsTable)
-    .innerJoin(departmentsTable, eq(departmentsTable.id, projectDepartmentsTable.departmentId))
-    .where(eq(projectDepartmentsTable.projectId, projectId));
+    const assigned = await db
+      .select({
+        id:           departmentsTable.id,
+        code:         departmentsTable.code,
+        name:         departmentsTable.name,
+        description:  departmentsTable.description,
+        assignedAt:   projectDepartmentsTable.assignedAt,
+      })
+      .from(projectDepartmentsTable)
+      .innerJoin(departmentsTable, eq(departmentsTable.id, projectDepartmentsTable.departmentId))
+      .where(eq(projectDepartmentsTable.projectId, projectId));
 
-  res.json(assigned);
+    return { kind: "ok" as const, assigned };
+  });
+
+  if (result.kind === "denied") return; // assertProjectAccess already wrote the response
+  if (result.kind === "notfound") { res.status(404).json({ error: "Project not found" }); return; }
+  res.json(result.assigned);
 });
 
 // POST /api/projects/:projectId/departments  { departmentId }

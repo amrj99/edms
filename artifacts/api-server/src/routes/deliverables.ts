@@ -30,17 +30,23 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
 
 router.get("/deliverables", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const rows = await db.select({
-    d: deliverablesTable,
-    doc: { documentNumber: documentsTable.documentNumber, title: documentsTable.title },
-  })
-    .from(deliverablesTable)
-    .leftJoin(documentsTable, eq(deliverablesTable.linkedDocumentId, documentsTable.id))
-    .where(eq(deliverablesTable.projectId, projectId))
-    .orderBy(desc(deliverablesTable.createdAt));
+  let ok = false;
+  let rows: { d: typeof deliverablesTable.$inferSelect; doc: { documentNumber: string; title: string } | null }[] | undefined;
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    rows = await db.select({
+      d: deliverablesTable,
+      doc: { documentNumber: documentsTable.documentNumber, title: documentsTable.title },
+    })
+      .from(deliverablesTable)
+      .leftJoin(documentsTable, eq(deliverablesTable.linkedDocumentId, documentsTable.id))
+      .where(eq(deliverablesTable.projectId, projectId))
+      .orderBy(desc(deliverablesTable.createdAt));
+  });
+  if (!ok) return;
   res.json({
-    deliverables: rows.map(r => ({
+    deliverables: rows!.map(r => ({
       ...r.d,
       linkedDocumentNumber: r.doc?.documentNumber,
       linkedDocumentTitle: r.doc?.title,
@@ -50,9 +56,15 @@ router.get("/deliverables", requireAuth, async (req: Request<ProjectParams>, res
 
 router.get("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const [row] = await db.select().from(deliverablesTable)
-    .where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  let ok = false;
+  let row: typeof deliverablesTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    [row] = await db.select().from(deliverablesTable)
+      .where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  });
+  if (!ok) return;
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });

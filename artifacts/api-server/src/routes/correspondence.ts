@@ -582,15 +582,16 @@ router.get("/assigned-to-me", requireAuth, async (req: Request<ProjectParams>, r
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
-  const items = await db.select().from(correspondenceTable)
-    .where(and(
-      eq(correspondenceTable.organizationId, orgId!),
-      eq(correspondenceTable.assignedToId, userId),
-      sql`${correspondenceTable.status} NOT IN ('closed')`,
-    ))
-    .orderBy(asc(correspondenceTable.dueDate), desc(correspondenceTable.updatedAt));
-
-  const enriched = await enrichCorrespondence(items);
+  const enriched = await tenantRead(async () => {
+    const items = await db.select().from(correspondenceTable)
+      .where(and(
+        eq(correspondenceTable.organizationId, orgId!),
+        eq(correspondenceTable.assignedToId, userId),
+        sql`${correspondenceTable.status} NOT IN ('closed')`,
+      ))
+      .orderBy(asc(correspondenceTable.dueDate), desc(correspondenceTable.updatedAt));
+    return enrichCorrespondence(items);
+  });
   res.json({ items: enriched, total: enriched.length });
 });
 
@@ -601,13 +602,14 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   const userId = caller.id;
   const orgId = caller.organizationId;
 
+  const out = await tenantRead(async (): Promise<{ status: number; body: unknown }> => {
   // Party-scoped project access: same-org users always allowed; cross-org users
   // must be explicit project members. Cross-org members get mail-model only (no viewAll).
   let isCrossOrgMember = false;
   if (projectId !== null && !isSystemOwner(caller)) {
     const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
       .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
+    if (!projCheck) { return { status: 404, body: { error: "Not Found" } }; }
     if (projCheck.organizationId !== orgId) {
       // Cross-org caller: must be an explicit project member
       const [membership] = await db.select({ userId: projectMembersTable.userId })
@@ -615,8 +617,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
         .where(and(eq(projectMembersTable.projectId, projectId), eq(projectMembersTable.userId, caller.id)))
         .limit(1);
       if (!membership) {
-        res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-        return;
+        return { status: 403, body: { error: "Forbidden", message: "You are not a member of this project" } };
       }
       isCrossOrgMember = true;
     }
@@ -667,13 +668,12 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
       .where(extraConds.length > 0 ? and(baseFilter, ...extraConds) : baseFilter)
       .orderBy(desc(correspondenceTable.updatedAt));
     const enriched = await enrichCorrespondence(allItems);
-    res.json({
+    return { status: 200, body: {
       items: enriched,
       total: enriched.length,
       viewAll: true,
       viewAllReason: isAdminLevel ? "admin_authority" : "pm_dc_opt_in",
-    });
-    return;
+    } };
   }
 
   // Default mail-model: only show correspondence where caller is sender, To, or CC
@@ -715,7 +715,9 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   allItems = allItems.filter(item => { if (seen.has(item.id)) return false; seen.add(item.id); return true; });
 
   const enriched = await enrichCorrespondence(allItems);
-  res.json({ items: enriched, total: enriched.length, viewAll: false });
+  return { status: 200, body: { items: enriched, total: enriched.length, viewAll: false } };
+  });
+  res.status(out.status).json(out.body);
 });
 
 router.post("/", requireAuth, parseBody(createCorrespondenceSchema), async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -733,43 +735,48 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
     ? and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId))
     : and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId));
 
-  const items = await db.select().from(correspondenceTable).where(filter).limit(1);
-  if (!items[0]) { res.status(404).json({ error: "Not Found" }); return; }
+  // Class B read: this GET conditionally marks the item read (a WRITE), so it runs
+  // in a short write unit-of-work. Access-check reads + mark-read + enrich share one tx.
+  const out = await withTenant(async (): Promise<{ status: number; body: unknown }> => {
+    const items = await db.select().from(correspondenceTable).where(filter).limit(1);
+    if (!items[0]) return { status: 404, body: { error: "Not Found" } };
 
-  // Access check: caller must be sender, To, CC, or same-org PM/DC with view-all capability.
-  // Cross-org items require explicit naming in To or CC even for admin-level roles.
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
-  const isSender = items[0].fromUserId === userId;
-  const isCrossOrgItem = items[0].organizationId !== null
-    && items[0].organizationId !== caller.organizationId
-    && !isSystemOwner(caller);
-  if (!isSender && (!CorrespondencePermissions.hasViewAllCapability(effectiveRole) || isCrossOrgItem)) {
-    const [toRow] = await db.select({ corrId: correspondenceRecipientsTable.correspondenceId })
-      .from(correspondenceRecipientsTable)
-      .where(and(eq(correspondenceRecipientsTable.correspondenceId, id), eq(correspondenceRecipientsTable.userId, userId)))
-      .limit(1);
-    const [ccRow] = await db.select({ corrId: correspondenceCcTable.correspondenceId })
-      .from(correspondenceCcTable)
-      .where(and(eq(correspondenceCcTable.correspondenceId, id), eq(correspondenceCcTable.userId, userId)))
-      .limit(1);
-    if (!toRow && !ccRow) { res.status(403).json({ error: "Forbidden", message: "You do not have access to this correspondence" }); return; }
-  }
+    // Access check: caller must be sender, To, CC, or same-org PM/DC with view-all capability.
+    // Cross-org items require explicit naming in To or CC even for admin-level roles.
+    const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId ?? undefined);
+    const isSender = items[0].fromUserId === userId;
+    const isCrossOrgItem = items[0].organizationId !== null
+      && items[0].organizationId !== caller.organizationId
+      && !isSystemOwner(caller);
+    if (!isSender && (!CorrespondencePermissions.hasViewAllCapability(effectiveRole) || isCrossOrgItem)) {
+      const [toRow] = await db.select({ corrId: correspondenceRecipientsTable.correspondenceId })
+        .from(correspondenceRecipientsTable)
+        .where(and(eq(correspondenceRecipientsTable.correspondenceId, id), eq(correspondenceRecipientsTable.userId, userId)))
+        .limit(1);
+      const [ccRow] = await db.select({ corrId: correspondenceCcTable.correspondenceId })
+        .from(correspondenceCcTable)
+        .where(and(eq(correspondenceCcTable.correspondenceId, id), eq(correspondenceCcTable.userId, userId)))
+        .limit(1);
+      if (!toRow && !ccRow) return { status: 403, body: { error: "Forbidden", message: "You do not have access to this correspondence" } };
+    }
 
-  if (!items[0].isRead && items[0].fromUserId !== userId) {
-    const now = new Date();
-    await db.update(correspondenceTable)
-      .set({
-        isRead: true,
-        firstReadAt: items[0].firstReadAt ?? now,
-        updatedAt: now,
-      })
-      .where(eq(correspondenceTable.id, id));
-    items[0].isRead = true;
-    if (!items[0].firstReadAt) items[0].firstReadAt = now;
-  }
+    if (!items[0].isRead && items[0].fromUserId !== userId) {
+      const now = new Date();
+      await db.update(correspondenceTable)
+        .set({
+          isRead: true,
+          firstReadAt: items[0].firstReadAt ?? now,
+          updatedAt: now,
+        })
+        .where(eq(correspondenceTable.id, id));
+      items[0].isRead = true;
+      if (!items[0].firstReadAt) items[0].firstReadAt = now;
+    }
 
-  const enriched = await enrichCorrespondence(items);
-  res.json(enriched[0]);
+    const enriched = await enrichCorrespondence(items);
+    return { status: 200, body: enriched[0] };
+  });
+  res.status(out.status).json(out.body);
 });
 
 // ─── Recall ───────────────────────────────────────────────────────────────────

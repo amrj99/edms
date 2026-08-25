@@ -4,7 +4,7 @@ import { metadataFieldsTable, documentTypesTable, normalizeDocTypeCode } from "@
 import type { MetadataField } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, ne } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { requireInt } from "../lib/params";
 import { logger } from "../lib/logger.js";
@@ -151,34 +151,42 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
       res.status(400).json({ error: "Bad Request", message: "documentTypeId requires an organization context" });
       return;
     }
-    const [docType] = await db
-      .select()
-      .from(documentTypesTable)
-      .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
+    let docType: typeof documentTypesTable.$inferSelect | undefined;
+    let fields: MetadataField[] | undefined;
+    await tenantRead(async () => {
+      [docType] = await db
+        .select()
+        .from(documentTypesTable)
+        .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
+      if (!docType) return;
+      fields = await resolveMetadataFields(orgId, documentTypeId);
+    });
     if (!docType) {
       res.status(400).json({ error: "Bad Request", message: "documentTypeId does not exist for this organization" });
       return;
     }
-    const fields = await resolveMetadataFields(orgId, documentTypeId);
     res.json({ fields });
     return;
   }
 
-  const fields = await db
-    .select()
-    .from(metadataFieldsTable)
-    .where(
-      and(
-        eq(metadataFieldsTable.isActive, true),
-        orgId
-          ? or(
-              eq(metadataFieldsTable.organizationId, orgId),
-              isNull(metadataFieldsTable.organizationId),
-            )
-          : isNull(metadataFieldsTable.organizationId),
-      ),
-    )
-    .orderBy(metadataFieldsTable.name);
+  let fields: MetadataField[] | undefined;
+  await tenantRead(async () => {
+    fields = await db
+      .select()
+      .from(metadataFieldsTable)
+      .where(
+        and(
+          eq(metadataFieldsTable.isActive, true),
+          orgId
+            ? or(
+                eq(metadataFieldsTable.organizationId, orgId),
+                isNull(metadataFieldsTable.organizationId),
+              )
+            : isNull(metadataFieldsTable.organizationId),
+        ),
+      )
+      .orderBy(metadataFieldsTable.name);
+  });
   res.json({ fields });
 });
 

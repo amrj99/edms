@@ -6,6 +6,7 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, or, inArray } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
+import { tenantRead } from "../middlewares/tenant-scope.js";
 
 const router = Router();
 
@@ -20,84 +21,89 @@ router.get("/events", requireAuth, async (req, res): Promise<void> => {
   const userId = user.id;
 
   try {
-    // Tenant isolation: scope meetings to user's org via project membership
-    let orgMeetingFilter;
-    if (!isSystemOwner(user) && user.organizationId) {
-      const orgProjects = await db
-        .select({ id: projectsTable.id })
-        .from(projectsTable)
-        .where(eq(projectsTable.organizationId, user.organizationId));
-      const orgProjectIds = orgProjects.map(p => p.id);
-      orgMeetingFilter = orgProjectIds.length > 0
-        ? or(
-            inArray(meetingsTable.projectId, orgProjectIds),
-            eq(meetingsTable.organizationId, user.organizationId),
-          )
-        : eq(meetingsTable.organizationId, user.organizationId);
-    }
+    // All DB reads for the calendar view run inside ONE short tenant read tx.
+    const { meetings, tasks, actionItems, projectMap } = await tenantRead(async () => {
+      // Tenant isolation: scope meetings to user's org via project membership
+      let orgMeetingFilter;
+      if (!isSystemOwner(user) && user.organizationId) {
+        const orgProjects = await db
+          .select({ id: projectsTable.id })
+          .from(projectsTable)
+          .where(eq(projectsTable.organizationId, user.organizationId));
+        const orgProjectIds = orgProjects.map(p => p.id);
+        orgMeetingFilter = orgProjectIds.length > 0
+          ? or(
+              inArray(meetingsTable.projectId, orgProjectIds),
+              eq(meetingsTable.organizationId, user.organizationId),
+            )
+          : eq(meetingsTable.organizationId, user.organizationId);
+      }
 
-    const [meetings, tasks, actionItems] = await Promise.all([
-      db.select({
-        id: meetingsTable.id,
-        title: meetingsTable.title,
-        meetingDate: meetingsTable.meetingDate,
-        duration: meetingsTable.duration,
-        status: meetingsTable.status,
-        location: meetingsTable.location,
-        projectId: meetingsTable.projectId,
-      })
-        .from(meetingsTable)
-        .where(and(
-          gte(meetingsTable.meetingDate, startDate),
-          lte(meetingsTable.meetingDate, endDate),
-          orgMeetingFilter,
-        )),
+      const [meetings, tasks, actionItems] = await Promise.all([
+        db.select({
+          id: meetingsTable.id,
+          title: meetingsTable.title,
+          meetingDate: meetingsTable.meetingDate,
+          duration: meetingsTable.duration,
+          status: meetingsTable.status,
+          location: meetingsTable.location,
+          projectId: meetingsTable.projectId,
+        })
+          .from(meetingsTable)
+          .where(and(
+            gte(meetingsTable.meetingDate, startDate),
+            lte(meetingsTable.meetingDate, endDate),
+            orgMeetingFilter,
+          )),
 
-      db.select({
-        id: tasksTable.id,
-        title: tasksTable.title,
-        dueDate: tasksTable.dueDate,
-        status: tasksTable.status,
-        priority: tasksTable.priority,
-        projectId: tasksTable.projectId,
-        assignedToId: tasksTable.assignedToId,
-      })
-        .from(tasksTable)
-        .where(and(
-          gte(tasksTable.dueDate, startDate),
-          lte(tasksTable.dueDate, endDate),
-          eq(tasksTable.assignedToId, userId),
-        )),
+        db.select({
+          id: tasksTable.id,
+          title: tasksTable.title,
+          dueDate: tasksTable.dueDate,
+          status: tasksTable.status,
+          priority: tasksTable.priority,
+          projectId: tasksTable.projectId,
+          assignedToId: tasksTable.assignedToId,
+        })
+          .from(tasksTable)
+          .where(and(
+            gte(tasksTable.dueDate, startDate),
+            lte(tasksTable.dueDate, endDate),
+            eq(tasksTable.assignedToId, userId),
+          )),
 
-      db.select({
-        id: meetingActionItemsTable.id,
-        title: meetingActionItemsTable.title,
-        dueDate: meetingActionItemsTable.dueDate,
-        status: meetingActionItemsTable.status,
-        assignedToId: meetingActionItemsTable.assignedToId,
-        meetingId: meetingActionItemsTable.meetingId,
-      })
-        .from(meetingActionItemsTable)
-        .where(and(
-          gte(meetingActionItemsTable.dueDate, startDate),
-          lte(meetingActionItemsTable.dueDate, endDate),
-          eq(meetingActionItemsTable.assignedToId, userId),
-        )),
-    ]);
+        db.select({
+          id: meetingActionItemsTable.id,
+          title: meetingActionItemsTable.title,
+          dueDate: meetingActionItemsTable.dueDate,
+          status: meetingActionItemsTable.status,
+          assignedToId: meetingActionItemsTable.assignedToId,
+          meetingId: meetingActionItemsTable.meetingId,
+        })
+          .from(meetingActionItemsTable)
+          .where(and(
+            gte(meetingActionItemsTable.dueDate, startDate),
+            lte(meetingActionItemsTable.dueDate, endDate),
+            eq(meetingActionItemsTable.assignedToId, userId),
+          )),
+      ]);
 
-    const projectIds = [
-      ...new Set([
-        ...meetings.map(m => m.projectId),
-        ...tasks.map(t => t.projectId),
-      ].filter(Boolean) as number[]),
-    ];
+      const projectIds = [
+        ...new Set([
+          ...meetings.map(m => m.projectId),
+          ...tasks.map(t => t.projectId),
+        ].filter(Boolean) as number[]),
+      ];
 
-    let projectMap: Record<number, string> = {};
-    if (projectIds.length) {
-      const ps = await db.select({ id: projectsTable.id, name: projectsTable.name, code: projectsTable.code })
-        .from(projectsTable);
-      projectMap = Object.fromEntries(ps.map(p => [p.id, `${p.code} – ${p.name}`]));
-    }
+      let projectMap: Record<number, string> = {};
+      if (projectIds.length) {
+        const ps = await db.select({ id: projectsTable.id, name: projectsTable.name, code: projectsTable.code })
+          .from(projectsTable);
+        projectMap = Object.fromEntries(ps.map(p => [p.id, `${p.code} – ${p.name}`]));
+      }
+
+      return { meetings, tasks, actionItems, projectMap };
+    });
 
     const events = [
       ...meetings.map(m => ({

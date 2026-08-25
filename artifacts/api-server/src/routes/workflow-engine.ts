@@ -30,7 +30,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, asc, inArray, or } from "drizzle-orm";
 import { requireAuth, requireRole, type AuthUser } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
 import { sendWorkflowStageEmail } from "../lib/email.js";
@@ -337,20 +337,22 @@ async function dispatchStageEmail(bundle: StageEmailBundle | null): Promise<void
 
 router.get("/templates", async (req, res): Promise<void> => {
   const org = orgId(req);
-  const templates = await db.select().from(wfTemplatesTable)
-    .where(eq(wfTemplatesTable.organizationId, org))
-    .orderBy(desc(wfTemplatesTable.updatedAt));
-  const enriched = await Promise.all(templates.map(async t => {
-    const stages = await db.select().from(wfTemplateStagesTable)
-      .where(eq(wfTemplateStagesTable.templateId, t.id))
-      .orderBy(asc(wfTemplateStagesTable.stageOrder));
-    return { ...t, stages };
-  }));
+  const enriched = await tenantRead(async () => {
+    const templates = await db.select().from(wfTemplatesTable)
+      .where(eq(wfTemplatesTable.organizationId, org))
+      .orderBy(desc(wfTemplatesTable.updatedAt));
+    return await Promise.all(templates.map(async t => {
+      const stages = await db.select().from(wfTemplateStagesTable)
+        .where(eq(wfTemplateStagesTable.templateId, t.id))
+        .orderBy(asc(wfTemplateStagesTable.stageOrder));
+      return { ...t, stages };
+    }));
+  });
   res.json({ templates: enriched });
 });
 
 router.get("/templates/:id", async (req, res): Promise<void> => {
-  const tpl = await getTemplateWithStages(requireInt(req.params.id), orgId(req));
+  const tpl = await tenantRead(() => getTemplateWithStages(requireInt(req.params.id), orgId(req)));
   if (!tpl) { res.status(404).json({ error: "Not found" }); return; }
   res.json(tpl);
 });
@@ -664,17 +666,19 @@ router.get("/instances", async (req, res): Promise<void> => {
   const org = orgId(req);
   const { docType, status, projectId, stageId } = req.query;
 
-  let instances = await db.select().from(wfInstancesTable)
-    .where(eq(wfInstancesTable.organizationId, org))
-    .orderBy(desc(wfInstancesTable.updatedAt));
+  const enriched = await tenantRead(async () => {
+    let instances = await db.select().from(wfInstancesTable)
+      .where(eq(wfInstancesTable.organizationId, org))
+      .orderBy(desc(wfInstancesTable.updatedAt));
 
-  // In-memory filters (docType requires join — filter after enrich)
-  if (status) instances = instances.filter(i => i.status === status);
-  if (projectId) instances = instances.filter(i => i.projectId === parseInt(projectId as string));
-  if (stageId) instances = instances.filter(i => i.currentStageId === parseInt(stageId as string));
+    // In-memory filters (docType requires join — filter after enrich)
+    if (status) instances = instances.filter(i => i.status === status);
+    if (projectId) instances = instances.filter(i => i.projectId === parseInt(projectId as string));
+    if (stageId) instances = instances.filter(i => i.currentStageId === parseInt(stageId as string));
 
-  const roleCache = new Map<number | null, string>();
-  const enriched = await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
+    const roleCache = new Map<number | null, string>();
+    return await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
+  });
 
   // docType filter (applied after enrichment)
   const filtered = docType ? enriched.filter(i => i.documentType === docType) : enriched;
@@ -685,11 +689,15 @@ router.get("/instances", async (req, res): Promise<void> => {
 router.get("/instances/:id", async (req, res): Promise<void> => {
   const org = orgId(req);
   const id = requireInt(req.params.id);
-  const [inst] = await db.select().from(wfInstancesTable)
-    .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org)))
-    .limit(1);
-  if (!inst) { res.status(404).json({ error: "Not found" }); return; }
-  res.json(await enrichInstance(inst, req.user!, new Map()));
+  const outcome = await tenantRead(async () => {
+    const [inst] = await db.select().from(wfInstancesTable)
+      .where(and(eq(wfInstancesTable.id, id), eq(wfInstancesTable.organizationId, org)))
+      .limit(1);
+    if (!inst) return { kind: "notFound" as const };
+    return { kind: "ok" as const, enriched: await enrichInstance(inst, req.user!, new Map()) };
+  });
+  if (outcome.kind === "notFound") { res.status(404).json({ error: "Not found" }); return; }
+  res.json(outcome.enriched);
 });
 
 router.post("/instances", async (req, res): Promise<void> => {
@@ -1063,16 +1071,18 @@ router.post("/templates/:id/duplicate", requireRole("admin", "project_manager", 
 router.get("/templates/for-type/:docType", async (req, res): Promise<void> => {
   const org = orgId(req);
   const { docType } = req.params;
-  // Case-insensitive match against documentType
-  const templates = await db.select().from(wfTemplatesTable)
-    .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.isActive, true)));
-  const matched = templates.filter(t => t.documentType.toLowerCase() === docType.toLowerCase());
-  const enriched = await Promise.all(matched.map(async t => {
-    const stages = await db.select().from(wfTemplateStagesTable)
-      .where(eq(wfTemplateStagesTable.templateId, t.id))
-      .orderBy(asc(wfTemplateStagesTable.stageOrder));
-    return { ...t, stages };
-  }));
+  const enriched = await tenantRead(async () => {
+    // Case-insensitive match against documentType
+    const templates = await db.select().from(wfTemplatesTable)
+      .where(and(eq(wfTemplatesTable.organizationId, org), eq(wfTemplatesTable.isActive, true)));
+    const matched = templates.filter(t => t.documentType.toLowerCase() === docType.toLowerCase());
+    return await Promise.all(matched.map(async t => {
+      const stages = await db.select().from(wfTemplateStagesTable)
+        .where(eq(wfTemplateStagesTable.templateId, t.id))
+        .orderBy(asc(wfTemplateStagesTable.stageOrder));
+      return { ...t, stages };
+    }));
+  });
   res.json({ templates: enriched });
 });
 
@@ -1081,11 +1091,13 @@ router.get("/templates/for-type/:docType", async (req, res): Promise<void> => {
 router.get("/instances/for-document/:docId", async (req, res): Promise<void> => {
   const org = orgId(req);
   const docId = requireInt(req.params.docId);
-  const instances = await db.select().from(wfInstancesTable)
-    .where(and(eq(wfInstancesTable.documentId, docId), eq(wfInstancesTable.organizationId, org)))
-    .orderBy(desc(wfInstancesTable.updatedAt));
-  const roleCache = new Map<number | null, string>();
-  const enriched = await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
+  const enriched = await tenantRead(async () => {
+    const instances = await db.select().from(wfInstancesTable)
+      .where(and(eq(wfInstancesTable.documentId, docId), eq(wfInstancesTable.organizationId, org)))
+      .orderBy(desc(wfInstancesTable.updatedAt));
+    const roleCache = new Map<number | null, string>();
+    return await Promise.all(instances.map(i => enrichInstance(i, req.user!, roleCache)));
+  });
   res.json({ items: enriched });
 });
 

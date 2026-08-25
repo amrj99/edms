@@ -11,7 +11,7 @@ import {
 } from "@workspace/db";
 import { eq, and, isNull, ne } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { parseBody } from "../lib/validate.js";
 import { requireInt, type ProjectParams } from "../lib/params.js";
@@ -75,64 +75,74 @@ async function resolveOwnerProject(
 // Gate: same as /parties — only owner-org users (+ system_owner) can call this.
 
 router.get("/available-organizations", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const ctx = await resolveOwnerProject(req);
-  if (!ctx) { res.status(404).json({ error: "Project not found" }); return; }
+  const result = await tenantRead(async () => {
+    const ctx = await resolveOwnerProject(req);
+    if (!ctx) return { kind: "notfound" as const };
 
-  const activeParties = await db
-    .select({ organizationId: projectPartiesTable.organizationId })
-    .from(projectPartiesTable)
-    .where(and(
-      eq(projectPartiesTable.projectId, ctx.projectId),
-      isNull(projectPartiesTable.removedAt),
-    ));
+    const activeParties = await db
+      .select({ organizationId: projectPartiesTable.organizationId })
+      .from(projectPartiesTable)
+      .where(and(
+        eq(projectPartiesTable.projectId, ctx.projectId),
+        isNull(projectPartiesTable.removedAt),
+      ));
 
-  const excludeIds = new Set([ctx.projectOrgId, ...activeParties.map(r => r.organizationId)]);
+    const all = await db
+      .select({
+        id:   organizationsTable.id,
+        name: organizationsTable.name,
+        code: organizationsTable.code,
+        type: organizationsTable.type,
+      })
+      .from(organizationsTable)
+      .orderBy(organizationsTable.name);
 
-  const all = await db
-    .select({
-      id:   organizationsTable.id,
-      name: organizationsTable.name,
-      code: organizationsTable.code,
-      type: organizationsTable.type,
-    })
-    .from(organizationsTable)
-    .orderBy(organizationsTable.name);
+    return { kind: "ok" as const, projectOrgId: ctx.projectOrgId, activeParties, all };
+  });
 
-  res.json(all.filter(o => !excludeIds.has(o.id)));
+  if (result.kind === "notfound") { res.status(404).json({ error: "Project not found" }); return; }
+
+  const excludeIds = new Set([result.projectOrgId, ...result.activeParties.map(r => r.organizationId)]);
+  res.json(result.all.filter(o => !excludeIds.has(o.id)));
 });
 
 // ─── GET /api/projects/:projectId/parties ─────────────────────────────────────
 // Returns active (non-removed) parties with org name and addedBy user.
 
 router.get("/parties", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const ctx = await resolveOwnerProject(req);
-  if (!ctx) { res.status(404).json({ error: "Project not found" }); return; }
+  const result = await tenantRead(async () => {
+    const ctx = await resolveOwnerProject(req);
+    if (!ctx) return { kind: "notfound" as const };
 
-  const rows = await db
-    .select({
-      id:        projectPartiesTable.id,
-      partyRole: projectPartiesTable.partyRole,
-      addedAt:   projectPartiesTable.addedAt,
-      organization: {
-        id:   organizationsTable.id,
-        name: organizationsTable.name,
-      },
-      addedBy: {
-        id:        usersTable.id,
-        firstName: usersTable.firstName,
-        lastName:  usersTable.lastName,
-      },
-    })
-    .from(projectPartiesTable)
-    .innerJoin(organizationsTable, eq(organizationsTable.id, projectPartiesTable.organizationId))
-    .innerJoin(usersTable, eq(usersTable.id, projectPartiesTable.addedById))
-    .where(and(
-      eq(projectPartiesTable.projectId, ctx.projectId),
-      isNull(projectPartiesTable.removedAt),
-    ))
-    .orderBy(organizationsTable.name);
+    const rows = await db
+      .select({
+        id:        projectPartiesTable.id,
+        partyRole: projectPartiesTable.partyRole,
+        addedAt:   projectPartiesTable.addedAt,
+        organization: {
+          id:   organizationsTable.id,
+          name: organizationsTable.name,
+        },
+        addedBy: {
+          id:        usersTable.id,
+          firstName: usersTable.firstName,
+          lastName:  usersTable.lastName,
+        },
+      })
+      .from(projectPartiesTable)
+      .innerJoin(organizationsTable, eq(organizationsTable.id, projectPartiesTable.organizationId))
+      .innerJoin(usersTable, eq(usersTable.id, projectPartiesTable.addedById))
+      .where(and(
+        eq(projectPartiesTable.projectId, ctx.projectId),
+        isNull(projectPartiesTable.removedAt),
+      ))
+      .orderBy(organizationsTable.name);
 
-  res.json(rows);
+    return { kind: "ok" as const, rows };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Project not found" }); return; }
+  res.json(result.rows);
 });
 
 // ─── POST /api/projects/:projectId/parties ────────────────────────────────────

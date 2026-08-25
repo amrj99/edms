@@ -39,10 +39,16 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
 // ─── ITR / MIR ────────────────────────────────────────────────────────────────
 router.get("/inspection-requests", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const rows = await db.select().from(inspectionRequestsTable)
-    .where(eq(inspectionRequestsTable.projectId, projectId))
-    .orderBy(desc(inspectionRequestsTable.createdAt));
+  let ok = false;
+  let rows: typeof inspectionRequestsTable.$inferSelect[] = [];
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    rows = await db.select().from(inspectionRequestsTable)
+      .where(eq(inspectionRequestsTable.projectId, projectId))
+      .orderBy(desc(inspectionRequestsTable.createdAt));
+  });
+  if (!ok) return;
   res.json({ inspectionRequests: rows });
 });
 
@@ -272,10 +278,16 @@ router.post(
 // ─── NCR / SOR ────────────────────────────────────────────────────────────────
 router.get("/ncr-records", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const rows = await db.select().from(ncrRecordsTable)
-    .where(eq(ncrRecordsTable.projectId, projectId))
-    .orderBy(desc(ncrRecordsTable.createdAt));
+  let ok = false;
+  let rows: typeof ncrRecordsTable.$inferSelect[] = [];
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    rows = await db.select().from(ncrRecordsTable)
+      .where(eq(ncrRecordsTable.projectId, projectId))
+      .orderBy(desc(ncrRecordsTable.createdAt));
+  });
+  if (!ok) return;
   res.json({ ncrRecords: rows });
 });
 
@@ -468,10 +480,16 @@ router.post(
 // ─── NOC ──────────────────────────────────────────────────────────────────────
 router.get("/noc-records", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const rows = await db.select().from(nocRecordsTable)
-    .where(eq(nocRecordsTable.projectId, projectId))
-    .orderBy(desc(nocRecordsTable.createdAt));
+  let ok = false;
+  let rows: typeof nocRecordsTable.$inferSelect[] = [];
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    rows = await db.select().from(nocRecordsTable)
+      .where(eq(nocRecordsTable.projectId, projectId))
+      .orderBy(desc(nocRecordsTable.createdAt));
+  });
+  if (!ok) return;
   res.json({ nocRecords: rows });
 });
 

@@ -13,7 +13,7 @@ import { eq, and, or, desc, asc } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { assertProjectAccess } from "../lib/tenant-guards.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireInt } from "../lib/params.js";
 import type { Request, Response } from "express";
 import type { ProjectParams, ProjectItemParams } from "../lib/params.js";
@@ -79,7 +79,7 @@ router.get("/", async (req: Request<ProjectParams>, res: Response): Promise<void
   const caller = req.user!;
   const { type, status } = req.query as { type?: string; status?: string };
 
-  let chains = await db
+  let chains = await tenantRead(() => db
     .select()
     .from(submissionChainsTable)
     .where(
@@ -93,7 +93,7 @@ router.get("/", async (req: Request<ProjectParams>, res: Response): Promise<void
             ),
           ),
     )
-    .orderBy(desc(submissionChainsTable.createdAt));
+    .orderBy(desc(submissionChainsTable.createdAt)));
 
   if (type) chains = chains.filter((c) => c.type === type);
   if (status) chains = chains.filter((c) => c.currentStatus === status);
@@ -245,83 +245,93 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res: Response): Promi
   const id = requireInt(req.params.id);
   const caller = req.user!;
 
-  const [chain] = await db
-    .select()
-    .from(submissionChainsTable)
-    .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
+  // Chain lookup + access checks + steps/documents/parties reads in ONE short
+  // read tx; computeActions (pure) runs OUTSIDE it below.
+  const loaded = await tenantRead(async () => {
+    const [chain] = await db
+      .select()
+      .from(submissionChainsTable)
+      .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-  if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) return { kind: "notfound" as const };
 
-  // Resolve caller's participant once — used for both access check and computeActions.
-  const callerParticipant = caller.organizationId
-    ? await resolveCallerParticipant(projectId, caller.organizationId)
-    : null;
+    // Resolve caller's participant once — used for both access check and computeActions.
+    const callerParticipant = caller.organizationId
+      ? await resolveCallerParticipant(projectId, caller.organizationId)
+      : null;
 
-  if (!isSystemOwner(caller)) {
-    let hasAccess = false;
+    if (!isSystemOwner(caller)) {
+      let hasAccess = false;
 
-    // Primary: caller's participant is in this chain's allowed_parties
-    if (callerParticipant) {
-      const [inParties] = await db
-        .select({ id: submissionChainAllowedPartiesTable.id })
-        .from(submissionChainAllowedPartiesTable)
-        .where(
-          and(
-            eq(submissionChainAllowedPartiesTable.chainId, id),
-            eq(submissionChainAllowedPartiesTable.participantId, callerParticipant.id),
-          ),
-        )
-        .limit(1);
-      if (inParties) hasAccess = true;
-    }
-
-    // Fallback: legacy org-based check (pre-Phase-3 chains)
-    if (!hasAccess) {
-      if (
-        chain.originatingOrgId === caller.organizationId ||
-        chain.currentOrgId === caller.organizationId
-      ) {
-        hasAccess = true;
-      }
-    }
-
-    // Last resort: caller appeared in any step
-    if (!hasAccess) {
-      const [inStep] = await db
-        .select({ id: submissionChainStepsTable.id })
-        .from(submissionChainStepsTable)
-        .where(
-          and(
-            eq(submissionChainStepsTable.chainId, id),
-            or(
-              eq(submissionChainStepsTable.fromOrgId, caller.organizationId!),
-              eq(submissionChainStepsTable.toOrgId, caller.organizationId!),
+      // Primary: caller's participant is in this chain's allowed_parties
+      if (callerParticipant) {
+        const [inParties] = await db
+          .select({ id: submissionChainAllowedPartiesTable.id })
+          .from(submissionChainAllowedPartiesTable)
+          .where(
+            and(
+              eq(submissionChainAllowedPartiesTable.chainId, id),
+              eq(submissionChainAllowedPartiesTable.participantId, callerParticipant.id),
             ),
-          ),
-        )
-        .limit(1);
-      if (inStep) hasAccess = true;
+          )
+          .limit(1);
+        if (inParties) hasAccess = true;
+      }
+
+      // Fallback: legacy org-based check (pre-Phase-3 chains)
+      if (!hasAccess) {
+        if (
+          chain.originatingOrgId === caller.organizationId ||
+          chain.currentOrgId === caller.organizationId
+        ) {
+          hasAccess = true;
+        }
+      }
+
+      // Last resort: caller appeared in any step
+      if (!hasAccess) {
+        const [inStep] = await db
+          .select({ id: submissionChainStepsTable.id })
+          .from(submissionChainStepsTable)
+          .where(
+            and(
+              eq(submissionChainStepsTable.chainId, id),
+              or(
+                eq(submissionChainStepsTable.fromOrgId, caller.organizationId!),
+                eq(submissionChainStepsTable.toOrgId, caller.organizationId!),
+              ),
+            ),
+          )
+          .limit(1);
+        if (inStep) hasAccess = true;
+      }
+
+      if (!hasAccess) return { kind: "forbidden" as const };
     }
 
-    if (!hasAccess) { res.status(403).json({ error: "Forbidden" }); return; }
-  }
+    const steps = await db
+      .select()
+      .from(submissionChainStepsTable)
+      .where(eq(submissionChainStepsTable.chainId, id))
+      .orderBy(asc(submissionChainStepsTable.stepNumber));
 
-  const steps = await db
-    .select()
-    .from(submissionChainStepsTable)
-    .where(eq(submissionChainStepsTable.chainId, id))
-    .orderBy(asc(submissionChainStepsTable.stepNumber));
+    const documents = await db
+      .select()
+      .from(submissionChainDocumentsTable)
+      .where(eq(submissionChainDocumentsTable.chainId, id));
 
-  const documents = await db
-    .select()
-    .from(submissionChainDocumentsTable)
-    .where(eq(submissionChainDocumentsTable.chainId, id));
+    const parties = await db
+      .select()
+      .from(submissionChainAllowedPartiesTable)
+      .where(eq(submissionChainAllowedPartiesTable.chainId, id))
+      .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
 
-  const parties = await db
-    .select()
-    .from(submissionChainAllowedPartiesTable)
-    .where(eq(submissionChainAllowedPartiesTable.chainId, id))
-    .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
+    return { kind: "ok" as const, chain, callerParticipant, steps, documents, parties };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  if (loaded.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+  const { chain, callerParticipant, steps, documents, parties } = loaded;
 
   const actions = computeActions(
     chain,

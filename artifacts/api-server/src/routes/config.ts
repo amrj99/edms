@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { orgConfigTable, systemSettingsTable, organizationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { getOrgSessionPolicy, invalidateOrgSessionPolicy, SESSION_BOUNDS } from "../lib/security-settings.js";
@@ -21,21 +21,34 @@ async function getSystemSetting(key: string): Promise<string> {
 }
 
 router.get("/system-settings", async (_req, res): Promise<void> => {
-  const registrationEnabled = await getSystemSetting("registrationEnabled");
+  // Public route: unauthenticated → tenantRead runs on the pool (no marker);
+  // authenticated → a short read tx. system_settings is a global (non-RLS) table.
+  let registrationEnabled = "true";
+  await tenantRead(async () => {
+    registrationEnabled = await getSystemSetting("registrationEnabled");
+  });
   res.json({ registrationEnabled: registrationEnabled === "true" });
 });
 
 // Public: list organizations for the registration form (only when registration is enabled)
 router.get("/organizations-public", async (_req, res): Promise<void> => {
-  const registrationEnabled = await getSystemSetting("registrationEnabled");
+  // Public route: unauthenticated callers (the registration form) read on the pool
+  // with no tenant marker — preserving the cross-org list; authenticated callers
+  // get a short read tx.
+  let registrationEnabled = "true";
+  let orgs: { id: number; name: string }[] = [];
+  await tenantRead(async () => {
+    registrationEnabled = await getSystemSetting("registrationEnabled");
+    if (registrationEnabled !== "true") return;
+    orgs = await db.select({
+      id: organizationsTable.id,
+      name: organizationsTable.name,
+    }).from(organizationsTable).orderBy(organizationsTable.name);
+  });
   if (registrationEnabled !== "true") {
     res.json({ organizations: [] });
     return;
   }
-  const orgs = await db.select({
-    id: organizationsTable.id,
-    name: organizationsTable.name,
-  }).from(organizationsTable).orderBy(organizationsTable.name);
   res.json({ organizations: orgs });
 });
 
@@ -107,11 +120,14 @@ async function writeSecurityPolicySetting(key: SecurityPolicyKey, raw: number): 
 }
 
 router.get("/security-settings", requireAuth, requireSysOwner, async (_req, res): Promise<void> => {
-  const [passwordMinLength, accessTokenExpiryMinutes, sessionTimeoutMinutes] = await Promise.all([
-    readSecurityPolicySetting("password_min_length"),
-    readSecurityPolicySetting("access_token_expiry_minutes"),
-    readSecurityPolicySetting("session_timeout_minutes"),
-  ]);
+  let passwordMinLength = 0, accessTokenExpiryMinutes = 0, sessionTimeoutMinutes = 0;
+  await tenantRead(async () => {
+    [passwordMinLength, accessTokenExpiryMinutes, sessionTimeoutMinutes] = await Promise.all([
+      readSecurityPolicySetting("password_min_length"),
+      readSecurityPolicySetting("access_token_expiry_minutes"),
+      readSecurityPolicySetting("session_timeout_minutes"),
+    ]);
+  });
   res.json({
     passwordMinLength,
     accessTokenExpiryMinutes,
@@ -188,12 +204,8 @@ router.get("/", async (req, res): Promise<void> => {
     res.json(getDefaultConfig());
     return;
   }
-  const [config] = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
-  if (!config) {
-    res.json(getDefaultConfig());
-    return;
-  }
-  res.json(config);
+  const [config] = await tenantRead(() => db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId)));
+  res.json(config ?? getDefaultConfig());
 });
 
 // ─── AI Governance (admin / system_owner only) ────────────────────────────────
@@ -204,7 +216,7 @@ router.get("/ai-governance", requireMinRole("admin"), async (req, res): Promise<
   const orgId = user.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
 
-  const [config] = await db
+  const [config] = await tenantRead(() => db
     .select({
       aiEnabled: orgConfigTable.aiEnabled,
       aiPlan: orgConfigTable.aiPlan,
@@ -214,7 +226,7 @@ router.get("/ai-governance", requireMinRole("admin"), async (req, res): Promise<
       aiPrivacyMode: orgConfigTable.aiPrivacyMode,
     })
     .from(orgConfigTable)
-    .where(eq(orgConfigTable.organizationId, orgId));
+    .where(eq(orgConfigTable.organizationId, orgId)));
 
   if (!config) { res.status(404).json({ error: "No org config found" }); return; }
   res.json(config);
@@ -268,13 +280,19 @@ router.put("/ai-governance", requireMinRole("admin"), async (req, res): Promise<
 router.get("/session-settings", requireMinRole("admin"), async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) { res.status(400).json({ error: "No organization" }); return; }
-  const [raw] = await db.select({
-    sessionTimeoutMinutes: orgConfigTable.sessionTimeoutMinutes,
-    idleTimeoutMinutes: orgConfigTable.idleTimeoutMinutes,
-    rememberMeEnabled: orgConfigTable.rememberMeEnabled,
-    rememberMeDays: orgConfigTable.rememberMeDays,
-  }).from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
-  const effective = await getOrgSessionPolicy(orgId);
+  // Both the direct read AND getOrgSessionPolicy (which does its own db.select on a
+  // cache miss, swallowing errors) MUST share one read unit — otherwise a fail-closed
+  // throw inside getOrgSessionPolicy would be silently swallowed into fallback defaults.
+  const { raw, effective } = await tenantRead(async () => {
+    const [raw] = await db.select({
+      sessionTimeoutMinutes: orgConfigTable.sessionTimeoutMinutes,
+      idleTimeoutMinutes: orgConfigTable.idleTimeoutMinutes,
+      rememberMeEnabled: orgConfigTable.rememberMeEnabled,
+      rememberMeDays: orgConfigTable.rememberMeDays,
+    }).from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId));
+    const effective = await getOrgSessionPolicy(orgId);
+    return { raw, effective };
+  });
   res.json({ stored: raw ?? null, effective, bounds: SESSION_BOUNDS });
 });
 
@@ -376,11 +394,11 @@ router.put("/", requireMinRole("admin"), async (req, res): Promise<void> => {
 });
 
 router.get("/public", async (_req, res): Promise<void> => {
-  const configs = await db.select({
+  const configs = await tenantRead(() => db.select({
     systemName: orgConfigTable.systemName,
     logoUrl: orgConfigTable.logoUrl,
     primaryColor: orgConfigTable.primaryColor,
-  }).from(orgConfigTable).limit(1);
+  }).from(orgConfigTable).limit(1));
   if (configs.length > 0) {
     res.json(configs[0]);
   } else {

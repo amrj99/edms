@@ -9,7 +9,7 @@ import { requireAuth, requireRole, isSysAdmin, isSystemOwner } from "../lib/auth
 import { createAuditLog } from "../lib/audit.js";
 import { sendMeetingCreatedEmail, sendActionItemAssignedEmail } from "../lib/email.js";
 import { dispatchNotification } from "../lib/notifications/index.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 import { orgScopedWhere } from "../lib/org-scope.js";
 
@@ -52,7 +52,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
     sqlConditions.push(eq(meetingsTable.status, status as "scheduled" | "in_progress" | "completed" | "cancelled") as SQL<unknown>);
   }
 
-  const rows = await db
+  const rows = await tenantRead(() => db
     .select({
       meeting: meetingsTable,
       organizer: {
@@ -70,7 +70,7 @@ router.get("/", async (req: Request, res: Response): Promise<void> => {
     .leftJoin(usersTable, eq(meetingsTable.organizedById, usersTable.id))
     .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
     .where(sqlConditions.length > 0 ? and(...sqlConditions) : undefined)
-    .orderBy(desc(meetingsTable.meetingDate));
+    .orderBy(desc(meetingsTable.meetingDate)));
 
   // Apply free-text search in JS (no index needed for low-cardinality searches)
   const filtered = q
@@ -116,7 +116,7 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
     sqlConditions.push(eq(meetingsTable.projectId, projectId) as SQL<unknown>);
   }
 
-  const rows = await db.select({
+  const rows = await tenantRead(() => db.select({
     item: meetingActionItemsTable,
     meeting: { id: meetingsTable.id, title: meetingsTable.title, referenceNumber: meetingsTable.referenceNumber, projectId: meetingsTable.projectId },
     assignedTo: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName },
@@ -127,7 +127,7 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
     .leftJoin(usersTable, eq(meetingActionItemsTable.assignedToId, usersTable.id))
     .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
     .where(sqlConditions.length > 0 ? and(...sqlConditions) : undefined)
-    .orderBy(desc(meetingActionItemsTable.createdAt));
+    .orderBy(desc(meetingActionItemsTable.createdAt)));
 
   const now = new Date();
   const filtered = rows.filter(r => {
@@ -156,59 +156,68 @@ router.get("/action-items", async (req: Request, res: Response): Promise<void> =
 router.get("/:id", async (req: Request, res: Response): Promise<void> => {
   const id = requireInt(req.params.id);
 
-  const [row] = await db
-    .select({
-      meeting: meetingsTable,
-      organizer: {
-        id: usersTable.id,
-        firstName: usersTable.firstName,
-        lastName: usersTable.lastName,
-      },
-      project: {
-        id: projectsTable.id,
-        name: projectsTable.name,
-        code: projectsTable.code,
-      },
-    })
-    .from(meetingsTable)
-    .leftJoin(usersTable, eq(meetingsTable.organizedById, usersTable.id))
-    .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
-    .where(eq(meetingsTable.id, id));
+  // Meeting lookup + org check + attendees/action-items/attachments in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [row] = await db
+      .select({
+        meeting: meetingsTable,
+        organizer: {
+          id: usersTable.id,
+          firstName: usersTable.firstName,
+          lastName: usersTable.lastName,
+        },
+        project: {
+          id: projectsTable.id,
+          name: projectsTable.name,
+          code: projectsTable.code,
+        },
+      })
+      .from(meetingsTable)
+      .leftJoin(usersTable, eq(meetingsTable.organizedById, usersTable.id))
+      .leftJoin(projectsTable, eq(meetingsTable.projectId, projectsTable.id))
+      .where(eq(meetingsTable.id, id));
 
-  if (!row) { res.status(404).json({ error: "Meeting not found" }); return; }
+    if (!row) return { kind: "notfound" as const };
 
-  // Org isolation check
-  if (!isSystemOwner(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
-    res.status(403).json({ error: "Forbidden" }); return;
-  }
+    // Org isolation check
+    if (!isSystemOwner(req.user!) && row.meeting.organizationId !== null && row.meeting.organizationId !== req.user!.organizationId) {
+      return { kind: "forbidden" as const };
+    }
 
-  const attendees = await db
-    .select({
-      id: meetingAttendeesTable.id,
-      userId: meetingAttendeesTable.userId,
-      name: meetingAttendeesTable.name,
-      email: meetingAttendeesTable.email,
-      attended: meetingAttendeesTable.attended,
-      user: {
-        firstName: usersTable.firstName,
-        lastName: usersTable.lastName,
-        email: usersTable.email,
-      },
-    })
-    .from(meetingAttendeesTable)
-    .leftJoin(usersTable, eq(meetingAttendeesTable.userId, usersTable.id))
-    .where(eq(meetingAttendeesTable.meetingId, id));
+    const attendees = await db
+      .select({
+        id: meetingAttendeesTable.id,
+        userId: meetingAttendeesTable.userId,
+        name: meetingAttendeesTable.name,
+        email: meetingAttendeesTable.email,
+        attended: meetingAttendeesTable.attended,
+        user: {
+          firstName: usersTable.firstName,
+          lastName: usersTable.lastName,
+          email: usersTable.email,
+        },
+      })
+      .from(meetingAttendeesTable)
+      .leftJoin(usersTable, eq(meetingAttendeesTable.userId, usersTable.id))
+      .where(eq(meetingAttendeesTable.meetingId, id));
 
-  const actionItems = await db
-    .select()
-    .from(meetingActionItemsTable)
-    .where(eq(meetingActionItemsTable.meetingId, id))
-    .orderBy(meetingActionItemsTable.createdAt);
+    const actionItems = await db
+      .select()
+      .from(meetingActionItemsTable)
+      .where(eq(meetingActionItemsTable.meetingId, id))
+      .orderBy(meetingActionItemsTable.createdAt);
 
-  const attachments = await db
-    .select()
-    .from(meetingAttachmentsTable)
-    .where(eq(meetingAttachmentsTable.meetingId, id));
+    const attachments = await db
+      .select()
+      .from(meetingAttachmentsTable)
+      .where(eq(meetingAttachmentsTable.meetingId, id));
+
+    return { kind: "ok" as const, row, attendees, actionItems, attachments };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Meeting not found" }); return; }
+  if (loaded.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+  const { row, attendees, actionItems, attachments } = loaded;
 
   res.json({
     meeting: { ...row.meeting, organizer: row.organizer, project: row.project },

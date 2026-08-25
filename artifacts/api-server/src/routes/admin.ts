@@ -13,7 +13,7 @@ import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { withTenant, runUnscoped } from "../middlewares/tenant-scope.js";
+import { withTenant, runUnscoped, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
@@ -34,12 +34,12 @@ router.get("/system-info", requireSysOwner, async (req, res): Promise<void> => {
     return r?.n ?? 0;
   };
 
-  const [users, projects, documents, orgs] = await Promise.all([
+  const [users, projects, documents, orgs] = await tenantRead(() => Promise.all([
     countRow(usersTable),
     countRow(projectsTable),
     countRow(documentsTable),
     countRow(organizationsTable),
-  ]);
+  ]));
 
   // ── P1 fix: stale SMTP env var check ──────────────────────────────────────
   // The email system was migrated from SMTP to Resend. The old SMTP_HOST/
@@ -79,38 +79,47 @@ router.get("/storage-usage", async (req, res): Promise<void> => {
   // Determine which orgs this user may see:
   //   system_owner (no org required) → all orgs
   //   admin                          → their org only
-  let orgs: any[] = [];
-  if (isSystemOwner(user)) {
-    orgs = await db.select().from(organizationsTable);
-  } else if (user.organizationId) {
-    orgs = await db
+  const { orgs, usageRows, configs } = await tenantRead(async () => {
+    let orgs: any[] = [];
+    if (isSystemOwner(user)) {
+      orgs = await db.select().from(organizationsTable);
+    } else if (user.organizationId) {
+      orgs = await db
+        .select()
+        .from(organizationsTable)
+        .where(eq(organizationsTable.id, user.organizationId));
+    }
+
+    if (orgs.length === 0) {
+      return { orgs, usageRows: [] as any[], configs: [] as any[] };
+    }
+
+    const orgIds = orgs.map(o => o.id);
+
+    const usageRows = await db
+      .select({
+        orgId: projectsTable.organizationId,
+        totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
+        docCount: sql<number>`count(${documentsTable.id})::int`,
+      })
+      .from(documentsTable)
+      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+      .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
+      .groupBy(projectsTable.organizationId);
+
+    const configs = await db
       .select()
-      .from(organizationsTable)
-      .where(eq(organizationsTable.id, user.organizationId));
-  }
+      .from(orgConfigTable)
+      .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
+
+    return { orgs, usageRows, configs };
+  });
 
   if (orgs.length === 0) {
     res.json({ usage: [] });
     return;
   }
 
-  const orgIds = orgs.map(o => o.id);
-
-  const usageRows = await db
-    .select({
-      orgId: projectsTable.organizationId,
-      totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
-      docCount: sql<number>`count(${documentsTable.id})::int`,
-    })
-    .from(documentsTable)
-    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-    .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
-    .groupBy(projectsTable.organizationId);
-
-  const configs = await db
-    .select()
-    .from(orgConfigTable)
-    .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
   const configMap = new Map(configs.map(c => [c.organizationId, c]));
 
   const result = orgs.map(org => {
@@ -143,21 +152,19 @@ router.get("/storage-usage", async (req, res): Promise<void> => {
 router.get("/usage", async (req, res): Promise<void> => {
   const user = req.user!;
 
-  let orgs: any[] = [];
-  if (isSystemOwner(user)) {
-    orgs = await db.select().from(organizationsTable);
-  } else if (user.organizationId) {
-    orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
-  }
+  const { orgs, aggregates } = await tenantRead(async () => {
+    let orgs: any[] = [];
+    if (isSystemOwner(user)) {
+      orgs = await db.select().from(organizationsTable);
+    } else if (user.organizationId) {
+      orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
+    }
 
-  const orgIds = orgs.map(o => o.id);
-  if (orgIds.length === 0) { res.json({ orgs: [], totals: {} }); return; }
+    const orgIds = orgs.map(o => o.id);
+    if (orgIds.length === 0) return { orgs, aggregates: null };
 
-  // --- aggregate per-org counts via raw SQL for efficiency ---
-  const [
-    docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
-    itrRows, ncrRows, nocRows, subRows,
-  ] = await Promise.all([
+    // --- aggregate per-org counts via raw SQL for efficiency ---
+    const aggregates = await Promise.all([
     // documents per org (via project)
     db.select({
       orgId: projectsTable.organizationId,
@@ -225,7 +232,17 @@ router.get("/usage", async (req, res): Promise<void> => {
       currentPeriodEnd: subscriptionsTable.currentPeriodEnd,
       paymentFailedAt: subscriptionsTable.paymentFailedAt,
     }).from(subscriptionsTable),
-  ]);
+    ]);
+
+    return { orgs, aggregates };
+  });
+
+  if (!orgs.length) { res.json({ orgs: [], totals: {} }); return; }
+
+  const [
+    docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
+    itrRows, ncrRows, nocRows, subRows,
+  ] = aggregates!;
 
   const byOrg = (rows: any[], key = "orgId") => new Map(rows.map(r => [r[key], r]));
   const docMap   = byOrg(docRows);
@@ -327,20 +344,24 @@ router.get("/backup", requireSysOwner, async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
 
-  let projectsFilter = await db.select().from(projectsTable);
-  if (!isSystemOwner(user) && orgId) {
-    projectsFilter = projectsFilter.filter(p => p.organizationId === orgId);
-  }
-  const projectIds = new Set(projectsFilter.map(p => p.id));
+  const { projectsFilter, allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks } =
+    await tenantRead(async () => {
+      let projectsFilter = await db.select().from(projectsTable);
+      if (!isSystemOwner(user) && orgId) {
+        projectsFilter = projectsFilter.filter(p => p.organizationId === orgId);
+      }
+      const [allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks] = await Promise.all([
+        db.select().from(usersTable),
+        db.select().from(organizationsTable),
+        db.select().from(documentsTable),
+        db.select().from(correspondenceTable),
+        db.select().from(transmittalsTable),
+        db.select().from(tasksTable),
+      ]);
+      return { projectsFilter, allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks };
+    });
 
-  const [allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks] = await Promise.all([
-    db.select().from(usersTable),
-    db.select().from(organizationsTable),
-    db.select().from(documentsTable),
-    db.select().from(correspondenceTable),
-    db.select().from(transmittalsTable),
-    db.select().from(tasksTable),
-  ]);
+  const projectIds = new Set(projectsFilter.map(p => p.id));
 
   const scopeByProject = (rows: any[]) => rows.filter(r => !r.projectId || projectIds.has(r.projectId));
 
@@ -691,8 +712,8 @@ router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promis
 // ── AI Classification toggle ──────────────────────────────────────────────────
 
 router.get("/ai-classification", requireAuth, async (req, res): Promise<void> => {
-  const [row] = await db.select().from(systemSettingsTable)
-    .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+  const [row] = await tenantRead(() => db.select().from(systemSettingsTable)
+    .where(eq(systemSettingsTable.key, "ai_classification_enabled")));
   const enabled = row ? row.value !== "false" : true;
   res.json({ enabled });
 });
@@ -724,31 +745,35 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
   if (isSystemOwner(user)) {
-    // system_owner only: return quota summary for every org
-    const configs = await db
-      .select({
-        organizationId: orgConfigTable.organizationId,
-        subscriptionTier: orgConfigTable.subscriptionTier,
-        aiProvider: orgConfigTable.aiProvider,
-        aiModel: orgConfigTable.aiModel,
-        aiDailyLimit: orgConfigTable.aiDailyLimit,
-      })
-      .from(orgConfigTable);
+    // system_owner only: return quota summary for every org.
+    // getOrgAiQuota reads via the `db` proxy, so a single outer tenantRead covers
+    // the config read and the per-org fan-out (nested reads reuse the same tx).
+    const quotas = await tenantRead(async () => {
+      const configs = await db
+        .select({
+          organizationId: orgConfigTable.organizationId,
+          subscriptionTier: orgConfigTable.subscriptionTier,
+          aiProvider: orgConfigTable.aiProvider,
+          aiModel: orgConfigTable.aiModel,
+          aiDailyLimit: orgConfigTable.aiDailyLimit,
+        })
+        .from(orgConfigTable);
 
-    const quotas = await Promise.all(
-      configs.map(async (cfg) => ({
-        organizationId: cfg.organizationId,
-        subscriptionTier: cfg.subscriptionTier,
-        quota: await getOrgAiQuota(cfg.organizationId),
-      }))
-    );
+      return Promise.all(
+        configs.map(async (cfg) => ({
+          organizationId: cfg.organizationId,
+          subscriptionTier: cfg.subscriptionTier,
+          quota: await getOrgAiQuota(cfg.organizationId),
+        }))
+      );
+    });
     res.json({ quotas });
     return;
   }
 
   // admin (org-scoped) and everyone else: own org only
   if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
-  const quota = await getOrgAiQuota(user.organizationId);
+  const quota = await tenantRead(() => getOrgAiQuota(user.organizationId!));
   res.json({ organizationId: user.organizationId, quota });
 });
 
@@ -858,14 +883,14 @@ router.put("/ai-limits/:orgId", requireSysOwner, async (req, res, next): Promise
 // ─── Plan Management ──────────────────────────────────────────────────────────
 
 router.get("/org-plans", requireSysOwner, async (req, res): Promise<void> => {
-  const rows = await db
+  const rows = await tenantRead(() => db
     .select({
       orgId: organizationsTable.id,
       orgName: organizationsTable.name,
       planId: sql<string>`COALESCE(${subscriptionsTable.planId}, ${organizationsTable.subscriptionTier}, 'expired')`,
     })
     .from(organizationsTable)
-    .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id));
+    .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id)));
   res.json({ plans: rows });
 });
 
@@ -950,12 +975,15 @@ router.get("/shadow-log", requireMinRole("admin"), async (req, res): Promise<voi
     const orgFilter         = needsOrgFilter ? sql` AND u.organization_id = ${user.organizationId}`   : sql``;
     const wherePrefix       = (divergeOnly || needsOrgFilter) ? sql` WHERE 1=1` : sql``;
 
-    const rowsResult  = await db.execute<Record<string, unknown>>(
-      sql`${baseSelect}${wherePrefix}${divergeFilter}${orgFilter} ORDER BY asl.evaluated_at DESC LIMIT ${limit}`
-    );
-    const countResult = await db.execute<Record<string, unknown>>(
-      sql`${baseCount}${wherePrefix}${divergeFilter}${orgFilter}`
-    );
+    const { rowsResult, countResult } = await tenantRead(async () => {
+      const rowsResult  = await db.execute<Record<string, unknown>>(
+        sql`${baseSelect}${wherePrefix}${divergeFilter}${orgFilter} ORDER BY asl.evaluated_at DESC LIMIT ${limit}`
+      );
+      const countResult = await db.execute<Record<string, unknown>>(
+        sql`${baseCount}${wherePrefix}${divergeFilter}${orgFilter}`
+      );
+      return { rowsResult, countResult };
+    });
 
     // Normalise snake_case → camelCase for API response consistency
     const rows = rowsResult.rows.map(r => ({

@@ -16,6 +16,7 @@ import {
 } from "@workspace/db";
 import { eq, ilike, or, and, desc } from "drizzle-orm";
 import { logger } from "./logger.js";
+import { tenantRead } from "../middlewares/tenant-scope.js";
 
 // ─── Elasticsearch client (lazy, optional) ────────────────────────────────────
 let esClient: any = null;
@@ -243,6 +244,10 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
   let meetings: any[] = [];
   let projects: any[] = [];
 
+  // DEBT-010 Phase D: the SQL fallback's DB reads run in ONE short tenant read tx
+  // (fail-closed under the request marker; pool when unscoped). The ES path never
+  // reaches here, so no tx is ever held across the Elasticsearch network call.
+  await tenantRead(async () => {
   if (!type || type === "document" || type === "all") {
     const rows = await db
       .select({
@@ -379,6 +384,7 @@ async function sqlSearch(params: SearchParams): Promise<SearchResults> {
 
     projects = rows.map((p) => ({ ...p, resultType: "project" }));
   }
+  });
 
   return {
     documents,

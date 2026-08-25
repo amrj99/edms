@@ -4,7 +4,7 @@ import { delegationsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, or, isNull, desc, gt } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -27,48 +27,50 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
         eq(delegationsTable.toUserId, caller.id),
       );
 
-  const rows = await db
-    .select({
-      delegation: delegationsTable,
-      fromUser: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role },
-      toUser: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role },
-    })
-    .from(delegationsTable)
-    .leftJoin(usersTable, eq(delegationsTable.fromUserId, usersTable.id))
-    .where(baseWhere)
-    .orderBy(desc(delegationsTable.grantedAt))
-    .limit(200);
+  const enriched = await tenantRead(async () => {
+    const rows = await db
+      .select({
+        delegation: delegationsTable,
+        fromUser: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role },
+        toUser: { id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role },
+      })
+      .from(delegationsTable)
+      .leftJoin(usersTable, eq(delegationsTable.fromUserId, usersTable.id))
+      .where(baseWhere)
+      .orderBy(desc(delegationsTable.grantedAt))
+      .limit(200);
 
-  // Manually resolve toUser since we can only join once
-  const enriched = await Promise.all(
-    rows.map(async (r) => {
-      const [toUser] = await db
-        .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })
-        .from(usersTable)
-        .where(eq(usersTable.id, r.delegation.toUserId))
-        .limit(1);
-
-      let projectName: string | null = null;
-      if (r.delegation.projectId) {
-        const [proj] = await db
-          .select({ name: projectsTable.name })
-          .from(projectsTable)
-          .where(eq(projectsTable.id, r.delegation.projectId))
+    // Manually resolve toUser since we can only join once
+    return Promise.all(
+      rows.map(async (r) => {
+        const [toUser] = await db
+          .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })
+          .from(usersTable)
+          .where(eq(usersTable.id, r.delegation.toUserId))
           .limit(1);
-        projectName = proj?.name ?? null;
-      }
 
-      const isExpired = r.delegation.expiresAt < now;
-      return {
-        ...r.delegation,
-        fromUser: r.fromUser,
-        toUser: toUser ?? null,
-        projectName,
-        isExpired,
-        isEffectivelyActive: r.delegation.isActive && !isExpired,
-      };
-    }),
-  );
+        let projectName: string | null = null;
+        if (r.delegation.projectId) {
+          const [proj] = await db
+            .select({ name: projectsTable.name })
+            .from(projectsTable)
+            .where(eq(projectsTable.id, r.delegation.projectId))
+            .limit(1);
+          projectName = proj?.name ?? null;
+        }
+
+        const isExpired = r.delegation.expiresAt < now;
+        return {
+          ...r.delegation,
+          fromUser: r.fromUser,
+          toUser: toUser ?? null,
+          projectName,
+          isExpired,
+          isEffectivelyActive: r.delegation.isActive && !isExpired,
+        };
+      }),
+    );
+  });
 
   const result = scope === "active"
     ? enriched.filter(d => d.isEffectivelyActive)

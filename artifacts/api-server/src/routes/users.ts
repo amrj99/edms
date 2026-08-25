@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { usersTable, organizationsTable, projectMembersTable, projectsTable } from "@workspace/db";
 import { eq, count, and, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, hashPassword, isSysAdmin, isSystemOwner, generateSecureToken, hashToken } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { validatePasswordPolicy } from "../lib/security-settings.js";
 import { requireMinRole, requireAdminOrSelf } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
@@ -52,30 +52,37 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 
   // ── Project-scoped query: all members of a project (cross-org collaboration) ──
   if (requestedProjectId) {
-    // DEBT-009: caller must be a member of the requested project. Only system_owner
-    // may bypass — a tenant ADMIN must NOT (isSysAdmin here let an org admin read any
-    // project's member PII across tenants by passing a foreign ?projectId).
-    if (!isSystemOwner(caller)) {
-      const [selfMembership] = await db.select({ userId: projectMembersTable.userId })
+    const scoped = await tenantRead(async () => {
+      // DEBT-009: caller must be a member of the requested project. Only system_owner
+      // may bypass — a tenant ADMIN must NOT (isSysAdmin here let an org admin read any
+      // project's member PII across tenants by passing a foreign ?projectId).
+      if (!isSystemOwner(caller)) {
+        const [selfMembership] = await db.select({ userId: projectMembersTable.userId })
+          .from(projectMembersTable)
+          .where(and(eq(projectMembersTable.projectId, requestedProjectId), eq(projectMembersTable.userId, caller.id)))
+          .limit(1);
+        if (!selfMembership) return { kind: "forbidden" as const };
+      }
+
+      const members = await db.select({ userId: projectMembersTable.userId })
         .from(projectMembersTable)
-        .where(and(eq(projectMembersTable.projectId, requestedProjectId), eq(projectMembersTable.userId, caller.id)))
-        .limit(1);
-      if (!selfMembership) { res.status(403).json({ error: "Forbidden" }); return; }
-    }
+        .where(eq(projectMembersTable.projectId, requestedProjectId));
+      const memberIds = members.map(m => m.userId);
+      if (memberIds.length === 0) return { kind: "empty" as const };
 
-    const members = await db.select({ userId: projectMembersTable.userId })
-      .from(projectMembersTable)
-      .where(eq(projectMembersTable.projectId, requestedProjectId));
-    const memberIds = members.map(m => m.userId);
-    if (memberIds.length === 0) { res.json({ items: [], total: 0 }); return; }
+      const results = await db.select({ user: usersTable, orgName: organizationsTable.name })
+        .from(usersTable)
+        .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
+        .where(inArray(usersTable.id, memberIds));
 
-    const results = await db.select({ user: usersTable, orgName: organizationsTable.name })
-      .from(usersTable)
-      .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
-      .where(inArray(usersTable.id, memberIds));
+      return { kind: "ok" as const, results };
+    });
+
+    if (scoped.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+    if (scoped.kind === "empty") { res.json({ items: [], total: 0 }); return; }
 
     res.json({
-      items: results.map(r => ({
+      items: scoped.results.map(r => ({
         id: r.user.id,
         firstName: r.user.firstName,
         lastName: r.user.lastName,
@@ -85,7 +92,7 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
         organizationName: r.orgName,
         isActive: r.user.isActive,
       })),
-      total: results.length,
+      total: scoped.results.length,
     });
     return;
   }
@@ -107,12 +114,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     ? eq(usersTable.organizationId, orgId)
     : isNotNull(usersTable.organizationId); // sysOwner with no filter → all orgs
 
-  const results = await db.select({
-    user: usersTable,
-    orgName: organizationsTable.name,
-  }).from(usersTable)
-    .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
-    .where(orgFilter);
+  const results = await tenantRead(async () =>
+    db.select({
+      user: usersTable,
+      orgName: organizationsTable.name,
+    }).from(usersTable)
+      .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
+      .where(orgFilter),
+  );
 
   res.json({
     items: results.map(r => ({
@@ -250,55 +259,68 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const caller = req.user!;
 
-  const users = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
-  const user = users[0];
-  if (!user) { res.status(404).json({ error: "Not Found" }); return; }
+  const result = await tenantRead(async () => {
+    const users = await db.select().from(usersTable).where(eq(usersTable.id, id)).limit(1);
+    const user = users[0];
+    if (!user) return { kind: "notfound" as const };
 
-  let limitedProfile = false;
+    let limitedProfile = false;
 
-  if (!isSystemOwner(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
-    // Cross-org: only allowed if they share at least one project membership
-    const callerProjectIds = (await db.select({ projectId: projectMembersTable.projectId })
-      .from(projectMembersTable)
-      .where(eq(projectMembersTable.userId, caller.id))
-    ).map(r => r.projectId);
-
-    const hasSharedProject = callerProjectIds.length > 0
-      && (await db.select({ userId: projectMembersTable.userId })
+    if (!isSystemOwner(caller) && caller.id !== id && user.organizationId !== caller.organizationId) {
+      // Cross-org: only allowed if they share at least one project membership
+      const callerProjectIds = (await db.select({ projectId: projectMembersTable.projectId })
         .from(projectMembersTable)
-        .where(and(eq(projectMembersTable.userId, id), inArray(projectMembersTable.projectId, callerProjectIds)))
-        .limit(1)).length > 0;
+        .where(eq(projectMembersTable.userId, caller.id))
+      ).map(r => r.projectId);
 
-    if (!hasSharedProject) { res.status(403).json({ error: "Forbidden" }); return; }
-    limitedProfile = true; // Only expose collaboration-level fields
-  }
+      const hasSharedProject = callerProjectIds.length > 0
+        && (await db.select({ userId: projectMembersTable.userId })
+          .from(projectMembersTable)
+          .where(and(eq(projectMembersTable.userId, id), inArray(projectMembersTable.projectId, callerProjectIds)))
+          .limit(1)).length > 0;
 
-  let orgName: string | undefined;
-  let orgType: string | undefined;
-  if (user.organizationId) {
-    const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
-    orgName = orgs[0]?.name;
-    orgType = orgs[0]?.type;
-  }
+      if (!hasSharedProject) return { kind: "forbidden" as const };
+      limitedProfile = true; // Only expose collaboration-level fields
+    }
 
-  if (limitedProfile) {
+    let orgName: string | undefined;
+    let orgType: string | undefined;
+    if (user.organizationId) {
+      const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
+      orgName = orgs[0]?.name;
+      orgType = orgs[0]?.type;
+    }
+
+    if (limitedProfile) {
+      return { kind: "limited" as const, user, orgName };
+    }
+
+    // Full profile: include project memberships
+    const projectMemberships = await db
+      .select({
+        projectId: projectMembersTable.projectId,
+        projectName: projectsTable.name,
+        projectCode: projectsTable.code,
+        memberRole: projectMembersTable.role,
+      })
+      .from(projectMembersTable)
+      .leftJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
+      .where(eq(projectMembersTable.userId, id));
+
+    return { kind: "full" as const, user, orgName, orgType, projectMemberships };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (result.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+
+  if (result.kind === "limited") {
     // Limited cross-org profile: name, email, organisation, role — no internal/admin fields
-    res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, organizationId: user.organizationId, organizationName: orgName });
+    const { user } = result;
+    res.json({ id: user.id, firstName: user.firstName, lastName: user.lastName, email: user.email, role: user.role, organizationId: user.organizationId, organizationName: result.orgName });
     return;
   }
 
-  // Full profile: include project memberships
-  const projectMemberships = await db
-    .select({
-      projectId: projectMembersTable.projectId,
-      projectName: projectsTable.name,
-      projectCode: projectsTable.code,
-      memberRole: projectMembersTable.role,
-    })
-    .from(projectMembersTable)
-    .leftJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
-    .where(eq(projectMembersTable.userId, id));
-
+  const { user } = result;
   res.json({
     id: user.id,
     email: user.email,
@@ -306,12 +328,12 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
     lastName: user.lastName,
     role: user.role,
     organizationId: user.organizationId,
-    organizationName: orgName,
-    organizationType: orgType,
+    organizationName: result.orgName,
+    organizationType: result.orgType,
     isActive: user.isActive,
     createdAt: user.createdAt,
     department: user.department,
-    projectMemberships: projectMemberships.map(m => ({
+    projectMemberships: result.projectMemberships.map(m => ({
       projectId: m.projectId,
       projectName: m.projectName,
       projectCode: m.projectCode,

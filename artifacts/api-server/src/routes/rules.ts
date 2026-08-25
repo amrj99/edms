@@ -13,7 +13,7 @@ import { db } from "@workspace/db";
 import { rulesTable } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -111,9 +111,12 @@ const ACTIVE_RULE_LIMIT = 100;
 router.get("/", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   if (!orgId) { res.json({ rules: [] }); return; }
-  const rules = await db.select().from(rulesTable)
-    .where(eq(rulesTable.organizationId, orgId))
-    .orderBy(asc(rulesTable.priority), asc(rulesTable.id));
+  let rules: typeof rulesTable.$inferSelect[] | undefined;
+  await tenantRead(async () => {
+    rules = await db.select().from(rulesTable)
+      .where(eq(rulesTable.organizationId, orgId))
+      .orderBy(asc(rulesTable.priority), asc(rulesTable.id));
+  });
   res.json({ rules });
 });
 
@@ -121,8 +124,11 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId;
   const id = requireInt(req.params.id);
-  const [rule] = await db.select().from(rulesTable)
-    .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+  let rule: typeof rulesTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    [rule] = await db.select().from(rulesTable)
+      .where(and(eq(rulesTable.id, id), eq(rulesTable.organizationId, orgId!)));
+  });
   if (!rule) { res.status(404).json({ error: "Rule not found" }); return; }
   res.json(rule);
 });

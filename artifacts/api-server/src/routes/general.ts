@@ -14,7 +14,7 @@ import {
 } from "@workspace/db";
 import { eq, isNull, desc, or, inArray, and } from "drizzle-orm";
 import { requireAuth, hashToken, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { TenantIsolationError } from '../lib/errors.js';
 import crypto from "crypto";
 import { createAuditLog } from "../lib/audit.js";
@@ -50,28 +50,31 @@ router.get("/correspondence", async (req, res): Promise<void> => {
   const userId = req.user!.id;
   const { folder = "inbox", type } = req.query;
 
-  // Items with no projectId, either sent by or addressed to this user
-  const recipientLinks = await db.select({
-    correspondenceId: correspondenceRecipientsTable.correspondenceId,
-  }).from(correspondenceRecipientsTable)
-    .where(eq(correspondenceRecipientsTable.userId, userId));
+  let enriched: Awaited<ReturnType<typeof enrichItems>> | undefined;
+  await tenantRead(async () => {
+    // Items with no projectId, either sent by or addressed to this user
+    const recipientLinks = await db.select({
+      correspondenceId: correspondenceRecipientsTable.correspondenceId,
+    }).from(correspondenceRecipientsTable)
+      .where(eq(correspondenceRecipientsTable.userId, userId));
 
-  const corrIds = recipientLinks.map(r => r.correspondenceId);
+    const corrIds = recipientLinks.map(r => r.correspondenceId);
 
-  const items = await db.select().from(correspondenceTable).where(
-    and(
-      isNull(correspondenceTable.projectId),
-      folder ? eq(correspondenceTable.folder, folder as any) : undefined,
-      type ? eq(correspondenceTable.type, type as any) : undefined,
-    )
-  ).orderBy(desc(correspondenceTable.createdAt)).limit(100);
+    const items = await db.select().from(correspondenceTable).where(
+      and(
+        isNull(correspondenceTable.projectId),
+        folder ? eq(correspondenceTable.folder, folder as any) : undefined,
+        type ? eq(correspondenceTable.type, type as any) : undefined,
+      )
+    ).orderBy(desc(correspondenceTable.createdAt)).limit(100);
 
-  // Filter: only items where user is sender or recipient
-  const userItems = items.filter(item =>
-    item.fromUserId === userId || corrIds.includes(item.id)
-  );
+    // Filter: only items where user is sender or recipient
+    const userItems = items.filter(item =>
+      item.fromUserId === userId || corrIds.includes(item.id)
+    );
 
-  const enriched = await enrichItems(userItems);
+    enriched = await enrichItems(userItems);
+  });
   res.json(enriched);
 });
 
@@ -130,27 +133,34 @@ router.get("/correspondence/:id", async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
 
-  const items = await db.select().from(correspondenceTable)
-    .where(and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId)))
-    .limit(1);
+  let items: typeof correspondenceTable.$inferSelect[] | undefined;
+  let enriched: Awaited<ReturnType<typeof enrichItems>> | undefined;
+  await tenantRead(async () => {
+    items = await db.select().from(correspondenceTable)
+      .where(and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId)))
+      .limit(1);
 
-  if (!items[0]) {
+    if (!items[0]) return;
+
+    // Tenant isolation: verify org ownership (NULL organizationId = legacy record, allow access)
+    if (!isSystemOwner(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
+      throw new TenantIsolationError({
+        route: req.path, method: req.method,
+        userId: user.id, userOrgId: user.organizationId,
+        attemptedResourceType: "correspondence", attemptedResourceId: id,
+        resourceOrgId: items[0].organizationId,
+      });
+    }
+
+    enriched = await enrichItems(items);
+  });
+
+  if (!items || !items[0]) {
     res.status(404).json({ error: "Not found" });
     return;
   }
 
-  // Tenant isolation: verify org ownership (NULL organizationId = legacy record, allow access)
-  if (!isSystemOwner(user) && items[0].organizationId !== null && items[0].organizationId !== user.organizationId) {
-    throw new TenantIsolationError({
-      route: req.path, method: req.method,
-      userId: user.id, userOrgId: user.organizationId,
-      attemptedResourceType: "correspondence", attemptedResourceId: id,
-      resourceOrgId: items[0].organizationId,
-    });
-  }
-
-  const enriched = await enrichItems(items);
-  res.json(enriched[0]);
+  res.json(enriched![0]);
 });
 
 // ─── Move to Project ──────────────────────────────────────────────────────────
@@ -300,9 +310,12 @@ router.put("/correspondence/:id/read", async (req, res): Promise<void> => {
 router.get("/correspondence/:id/share", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
-  const [corr] = await db
-    .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt, organizationId: correspondenceTable.organizationId })
-    .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  let corr: { hasShareLink: string | null; expiresAt: Date | null; organizationId: number | null } | undefined;
+  await tenantRead(async () => {
+    [corr] = await db
+      .select({ hasShareLink: correspondenceTable.shareToken, expiresAt: correspondenceTable.shareExpiresAt, organizationId: correspondenceTable.organizationId })
+      .from(correspondenceTable).where(eq(correspondenceTable.id, id)).limit(1);
+  });
   if (!corr) { res.status(404).json({ error: "Not Found" }); return; }
   if (!isSystemOwner(user) && corr.organizationId !== null && corr.organizationId !== user.organizationId) {
     res.status(403).json({ error: "Forbidden" });
@@ -381,14 +394,17 @@ router.delete("/correspondence/:id", requireAuth, async (req, res): Promise<void
 router.get("/my-projects", async (req, res): Promise<void> => {
   const userId = req.user!.id;
 
-  const memberships = await db.select({
-    projectId: projectMembersTable.projectId,
-    project: projectsTable,
-  }).from(projectMembersTable)
-    .leftJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
-    .where(eq(projectMembersTable.userId, userId));
+  let memberships: { projectId: number; project: typeof projectsTable.$inferSelect | null }[] | undefined;
+  await tenantRead(async () => {
+    memberships = await db.select({
+      projectId: projectMembersTable.projectId,
+      project: projectsTable,
+    }).from(projectMembersTable)
+      .leftJoin(projectsTable, eq(projectMembersTable.projectId, projectsTable.id))
+      .where(eq(projectMembersTable.userId, userId));
+  });
 
-  const projects = memberships
+  const projects = memberships!
     .filter(m => m.project)
     .map(m => m.project!);
 

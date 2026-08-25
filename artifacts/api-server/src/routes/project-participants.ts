@@ -9,7 +9,7 @@ import {
   participantRoleEnum,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { parseBody } from "../lib/validate.js";
 import { requireInt, type ProjectParams } from "../lib/params.js";
@@ -70,30 +70,35 @@ async function resolveProjectOrg(
 // ─── GET /api/projects/:projectId/participants ────────────────────────────────
 
 router.get("/participants", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const ctx = await resolveProjectOrg(req);
-  if (!ctx) { res.status(404).json({ error: "Project not found" }); return; }
+  const result = await tenantRead(async () => {
+    const ctx = await resolveProjectOrg(req);
+    if (!ctx) return { kind: "notfound" as const };
 
-  const rows = await db
-    .select({
-      id:         projectParticipantsTable.id,
-      role:       projectParticipantsTable.role,
-      notes:      projectParticipantsTable.notes,
-      createdAt:  projectParticipantsTable.createdAt,
-      updatedAt:  projectParticipantsTable.updatedAt,
-      entity: {
-        id:                 entitiesTable.id,
-        name:               entitiesTable.name,
-        type:               entitiesTable.type,
-        country:            entitiesTable.country,
-        registrationNumber: entitiesTable.registrationNumber,
-      },
-    })
-    .from(projectParticipantsTable)
-    .innerJoin(entitiesTable, eq(entitiesTable.id, projectParticipantsTable.entityId))
-    .where(eq(projectParticipantsTable.projectId, ctx.projectId))
-    .orderBy(projectParticipantsTable.role, entitiesTable.name);
+    const rows = await db
+      .select({
+        id:         projectParticipantsTable.id,
+        role:       projectParticipantsTable.role,
+        notes:      projectParticipantsTable.notes,
+        createdAt:  projectParticipantsTable.createdAt,
+        updatedAt:  projectParticipantsTable.updatedAt,
+        entity: {
+          id:                 entitiesTable.id,
+          name:               entitiesTable.name,
+          type:               entitiesTable.type,
+          country:            entitiesTable.country,
+          registrationNumber: entitiesTable.registrationNumber,
+        },
+      })
+      .from(projectParticipantsTable)
+      .innerJoin(entitiesTable, eq(entitiesTable.id, projectParticipantsTable.entityId))
+      .where(eq(projectParticipantsTable.projectId, ctx.projectId))
+      .orderBy(projectParticipantsTable.role, entitiesTable.name);
 
-  res.json(rows);
+    return { kind: "ok" as const, rows };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Project not found" }); return; }
+  res.json(result.rows);
 });
 
 // ─── POST /api/projects/:projectId/participants ───────────────────────────────

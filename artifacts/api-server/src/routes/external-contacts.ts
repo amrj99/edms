@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, externalContactsTable } from "@workspace/db";
 import { eq, and, ilike, or } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { logger } from "../lib/logger.js";
 import {param, paramInt, requireInt} from '../lib/params';
 
@@ -15,27 +15,29 @@ router.get("/", async (req, res): Promise<void> => {
     const orgId = req.user!.organizationId!;
     const search = (req.query.q as string | undefined)?.trim();
 
-    let rows;
-    if (search) {
-      rows = await db
-        .select()
-        .from(externalContactsTable)
-        .where(and(
-          eq(externalContactsTable.organizationId, orgId),
-          or(
-            ilike(externalContactsTable.name, `%${search}%`),
-            ilike(externalContactsTable.email, `%${search}%`),
-            ilike(externalContactsTable.company, `%${search}%`),
-          ),
-        ))
-        .orderBy(externalContactsTable.name);
-    } else {
-      rows = await db
-        .select()
-        .from(externalContactsTable)
-        .where(eq(externalContactsTable.organizationId, orgId))
-        .orderBy(externalContactsTable.name);
-    }
+    let rows: typeof externalContactsTable.$inferSelect[] | undefined;
+    await tenantRead(async () => {
+      if (search) {
+        rows = await db
+          .select()
+          .from(externalContactsTable)
+          .where(and(
+            eq(externalContactsTable.organizationId, orgId),
+            or(
+              ilike(externalContactsTable.name, `%${search}%`),
+              ilike(externalContactsTable.email, `%${search}%`),
+              ilike(externalContactsTable.company, `%${search}%`),
+            ),
+          ))
+          .orderBy(externalContactsTable.name);
+      } else {
+        rows = await db
+          .select()
+          .from(externalContactsTable)
+          .where(eq(externalContactsTable.organizationId, orgId))
+          .orderBy(externalContactsTable.name);
+      }
+    });
 
     res.json(rows);
   } catch (err) {

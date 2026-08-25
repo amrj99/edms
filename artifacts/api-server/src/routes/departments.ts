@@ -4,7 +4,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { departmentsTable, userDepartmentsTable, usersTable } from "@workspace/db";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import {param, paramInt, requireInt, queryIntOrNull} from '../lib/params';
 
@@ -27,23 +27,25 @@ router.get("/", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   if (!orgId) { res.status(400).json({ error: "Organization required" }); return; }
 
-  const rows = await db
-    .select({
-      id:             departmentsTable.id,
-      organizationId: departmentsTable.organizationId,
-      code:           departmentsTable.code,
-      name:           departmentsTable.name,
-      description:    departmentsTable.description,
-      parentId:       departmentsTable.parentId,
-      isActive:       departmentsTable.isActive,
-      createdAt:      departmentsTable.createdAt,
-      memberCount:    sql<number>`(
-        SELECT count(*)::int FROM user_departments ud WHERE ud.department_id = ${departmentsTable.id}
-      )`,
-    })
-    .from(departmentsTable)
-    .where(eq(departmentsTable.organizationId, orgId))
-    .orderBy(departmentsTable.name);
+  const rows = await tenantRead(async () =>
+    db
+      .select({
+        id:             departmentsTable.id,
+        organizationId: departmentsTable.organizationId,
+        code:           departmentsTable.code,
+        name:           departmentsTable.name,
+        description:    departmentsTable.description,
+        parentId:       departmentsTable.parentId,
+        isActive:       departmentsTable.isActive,
+        createdAt:      departmentsTable.createdAt,
+        memberCount:    sql<number>`(
+          SELECT count(*)::int FROM user_departments ud WHERE ud.department_id = ${departmentsTable.id}
+        )`,
+      })
+      .from(departmentsTable)
+      .where(eq(departmentsTable.organizationId, orgId))
+      .orderBy(departmentsTable.name),
+  );
 
   res.json(rows);
 });
@@ -136,29 +138,34 @@ router.get("/:id/members", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const deptId = requireInt(req.params.id);
 
-  const [dept] = await db
-    .select()
-    .from(departmentsTable)
-    .where(and(eq(departmentsTable.id, deptId), eq(departmentsTable.organizationId, orgId!)));
+  const result = await tenantRead(async () => {
+    const [dept] = await db
+      .select()
+      .from(departmentsTable)
+      .where(and(eq(departmentsTable.id, deptId), eq(departmentsTable.organizationId, orgId!)));
 
-  if (!dept) { res.status(404).json({ error: "Department not found" }); return; }
+    if (!dept) return { kind: "notfound" as const };
 
-  const members = await db
-    .select({
-      userId:    usersTable.id,
-      firstName: usersTable.firstName,
-      lastName:  usersTable.lastName,
-      email:     usersTable.email,
-      role:      usersTable.role,
-      isPrimary: userDepartmentsTable.isPrimary,
-      joinedAt:  userDepartmentsTable.joinedAt,
-    })
-    .from(userDepartmentsTable)
-    .innerJoin(usersTable, eq(userDepartmentsTable.userId, usersTable.id))
-    .where(eq(userDepartmentsTable.departmentId, deptId))
-    .orderBy(usersTable.firstName);
+    const members = await db
+      .select({
+        userId:    usersTable.id,
+        firstName: usersTable.firstName,
+        lastName:  usersTable.lastName,
+        email:     usersTable.email,
+        role:      usersTable.role,
+        isPrimary: userDepartmentsTable.isPrimary,
+        joinedAt:  userDepartmentsTable.joinedAt,
+      })
+      .from(userDepartmentsTable)
+      .innerJoin(usersTable, eq(userDepartmentsTable.userId, usersTable.id))
+      .where(eq(userDepartmentsTable.departmentId, deptId))
+      .orderBy(usersTable.firstName);
 
-  res.json(members);
+    return { kind: "ok" as const, members };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Department not found" }); return; }
+  res.json(result.members);
 });
 
 // ─── Add user to department ────────────────────────────────────────────────────
@@ -239,20 +246,22 @@ router.get("/user/:userId", async (req, res): Promise<void> => {
   const orgId = getOrgId(req);
   const targetUserId = requireInt(req.params.userId);
 
-  const rows = await db
-    .select({
-      id:          departmentsTable.id,
-      code:        departmentsTable.code,
-      name:        departmentsTable.name,
-      isPrimary:   userDepartmentsTable.isPrimary,
-    })
-    .from(userDepartmentsTable)
-    .innerJoin(departmentsTable, eq(userDepartmentsTable.departmentId, departmentsTable.id))
-    .where(and(
-      eq(userDepartmentsTable.userId, targetUserId),
-      eq(departmentsTable.organizationId, orgId!),
-    ))
-    .orderBy(userDepartmentsTable.isPrimary);
+  const rows = await tenantRead(async () =>
+    db
+      .select({
+        id:          departmentsTable.id,
+        code:        departmentsTable.code,
+        name:        departmentsTable.name,
+        isPrimary:   userDepartmentsTable.isPrimary,
+      })
+      .from(userDepartmentsTable)
+      .innerJoin(departmentsTable, eq(userDepartmentsTable.departmentId, departmentsTable.id))
+      .where(and(
+        eq(userDepartmentsTable.userId, targetUserId),
+        eq(departmentsTable.organizationId, orgId!),
+      ))
+      .orderBy(userDepartmentsTable.isPrimary),
+  );
 
   res.json(rows);
 });

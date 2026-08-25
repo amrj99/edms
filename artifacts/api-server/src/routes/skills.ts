@@ -19,29 +19,32 @@ router.get("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId = getReqOrgId(req);
   if (!orgId) { res.status(403).json({ error: "No organization context" }); return; }
 
-  const skills = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.organizationId, orgId))
-    .orderBy(skillDefinitionsTable.createdAt);
+  // List + per-skill last-execution fan-out inside ONE short tenant read tx.
+  const enriched = await tenantRead(async () => {
+    const skills = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.organizationId, orgId))
+      .orderBy(skillDefinitionsTable.createdAt);
 
-  // Attach last execution for each skill
-  const enriched = await Promise.all(
-    skills.map(async (s) => {
-      const [lastExec] = await db
-        .select({
-          id:          skillExecutionsTable.id,
-          status:      skillExecutionsTable.status,
-          executedAt:  skillExecutionsTable.executedAt,
-          durationMs:  skillExecutionsTable.durationMs,
-        })
-        .from(skillExecutionsTable)
-        .where(eq(skillExecutionsTable.skillId, s.id))
-        .orderBy(desc(skillExecutionsTable.executedAt))
-        .limit(1);
-      return { ...s, lastExecution: lastExec ?? null };
-    }),
-  );
+    // Attach last execution for each skill
+    return await Promise.all(
+      skills.map(async (s) => {
+        const [lastExec] = await db
+          .select({
+            id:          skillExecutionsTable.id,
+            status:      skillExecutionsTable.status,
+            executedAt:  skillExecutionsTable.executedAt,
+            durationMs:  skillExecutionsTable.durationMs,
+          })
+          .from(skillExecutionsTable)
+          .where(eq(skillExecutionsTable.skillId, s.id))
+          .orderBy(desc(skillExecutionsTable.executedAt))
+          .limit(1);
+        return { ...s, lastExecution: lastExec ?? null };
+      }),
+    );
+  });
 
   res.json(enriched);
 });
@@ -200,28 +203,35 @@ router.get("/:id/executions", requireAuth, adminOnly, async (req, res): Promise<
   const skillId = requireInt(req.params.id);
   const limit   = Math.min(queryIntOr(req.query.limit, 50), 200);
 
-  const [existing] = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .limit(1);
+  const outcome = await tenantRead(async () => {
+    const [existing] = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .limit(1);
 
-  if (!existing) { res.status(404).json({ error: "Skill not found" }); return; }
-  if (existing.organizationId !== orgId) { res.status(403).json({ error: "Forbidden" }); return; }
+    if (!existing) return { kind: "notFound" as const };
+    if (existing.organizationId !== orgId) return { kind: "forbidden" as const };
 
-  const executions = await db
-    .select()
-    .from(skillExecutionsTable)
-    .where(
-      and(
-        eq(skillExecutionsTable.skillId, skillId),
-        eq(skillExecutionsTable.organizationId, orgId),
-      ),
-    )
-    .orderBy(desc(skillExecutionsTable.executedAt))
-    .limit(limit);
+    const executions = await db
+      .select()
+      .from(skillExecutionsTable)
+      .where(
+        and(
+          eq(skillExecutionsTable.skillId, skillId),
+          eq(skillExecutionsTable.organizationId, orgId),
+        ),
+      )
+      .orderBy(desc(skillExecutionsTable.executedAt))
+      .limit(limit);
 
-  res.json(executions);
+    return { kind: "ok" as const, executions };
+  });
+
+  if (outcome.kind === "notFound") { res.status(404).json({ error: "Skill not found" }); return; }
+  if (outcome.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+
+  res.json(outcome.executions);
 });
 
 export default router;

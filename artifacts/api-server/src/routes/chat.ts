@@ -79,66 +79,72 @@ router.get("/groups", async (req, res): Promise<void> => {
     return;
   }
 
-  const memberships = await db
-    .select({ groupId: chatGroupMembersTable.groupId })
-    .from(chatGroupMembersTable)
-    .where(eq(chatGroupMembersTable.userId, userId));
+  const result = await tenantRead(async () => {
+    const memberships = await db
+      .select({ groupId: chatGroupMembersTable.groupId })
+      .from(chatGroupMembersTable)
+      .where(eq(chatGroupMembersTable.userId, userId));
 
-  const groupIds = memberships.map((m) => m.groupId);
-  if (groupIds.length === 0) {
+    const groupIds = memberships.map((m) => m.groupId);
+    if (groupIds.length === 0) return null;
+
+    const groups = await db
+      .select({
+        id: chatGroupsTable.id,
+        name: chatGroupsTable.name,
+        description: chatGroupsTable.description,
+        type: chatGroupsTable.type,
+        projectId: chatGroupsTable.projectId,
+        department: chatGroupsTable.department,
+        createdById: chatGroupsTable.createdById,
+        isArchived: chatGroupsTable.isArchived,
+        createdAt: chatGroupsTable.createdAt,
+        updatedAt: chatGroupsTable.updatedAt,
+      })
+      .from(chatGroupsTable)
+      .where(and(inArray(chatGroupsTable.id, groupIds), eq(chatGroupsTable.organizationId, orgId!), eq(chatGroupsTable.isArchived, false)));
+
+    const projectIds = [...new Set(groups.filter((g) => g.projectId).map((g) => g.projectId!))];
+    let projectMap: Record<number, string> = {};
+    if (projectIds.length > 0) {
+      const projects = await db
+        .select({ id: projectsTable.id, name: projectsTable.name })
+        .from(projectsTable)
+        .where(inArray(projectsTable.id, projectIds));
+      projectMap = Object.fromEntries(projects.map((p) => [p.id, p.name]));
+    }
+
+    // Get unread counts for each group
+    const unreadCounts: Record<number, number> = {};
+    for (const gId of groupIds) {
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(chatMessagesTable)
+        .where(
+          and(
+            eq(chatMessagesTable.groupId, gId),
+            eq(chatMessagesTable.isDeleted, false),
+            sql`${chatMessagesTable.id} not in (
+              select message_id from chat_message_reads where user_id = ${userId}
+            )`
+          )
+        );
+      unreadCounts[gId] = row?.count ?? 0;
+    }
+
+    return { groups, projectMap, unreadCounts };
+  });
+
+  if (!result) {
     res.json({ groups: [] });
     return;
   }
 
-  const groups = await db
-    .select({
-      id: chatGroupsTable.id,
-      name: chatGroupsTable.name,
-      description: chatGroupsTable.description,
-      type: chatGroupsTable.type,
-      projectId: chatGroupsTable.projectId,
-      department: chatGroupsTable.department,
-      createdById: chatGroupsTable.createdById,
-      isArchived: chatGroupsTable.isArchived,
-      createdAt: chatGroupsTable.createdAt,
-      updatedAt: chatGroupsTable.updatedAt,
-    })
-    .from(chatGroupsTable)
-    .where(and(inArray(chatGroupsTable.id, groupIds), eq(chatGroupsTable.organizationId, orgId!), eq(chatGroupsTable.isArchived, false)));
-
-  const projectIds = [...new Set(groups.filter((g) => g.projectId).map((g) => g.projectId!))];
-  let projectMap: Record<number, string> = {};
-  if (projectIds.length > 0) {
-    const projects = await db
-      .select({ id: projectsTable.id, name: projectsTable.name })
-      .from(projectsTable)
-      .where(inArray(projectsTable.id, projectIds));
-    projectMap = Object.fromEntries(projects.map((p) => [p.id, p.name]));
-  }
-
-  // Get unread counts for each group
-  const unreadCounts: Record<number, number> = {};
-  for (const gId of groupIds) {
-    const [result] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(chatMessagesTable)
-      .where(
-        and(
-          eq(chatMessagesTable.groupId, gId),
-          eq(chatMessagesTable.isDeleted, false),
-          sql`${chatMessagesTable.id} not in (
-            select message_id from chat_message_reads where user_id = ${userId}
-          )`
-        )
-      );
-    unreadCounts[gId] = result?.count ?? 0;
-  }
-
   res.json({
-    groups: groups.map((g) => ({
+    groups: result.groups.map((g) => ({
       ...g,
-      projectName: g.projectId ? (projectMap[g.projectId] ?? null) : null,
-      unreadCount: unreadCounts[g.id] ?? 0,
+      projectName: g.projectId ? (result.projectMap[g.projectId] ?? null) : null,
+      unreadCount: result.unreadCounts[g.id] ?? 0,
     })),
   });
 });
@@ -187,35 +193,39 @@ router.get("/groups/:id", async (req, res): Promise<void> => {
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!(await isMember(groupId, userId))) {
-    res.status(403).json({ error: "Not a member of this group" });
-    return;
-  }
+  const outcome = await tenantRead(async () => {
+    if (!(await isMember(groupId, userId))) return { kind: "notMember" as const };
 
-  const [group] = await db.select().from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId));
-  if (!group) { res.status(404).json({ error: "Group not found" }); return; }
+    const [group] = await db.select().from(chatGroupsTable).where(eq(chatGroupsTable.id, groupId));
+    if (!group) return { kind: "notFound" as const };
 
-  const members = await db
-    .select({
-      id: chatGroupMembersTable.id,
-      userId: chatGroupMembersTable.userId,
-      role: chatGroupMembersTable.role,
-      joinedAt: chatGroupMembersTable.joinedAt,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      email: usersTable.email,
-    })
-    .from(chatGroupMembersTable)
-    .leftJoin(usersTable, eq(chatGroupMembersTable.userId, usersTable.id))
-    .where(eq(chatGroupMembersTable.groupId, groupId));
+    const members = await db
+      .select({
+        id: chatGroupMembersTable.id,
+        userId: chatGroupMembersTable.userId,
+        role: chatGroupMembersTable.role,
+        joinedAt: chatGroupMembersTable.joinedAt,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        email: usersTable.email,
+      })
+      .from(chatGroupMembersTable)
+      .leftJoin(usersTable, eq(chatGroupMembersTable.userId, usersTable.id))
+      .where(eq(chatGroupMembersTable.groupId, groupId));
 
-  let projectName: string | null = null;
-  if (group.projectId) {
-    const [proj] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, group.projectId));
-    projectName = proj?.name ?? null;
-  }
+    let projectName: string | null = null;
+    if (group.projectId) {
+      const [proj] = await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, group.projectId));
+      projectName = proj?.name ?? null;
+    }
 
-  res.json({ group: { ...group, projectName }, members: members.map(m => ({ ...m, name: `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() })) });
+    return { kind: "ok" as const, group, members, projectName };
+  });
+
+  if (outcome.kind === "notMember") { res.status(403).json({ error: "Not a member of this group" }); return; }
+  if (outcome.kind === "notFound") { res.status(404).json({ error: "Group not found" }); return; }
+
+  res.json({ group: { ...outcome.group, projectName: outcome.projectName }, members: outcome.members.map(m => ({ ...m, name: `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() })) });
 });
 
 // ─── PUT /api/chat/groups/:id ──────────────────────────────────────────────────
@@ -286,23 +296,29 @@ router.get("/groups/:id/members", async (req, res): Promise<void> => {
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
+  const outcome = await tenantRead(async () => {
+    if (!(await isMember(groupId, userId))) return { kind: "notMember" as const };
 
-  const members = await db
-    .select({
-      id: chatGroupMembersTable.id,
-      userId: chatGroupMembersTable.userId,
-      role: chatGroupMembersTable.role,
-      joinedAt: chatGroupMembersTable.joinedAt,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      email: usersTable.email,
-    })
-    .from(chatGroupMembersTable)
-    .leftJoin(usersTable, eq(chatGroupMembersTable.userId, usersTable.id))
-    .where(eq(chatGroupMembersTable.groupId, groupId));
+    const members = await db
+      .select({
+        id: chatGroupMembersTable.id,
+        userId: chatGroupMembersTable.userId,
+        role: chatGroupMembersTable.role,
+        joinedAt: chatGroupMembersTable.joinedAt,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        email: usersTable.email,
+      })
+      .from(chatGroupMembersTable)
+      .leftJoin(usersTable, eq(chatGroupMembersTable.userId, usersTable.id))
+      .where(eq(chatGroupMembersTable.groupId, groupId));
 
-  res.json({ members: members.map(m => ({ ...m, name: `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() })) });
+    return { kind: "ok" as const, members };
+  });
+
+  if (outcome.kind === "notMember") { res.status(403).json({ error: "Not a member" }); return; }
+
+  res.json({ members: outcome.members.map(m => ({ ...m, name: `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() })) });
 });
 
 // ─── POST /api/chat/groups/:id/members ────────────────────────────────────────
@@ -380,8 +396,6 @@ router.get("/groups/:id/messages", async (req, res): Promise<void> => {
   const groupId = requireInt(req.params.id);
   if (!Number.isInteger(groupId)) { res.status(400).json({ error: "Invalid id" }); return; }
 
-  if (!(await isMember(groupId, userId))) { res.status(403).json({ error: "Not a member" }); return; }
-
   const limit = Math.min(parseInt(String(req.query.limit ?? "50")), 100);
   const before = req.query.before ? parseInt(String(req.query.before)) : null;
   const after = req.query.after ? parseInt(String(req.query.after)) : null;
@@ -400,15 +414,24 @@ router.get("/groups/:id/messages", async (req, res): Promise<void> => {
     }
   }
 
-  const messages = await db
-    .select()
-    .from(chatMessagesTable)
-    .where(and(...conditions))
-    .orderBy(desc(chatMessagesTable.id))
-    .limit(limit);
+  const outcome = await tenantRead(async () => {
+    if (!(await isMember(groupId, userId))) return { kind: "notMember" as const };
 
-  const enriched = await enrichMessages(messages.reverse(), userId);
-  res.json({ messages: enriched, hasMore: messages.length === limit });
+    const messages = await db
+      .select()
+      .from(chatMessagesTable)
+      .where(and(...conditions))
+      .orderBy(desc(chatMessagesTable.id))
+      .limit(limit);
+
+    const count = messages.length;
+    const enriched = await enrichMessages(messages.reverse(), userId);
+    return { kind: "ok" as const, enriched, count };
+  });
+
+  if (outcome.kind === "notMember") { res.status(403).json({ error: "Not a member" }); return; }
+
+  res.json({ messages: outcome.enriched, hasMore: outcome.count === limit });
 });
 
 // ─── POST /api/chat/groups/:id/messages ───────────────────────────────────────
@@ -571,38 +594,44 @@ router.post("/groups/:id/read-all", async (req, res): Promise<void> => {
 router.get("/unread", async (req, res): Promise<void> => {
   const userId = req.user!.id;
 
-  const memberships = await db
-    .select({ groupId: chatGroupMembersTable.groupId })
-    .from(chatGroupMembersTable)
-    .where(eq(chatGroupMembersTable.userId, userId));
+  const outcome = await tenantRead(async () => {
+    const memberships = await db
+      .select({ groupId: chatGroupMembersTable.groupId })
+      .from(chatGroupMembersTable)
+      .where(eq(chatGroupMembersTable.userId, userId));
 
-  const groupIds = memberships.map((m) => m.groupId);
-  if (groupIds.length === 0) {
+    const groupIds = memberships.map((m) => m.groupId);
+    if (groupIds.length === 0) return { kind: "empty" as const };
+
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(chatMessagesTable)
+      .where(
+        and(
+          inArray(chatMessagesTable.groupId, groupIds),
+          eq(chatMessagesTable.isDeleted, false),
+          sql`${chatMessagesTable.id} not in (select message_id from chat_message_reads where user_id = ${userId})`
+        )
+      );
+
+    return { kind: "ok" as const, total: row?.count ?? 0 };
+  });
+
+  if (outcome.kind === "empty") {
     res.json({ total: 0, byGroup: {} });
     return;
   }
 
-  const [result] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(chatMessagesTable)
-    .where(
-      and(
-        inArray(chatMessagesTable.groupId, groupIds),
-        eq(chatMessagesTable.isDeleted, false),
-        sql`${chatMessagesTable.id} not in (select message_id from chat_message_reads where user_id = ${userId})`
-      )
-    );
-
-  res.json({ total: result?.count ?? 0 });
+  res.json({ total: outcome.total });
 });
 
 // ─── GET /api/chat/users ─── list org users to add to groups ─────────────────
 router.get("/users", async (req, res): Promise<void> => {
   const orgId = req.user!.organizationId!;
-  const rawUsers = await db
+  const rawUsers = await tenantRead(() => db
     .select({ id: usersTable.id, firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email, role: usersTable.role })
     .from(usersTable)
-    .where(eq(usersTable.organizationId, orgId));
+    .where(eq(usersTable.organizationId, orgId)));
   const users = rawUsers.map(u => ({ ...u, name: `${u.firstName} ${u.lastName}`.trim() }));
   res.json({ items: users });
 });

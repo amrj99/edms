@@ -12,42 +12,63 @@ router.use(requireAuth);
 router.get("/", async (req: Request, res: Response): Promise<void> => {
   const userId = req.user!.id;
 
-  const [user] = await db
-    .select({
-      id: usersTable.id,
-      email: usersTable.email,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      role: usersTable.role,
-      organizationId: usersTable.organizationId,
-      organizationName: organizationsTable.name,
-      department: usersTable.department,
-      createdAt: usersTable.createdAt,
-    })
-    .from(usersTable)
-    .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
-    .where(eq(usersTable.id, userId));
+  let user: {
+    id: number;
+    email: string;
+    firstName: string;
+    lastName: string;
+    role: typeof usersTable.$inferSelect["role"];
+    organizationId: number | null;
+    organizationName: string | null;
+    department: string | null;
+    createdAt: Date;
+  } | undefined;
+  let prefs: typeof userPreferencesTable.$inferSelect | undefined;
+  let recentActivity: Pick<
+    typeof auditLogsTable.$inferSelect,
+    "id" | "action" | "entityType" | "entityId" | "details" | "createdAt"
+  >[] | undefined;
+
+  await tenantRead(async () => {
+    [user] = await db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        role: usersTable.role,
+        organizationId: usersTable.organizationId,
+        organizationName: organizationsTable.name,
+        department: usersTable.department,
+        createdAt: usersTable.createdAt,
+      })
+      .from(usersTable)
+      .leftJoin(organizationsTable, eq(usersTable.organizationId, organizationsTable.id))
+      .where(eq(usersTable.id, userId));
+
+    if (!user) return;
+
+    [prefs] = await db
+      .select()
+      .from(userPreferencesTable)
+      .where(eq(userPreferencesTable.userId, userId));
+
+    recentActivity = await db
+      .select({
+        id: auditLogsTable.id,
+        action: auditLogsTable.action,
+        entityType: auditLogsTable.entityType,
+        entityId: auditLogsTable.entityId,
+        details: auditLogsTable.details,
+        createdAt: auditLogsTable.createdAt,
+      })
+      .from(auditLogsTable)
+      .where(eq(auditLogsTable.userId, userId))
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(5);
+  });
 
   if (!user) { res.status(404).json({ error: "User not found" }); return; }
-
-  const [prefs] = await db
-    .select()
-    .from(userPreferencesTable)
-    .where(eq(userPreferencesTable.userId, userId));
-
-  const recentActivity = await db
-    .select({
-      id: auditLogsTable.id,
-      action: auditLogsTable.action,
-      entityType: auditLogsTable.entityType,
-      entityId: auditLogsTable.entityId,
-      details: auditLogsTable.details,
-      createdAt: auditLogsTable.createdAt,
-    })
-    .from(auditLogsTable)
-    .where(eq(auditLogsTable.userId, userId))
-    .orderBy(desc(auditLogsTable.createdAt))
-    .limit(5);
 
   res.json({
     user,

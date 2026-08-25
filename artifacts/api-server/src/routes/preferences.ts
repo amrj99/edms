@@ -3,13 +3,16 @@ import { db } from "@workspace/db";
 import { userPreferencesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 
 const router = Router();
 
 router.get("/preferences", requireAuth, async (req, res): Promise<void> => {
-  const [row] = await db.select().from(userPreferencesTable)
-    .where(eq(userPreferencesTable.userId, req.user!.id));
+  let row: typeof userPreferencesTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    [row] = await db.select().from(userPreferencesTable)
+      .where(eq(userPreferencesTable.userId, req.user!.id));
+  });
   res.json(row ?? { userId: req.user!.id, dashboardWidgets: null, dashboardLayout: null, savedFilters: null, columnPrefs: null });
 });
 

@@ -4,7 +4,7 @@ import { projectsTable, projectMembersTable, projectPartiesTable, organizationsT
 import { eq, count, and, inArray, isNotNull, isNull } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { canAccessProject } from "../lib/can-access-project.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, hasMinRole } from "../middlewares/require-role.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -46,21 +46,55 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     ? eq(projectsTable.organizationId, effectiveOrgId)
     : isNotNull(projectsTable.organizationId); // sysOwner with no org filter → all orgs
 
-  let projects = await db.select({
-    project: projectsTable,
-    orgName: organizationsTable.name,
-  }).from(projectsTable)
-    .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
-    .where(orgFilter);
+  const data = await tenantRead(async () => {
+    const projects = await db.select({
+      project: projectsTable,
+      orgName: organizationsTable.name,
+    }).from(projectsTable)
+      .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
+      .where(orgFilter);
 
-  // Non-elevated users only see projects they are explicitly assigned to.
-  // Admins and system owners see all projects in the organization.
+    // Non-elevated users only see projects they are explicitly assigned to.
+    const memberships = !hasMinRole(user, "admin")
+      ? await db
+          .select({ projectId: projectMembersTable.projectId })
+          .from(projectMembersTable)
+          .where(eq(projectMembersTable.userId, user.id))
+      : null;
+
+    // ── Party project discovery (Phase 6C) ──────────────────────────────────
+    // Invariant I-10: every project in this list must satisfy canAccessProject()
+    // for the same caller — the list must never be broader than the detail gate.
+    // Both conditions below mirror the party branch of canAccessProject():
+    //   removed_at IS NULL          → revocation takes effect on the next request
+    //   collaboration_mode='parties' → stale party rows on org_only projects never leak
+    // Party access is org-wide (no project_members check), matching the detail gate.
+    const partyRows = (!isSystemOwner(user) && user.organizationId)
+      ? await db.select({
+          project: projectsTable,
+          orgName: organizationsTable.name,
+          partyRole: projectPartiesTable.partyRole,
+        }).from(projectPartiesTable)
+          .innerJoin(projectsTable, eq(projectPartiesTable.projectId, projectsTable.id))
+          .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
+          .where(and(
+            eq(projectPartiesTable.organizationId, user.organizationId),
+            isNull(projectPartiesTable.removedAt),
+            eq(projectsTable.collaborationMode, "parties"),
+          ))
+      : [];
+
+    const memberCounts = await db.select({ projectId: projectMembersTable.projectId, cnt: count() }).from(projectMembersTable).groupBy(projectMembersTable.projectId);
+    const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
+
+    return { projects, memberships, partyRows, memberCounts, docCounts };
+  });
+
+  // ── Pure JS assembly (outside the read tx) ──────────────────────────────────
+  let projects = data.projects;
+
   if (!hasMinRole(user, "admin")) {
-    const memberships = await db
-      .select({ projectId: projectMembersTable.projectId })
-      .from(projectMembersTable)
-      .where(eq(projectMembersTable.userId, user.id));
-    const accessibleIds = new Set(memberships.map(m => m.projectId));
+    const accessibleIds = new Set(data.memberships!.map(m => m.projectId));
     projects = projects.filter(p => accessibleIds.has(p.project.id));
   }
 
@@ -70,30 +104,10 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     projects = projects.filter(p => p.project.visibleOnFree);
   }
 
-  // ── Party project discovery (Phase 6C) ──────────────────────────────────────
-  // Invariant I-10: every project in this list must satisfy canAccessProject()
-  // for the same caller — the list must never be broader than the detail gate.
-  // Both conditions below mirror the party branch of canAccessProject():
-  //   removed_at IS NULL          → revocation takes effect on the next request
-  //   collaboration_mode='parties' → stale party rows on org_only projects never leak
-  // Party access is org-wide (no project_members check), matching the detail gate.
   const partyRoleMap = new Map<number, string>();
   if (!isSystemOwner(user) && user.organizationId) {
-    const partyRows = await db.select({
-      project: projectsTable,
-      orgName: organizationsTable.name,
-      partyRole: projectPartiesTable.partyRole,
-    }).from(projectPartiesTable)
-      .innerJoin(projectsTable, eq(projectPartiesTable.projectId, projectsTable.id))
-      .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
-      .where(and(
-        eq(projectPartiesTable.organizationId, user.organizationId),
-        isNull(projectPartiesTable.removedAt),
-        eq(projectsTable.collaborationMode, "parties"),
-      ));
-
     const ownIds = new Set(projects.map(p => p.project.id));
-    for (const row of partyRows) {
+    for (const row of data.partyRows) {
       if (ownIds.has(row.project.id)) continue; // defensive dedupe — owner org cannot be its own party
       if (!row.project.visibleOnFree) continue;
       partyRoleMap.set(row.project.id, row.partyRole);
@@ -101,11 +115,8 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
     }
   }
 
-  const memberCounts = await db.select({ projectId: projectMembersTable.projectId, cnt: count() }).from(projectMembersTable).groupBy(projectMembersTable.projectId);
-  const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
-
-  const mcMap = new Map(memberCounts.map(r => [r.projectId, Number(r.cnt)]));
-  const dcMap = new Map(docCounts.map(r => [r.projectId, Number(r.cnt)]));
+  const mcMap = new Map(data.memberCounts.map(r => [r.projectId, Number(r.cnt)]));
+  const dcMap = new Map(data.docCounts.map(r => [r.projectId, Number(r.cnt)]));
 
   res.json({
     items: projects.map(({ project, orgName }) => ({
@@ -277,29 +288,37 @@ router.post("/", requireAuth, async (req, res): Promise<void> => {
 router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
-  const results = await db.select({ project: projectsTable, orgName: organizationsTable.name })
-    .from(projectsTable)
-    .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
-    .where(eq(projectsTable.id, id))
-    .limit(1);
 
-  if (!results[0]) { res.status(404).json({ error: "Not Found" }); return; }
+  const result = await tenantRead(async () => {
+    const results = await db.select({ project: projectsTable, orgName: organizationsTable.name })
+      .from(projectsTable)
+      .leftJoin(organizationsTable, eq(projectsTable.organizationId, organizationsTable.id))
+      .where(eq(projectsTable.id, id))
+      .limit(1);
 
-  // Party members can view projects they are active parties to (Phase 5, ADR-011)
-  const { allowed, mode, partyRole } = await canAccessProject(user.id, user.organizationId, id, isSystemOwner(user));
-  if (!allowed) { res.status(403).json({ error: "Forbidden" }); return; }
+    if (!results[0]) return { kind: "notfound" as const };
 
-  const mc = await db.select({ cnt: count() }).from(projectMembersTable).where(eq(projectMembersTable.projectId, id));
-  const dc = await db.select({ cnt: count() }).from(documentsTable).where(eq(documentsTable.projectId, id));
+    // Party members can view projects they are active parties to (Phase 5, ADR-011)
+    const { allowed, mode, partyRole } = await canAccessProject(user.id, user.organizationId, id, isSystemOwner(user));
+    if (!allowed) return { kind: "forbidden" as const };
+
+    const mc = await db.select({ cnt: count() }).from(projectMembersTable).where(eq(projectMembersTable.projectId, id));
+    const dc = await db.select({ cnt: count() }).from(documentsTable).where(eq(documentsTable.projectId, id));
+    return { kind: "ok" as const, project: results[0].project, orgName: results[0].orgName, mode, partyRole, mc, dc };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (result.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+
   res.json({
-    ...results[0].project,
-    organizationName: results[0].orgName,
-    memberCount: Number(mc[0]?.cnt ?? 0),
-    documentCount: Number(dc[0]?.cnt ?? 0),
+    ...result.project,
+    organizationName: result.orgName,
+    memberCount: Number(result.mc[0]?.cnt ?? 0),
+    documentCount: Number(result.dc[0]?.cnt ?? 0),
     // Phase 6C: expose the resolved access mode so the UI can gate party views.
     // Purely informational — enforcement stays in canAccessProject + ceilings.
-    accessMode: mode,
-    ...(partyRole ? { partyRole } : {}),
+    accessMode: result.mode,
+    ...(result.partyRole ? { partyRole: result.partyRole } : {}),
   });
 });
 
@@ -394,30 +413,36 @@ router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
 
-  // Tenant isolation: verify project belongs to the user's org
-  if (!isSystemOwner(user) && user.organizationId) {
-    const [project] = await db.select({ organizationId: projectsTable.organizationId })
-      .from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
-    if (!project) { res.status(404).json({ error: "Not Found" }); return; }
-    if (project.organizationId !== user.organizationId) {
-      throw new TenantIsolationError({
-        route: req.path, method: req.method,
-        userId: user.id, userOrgId: user.organizationId,
-        attemptedResourceType: "project_members", attemptedResourceId: id,
-        projectOrgId: project.organizationId,
-      });
+  const result = await tenantRead(async () => {
+    // Tenant isolation: verify project belongs to the user's org
+    if (!isSystemOwner(user) && user.organizationId) {
+      const [project] = await db.select({ organizationId: projectsTable.organizationId })
+        .from(projectsTable).where(eq(projectsTable.id, id)).limit(1);
+      if (!project) return { kind: "notfound" as const };
+      if (project.organizationId !== user.organizationId) {
+        throw new TenantIsolationError({
+          route: req.path, method: req.method,
+          userId: user.id, userOrgId: user.organizationId,
+          attemptedResourceType: "project_members", attemptedResourceId: id,
+          projectOrgId: project.organizationId,
+        });
+      }
     }
-  }
 
-  const members = await db.select({
-    member: projectMembersTable,
-    user: usersTable,
-  }).from(projectMembersTable)
-    .leftJoin(usersTable, eq(projectMembersTable.userId, usersTable.id))
-    .where(eq(projectMembersTable.projectId, id));
+    const members = await db.select({
+      member: projectMembersTable,
+      user: usersTable,
+    }).from(projectMembersTable)
+      .leftJoin(usersTable, eq(projectMembersTable.userId, usersTable.id))
+      .where(eq(projectMembersTable.projectId, id));
+
+    return { kind: "ok" as const, members };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
 
   res.json({
-    members: members.map(({ member, user }) => ({
+    members: result.members.map(({ member, user }) => ({
       id: member.id,
       userId: member.userId,
       projectId: member.projectId,
@@ -427,7 +452,7 @@ router.get("/:id/members", requireAuth, async (req, res): Promise<void> => {
         id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role, isActive: user.isActive, organizationId: user.organizationId, createdAt: user.createdAt,
       } : undefined,
     })),
-    total: members.length,
+    total: result.members.length,
   });
 });
 

@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable, orgConfigTable } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { withTenant } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { grantCredits, INITIAL_FREE_CREDITS } from "../lib/ai-credits.js";
@@ -15,9 +15,14 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
   if (isSystemOwner(user)) {
-    const orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
-    const userCounts = await db.select({ orgId: usersTable.organizationId, cnt: count() }).from(usersTable).groupBy(usersTable.organizationId);
-    const projectCounts = await db.select({ orgId: projectsTable.organizationId, cnt: count() }).from(projectsTable).groupBy(projectsTable.organizationId);
+    let orgs: typeof organizationsTable.$inferSelect[] = [];
+    let userCounts: { orgId: number | null; cnt: number }[] = [];
+    let projectCounts: { orgId: number | null; cnt: number }[] = [];
+    await tenantRead(async () => {
+      orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
+      userCounts = await db.select({ orgId: usersTable.organizationId, cnt: count() }).from(usersTable).groupBy(usersTable.organizationId);
+      projectCounts = await db.select({ orgId: projectsTable.organizationId, cnt: count() }).from(projectsTable).groupBy(projectsTable.organizationId);
+    });
     const countMap = new Map(userCounts.map((r) => [r.orgId, Number(r.cnt)]));
     const projMap = new Map(projectCounts.map((r) => [r.orgId, Number(r.cnt)]));
     res.json({
@@ -34,10 +39,16 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
   if (!user.organizationId) {
     res.json({ items: [], total: 0 }); return;
   }
-  const [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).limit(1);
+  let org: typeof organizationsTable.$inferSelect | undefined;
+  let uc: { cnt: number } | undefined;
+  let pc: { cnt: number } | undefined;
+  await tenantRead(async () => {
+    [org] = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId!)).limit(1);
+    if (!org) return;
+    [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, org.id));
+    [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, org.id));
+  });
   if (!org) { res.json({ items: [], total: 0 }); return; }
-  const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, org.id));
-  const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, org.id));
   res.json({ items: [{ ...org, userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) }], total: 1 });
 });
 
@@ -45,8 +56,20 @@ router.get("/", requireAuth, async (req, res): Promise<void> => {
 router.get("/cross-org-stats", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!)) { res.status(403).json({ error: "Forbidden" }); return; }
 
-  const orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
-  const projectRows = await db.select({ id: projectsTable.id, orgId: projectsTable.organizationId }).from(projectsTable);
+  let orgs: typeof organizationsTable.$inferSelect[] = [];
+  let projectRows: { id: number; orgId: number }[] = [];
+  let docCounts: { projectId: number; cnt: number }[] = [];
+  let ncrCounts: { projectId: number; cnt: number }[] = [];
+  await tenantRead(async () => {
+    orgs = await db.select().from(organizationsTable).orderBy(organizationsTable.name);
+    projectRows = await db.select({ id: projectsTable.id, orgId: projectsTable.organizationId }).from(projectsTable);
+    docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
+    ncrCounts = await db
+      .select({ projectId: ncrRecordsTable.projectId, cnt: count() })
+      .from(ncrRecordsTable)
+      .where(eq(ncrRecordsTable.status, "open"))
+      .groupBy(ncrRecordsTable.projectId);
+  });
 
   // Build project → org mapping
   const projOrgMap = new Map(projectRows.map(p => [p.id, p.orgId]));
@@ -58,7 +81,6 @@ router.get("/cross-org-stats", requireAuth, async (req, res): Promise<void> => {
   });
 
   // Count documents per project, then aggregate by org
-  const docCounts = await db.select({ projectId: documentsTable.projectId, cnt: count() }).from(documentsTable).groupBy(documentsTable.projectId);
   const docByOrg = new Map<number, number>();
   docCounts.forEach(r => {
     const orgId = projOrgMap.get(r.projectId);
@@ -66,11 +88,6 @@ router.get("/cross-org-stats", requireAuth, async (req, res): Promise<void> => {
   });
 
   // Count open NCRs per project, then aggregate by org
-  const ncrCounts = await db
-    .select({ projectId: ncrRecordsTable.projectId, cnt: count() })
-    .from(ncrRecordsTable)
-    .where(eq(ncrRecordsTable.status, "open"))
-    .groupBy(ncrRecordsTable.projectId);
   const ncrByOrg = new Map<number, number>();
   ncrCounts.forEach(r => {
     const orgId = projOrgMap.get(r.projectId);
@@ -149,10 +166,16 @@ router.get("/:id", requireAuth, async (req, res): Promise<void> => {
   if (!isSystemOwner(req.user!) && req.user!.organizationId !== id) {
     res.status(403).json({ error: "Forbidden" }); return;
   }
-  const orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, id)).limit(1);
+  let orgs: typeof organizationsTable.$inferSelect[] = [];
+  let uc: { cnt: number } | undefined;
+  let pc: { cnt: number } | undefined;
+  await tenantRead(async () => {
+    orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, id)).limit(1);
+    if (!orgs[0]) return;
+    [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));
+    [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, id));
+  });
   if (!orgs[0]) { res.status(404).json({ error: "Not Found" }); return; }
-  const [uc] = await db.select({ cnt: count() }).from(usersTable).where(eq(usersTable.organizationId, id));
-  const [pc] = await db.select({ cnt: count() }).from(projectsTable).where(eq(projectsTable.organizationId, id));
   res.json({ ...orgs[0], userCount: Number(uc?.cnt ?? 0), projectCount: Number(pc?.cnt ?? 0) });
 });
 
