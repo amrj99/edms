@@ -218,7 +218,7 @@ router.use("/rules", tenantScoped(rulesRouter));
 router.use("/skills", skillsRouter);
 router.use("/migrations", migrationsRouter);
 
-router.use("/workflow-engine", requireModule("workflow_engine"), workflowEngineRouter);
+router.use("/workflow-engine", requireModule("workflow_engine"), tenantScoped(workflowEngineRouter));
 router.use("/delegations", tenantScoped(delegationsRouter));
 router.use("/projects/:projectId", tenantScoped(projectRoleOverridesRouter));
 router.use("/projects/:projectId", tenantScoped(projectGovernanceRouter));
