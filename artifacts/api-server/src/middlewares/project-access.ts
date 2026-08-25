@@ -19,6 +19,7 @@ import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { requireInt, type ProjectParams } from "../lib/params.js";
 import { canAccessProject, type ProjectAccessResult } from "../lib/can-access-project.js";
 import { isSystemOwner } from "../lib/auth.js";
+import { tenantRead } from "./tenant-scope.js";
 
 /**
  * The resolved project-access context stashed on the request.
@@ -52,7 +53,10 @@ export function requireProjectAccess(): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const caller = req.user!;
     const projectId = requireInt((req.params as ProjectParams).projectId);
-    const access = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+    // tenantRead: on a WRITE under the fail-closed marker there is no active tx,
+    // so this authorization read opens its own SHORT read tx; on a GET it reuses
+    // the auto-wrap tx; on unconverted/public routes it uses the pool.
+    const access = await tenantRead(() => canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller)));
     if (!access.allowed) {
       res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
       return;

@@ -41,6 +41,22 @@ export function withTenant<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Context-aware READ helper for DB-reading middlewares/authorization gates that
+ * run under the fail-closed marker but outside any withTenant() (e.g. a router-
+ * wide `requireProjectAccess()` on a POST/PUT/DELETE, where the read auto-wrapper
+ * intentionally does not apply). Resolves to:
+ *   • the current tenant tx if one is already open (GET auto-wrap / withTenant), or
+ *   • a SHORT read tenant tx when inside a tenant request with no tx (writes), or
+ *   • the pool directly when there is no tenant marker (unconverted/public routes).
+ * This keeps authorization reads correct without holding a tx across the handler.
+ */
+export function tenantRead<T>(fn: () => Promise<T>): Promise<T> {
+  if (dbContext.getStore()) return fn();               // already inside a tenant tx
+  if (requestContext.getStore()) return withTenant(fn); // write under marker → short read tx
+  return fn();                                          // no marker → pool (unchanged)
+}
+
+/**
  * Run a genuine PLATFORM/bulk operation OUTSIDE the request's tenant scope, on
  * the pool-backed handle (no marker → no fail-closed throw). Use ONLY for real
  * cross-tenant platform work (e.g. full search reindex) — never as a per-request

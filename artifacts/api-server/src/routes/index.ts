@@ -177,7 +177,7 @@ router.use("/projects/:projectId/documents", documentsRouter);
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
 router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
 
-router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
+router.use("/projects/:projectId/transmittals", requireModule("registers"), tenantScoped(transmittalsRouter));
 router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
 router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
 router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
