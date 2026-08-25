@@ -21,6 +21,7 @@ import { requestUpload, getS3PresignedGetUrl, getR2PresignedGetUrl, isR2Configur
 import { StorageNotConfiguredError } from "../lib/errors.js";
 import { requireAuth, signToken, verifyToken, isSystemOwner } from "../lib/auth.js";
 import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
+import { requestContext } from "@workspace/db";
 import { canAccessProjectAsParty } from "../lib/party-access.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { resolveEffectiveRole } from "../lib/governance.js";
@@ -155,12 +156,19 @@ function requireAuthOrViewToken(expectedPathFn: (req: Request) => string) {
         return;
       }
       // Inject minimal user context for downstream org-access checks
-      (req as any).user = {
+      const vtUser = {
         id: payload.userId as number,
-        organizationId: payload.orgId as number | null,
-        role: payload.role as string ?? "member",
+        organizationId: (payload.orgId as number | null) ?? null,
+        role: (payload.role as string) ?? "member",
       };
-      next();
+      (req as any).user = vtUser;
+      // View-token requests carry no Bearer, so tenantScoped never saw req.user and
+      // did NOT establish the request marker. Establish it here (from the verified
+      // token identity) so the download handler's withTenant() has a tenant scope.
+      requestContext.run(
+        { userId: vtUser.id, orgId: vtUser.organizationId, isSystemOwner: vtUser.role === "system_owner" },
+        () => next(),
+      );
       return;
     }
 
