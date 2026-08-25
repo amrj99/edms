@@ -13,9 +13,11 @@
  *     it never reads identity from the request ALS.
  *   • This is NOT `runUnscoped` and NOT a general pool escape. It is a named
  *     background boundary specific to skill events.
- *   • ⚠️ edms_app gate: tenant DB access inside skill-engine/executeSkill must move
- *     to its own tenant scope (runInTenantTx with the explicit org context), not
- *     an unrestricted pool. Tracked in qa/OPEN_DEBT.md (background-jobs tenant ctx).
+ *   • edms_app gate (CLOSED): tenant DB access inside skill-engine now runs under a
+ *     per-org `withSystemTenantTx(skill.organizationId)` opened INSIDE executeSkill /
+ *     triggerSkillEvent (one tx per skill/org, never one across orgs), so RLS is
+ *     enforced under edms_app. This dispatcher only supplies the detach + explicit
+ *     org context; it opens no tx itself.
  *   • AI / external I/O inside skill execution stays OUTSIDE any DB transaction.
  */
 import { requestContext, dbContext } from "@workspace/db";
@@ -56,8 +58,8 @@ export function dispatchSkillEventBackground(
  * Run a skill (manual/event trigger) as detached background work with an explicit
  * tenant context. Same contract as dispatchSkillEventBackground: detaches from the
  * request ALS, carries {organizationId, userId, skillId} + trigger metadata, and is
- * fire-and-forget. The skill engine's OWN internal tenant-DB access remains deferred
- * to the edms_app gate (background-jobs item #2) — NOT handled here.
+ * fire-and-forget. The skill engine's OWN internal tenant-DB access is now scoped by
+ * a per-org `withSystemTenantTx` opened inside executeSkill (edms_app gate closed).
  */
 export function executeSkillBackground(
   ctx: { organizationId: number; userId: number; skillId: number },

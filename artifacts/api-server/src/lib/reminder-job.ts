@@ -1,10 +1,14 @@
 // Due-date & workflow-SLA reminder job — extracted from app.ts (Phase: app/bootstrap separation).
-// Behaviour is byte-identical to the original inline implementation; only the
-// location changed so app.ts stays free of startup side-effects.
-import { db } from "@workspace/db";
+// DEBT-010 Category-A: this job runs from a timer with NO request context, so a bare
+// `db` would hit the pool with no RLS tenant context and (under the non-superuser
+// edms_app role) RLS tables would return zero rows. It is therefore restructured to
+// run PER ORG inside `withSystemTenantTx(orgId, …)` so RLS is enforced, WITHOUT
+// changing which reminders get sent. External email I/O is collected inside each
+// org's tx and sent AFTER that tx commits (never awaited while the tx is open).
+import { db, withSystemTenantTx } from "@workspace/db";
 import {
   tasksTable, meetingActionItemsTable, meetingsTable, notificationsTable, usersTable, projectsTable,
-  wfInstancesTable, wfTemplateStagesTable,
+  wfInstancesTable, wfTemplateStagesTable, organizationsTable,
 } from "@workspace/db";
 import { and, eq, lt, isNotNull, sql, ne } from "drizzle-orm";
 import { sendOverdueTaskEmail, sendWorkflowStageEmail } from "./email.js";
@@ -20,11 +24,43 @@ export async function sendDueDateReminders() {
     const now = new Date();
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    // Overdue tasks with an assignee
+    // `organizations` is NON-RLS — enumerate ONCE on the bare pool, outside any
+    // tenant tx. Each org is then processed in its own short tenant tx below.
+    const orgs = await db.select({ id: organizationsTable.id }).from(organizationsTable);
+
+    for (const org of orgs) {
+      // A failure processing one org must NOT abort the others, and each org gets
+      // its own withSystemTenantTx so no context leaks to the next org.
+      try {
+        await processOrgReminders(org.id, now, yesterday);
+      } catch (err) {
+        logger.error({ err, orgId: org.id }, "Due-date reminder job failed for organization");
+      }
+    }
+
+    logger.info("Due-date reminder job completed");
+  } catch (err) {
+    logger.error({ err }, "Due-date reminder job failed");
+  }
+}
+
+/**
+ * Process all reminder scans + notification inserts for a SINGLE org inside one
+ * short tenant tx (RLS enforced under edms_app). Email payloads are collected and
+ * returned via the outer scope, then sent AFTER the tx commits — external I/O is
+ * never awaited while the tenant tx is open.
+ */
+async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
+  // Collected email senders — populated inside the tenant tx, flushed after commit.
+  const pendingEmails: Array<() => void> = [];
+
+  await withSystemTenantTx(orgId, async () => {
+    // Overdue tasks with an assignee (tasks is RLS; explicit org filter added too).
     const overdueTasks = await db
       .select({ id: tasksTable.id, title: tasksTable.title, assigneeId: tasksTable.assignedToId, projectId: tasksTable.projectId })
       .from(tasksTable)
       .where(and(
+        eq(tasksTable.organizationId, orgId),
         isNotNull(tasksTable.dueDate),
         lt(tasksTable.dueDate, now),
         isNotNull(tasksTable.assignedToId),
@@ -57,7 +93,7 @@ export async function sendDueDateReminders() {
         actionUrl: `/tasks`,
       });
 
-      // Send overdue email to assignee (fire-and-forget)
+      // Collect overdue email to assignee (fire-and-forget AFTER the tx commits)
       const [assignee] = await db
         .select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
         .from(usersTable).where(eq(usersTable.id, task.assigneeId)).limit(1);
@@ -65,19 +101,26 @@ export async function sendDueDateReminders() {
         ? await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, task.projectId)).limit(1)
         : [null];
       if (assignee?.email) {
-        sendOverdueTaskEmail({
-          to: assignee.email,
-          userName: `${assignee.firstName} ${assignee.lastName}`.trim(),
-          taskTitle: task.title,
-          taskType: "task",
-          dueDate: "Overdue",
-          projectName: project?.name ?? null,
-          taskLink: `${process.env.APP_URL ?? ""}/tasks`,
-        }).catch(() => {});
+        const to = assignee.email;
+        const userName = `${assignee.firstName} ${assignee.lastName}`.trim();
+        const taskTitle = task.title;
+        const projectName = project?.name ?? null;
+        pendingEmails.push(() => {
+          sendOverdueTaskEmail({
+            to,
+            userName,
+            taskTitle,
+            taskType: "task",
+            dueDate: "Overdue",
+            projectName,
+            taskLink: `${process.env.APP_URL ?? ""}/tasks`,
+          }).catch(() => {});
+        });
       }
     }
 
-    // Overdue meeting action items with an assignee
+    // Overdue meeting action items with an assignee.
+    // meeting_action_items / meetings are NON-RLS — scope explicitly by org.
     const overdueItems = await db
       .select({
         id: meetingActionItemsTable.id,
@@ -89,6 +132,7 @@ export async function sendDueDateReminders() {
       .from(meetingActionItemsTable)
       .leftJoin(meetingsTable, eq(meetingActionItemsTable.meetingId, meetingsTable.id))
       .where(and(
+        eq(meetingActionItemsTable.organizationId, orgId),
         isNotNull(meetingActionItemsTable.dueDate),
         lt(meetingActionItemsTable.dueDate, now),
         isNotNull(meetingActionItemsTable.assignedToId),
@@ -122,7 +166,7 @@ export async function sendDueDateReminders() {
     }
 
     // ─── Workflow SLA: overdue stages ─────────────────────────────────────
-    // Find active wf_instances whose stage_due_at has passed
+    // wf_instances / wf_template_stages are NON-RLS — scope by org explicitly.
     const overdueInstances = await db
       .select({
         id: wfInstancesTable.id,
@@ -133,6 +177,7 @@ export async function sendDueDateReminders() {
       })
       .from(wfInstancesTable)
       .where(and(
+        eq(wfInstancesTable.organizationId, orgId),
         eq(wfInstancesTable.status, "active"),
         isNotNull(wfInstancesTable.stageDueAt),
         lt(wfInstancesTable.stageDueAt, now),
@@ -184,20 +229,27 @@ export async function sendDueDateReminders() {
           actionUrl: `/workflow-engine`,
         }).catch(() => {});
 
-        // Email
+        // Collect email (sent AFTER the tx commits)
         const [recipient] = await db.select({ email: usersTable.email, firstName: usersTable.firstName, lastName: usersTable.lastName })
           .from(usersTable).where(eq(usersTable.id, userId)).limit(1);
         if (recipient?.email) {
-          sendWorkflowStageEmail({
-            to: recipient.email,
-            stageName: `${stage.name} (OVERDUE)`,
-            stageRole: stage.responsibleRole ?? undefined,
-            documentTitle: `Document #${inst.documentId}`,
-            documentNumber: "",
-            workflowName: `Workflow Instance #${inst.id}`,
-            submittedByName: "System",
-            instanceId: inst.id,
-          }).catch(() => {});
+          const to = recipient.email;
+          const stageName = `${stage.name} (OVERDUE)`;
+          const stageRole = stage.responsibleRole ?? undefined;
+          const documentTitle = `Document #${inst.documentId}`;
+          const instanceId = inst.id;
+          pendingEmails.push(() => {
+            sendWorkflowStageEmail({
+              to,
+              stageName,
+              stageRole,
+              documentTitle,
+              documentNumber: "",
+              workflowName: `Workflow Instance #${instanceId}`,
+              submittedByName: "System",
+              instanceId,
+            }).catch(() => {});
+          });
         }
       }
     }
@@ -215,6 +267,7 @@ export async function sendDueDateReminders() {
       })
       .from(wfInstancesTable)
       .where(and(
+        eq(wfInstancesTable.organizationId, orgId),
         eq(wfInstancesTable.status, "active"),
         isNotNull(wfInstancesTable.stageDueAt),
         sql`${wfInstancesTable.stageDueAt} > ${now}`, // not yet overdue
@@ -272,9 +325,8 @@ export async function sendDueDateReminders() {
         }).catch(() => {});
       }
     }
+  });
 
-    logger.info("Due-date reminder job completed");
-  } catch (err) {
-    logger.error({ err }, "Due-date reminder job failed");
-  }
+  // External I/O OUTSIDE the tenant tx — flush collected emails after commit.
+  for (const send of pendingEmails) send();
 }

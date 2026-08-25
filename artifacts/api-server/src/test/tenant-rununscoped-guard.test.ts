@@ -25,9 +25,12 @@ const SRC = path.resolve(__dirname, "..");
 // Allowlisted call sites: "<relative path>" → why it is a legitimate platform op.
 // The definition/JSDoc in middlewares/tenant-scope.ts is excluded (it declares the
 // function; it does not "call" it as an escape).
-const ALLOWLIST: Record<string, string> = {
-  "routes/admin.ts": "search/reindex — cross-tenant bulk reindex to Elasticsearch (external I/O platform op)",
-};
+// DEBT-010 Decision B: the single platform-wide op (search reindex) moved to the
+// named `withSystemContext` (is_system_owner=true) primitive — see
+// tenant-systemcontext-guard.test.ts. `runUnscoped` now has ZERO call sites; it
+// remains defined only as a guarded escape. Any new call MUST be added here
+// (a deliberate, reviewed act).
+const ALLOWLIST: Record<string, string> = {};
 
 const DEFINITION_FILE = "middlewares/tenant-scope.ts";
 

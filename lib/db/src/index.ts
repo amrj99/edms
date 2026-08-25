@@ -128,5 +128,31 @@ export async function runInTenantTx<T>(
   });
 }
 
+/**
+ * DEBT-010 Decision B — named background/system contexts (NOT a general bypass).
+ *
+ * Background jobs run from timers / detached callbacks with NO request ALS, so bare
+ * `db` would hit the pool with no RLS context. These two helpers give them an
+ * EXPLICIT, minimal tenant context so RLS is enforced under `edms_app`:
+ *
+ *   withSystemTenantTx(orgId, fn) — a per-org system-actor unit of work. Sets the
+ *     org context with is_system_owner=false and NO human user (current_user_id
+ *     empty). Category-A tenant jobs (skill/reminder/trial-downgrade/migrations)
+ *     open ONE of these PER ORG (never one tx across many orgs). It never
+ *     impersonates a human — recipient user ids are written as data columns, not
+ *     as the session user. Keep external I/O (email/AI) OUTSIDE this tx.
+ *
+ *   withSystemContext(fn) — the ONLY platform-wide escape (Category B). Sets
+ *     is_system_owner=true so RLS admits all tenants for a genuine global op
+ *     (search reindex). Named + allowlisted + static-guarded. Do external I/O
+ *     (Elasticsearch push) OUTSIDE the tx.
+ */
+export function withSystemTenantTx<T>(orgId: number, fn: () => Promise<T>): Promise<T> {
+  return runInTenantTx({ orgId, isSystemOwner: false, userId: null }, fn);
+}
+export function withSystemContext<T>(fn: () => Promise<T>): Promise<T> {
+  return runInTenantTx({ orgId: null, isSystemOwner: true, userId: null }, fn);
+}
+
 export * from "./schema";
 export * from "./document-type-utils";

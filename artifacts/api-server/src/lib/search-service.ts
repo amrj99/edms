@@ -17,6 +17,7 @@ import {
 import { eq, ilike, or, and, desc } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { tenantRead } from "../middlewares/tenant-scope.js";
+import { withSystemContext } from "@workspace/db";
 
 // ─── Elasticsearch client (lazy, optional) ────────────────────────────────────
 let esClient: any = null;
@@ -97,7 +98,10 @@ export async function reindexAll(): Promise<{ indexed: number; errors: number }>
   let indexed = 0;
   let errors = 0;
 
-  const docs = await db.select().from(documentsTable).limit(10_000);
+  // DEBT-010 Category B: the ONLY platform-wide op — read every tenant's documents
+  // under an explicit system-owner context (RLS admits all tenants). The Elasticsearch
+  // push happens OUTSIDE this short read tx (no DB connection held during ES I/O).
+  const docs = await withSystemContext(() => db.select().from(documentsTable).limit(10_000));
   const body: any[] = [];
   for (const doc of docs) {
     body.push({ index: { _index: IDX.documents, _id: String(doc.id) } });

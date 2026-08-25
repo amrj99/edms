@@ -13,7 +13,7 @@ import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
-import { withTenant, runUnscoped, tenantRead } from "../middlewares/tenant-scope.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
@@ -695,10 +695,10 @@ router.get("/search/status", async (req, res): Promise<void> => {
 router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promise<void> => {
   try {
     const { reindexAll } = await import("../lib/search-service.js");
-    // Cross-tenant bulk platform op with external I/O (Elasticsearch). Run OUTSIDE
-    // the tenant marker (pool). ⚠️ edms_app gate: refactor to read under
-    // withSystemContext and push to ES outside the tx (see runUnscoped note).
-    const result = await runUnscoped(() => reindexAll());
+    // Cross-tenant bulk platform op (search reindex). reindexAll() reads all tenants'
+    // documents under an explicit system-owner context (is_system_owner=true) and
+    // pushes to Elasticsearch OUTSIDE the tx — the single allowlisted platform-wide escape.
+    const result = await reindexAll();
     if (result.indexed === 0 && result.errors === 0) {
       res.json({ success: false, message: "Elasticsearch is not configured. Set ELASTICSEARCH_URL to enable indexing." });
       return;
