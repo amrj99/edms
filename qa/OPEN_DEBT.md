@@ -513,6 +513,34 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
     post-commit pattern) — it belongs with the edms_app background-jobs gate below, not the mechanical sweep.
     Also still bare (by constraint / nature): `/billing` + `/billing/webhook` (out of DEBT-010 scope), `/dev`
     (non-prod), `health`/`auth` (public/pre-auth).
+- **③ Hybrid-Y Phase D ✅ COMPLETE (2026-08-25):** the transitional read auto-wrapper is GONE. Every
+  GET/HEAD handler across all `tenantScoped()` routers (~120 handlers, 41 routers) now opens its own SHORT
+  `tenantRead()` unit-of-work: reads inside the closure, response serialization OUTSIDE it (no tx held during
+  serialization or I/O). `tenantRead` reuses an active tx, opens a short read tx under the marker, or falls
+  back to the pool when unauthenticated — so cross-org/system_owner reads keep the exact `is_system_owner`
+  context the auto-wrap used. Delivered by 4 parallel mechanical conversion agents (Phase A/B/C-dbonly/
+  C-reads) + admin agent + owner-authored specials, each verified typecheck-clean.
+  - **Non-mechanical specials (hand-done):** notifications `GET /` (generators → short write UoW returning
+    inserted rows; `emitToUser` AFTER commit); correspondence `GET /:id` (conditional mark-as-read WRITE →
+    `withTenant`); search `GET /` (only `sqlSearch` DB wrapped; ES path holds NO tx — fixes the pre-existing
+    tx-across-ES from having no skipRead); audit-logs `GET /export` (CSV built + sent OUTSIDE the tx); config
+    public GETs (pool fallback via `tenantRead` when unauthenticated) + `/session-settings` (direct read +
+    `getOrgSessionPolicy` in ONE unit); admin `/backup` (dump read in tx, serialize outside) + `/ai-quota`
+    (getOrgAiQuota is db-proxy → reuses the one tx).
+  - **Wrapper removed:** `makeReadAutoWrap`/`readAutoWrap`/`getAutoWrappedReadInventory` + the `tenantScoped`
+    `skipRead` option deleted from `middlewares/tenant-scope.ts`; storage/admin mounts drop `skipRead`.
+    `tenantScoped()` now only sets the fail-closed marker + exits on fall-through.
+  - **Static gate** (`phase-d-readautowrap-removed.test.ts`): no production source references the auto-wrapper;
+    no `skipRead` remains; tenant-scope.ts no longer defines it; **bare tenant DB access inside a request
+    marker STILL throws fail-closed** (runtime assertion).
+  - **Final Gate:** typecheck 0 · build OK · **full regression 876/876** (70 files) · A/B concurrency no-leak +
+    fail-closed (no pool fallback) + exit-on-fall-through proofs green · streaming-after-commit proofs green.
+  - **Final tenant boundary state:** every tenant-facing route is fail-closed with EXPLICIT `withTenant()`
+    (writes) / `tenantRead()` (reads) — no implicit request-spanning tx anywhere. Still bare by design:
+    `/migrations` (deferred background subsystem), `/billing`+`/billing/webhook` (out of scope), `/dev`
+    (non-prod), `health`/`auth` (public/pre-auth). `runUnscoped` = 1 allowlisted site (admin reindex);
+    `notificationDb` = notifications-infra only; both statically guarded.
+  - **Commit (unpushed):** `8d00c64`.
 - **🔴 edms_app-gate — background jobs / subsystems still needing tenant context (owner deliverable):**
   these run on the pool with NO tenant context today (safe only because prod app role is superuser → RLS inert).
   Before the `edms_app` cutover, each DB access that touches an RLS table MUST use its own `runInTenantTx` with
