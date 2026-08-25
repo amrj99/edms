@@ -81,6 +81,7 @@ function rlsTesterUrl(): string {
 async function withRlsClient<T>(
   orgId: number | null,
   fn: (client: pg.Client) => Promise<T>,
+  userId?: number | null,
 ): Promise<T> {
   const client = new Client({ connectionString: rlsTesterUrl() });
   await client.connect();
@@ -94,6 +95,8 @@ async function withRlsClient<T>(
       await client.query("SELECT set_config('app.is_system_owner', 'false', FALSE)");
       await client.query("SELECT set_config('app.current_org_id', $1, FALSE)", [String(orgId)]);
     }
+    // DEBT-010 Decision B: per-user context (notifications policy + membership predicates).
+    await client.query("SELECT set_config('app.current_user_id', $1, FALSE)", [userId == null ? "" : String(userId)]);
     return await fn(client);
   } finally {
     await client.end();
@@ -295,29 +298,44 @@ describe("RLS — correspondence table", () => {
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
 
-describe("RLS — notifications table", () => {
-  it("Org B session cannot see Org A notifications", async () => {
+describe("RLS — notifications table (DEBT-010 Decision B: per-user)", () => {
+  it("Org B user cannot see Org A user's notification", async () => {
+    // Even with a user context, a different-org user (not the recipient) sees nothing.
     const rows = await withRlsClient(fx.orgB.id, async (client) => {
       const result = await client.query(
         "SELECT id FROM notifications WHERE id = $1",
         [fx.notificationId],
       );
       return result.rows;
-    });
+    }, 999999);
 
     expect(rows).toHaveLength(0);
   });
 
-  it("Org A session can see its own notifications", async () => {
+  it("recipient user can see their own notification", async () => {
     const rows = await withRlsClient(fx.orgA.id, async (client) => {
       const result = await client.query(
         "SELECT id FROM notifications WHERE id = $1",
         [fx.notificationId],
       );
       return result.rows;
-    });
+    }, fx.userA.id);
 
     expect(rows).toHaveLength(1);
+  });
+
+  it("same-org NON-recipient user cannot see another user's notification (per-user isolation)", async () => {
+    // A different user in the SAME org must NOT see the recipient's notification —
+    // this is the tightening Decision U delivers over org-only RLS.
+    const rows = await withRlsClient(fx.orgA.id, async (client) => {
+      const result = await client.query(
+        "SELECT id FROM notifications WHERE id = $1",
+        [fx.notificationId],
+      );
+      return result.rows;
+    }, 888888);
+
+    expect(rows).toHaveLength(0);
   });
 });
 

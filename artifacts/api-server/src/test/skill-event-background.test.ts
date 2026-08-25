@@ -15,7 +15,7 @@ describe("DEBT-010 — dispatchSkillEventBackground (detached background boundar
     let seen: { req: unknown; db: unknown } | undefined;
     requestContext.run({ userId: 7, orgId: 111, isSystemOwner: false }, () => {
       // Simulate an OPEN tenant tx (dbContext set), as during a request handler.
-      dbContext.run({ tx: {} as never, orgId: 111, isSystemOwner: false }, () => {
+      dbContext.run({ tx: {} as never, orgId: 111, isSystemOwner: false, userId: 7 }, () => {
         expect(requestContext.getStore()).toBeDefined();
         expect(dbContext.getStore()).toBeDefined();
         __test.runDetachedFromRequest(() => {
@@ -42,7 +42,7 @@ describe("DEBT-010 — dispatchSkillEventBackground (detached background boundar
   it("executeSkillBackground: firing from inside a request scope does not throw fail-closed (detaches)", async () => {
     expect(() =>
       requestContext.run({ userId: 7, orgId: 111, isSystemOwner: false }, () => {
-        dbContext.run({ tx: {} as never, orgId: 111, isSystemOwner: false }, () => {
+        dbContext.run({ tx: {} as never, orgId: 111, isSystemOwner: false, userId: 7 }, () => {
           executeSkillBackground({ organizationId: 111, userId: 7, skillId: 999999 }, { triggeredByType: "manual" });
         });
       }),

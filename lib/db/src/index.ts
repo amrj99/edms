@@ -64,7 +64,7 @@ const baseDb = drizzle(pool, { schema });
 // to the pool-backed `baseDb`. This is transaction-LOCAL: the context never
 // leaks to another request and never persists on a reused pooled connection.
 type TenantTx = Parameters<Parameters<typeof baseDb.transaction>[0]>[0];
-interface TenantStore { tx: TenantTx; orgId: number | null; isSystemOwner: boolean }
+interface TenantStore { tx: TenantTx; orgId: number | null; isSystemOwner: boolean; userId: number | null }
 
 export const dbContext = new AsyncLocalStorage<TenantStore>();
 
@@ -113,13 +113,18 @@ export const db = new Proxy(baseDb, {
  * (R2/email/etc.) OUTSIDE this scope so a connection is never held during I/O.
  */
 export async function runInTenantTx<T>(
-  ctx: { orgId: number | null; isSystemOwner: boolean },
+  ctx: { orgId: number | null; isSystemOwner: boolean; userId?: number | null },
   fn: () => Promise<T>,
 ): Promise<T> {
+  const userId = ctx.userId ?? null;
   return baseDb.transaction(async (tx) => {
     await tx.execute(sql`SELECT set_config('app.current_org_id', ${ctx.orgId == null ? "" : String(ctx.orgId)}, true)`);
     await tx.execute(sql`SELECT set_config('app.is_system_owner', ${ctx.isSystemOwner ? "true" : "false"}, true)`);
-    return dbContext.run({ tx, orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner }, fn);
+    // DEBT-010 Decision B: transaction-local user context for per-user / membership-aware RLS.
+    // Missing user context ⇒ '' ⇒ per-user/collaborative predicates that need it evaluate to
+    // NULL/false ⇒ zero rows (fail-closed).
+    await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId == null ? "" : String(userId)}, true)`);
+    return dbContext.run({ tx, orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner, userId }, fn);
   });
 }
 

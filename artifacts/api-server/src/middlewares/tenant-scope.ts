@@ -37,7 +37,7 @@ export function withTenant<T>(fn: () => Promise<T>): Promise<T> {
   if (!ctx) {
     throw new Error("withTenant() called outside a tenant request scope (no requestContext).");
   }
-  return runInTenantTx({ orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner }, fn);
+  return runInTenantTx({ orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner, userId: ctx.userId }, fn);
 }
 
 /**

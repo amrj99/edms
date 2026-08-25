@@ -13,7 +13,7 @@ describe("DEBT-010 — dispatchClassificationBackground (detached AI boundary)",
   it("runs detached: request marker AND tenant tx are both cleared inside", () => {
     let seen: { req: unknown; db: unknown } | undefined;
     requestContext.run({ userId: 3, orgId: 222, isSystemOwner: false }, () => {
-      dbContext.run({ tx: {} as never, orgId: 222, isSystemOwner: false }, () => {
+      dbContext.run({ tx: {} as never, orgId: 222, isSystemOwner: false, userId: 7 }, () => {
         expect(requestContext.getStore()).toBeDefined();
         expect(dbContext.getStore()).toBeDefined();
         __test.runDetachedFromRequest(() => {
