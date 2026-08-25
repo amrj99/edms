@@ -4,8 +4,9 @@ import {
   db, skillDefinitionsTable, skillExecutionsTable,
 } from "@workspace/db";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { getReqOrgId } from "../lib/org-scope.js";
-import { executeSkill } from "../lib/skill-engine.js";
+import { executeSkillBackground } from "../lib/skill-events.js";
 import {param, paramInt, requireInt, queryIntOr} from '../lib/params';
 
 const router = Router();
@@ -57,21 +58,24 @@ router.post("/", requireAuth, adminOnly, async (req, res): Promise<void> => {
     return;
   }
 
-  const [skill] = await db
-    .insert(skillDefinitionsTable)
-    .values({
-      organizationId: orgId,
-      name,
-      description: description ?? null,
-      triggerType,
-      handlerType,
-      config:    config ?? {},
-      isEnabled: isEnabled ?? false,
-      createdById: req.user!.id,
-      createdAt:   new Date(),
-      updatedAt:   new Date(),
-    })
-    .returning();
+  let skill: typeof skillDefinitionsTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [skill] = await db
+      .insert(skillDefinitionsTable)
+      .values({
+        organizationId: orgId,
+        name,
+        description: description ?? null,
+        triggerType,
+        handlerType,
+        config:    config ?? {},
+        isEnabled: isEnabled ?? false,
+        createdById: req.user!.id,
+        createdAt:   new Date(),
+        updatedAt:   new Date(),
+      })
+      .returning();
+  });
 
   res.status(201).json(skill);
 });
@@ -81,32 +85,35 @@ router.put("/:id", requireAuth, adminOnly, async (req, res): Promise<void> => {
   const orgId   = getReqOrgId(req);
   const skillId = requireInt(req.params.id);
 
-  const [existing] = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .limit(1);
-
-  if (!existing) { res.status(404).json({ error: "Skill not found" }); return; }
-  if (existing.organizationId !== orgId) { res.status(403).json({ error: "Forbidden" }); return; }
-
   const { name, description, config, isEnabled, triggerType, handlerType } = req.body;
 
-  const [updated] = await db
-    .update(skillDefinitionsTable)
-    .set({
-      name:        name        ?? existing.name,
-      description: description ?? existing.description,
-      config:      config      ?? existing.config,
-      isEnabled:   isEnabled   !== undefined ? isEnabled : existing.isEnabled,
-      triggerType: triggerType ?? existing.triggerType,
-      handlerType: handlerType ?? existing.handlerType,
-      updatedAt:   new Date(),
-    })
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .returning();
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [existing] = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .limit(1);
 
-  res.json(updated);
+    if (!existing) { result = { status: 404, body: { error: "Skill not found" } }; return; }
+    if (existing.organizationId !== orgId) { result = { status: 403, body: { error: "Forbidden" } }; return; }
+
+    const [updated] = await db
+      .update(skillDefinitionsTable)
+      .set({
+        name:        name        ?? existing.name,
+        description: description ?? existing.description,
+        config:      config      ?? existing.config,
+        isEnabled:   isEnabled   !== undefined ? isEnabled : existing.isEnabled,
+        triggerType: triggerType ?? existing.triggerType,
+        handlerType: handlerType ?? existing.handlerType,
+        updatedAt:   new Date(),
+      })
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .returning();
+    result = { status: 200, body: updated };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // ─── DELETE /api/skills/:id ───────────────────────────────────────────────────
@@ -114,20 +121,24 @@ router.delete("/:id", requireAuth, adminOnly, async (req, res): Promise<void> =>
   const orgId   = getReqOrgId(req);
   const skillId = requireInt(req.params.id);
 
-  const [existing] = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .limit(1);
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [existing] = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .limit(1);
 
-  if (!existing) { res.status(404).json({ error: "Skill not found" }); return; }
-  if (existing.organizationId !== orgId) { res.status(403).json({ error: "Forbidden" }); return; }
+    if (!existing) { result = { status: 404, body: { error: "Skill not found" } }; return; }
+    if (existing.organizationId !== orgId) { result = { status: 403, body: { error: "Forbidden" } }; return; }
 
-  // Cascade-delete executions first
-  await db.delete(skillExecutionsTable).where(eq(skillExecutionsTable.skillId, skillId));
-  await db.delete(skillDefinitionsTable).where(eq(skillDefinitionsTable.id, skillId));
-
-  res.status(204).send();
+    // Cascade-delete executions first
+    await db.delete(skillExecutionsTable).where(eq(skillExecutionsTable.skillId, skillId));
+    await db.delete(skillDefinitionsTable).where(eq(skillDefinitionsTable.id, skillId));
+    result = { status: 204, body: null };
+  });
+  if (result!.status === 204) { res.status(204).send(); return; }
+  res.status(result!.status).json(result!.body);
 });
 
 // ─── PUT /api/skills/:id/toggle — enable / disable ───────────────────────────
@@ -135,22 +146,25 @@ router.put("/:id/toggle", requireAuth, adminOnly, async (req, res): Promise<void
   const orgId   = getReqOrgId(req);
   const skillId = requireInt(req.params.id);
 
-  const [existing] = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .limit(1);
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
+    const [existing] = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .limit(1);
 
-  if (!existing) { res.status(404).json({ error: "Skill not found" }); return; }
-  if (existing.organizationId !== orgId) { res.status(403).json({ error: "Forbidden" }); return; }
+    if (!existing) { result = { status: 404, body: { error: "Skill not found" } }; return; }
+    if (existing.organizationId !== orgId) { result = { status: 403, body: { error: "Forbidden" } }; return; }
 
-  const [updated] = await db
-    .update(skillDefinitionsTable)
-    .set({ isEnabled: !existing.isEnabled, updatedAt: new Date() })
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .returning();
-
-  res.json({ id: updated.id, isEnabled: updated.isEnabled });
+    const [updated] = await db
+      .update(skillDefinitionsTable)
+      .set({ isEnabled: !existing.isEnabled, updatedAt: new Date() })
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .returning();
+    result = { status: 200, body: { id: updated.id, isEnabled: updated.isEnabled } };
+  });
+  res.status(result!.status).json(result!.body);
 });
 
 // ─── PUT /api/skills/:id/run — manual execution ──────────────────────────────
@@ -158,17 +172,24 @@ router.put("/:id/run", requireAuth, adminOnly, async (req, res): Promise<void> =
   const orgId   = getReqOrgId(req);
   const skillId = requireInt(req.params.id);
 
-  const [existing] = await db
-    .select()
-    .from(skillDefinitionsTable)
-    .where(eq(skillDefinitionsTable.id, skillId))
-    .limit(1);
+  let existing: typeof skillDefinitionsTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    [existing] = await db
+      .select()
+      .from(skillDefinitionsTable)
+      .where(eq(skillDefinitionsTable.id, skillId))
+      .limit(1);
+  });
 
   if (!existing) { res.status(404).json({ error: "Skill not found" }); return; }
   if (existing.organizationId !== orgId) { res.status(403).json({ error: "Forbidden" }); return; }
 
-  // Fire-and-forget — respond immediately
-  executeSkill(skillId, { triggeredByType: "manual", triggeredById: req.user!.id }).catch(() => {});
+  // Detached background execution: exits the request ALS + tenant tx, carries the
+  // explicit skill/org/user context (DEBT-010 decision B). Fire-and-forget.
+  executeSkillBackground(
+    { organizationId: existing.organizationId, userId: req.user!.id, skillId },
+    { triggeredByType: "manual" },
+  );
 
   res.json({ message: "Skill execution started", skillId });
 });

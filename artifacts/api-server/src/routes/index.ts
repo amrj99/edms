@@ -215,7 +215,7 @@ if (process.env.NODE_ENV !== "production") {
 router.use("/calendar", tenantScoped(calendarRouter));
 router.use("/", tenantScoped(notificationSummaryRouter));
 router.use("/rules", tenantScoped(rulesRouter));
-router.use("/skills", skillsRouter);
+router.use("/skills", tenantScoped(skillsRouter));
 router.use("/migrations", migrationsRouter);
 
 router.use("/workflow-engine", requireModule("workflow_engine"), tenantScoped(workflowEngineRouter));
