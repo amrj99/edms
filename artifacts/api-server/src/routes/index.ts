@@ -173,7 +173,7 @@ router.use("/organizations", tenantScoped(organizationsRouter));
 // read auto-wrapper (writes use explicit withTenant(); reads auto-wrapped).
 router.use("/users", tenantScoped(usersRouter));
 router.use("/projects", tenantScoped(projectsRouter));
-router.use("/projects/:projectId/documents", documentsRouter);
+router.use("/projects/:projectId/documents", tenantScoped(documentsRouter));
 router.use("/projects/:projectId/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
 router.use("/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
 

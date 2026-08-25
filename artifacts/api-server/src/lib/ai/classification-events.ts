@@ -45,5 +45,23 @@ export function dispatchClassificationBackground(
   });
 }
 
+/**
+ * AWAITED detached classification — for callers that need the result synchronously
+ * (e.g. documents POST persists aiTags/aiPriority and returns them in the response).
+ * Runs classifyItem DETACHED from the request ALS so its AI/network I/O and infra-DB
+ * reads never touch the request's tenant transaction. The caller MUST invoke this
+ * AFTER its business commit and OUTSIDE any withTenant(), then persist the result via
+ * its OWN short withTenant() update. Returns null on any failure (best-effort).
+ */
+export function classifyDetached(
+  ctx: { organizationId: number | null; itemType: "document" | "correspondence" },
+  input: { title?: string | null; documentType?: string | null; discipline?: string | null; subject?: string | null; body?: string | null },
+): Promise<Awaited<ReturnType<typeof classifyItem>>> {
+  return requestContext.exit(() => dbContext.exit(() =>
+    classifyItem({ type: ctx.itemType, organizationId: ctx.organizationId, ...input })
+      .catch((err) => { logger.warn({ err, itemType: ctx.itemType }, "ai-classification: detached classify failed"); return null; }),
+  ));
+}
+
 // Test-only seam — assert detachment without running real AI logic.
 export const __test = { runDetachedFromRequest };
