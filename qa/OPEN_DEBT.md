@@ -458,6 +458,45 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   `runInTenantTx(...)` with the explicit org context (never unrestricted pool), and AI/external I/O must stay
   OUTSIDE that tx. Full list of background jobs to convert is delivered at Phase B end.
 
+- **③ Hybrid-Y Phase B ✅ COMPLETE (2026-08-25):** all Phase B routers converted + mounted via
+  `tenantScoped()` — transmittals, submission-chains, global-documents, meetings, tasks, correspondence,
+  documents (20 handlers), storage (streaming). Writes = explicit `withTenant()` (capture-result; no 2xx
+  before commit; bcrypt/CPU + external I/O outside the tx). **Subsystem boundaries added (all narrow/named,
+  no general poolDb, no runUnscoped-for-tenant-work):**
+  - `notificationDb` (lib/notifications/notification-db.ts) — pool-backed, notification infra tables only;
+    dispatchNotification runs post-commit. Guard: `tenant-notificationdb-guard.test.ts`.
+  - `dispatchSkillEventBackground` (lib/skill-events.ts) — detaches request ALS, explicit {org,user} ctx.
+  - `dispatchClassificationBackground` + `classifyDetached` (lib/ai/classification-events.ts) — AI detached,
+    explicit ctx, AI I/O outside any tx; classifyDetached is the awaited variant (documents).
+  - `tenantRead()` — context-aware read for authz middlewares/subsystem config (requireProjectAccess,
+    assertProjectAccess, orgStorage.getOrgConfig). Opens a SHORT read tx on writes; reuses tx on GET; pool if unscoped.
+  - **storage streaming**: download/serve routes do `withTenant(authz+metadata) → commit → R2/S3/onprem
+    stream or 302 redirect`; excluded from read auto-wrap via `skipRead`; view-token requests establish the
+    marker from the token identity. Upload keeps I/O-then-short-DB-tx + compensation/orphan verbatim.
+  - **Final Gate:** typecheck 0 · build OK · **full regression 871/871** (69 files) · streaming-after-commit
+    proof 2/2 · guards (runUnscoped 2/2, notificationDb 2/2, skill/classification detachment 4/4).
+  - **Inventories:** `runUnscoped` — 1 call site (admin `search/reindex`). `notificationDb` — 0 refs outside
+    lib/notifications/. Background dispatchers — `dispatchSkillEventBackground` (tasks), `dispatchClassification
+    Background` (correspondence), `classifyDetached` (documents). All guarded by static tests.
+  - **Commits (unpushed, on `release/rc-session-cors-optin-debt004`):** Phase A `64ed976`,`1455288`,`e91615b`,
+    `658cbef`,`00432e0`; Phase B `0944f18`,`9c545b1`,`095d4df`,`9fe66a3`,`c2c1937`,`5463ad2`,`97a63be`,
+    `41f540d` + view-token fix.
+- **🔴 edms_app-gate — background jobs / subsystems still needing tenant context (owner deliverable):**
+  these run on the pool with NO tenant context today (safe only because prod app role is superuser → RLS inert).
+  Before the `edms_app` cutover, each DB access that touches an RLS table MUST use its own `runInTenantTx` with
+  explicit org context (or an audited system_owner context); AI/external I/O stays outside the tx:
+  1. **`reindexAll`** (admin `search/reindex`, via `runUnscoped`) — reads `documents` (RLS) cross-tenant →
+     needs `withSystemContext` (is_system_owner) to read; ES push outside the tx.
+  2. **skill-engine `executeSkill`** + skill cron (`startBackgroundJobs`) — skill actions create tasks/
+     notifications/documents (RLS) → per-org `runInTenantTx`.
+  3. **notification scheduler** (`startNotificationScheduler`) — fires scheduled_notifications; creating
+     in-app `notifications` (RLS) needs per-recipient-org `runInTenantTx`.
+  4. **trial-downgrade scheduler** (`startTrialDowngradeScheduler`) — flips `projects.visible_on_free` (RLS
+     table `projects`) → per-org `runInTenantTx`.
+  5. **module-sync / seeds** (`syncOrgModules`, `seedAISettings`, `seedSecuritySettings`) — org_config /
+     system_settings are non-RLS; safe on pool, but confirm at cutover.
+  `notificationDb` / `classifyDetached` infra reads use non-RLS tables and are safe on the pool under edms_app.
+
 ## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
 - **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
   there is **no `auth_version`** and role/disable changes bump nothing (DEBT-003 covered refresh
