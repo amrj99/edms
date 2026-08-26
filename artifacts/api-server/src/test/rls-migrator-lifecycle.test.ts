@@ -49,10 +49,10 @@ async function dropScratch() {
  * Mirrors docker-entrypoint.sh: `node --enable-source-maps dist/migrate.mjs`,
  * NODE_ENV=production, DATABASE_URL = the migrator/owner connection.
  */
-function runMigrator(): string {
+function runMigrator(envOverride: Record<string, string> = {}): string {
   return execSync(`node --enable-source-maps "${MIGRATE_MJS}"`, {
     cwd: apiRoot,
-    env: { ...process.env, NODE_ENV: "production", DATABASE_URL: SCRATCH_URL, APP_DATABASE_URL: "", APP_DB_ROLE: "owner" },
+    env: { ...process.env, NODE_ENV: "production", DATABASE_URL: SCRATCH_URL, APP_DATABASE_URL: "", APP_DB_ROLE: "owner", ...envOverride },
     encoding: "utf8",
     stdio: "pipe",
   });
@@ -150,5 +150,41 @@ describe("DEBT-010 — deployment artifact lifecycle (node dist/migrate.mjs, NOD
     expect(() => runMigrator()).not.toThrow();
     expect((await scalar(`SELECT count(*)::int c FROM pg_policies WHERE schemaname='public' AND policyname='${POLICY_NAME}'`)).c).toBe(13);
     expect((await scalar(`SELECT count(*)::int c FROM plans`)).c).toBeGreaterThanOrEqual(6);
+  }, 120_000);
+
+  it("migrator connects via MIGRATION_DATABASE_URL (owner), NOT DATABASE_URL (edms_app)", async () => {
+    // Proves the deploy-time role split: run the artifact with DATABASE_URL pointing at the
+    // NON-owner edms_app role (which cannot run DDL) and MIGRATION_DATABASE_URL pointing at a
+    // fresh owner scratch DB. If migrate honored DATABASE_URL it would fail (no DDL privilege);
+    // a successful full install into the MIGRATION_DATABASE_URL scratch proves migrate bound to
+    // the migrator/owner role, while the runtime keeps DATABASE_URL (edms_app).
+    const SCRATCH2 = "edms_migrator_split";
+    const scratch2Url = BASE.replace(/\/[^/?]+(\?|$)/, `/${SCRATCH2}$1`);
+    const appNonOwnerUrl = BASE.replace(/^(postgresql:\/\/)[^@]+(@)/, "$1edms_app:edms_app_pw$2"); // edms_app on the base DB — cannot DDL
+
+    const o = new Client({ connectionString: BASE });
+    await o.connect();
+    await o.query(`DROP DATABASE IF EXISTS ${SCRATCH2} WITH (FORCE)`);
+    await o.query(`CREATE DATABASE ${SCRATCH2}`);
+    await o.end();
+
+    try {
+      runMigrator({ DATABASE_URL: appNonOwnerUrl, MIGRATION_DATABASE_URL: scratch2Url });
+      const s2 = new Client({ connectionString: scratch2Url });
+      await s2.connect();
+      try {
+        // Installed into the MIGRATION_DATABASE_URL scratch (owner) → migrate used the migrator role.
+        expect((await s2.query(`SELECT count(*)::int c FROM pg_namespace WHERE nspname='app'`)).rows[0].c).toBe(1);
+        expect((await s2.query(`SELECT count(*)::int c FROM pg_policies WHERE policyname='${POLICY_NAME}'`)).rows[0].c).toBe(13);
+        expect((await s2.query(`SELECT count(*)::int c FROM plans`)).rows[0].c).toBeGreaterThanOrEqual(6);
+      } finally {
+        await s2.end();
+      }
+    } finally {
+      const d = new Client({ connectionString: BASE });
+      await d.connect();
+      await d.query(`DROP DATABASE IF EXISTS ${SCRATCH2} WITH (FORCE)`);
+      await d.end();
+    }
   }, 120_000);
 });

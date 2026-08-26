@@ -27,6 +27,9 @@
  *   can reference it safely.  IF NOT EXISTS makes every call idempotent.
  */
 
+// MUST be first — binds DATABASE_URL to MIGRATION_DATABASE_URL (the migrator/owner role)
+// BEFORE @workspace/db creates its pool. See migrate-env.ts.
+import "./migrate-env.js";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { pool, db } from "@workspace/db";
 import { applyMembershipRls } from "./lib/rls-membership.js";
