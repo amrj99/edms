@@ -21,7 +21,7 @@
  *
  *   RLS is a defence-in-depth layer. The primary isolation mechanism is
  *   application-level (requireOrgScope + assertOrgMatch). These tests verify
- *   that the DB-level policy behaves as documented in rls-init.ts.
+ *   that the DB-level policy behaves as documented in rls-membership.ts.
  *
  *   Tests use a dedicated DB client (NOT the shared pool) to ensure
  *   set_config() applies to the same connection that runs the query.

@@ -22,7 +22,8 @@ import { seedPlans } from "./lib/seed-plans.js";
 import { runIntegrityMigrations } from "./lib/integrity-migrations.js";
 import { resetModulesToPlan } from "./lib/reset-modules-to-plan.js";
 import { startModuleSyncScheduler, type SchedulerHandle } from "./lib/module-sync-scheduler.js";
-import { initRlsPolicies } from "./lib/rls-init.js";
+import { pool } from "@workspace/db";
+import { assertMembershipRlsInstalled } from "./lib/rls-membership.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { sendDueDateReminders } from "./lib/reminder-job.js";
 
@@ -49,9 +50,13 @@ export async function runCriticalStartup(): Promise<void> {
   // the app relies on are absent, so we must not accept traffic.
   await runIntegrityMigrations();
 
-  // ── FATAL: row-level security must be enabled before serving requests ───────
-  // Without RLS, org-isolation policies are missing — a hard security stop.
-  await initRlsPolicies();
+  // ── FATAL: row-level security must be PRESENT before serving requests ───────
+  // The runtime NEVER installs or modifies RLS — the deploy-time migrator
+  // (applyMembershipRls, the single authoritative source) owns that. Here we only
+  // VERIFY the membership-aware model is installed (schema `app` + FORCEd RLS +
+  // per-table org_isolation_policy) and refuse to start if the migrator has not run.
+  // This is the security stop that guarantees policies exist before edms_app serves.
+  await assertMembershipRlsInstalled((s) => pool.query(s));
 
   // ── Non-fatal, awaited (ordered, no longer fire-and-forget) ─────────────────
   // Plans catalog — getResolvedPlan() falls back gracefully if absent, so a

@@ -17,7 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(__dirname, "..");
 const NOTIF_DIR = "lib/notifications"; // the only place notificationDb may be used
 
-// Tenant RLS tables (mirror lib/rls-init.ts) that must NEVER be queried via notificationDb.
+// Tenant RLS tables (mirror lib/rls-membership.ts (MEMBERSHIP_RLS_TABLES)) that must NEVER be queried via notificationDb.
 const RLS_TABLE_IDENTS = [
   "documentsTable", "documentRevisionsTable", "documentFilesTable", "projectsTable",
   "tasksTable", "notificationsTable", "rulesTable", "correspondenceTable",

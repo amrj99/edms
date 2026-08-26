@@ -11,7 +11,7 @@
  *     • org_notification_settings — per-(org,event) enable flag   (WHERE organization_id = … AND event_key = …)
  *     • user_preferences          — per-user notification prefs    (WHERE user_id = …)
  *     • notification_logs         — delivery audit                 (INSERT with explicit organization_id/recipient_user_id)
- *   None of the three is a Row-Level-Security table (see lib/rls-init.ts).
+ *   None of the three is a Row-Level-Security table (see lib/rls-membership.ts).
  *
  * CONTRACT (enforced by test/tenant-notificationdb-guard.test.ts):
  *   • Import/use `notificationDb` ONLY inside lib/notifications/**.

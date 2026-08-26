@@ -23,9 +23,15 @@
  * RLS is VISIBILITY + tenant/project anchoring ONLY. It never replaces RBAC and
  * never grants edit/delete/approve/admin just because a row is visible.
  *
- * This module is applied to the ISOLATED environment only (test global-setup /
- * a future explicit edms_app cutover). It does not switch DATABASE_URL, create
- * Production roles by itself, or perform any cutover.
+ * This module is the SINGLE authoritative installer for the RLS model. It is invoked
+ * by (a) the test global-setup and (b) the deploy-time migrator (migrate.ts) — NEVER
+ * by the runtime app pool. It is idempotent and upgrades in place from the legacy
+ * org-only `org_isolation_policy` baseline (per-table DROP POLICY IF EXISTS → CREATE,
+ * CREATE SCHEMA IF NOT EXISTS, CREATE OR REPLACE FUNCTION, DROP TRIGGER IF EXISTS).
+ * It does not switch DATABASE_URL, does not create the LOGIN role edms_app in
+ * Production (that is an out-of-band cutover step with a real secret), and performs no
+ * cutover itself. The runtime only VERIFIES the model is present (see
+ * assertMembershipRlsInstalled) and never installs or modifies it.
  */
 
 /** A raw-SQL executor. `global-setup` passes a pg Client's query; other callers a wrapper. */
@@ -54,27 +60,40 @@ export const POLICY_NAME = "org_isolation_policy"; // unchanged name — posture
 export async function applyMembershipRls(
   exec: SqlExec,
   opts: { createRoles?: boolean; appPassword?: string } = {},
-): Promise<void> {
+): Promise<{ appRoleGranted: boolean }> {
   const run = (s: string) => exec(s);
 
-  // ── Roles (isolated env only) ───────────────────────────────────────────────
+  // ── Owner role (NOLOGIN, secret-free) — ALWAYS ensured ──────────────────────
+  // The owner owns schema `app` + the DEFINER functions. It has no password and no
+  // login, so the migrator can safely auto-provision it on any environment (fresh,
+  // upgrade, or a code-first deploy that precedes the edms_app cutover).
+  await run(`
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OWNER_ROLE}') THEN
+        CREATE ROLE ${OWNER_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS;
+      END IF;
+    END $$;`);
+
+  // ── Runtime role edms_app (LOGIN, needs a real secret) ──────────────────────
+  // Created here ONLY in the isolated/test env (opts.createRoles). In Production it is
+  // created out-of-band at cutover with a real secret — never embedded in this code.
+  // Every edms_app-dependent GRANT below is guarded by `appExists`, so this installer
+  // runs cleanly on a code-first deploy (edms_app absent → schema/functions/policies/
+  // triggers install, grants deferred) and applies the grants once edms_app exists.
   if (opts.createRoles) {
     await run(`
       DO $$ BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OWNER_ROLE}') THEN
-          CREATE ROLE ${OWNER_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS;
-        END IF;
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${APP_ROLE}') THEN
           CREATE ROLE ${APP_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${opts.appPassword ?? "edms_app_pw"}';
         END IF;
-      END $$;
-    `);
+      END $$;`);
   }
+  const appExists = (await queryRows(exec, `SELECT 1 FROM pg_roles WHERE rolname = '${APP_ROLE}'`)).length > 0;
 
   // ── Schema `app` owned by the owner role; runtime gets USAGE only ───────────
   await run(`CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION ${OWNER_ROLE}`);
   await run(`REVOKE CREATE ON SCHEMA app FROM PUBLIC`);
-  await run(`GRANT USAGE ON SCHEMA app TO ${APP_ROLE}`);
+  if (appExists) await run(`GRANT USAGE ON SCHEMA app TO ${APP_ROLE}`);
 
   // The owner (definer) needs SELECT on the NON-RLS authority tables it reads.
   await run(`GRANT SELECT ON public.project_parties, public.project_members,
@@ -136,7 +155,7 @@ export async function applyMembershipRls(
   for (const f of FUNCS) {
     await run(`ALTER FUNCTION ${f} OWNER TO ${OWNER_ROLE}`);
     await run(`REVOKE EXECUTE ON FUNCTION ${f} FROM PUBLIC`);
-    await run(`GRANT EXECUTE ON FUNCTION ${f} TO ${APP_ROLE}`);
+    if (appExists) await run(`GRANT EXECUTE ON FUNCTION ${f} TO ${APP_ROLE}`);
   }
 
   // ── Enable + FORCE RLS and (re)create the single per-table policy ───────────
@@ -298,8 +317,60 @@ export async function applyMembershipRls(
   // edms_app is the application: it may touch app tables (RLS filters rows), but is
   // NOT superuser / bypassrls / owner, and has NO CREATE (no object shadowing).
   await run(`REVOKE CREATE ON SCHEMA public FROM PUBLIC`);
-  await run(`REVOKE CREATE ON SCHEMA public FROM ${APP_ROLE}`);
-  await run(`GRANT USAGE ON SCHEMA public TO ${APP_ROLE}`);
-  await run(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
-  await run(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`);
+  if (appExists) {
+    await run(`REVOKE CREATE ON SCHEMA public FROM ${APP_ROLE}`);
+    await run(`GRANT USAGE ON SCHEMA public TO ${APP_ROLE}`);
+    await run(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${APP_ROLE}`);
+    await run(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`);
+  }
+
+  return { appRoleGranted: appExists };
+}
+
+/** Normalize a raw-SQL executor's result to an array of rows (pg Client/pool → .rows). */
+async function queryRows(exec: SqlExec, sqlText: string): Promise<any[]> {
+  const res: any = await exec(sqlText);
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray(res.rows)) return res.rows;
+  return [];
+}
+
+/**
+ * Read-only verification that the membership-aware RLS model is installed.
+ *
+ * The runtime bootstrap calls this as a FATAL precondition: the runtime NEVER
+ * installs or modifies RLS (that is the migrator's job) — it only refuses to serve
+ * if the migrator has not yet applied the model. Reads catalogs only; performs no DDL.
+ */
+export async function assertMembershipRlsInstalled(exec: SqlExec): Promise<void> {
+  const schema = await queryRows(exec, `SELECT 1 FROM pg_namespace WHERE nspname = 'app'`);
+  if (schema.length === 0) {
+    throw new Error(
+      `[rls] membership-aware RLS not installed: schema "app" is missing. ` +
+      `The deploy-time migrator (applyMembershipRls) must run before the app starts.`,
+    );
+  }
+  const tableList = MEMBERSHIP_RLS_TABLES.map((t) => `'${t}'`).join(", ");
+  const rows = await queryRows(
+    exec,
+    `SELECT c.relname AS relname,
+            c.relforcerowsecurity AS forced,
+            EXISTS (SELECT 1 FROM pg_policies p
+                    WHERE p.schemaname = 'public' AND p.tablename = c.relname
+                      AND p.policyname = '${POLICY_NAME}') AS has_policy
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname IN (${tableList})`,
+  );
+  const problems: string[] = [];
+  for (const t of MEMBERSHIP_RLS_TABLES) {
+    const row = rows.find((r) => r.relname === t);
+    if (!row) problems.push(`${t} (table missing)`);
+    else if (!row.forced) problems.push(`${t} (RLS not FORCEd)`);
+    else if (!row.has_policy) problems.push(`${t} (no ${POLICY_NAME})`);
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `[rls] membership-aware RLS incomplete — run the migrator before starting. Problems: ${problems.join(", ")}`,
+    );
+  }
 }

@@ -28,7 +28,10 @@ const skills = vi.fn(async () => {});
 const reminders = vi.fn(async () => {});
 
 vi.mock("../lib/integrity-migrations.js", () => ({ runIntegrityMigrations: () => integrity() }));
-vi.mock("../lib/rls-init.js", () => ({ initRlsPolicies: () => rls() }));
+// DEBT-010: the runtime no longer INSTALLS RLS — it only VERIFIES it (read-only,
+// FATAL). The "rls" step is now assertMembershipRlsInstalled; the pool it reads is mocked.
+vi.mock("@workspace/db", () => ({ pool: { query: vi.fn(async () => ({ rows: [] })) } }));
+vi.mock("../lib/rls-membership.js", () => ({ assertMembershipRlsInstalled: () => rls() }));
 vi.mock("../lib/seed-plans.js", () => ({ seedPlans: () => plans() }));
 vi.mock("../lib/seed.js", () => ({ seedDefaultAdmin: () => admin() }));
 vi.mock("../lib/backfill-org-config.js", () => ({ backfillOrgConfig: () => backfill() }));
@@ -59,7 +62,9 @@ describe("bootstrap — critical startup", () => {
     await expect(runCriticalStartup()).rejects.toThrow("integrity boom");
   });
 
-  it("REJECTS when RLS init fails (security-critical)", async () => {
+  it("REJECTS when the RLS presence check fails (security-critical)", async () => {
+    // assertMembershipRlsInstalled throwing (migrator hasn't installed RLS) must
+    // stop the server from listening — same FATAL contract as before.
     rls.mockRejectedValueOnce(new Error("rls boom"));
     await expect(runCriticalStartup()).rejects.toThrow("rls boom");
   });
