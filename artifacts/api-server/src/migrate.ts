@@ -30,6 +30,8 @@
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { pool, db } from "@workspace/db";
 import { applyMembershipRls } from "./lib/rls-membership.js";
+import { seedPlans } from "./lib/seed-plans.js";
+import { runIntegrityMigrations } from "./lib/integrity-migrations.js";
 import { createHash } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -59,6 +61,16 @@ async function main() {
     await ensureEnumValues();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     console.log("[migrate] All migrations applied successfully.");
+
+    // ── DEBT-010: ALL privileged schema/DDL work runs HERE (migrator/owner role) ─
+    // The runtime app pool (edms_app) is least-privilege DML-only and must NEVER run
+    // DDL. Schema bootstrap (plan tables + trial/verification columns) and the H1
+    // integrity constraints therefore run in the migrator, before RLS is installed.
+    // Both are idempotent (CREATE/ALTER … IF NOT EXISTS, ON CONFLICT).
+    console.log("[migrate] Bootstrapping plan catalog + reference seed (seedPlans)...");
+    await seedPlans();
+    console.log("[migrate] Applying integrity constraints (runIntegrityMigrations)...");
+    await runIntegrityMigrations();
 
     // ── DEBT-010: install/upgrade the membership-aware RLS model ─────────────────
     // The migrator is the SINGLE authoritative installer of RLS (schema `app` +

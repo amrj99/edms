@@ -90,4 +90,19 @@ describe("DEBT-010 — RLS single-source guard (static)", () => {
     expect(/\bapplyMembershipRls\b/.test(bootstrap!.code), "bootstrap must NOT install RLS").toBe(false);
     expect(/\bassertMembershipRlsInstalled\b/.test(bootstrap!.code), "bootstrap must VERIFY RLS").toBe(true);
   });
+
+  it("runtime startup performs NO privileged DDL install (integrity/plans are migrator-only)", () => {
+    // These do ALTER TABLE / CREATE TABLE and must never run under the edms_app runtime.
+    const bootstrap = files.find((f) => f.rel === "bootstrap.ts")!;
+    for (const sym of ["runIntegrityMigrations", "seedPlans"]) {
+      expect(new RegExp(`\\b${sym}\\b`).test(bootstrap.code), `${sym} must run in the migrator, not runtime startup`).toBe(false);
+    }
+  });
+
+  it("the migrator is the single privileged path — it installs schema/DDL + RLS", () => {
+    const migrator = files.find((f) => f.rel === MIGRATOR)!;
+    for (const sym of ["seedPlans", "runIntegrityMigrations", "applyMembershipRls"]) {
+      expect(new RegExp(`\\b${sym}\\s*\\(`).test(migrator.code), `${MIGRATOR} must call ${sym}`).toBe(true);
+    }
+  });
 });
