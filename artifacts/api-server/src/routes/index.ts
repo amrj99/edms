@@ -52,8 +52,6 @@ import projectPartiesRouter from "./project-parties.js";
 import externalContactsRouter from "./external-contacts.js";
 import documentTypesRouter from "./document-types.js";
 import entitiesRouter from "./entities.js";
-import billingRouter from "./billing.js";
-import billingWebhookRouter from "./billing-webhook.js";
 import { requireModule } from "../middlewares/require-module.js";
 
 import { requireOrg } from "../middlewares/require-org.js";
@@ -65,12 +63,6 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use("/auth", authRouter);
-
-// Stripe webhook — UNAUTHENTICATED, mounted before the JWT/org gates because
-// Stripe presents no bearer token. Its raw body is set in app.ts for signature
-// verification. Path specificity: this handles POST /api/billing/webhook, so it
-// never reaches the authenticated "/billing" router mounted further below.
-router.use("/billing/webhook", billingWebhookRouter);
 
 // ── JWT pre-parse: lightweight, non-authoritative context population ───────────
 // Purpose: populate req.user early so every subsequent global middleware
@@ -145,9 +137,6 @@ router.use(shadowPlanMiddleware);
 router.use((req, res, next) => {
   const method = req.method.toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
-  // Billing must stay reachable: upgrading/paying is precisely how a read-only
-  // (downgraded/expired) org exits read-only mode. Blocking it would trap them.
-  if (req.path.startsWith("/billing")) return next();
   if (req.user?.role === "system_owner") return next();
   if (!req.user?.isReadOnlyOverride) return next();
 
@@ -191,7 +180,6 @@ router.use("/audit-logs", tenantScoped(auditLogsRouter));
 router.use("/general", tenantScoped(generalRouter));
 router.use("/notifications", tenantScoped(notificationsRouter));
 router.use("/config", tenantScoped(configRouter));
-router.use("/billing", billingRouter);
 // storage download/stream routes (objects/onpremise/s3-object/r2-object/public-objects)
 // do external I/O (R2/S3/fs stream or 302 redirect) on GET: each does its own
 // withTenant(authz+metadata) → commit → stream/redirect (no tx held during I/O).
