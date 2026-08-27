@@ -13,6 +13,7 @@ import { eq, and, or, desc, asc } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { assertProjectAccess } from "../lib/tenant-guards.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireInt } from "../lib/params.js";
 import type { Request, Response } from "express";
 import type { ProjectParams, ProjectItemParams } from "../lib/params.js";
@@ -78,7 +79,7 @@ router.get("/", async (req: Request<ProjectParams>, res: Response): Promise<void
   const caller = req.user!;
   const { type, status } = req.query as { type?: string; status?: string };
 
-  let chains = await db
+  let chains = await tenantRead(() => db
     .select()
     .from(submissionChainsTable)
     .where(
@@ -92,7 +93,7 @@ router.get("/", async (req: Request<ProjectParams>, res: Response): Promise<void
             ),
           ),
     )
-    .orderBy(desc(submissionChainsTable.createdAt));
+    .orderBy(desc(submissionChainsTable.createdAt)));
 
   if (type) chains = chains.filter((c) => c.type === type);
   if (status) chains = chains.filter((c) => c.currentStatus === status);
@@ -105,7 +106,7 @@ router.get("/", async (req: Request<ProjectParams>, res: Response): Promise<void
 router.post(
   "/",
   requireMinRole("document_controller"),
-  async (req: Request<ProjectParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     // DEBT-009: the project must belong to (or be accessible by) the caller — never
     // create a chain against a client-supplied foreign projectId (cross-tenant write).
@@ -125,53 +126,58 @@ router.post(
       return;
     }
 
-    const existing = await db
-      .select({ id: submissionChainsTable.id })
-      .from(submissionChainsTable)
-      .where(eq(submissionChainsTable.projectId, projectId));
+    try {
+      const payload = await withTenant(async () => {
+        const existing = await db
+          .select({ id: submissionChainsTable.id })
+          .from(submissionChainsTable)
+          .where(eq(submissionChainsTable.projectId, projectId));
 
-    const seq = String(existing.length + 1).padStart(4, "0");
-    const [project] = await db
-      .select({ code: projectsTable.code })
-      .from(projectsTable)
-      .where(eq(projectsTable.id, projectId));
+        const seq = String(existing.length + 1).padStart(4, "0");
+        const [project] = await db
+          .select({ code: projectsTable.code })
+          .from(projectsTable)
+          .where(eq(projectsTable.id, projectId));
 
-    const chainNumber = `SC-${project?.code ?? "PRJ"}-${seq}`;
+        const chainNumber = `SC-${project?.code ?? "PRJ"}-${seq}`;
 
-    const [chain] = await db
-      .insert(submissionChainsTable)
-      .values({
-        chainNumber,
-        title,
-        description: description ?? null,
-        type: chainType,
-        projectId,
-        originatingOrgId: req.user!.organizationId,
-        currentOrgId: req.user!.organizationId,
-        currentStatus: "active",
-        activeRevisionCycle: 1,
-        createdById: req.user!.id,
-      })
-      .returning();
+        const [chain] = await db
+          .insert(submissionChainsTable)
+          .values({
+            chainNumber,
+            title,
+            description: description ?? null,
+            type: chainType,
+            projectId,
+            originatingOrgId: req.user!.organizationId!,
+            currentOrgId: req.user!.organizationId!,
+            currentStatus: "active",
+            activeRevisionCycle: 1,
+            createdById: req.user!.id,
+          })
+          .returning();
 
-    let documents: typeof submissionChainDocumentsTable.$inferSelect[] = [];
-    if (documentIds && Array.isArray(documentIds) && documentIds.length > 0) {
-      await db.insert(submissionChainDocumentsTable).values(
-        documentIds.map((d: { documentId: number; revisionId: number }) => ({
-          chainId: chain.id,
-          documentId: d.documentId,
-          revisionId: d.revisionId,
-          revisionCycle: 1,
-          addedById: req.user!.id,
-        })),
-      );
-      documents = await db
-        .select()
-        .from(submissionChainDocumentsTable)
-        .where(eq(submissionChainDocumentsTable.chainId, chain.id));
-    }
+        let documents: typeof submissionChainDocumentsTable.$inferSelect[] = [];
+        if (documentIds && Array.isArray(documentIds) && documentIds.length > 0) {
+          await db.insert(submissionChainDocumentsTable).values(
+            documentIds.map((d: { documentId: number; revisionId: number }) => ({
+              chainId: chain.id,
+              documentId: d.documentId,
+              revisionId: d.revisionId,
+              revisionCycle: 1,
+              addedById: req.user!.id,
+            })),
+          );
+          documents = await db
+            .select()
+            .from(submissionChainDocumentsTable)
+            .where(eq(submissionChainDocumentsTable.chainId, chain.id));
+        }
+        return { ...chain, documents };
+      });
 
-    res.status(201).json({ ...chain, documents });
+      res.status(201).json(payload);
+    } catch (e) { next(e); }
   },
 );
 
@@ -239,83 +245,93 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res: Response): Promi
   const id = requireInt(req.params.id);
   const caller = req.user!;
 
-  const [chain] = await db
-    .select()
-    .from(submissionChainsTable)
-    .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
+  // Chain lookup + access checks + steps/documents/parties reads in ONE short
+  // read tx; computeActions (pure) runs OUTSIDE it below.
+  const loaded = await tenantRead(async () => {
+    const [chain] = await db
+      .select()
+      .from(submissionChainsTable)
+      .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-  if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) return { kind: "notfound" as const };
 
-  // Resolve caller's participant once — used for both access check and computeActions.
-  const callerParticipant = caller.organizationId
-    ? await resolveCallerParticipant(projectId, caller.organizationId)
-    : null;
+    // Resolve caller's participant once — used for both access check and computeActions.
+    const callerParticipant = caller.organizationId
+      ? await resolveCallerParticipant(projectId, caller.organizationId)
+      : null;
 
-  if (!isSystemOwner(caller)) {
-    let hasAccess = false;
+    if (!isSystemOwner(caller)) {
+      let hasAccess = false;
 
-    // Primary: caller's participant is in this chain's allowed_parties
-    if (callerParticipant) {
-      const [inParties] = await db
-        .select({ id: submissionChainAllowedPartiesTable.id })
-        .from(submissionChainAllowedPartiesTable)
-        .where(
-          and(
-            eq(submissionChainAllowedPartiesTable.chainId, id),
-            eq(submissionChainAllowedPartiesTable.participantId, callerParticipant.id),
-          ),
-        )
-        .limit(1);
-      if (inParties) hasAccess = true;
-    }
-
-    // Fallback: legacy org-based check (pre-Phase-3 chains)
-    if (!hasAccess) {
-      if (
-        chain.originatingOrgId === caller.organizationId ||
-        chain.currentOrgId === caller.organizationId
-      ) {
-        hasAccess = true;
-      }
-    }
-
-    // Last resort: caller appeared in any step
-    if (!hasAccess) {
-      const [inStep] = await db
-        .select({ id: submissionChainStepsTable.id })
-        .from(submissionChainStepsTable)
-        .where(
-          and(
-            eq(submissionChainStepsTable.chainId, id),
-            or(
-              eq(submissionChainStepsTable.fromOrgId, caller.organizationId!),
-              eq(submissionChainStepsTable.toOrgId, caller.organizationId!),
+      // Primary: caller's participant is in this chain's allowed_parties
+      if (callerParticipant) {
+        const [inParties] = await db
+          .select({ id: submissionChainAllowedPartiesTable.id })
+          .from(submissionChainAllowedPartiesTable)
+          .where(
+            and(
+              eq(submissionChainAllowedPartiesTable.chainId, id),
+              eq(submissionChainAllowedPartiesTable.participantId, callerParticipant.id),
             ),
-          ),
-        )
-        .limit(1);
-      if (inStep) hasAccess = true;
+          )
+          .limit(1);
+        if (inParties) hasAccess = true;
+      }
+
+      // Fallback: legacy org-based check (pre-Phase-3 chains)
+      if (!hasAccess) {
+        if (
+          chain.originatingOrgId === caller.organizationId ||
+          chain.currentOrgId === caller.organizationId
+        ) {
+          hasAccess = true;
+        }
+      }
+
+      // Last resort: caller appeared in any step
+      if (!hasAccess) {
+        const [inStep] = await db
+          .select({ id: submissionChainStepsTable.id })
+          .from(submissionChainStepsTable)
+          .where(
+            and(
+              eq(submissionChainStepsTable.chainId, id),
+              or(
+                eq(submissionChainStepsTable.fromOrgId, caller.organizationId!),
+                eq(submissionChainStepsTable.toOrgId, caller.organizationId!),
+              ),
+            ),
+          )
+          .limit(1);
+        if (inStep) hasAccess = true;
+      }
+
+      if (!hasAccess) return { kind: "forbidden" as const };
     }
 
-    if (!hasAccess) { res.status(403).json({ error: "Forbidden" }); return; }
-  }
+    const steps = await db
+      .select()
+      .from(submissionChainStepsTable)
+      .where(eq(submissionChainStepsTable.chainId, id))
+      .orderBy(asc(submissionChainStepsTable.stepNumber));
 
-  const steps = await db
-    .select()
-    .from(submissionChainStepsTable)
-    .where(eq(submissionChainStepsTable.chainId, id))
-    .orderBy(asc(submissionChainStepsTable.stepNumber));
+    const documents = await db
+      .select()
+      .from(submissionChainDocumentsTable)
+      .where(eq(submissionChainDocumentsTable.chainId, id));
 
-  const documents = await db
-    .select()
-    .from(submissionChainDocumentsTable)
-    .where(eq(submissionChainDocumentsTable.chainId, id));
+    const parties = await db
+      .select()
+      .from(submissionChainAllowedPartiesTable)
+      .where(eq(submissionChainAllowedPartiesTable.chainId, id))
+      .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
 
-  const parties = await db
-    .select()
-    .from(submissionChainAllowedPartiesTable)
-    .where(eq(submissionChainAllowedPartiesTable.chainId, id))
-    .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
+    return { kind: "ok" as const, chain, callerParticipant, steps, documents, parties };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  if (loaded.kind === "forbidden") { res.status(403).json({ error: "Forbidden" }); return; }
+  const { chain, callerParticipant, steps, documents, parties } = loaded;
 
   const actions = computeActions(
     chain,
@@ -336,7 +352,7 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res: Response): Promi
 router.post(
   "/:id/setup-parties",
   requireMinRole("document_controller"),
-  async (req: Request<ProjectItemParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     const id = requireInt(req.params.id);
     const { parties } = req.body as {
@@ -354,21 +370,21 @@ router.post(
       return;
     }
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     const [chain] = await db
       .select()
       .from(submissionChainsTable)
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-    if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
     // Authorise: only the chain's originating org (or system_owner) may define /
     // replace the party configuration. Prevents cross-tenant wiping of parties.
     const caller = req.user!;
     if (!isSystemOwner(caller) && chain.originatingOrgId !== caller.organizationId) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: "Only the originating organisation can configure chain parties.",
-      });
+      result = { status: 403, body: { error: "Forbidden", message: "Only the originating organisation can configure chain parties." } };
       return;
     }
 
@@ -380,48 +396,37 @@ router.post(
       .limit(1);
 
     if (firstStep) {
-      res.status(409).json({
-        error: "CHAIN_IN_MOTION",
-        message: "Party configuration cannot be changed after forwarding has begun.",
-      });
+      result = { status: 409, body: { error: "CHAIN_IN_MOTION", message: "Party configuration cannot be changed after forwarding has begun." } };
       return;
     }
 
     // stepOrder 1 (originator) is mandatory
     if (!parties.some((p) => p.stepOrder === 1)) {
-      res.status(400).json({ error: "stepOrder 1 (originator) is required" });
+      result = { status: 400, body: { error: "stepOrder 1 (originator) is required" } };
       return;
     }
 
     // stepOrders must be unique
     const stepOrders = parties.map((p) => p.stepOrder);
     if (new Set(stepOrders).size !== stepOrders.length) {
-      res.status(400).json({ error: "stepOrder values must be unique" });
+      result = { status: 400, body: { error: "stepOrder values must be unique" } };
       return;
     }
 
     // Validate each party entry
     for (const party of parties) {
       if (!party.participantId || !party.stepOrder || !party.assignmentStrategy) {
-        res.status(400).json({
-          error: "Each party requires participantId, stepOrder, and assignmentStrategy",
-        });
+        result = { status: 400, body: { error: "Each party requires participantId, stepOrder, and assignmentStrategy" } };
         return;
       }
 
       if ((party.assignmentStrategy as string) === "unassigned") {
-        res.status(400).json({
-          error: "UNASSIGNED_NOT_SUPPORTED",
-          message:
-            "assignmentStrategy 'unassigned' is reserved for a future release. Use 'named' or 'role_based'.",
-        });
+        result = { status: 400, body: { error: "UNASSIGNED_NOT_SUPPORTED", message: "assignmentStrategy 'unassigned' is reserved for a future release. Use 'named' or 'role_based'." } };
         return;
       }
 
       if (party.assignmentStrategy === "named" && !party.defaultAssigneeId) {
-        res.status(400).json({
-          error: "defaultAssigneeId is required when assignmentStrategy is 'named'",
-        });
+        result = { status: 400, body: { error: "defaultAssigneeId is required when assignmentStrategy is 'named'" } };
         return;
       }
 
@@ -436,9 +441,7 @@ router.post(
         );
 
       if (!participant) {
-        res.status(400).json({
-          error: `participantId ${party.participantId} does not belong to project ${projectId}`,
-        });
+        result = { status: 400, body: { error: `participantId ${party.participantId} does not belong to project ${projectId}` } };
         return;
       }
     }
@@ -483,7 +486,10 @@ router.post(
       .where(eq(submissionChainAllowedPartiesTable.chainId, id))
       .orderBy(asc(submissionChainAllowedPartiesTable.stepOrder));
 
-    res.json({ chain: updatedChain, parties: insertedParties });
+    result = { status: 200, body: { chain: updatedChain, parties: insertedParties } };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   },
 );
 
@@ -495,7 +501,7 @@ router.post(
 router.post(
   "/:id/forward",
   requireMinRole("document_controller"),
-  async (req: Request<ProjectItemParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     const id = requireInt(req.params.id);
     const { toParticipantId, assignedToUserId, transmittalId } = req.body;
@@ -505,18 +511,18 @@ router.post(
       return;
     }
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     const [chain] = await db
       .select()
       .from(submissionChainsTable)
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-    if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
     if (chain.currentStatus !== "active") {
-      res.status(409).json({
-        error: "CHAIN_NOT_ACTIVE",
-        message: `Chain is in status '${chain.currentStatus}'. Only active chains can be forwarded.`,
-      });
+      result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only active chains can be forwarded.` } };
       return;
     }
 
@@ -530,20 +536,12 @@ router.post(
           : null;
 
         if (!callerParticipant || callerParticipant.id !== chain.currentParticipantId) {
-          res.status(403).json({
-            error: "Forbidden",
-            message: "Only the current custodian participant can forward this chain.",
-            currentCustodianParticipantId: chain.currentParticipantId,
-          });
+          result = { status: 403, body: { error: "Forbidden", message: "Only the current custodian participant can forward this chain.", currentCustodianParticipantId: chain.currentParticipantId } };
           return;
         }
       } else if (chain.currentOrgId !== caller.organizationId) {
         // Legacy fallback: org-based check for chains without participant wiring
-        res.status(403).json({
-          error: "Forbidden",
-          message: "Only the current custodian organisation can forward this chain.",
-          currentCustodianOrgId: chain.currentOrgId,
-        });
+        result = { status: 403, body: { error: "Forbidden", message: "Only the current custodian organisation can forward this chain.", currentCustodianOrgId: chain.currentOrgId } };
         return;
       }
     }
@@ -571,19 +569,12 @@ router.post(
         );
 
       if (!targetParty) {
-        res.status(400).json({
-          error: "toParticipantId is not a configured party for this chain",
-        });
+        result = { status: 400, body: { error: "toParticipantId is not a configured party for this chain" } };
         return;
       }
 
       if (currentParty && targetParty.stepOrder !== currentParty.stepOrder + 1) {
-        res.status(400).json({
-          error: "SEQUENCE_VIOLATION",
-          message:
-            `toParticipantId must be at stepOrder ${currentParty.stepOrder + 1}. ` +
-            `Requested participant is at stepOrder ${targetParty.stepOrder}.`,
-        });
+        result = { status: 400, body: { error: "SEQUENCE_VIOLATION", message: `toParticipantId must be at stepOrder ${currentParty.stepOrder + 1}. Requested participant is at stepOrder ${targetParty.stepOrder}.` } };
         return;
       }
     }
@@ -629,7 +620,10 @@ router.post(
       .where(eq(submissionChainsTable.id, id))
       .returning();
 
-    res.json({ chain: updatedChain, step });
+    result = { status: 200, body: { chain: updatedChain, step } };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   },
 );
 
@@ -641,7 +635,7 @@ router.post(
 router.post(
   "/:id/review",
   requireMinRole("reviewer"),
-  async (req: Request<ProjectItemParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     const id = requireInt(req.params.id);
     const { reviewCode, comments } = req.body;
@@ -652,18 +646,18 @@ router.post(
       return;
     }
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     const [chain] = await db
       .select()
       .from(submissionChainsTable)
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-    if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
     if (chain.currentStatus !== "active") {
-      res.status(409).json({
-        error: "CHAIN_NOT_ACTIVE",
-        message: `Chain is in status '${chain.currentStatus}'. Only active chains can be reviewed.`,
-      });
+      result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only active chains can be reviewed.` } };
       return;
     }
 
@@ -676,14 +670,11 @@ router.post(
           : null;
 
         if (!callerParticipant || callerParticipant.id !== chain.currentParticipantId) {
-          res.status(403).json({
-            error: "Forbidden",
-            message: "Only the current custodian can record a review.",
-          });
+          result = { status: 403, body: { error: "Forbidden", message: "Only the current custodian can record a review." } };
           return;
         }
       } else if (chain.currentOrgId !== caller.organizationId) {
-        res.status(403).json({ error: "Forbidden" });
+        result = { status: 403, body: { error: "Forbidden" } };
         return;
       }
     }
@@ -704,10 +695,7 @@ router.post(
       .limit(1);
 
     if (!incomingStep) {
-      res.status(400).json({
-        error: "NO_INCOMING_STEP",
-        message: "No incoming step found. Forward the chain to this party first.",
-      });
+      result = { status: 400, body: { error: "NO_INCOMING_STEP", message: "No incoming step found. Forward the chain to this party first." } };
       return;
     }
 
@@ -722,7 +710,10 @@ router.post(
       .where(eq(submissionChainStepsTable.id, incomingStep.id))
       .returning();
 
-    res.json({ step: updatedStep, chain });
+    result = { status: 200, body: { step: updatedStep, chain } };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   },
 );
 
@@ -733,7 +724,7 @@ router.post(
 router.post(
   "/:id/return",
   requireMinRole("document_controller"),
-  async (req: Request<ProjectItemParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     const id = requireInt(req.params.id);
     const { reviewCode, comments } = req.body;
@@ -754,26 +745,23 @@ router.post(
       return;
     }
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     const [chain] = await db
       .select()
       .from(submissionChainsTable)
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-    if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
     if (chain.currentStatus !== "active") {
-      res.status(409).json({
-        error: "CHAIN_NOT_ACTIVE",
-        message: `Chain is in status '${chain.currentStatus}'. Only active chains can be returned.`,
-      });
+      result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only active chains can be returned.` } };
       return;
     }
 
     if (chain.currentParticipantId === null) {
-      res.status(400).json({
-        error: "PARTIES_NOT_CONFIGURED",
-        message: "Call setup-parties before using return.",
-      });
+      result = { status: 400, body: { error: "PARTIES_NOT_CONFIGURED", message: "Call setup-parties before using return." } };
       return;
     }
 
@@ -783,10 +771,7 @@ router.post(
       : null;
 
     if (!isSystemOwner(caller) && (!callerParticipant || callerParticipant.id !== chain.currentParticipantId)) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: "Only the current custodian can return this chain.",
-      });
+      result = { status: 403, body: { error: "Forbidden", message: "Only the current custodian can return this chain." } };
       return;
     }
 
@@ -802,10 +787,7 @@ router.post(
       );
 
     if (!currentParty || currentParty.stepOrder <= 1) {
-      res.status(400).json({
-        error: "CANNOT_RETURN_FROM_ORIGINATOR",
-        message: "The originating party (stepOrder 1) cannot return the chain.",
-      });
+      result = { status: 400, body: { error: "CANNOT_RETURN_FROM_ORIGINATOR", message: "The originating party (stepOrder 1) cannot return the chain." } };
       return;
     }
 
@@ -821,7 +803,7 @@ router.post(
       );
 
     if (!prevParty?.participantId) {
-      res.status(400).json({ error: "Previous party not found in allowed sequence" });
+      result = { status: 400, body: { error: "Previous party not found in allowed sequence" } };
       return;
     }
 
@@ -868,7 +850,10 @@ router.post(
       .where(eq(submissionChainsTable.id, id))
       .returning();
 
-    res.json({ chain: updatedChain, step });
+    result = { status: 200, body: { chain: updatedChain, step } };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   },
 );
 
@@ -879,25 +864,25 @@ router.post(
 router.post(
   "/:id/resubmit",
   requireMinRole("document_controller"),
-  async (req: Request<ProjectItemParams>, res: Response): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
     const projectId = requireInt(req.params.projectId);
     const id = requireInt(req.params.id);
     const { documentIds } = req.body as {
       documentIds?: Array<{ documentId: number; revisionId: number }>;
     };
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     const [chain] = await db
       .select()
       .from(submissionChainsTable)
       .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
 
-    if (!chain) { res.status(404).json({ error: "Not found" }); return; }
+    if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
     if (chain.currentStatus !== "returned") {
-      res.status(409).json({
-        error: "CHAIN_NOT_RETURNED",
-        message: `Chain must be in status 'returned' to resubmit. Current: '${chain.currentStatus}'.`,
-      });
+      result = { status: 409, body: { error: "CHAIN_NOT_RETURNED", message: `Chain must be in status 'returned' to resubmit. Current: '${chain.currentStatus}'.` } };
       return;
     }
 
@@ -920,10 +905,7 @@ router.post(
       !originatorParty?.participantId ||
       (!isSystemOwner(caller) && (!callerParticipant || callerParticipant.id !== originatorParty.participantId))
     ) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: "Only the originating party (stepOrder 1) can resubmit.",
-      });
+      result = { status: 403, body: { error: "Forbidden", message: "Only the originating party (stepOrder 1) can resubmit." } };
       return;
     }
 
@@ -939,9 +921,7 @@ router.post(
       );
 
     if (!nextParty?.participantId) {
-      res.status(400).json({
-        error: "No stepOrder=2 party configured. Call setup-parties first.",
-      });
+      result = { status: 400, body: { error: "No stepOrder=2 party configured. Call setup-parties first." } };
       return;
     }
 
@@ -1003,7 +983,10 @@ router.post(
       .from(submissionChainDocumentsTable)
       .where(eq(submissionChainDocumentsTable.chainId, id));
 
-    res.json({ chain: updatedChain, step, documents });
+    result = { status: 200, body: { chain: updatedChain, step, documents } };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   },
 );
 

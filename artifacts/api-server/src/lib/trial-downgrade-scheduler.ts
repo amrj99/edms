@@ -20,7 +20,7 @@
  * projects in the org.
  */
 
-import { db } from "@workspace/db";
+import { db, withSystemTenantTx } from "@workspace/db";
 import {
   organizationsTable,
   usersTable,
@@ -63,101 +63,114 @@ async function processExpiredTrials(): Promise<void> {
 }
 
 async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
-  // ── 1. Find all active users and pick the one to keep ─────────────────────
-  const allUsers = await db
-    .select({ id: usersTable.id, role: usersTable.role, createdAt: usersTable.createdAt })
-    .from(usersTable)
-    .where(and(eq(usersTable.organizationId, orgId), eq(usersTable.isActive, true)))
-    .orderBy(usersTable.createdAt);
+  // DEBT-010 Category-A: this job runs from a timer with NO request context, so a
+  // bare `db` would hit the pool with no RLS tenant context and (under the
+  // non-superuser edms_app role) the RLS-scoped `projects` write would be
+  // rejected/silently no-op. The whole per-org downgrade is therefore wrapped in
+  // ONE `withSystemTenantTx(orgId, …)` so every read/write runs under the org's
+  // tenant context (is_system_owner=false, no human user) AND is atomic per org.
+  // One tx PER org; a failure here throws to the caller's per-org try/catch so it
+  // does not abort the other orgs, and the context never leaks to the next org.
+  await withSystemTenantTx(orgId, async () => {
+    // ── 1. Find all active users and pick the one to keep ───────────────────
+    const allUsers = await db
+      .select({ id: usersTable.id, role: usersTable.role, createdAt: usersTable.createdAt })
+      .from(usersTable)
+      .where(and(eq(usersTable.organizationId, orgId), eq(usersTable.isActive, true)))
+      .orderBy(usersTable.createdAt);
 
-  if (allUsers.length === 0) {
+    if (allUsers.length === 0) {
+      await db
+        .update(organizationsTable)
+        .set({ subscriptionTier: "expired", updatedAt: new Date() })
+        .where(eq(organizationsTable.id, orgId));
+      logger.info({ orgId }, "[trial-downgrade] No active users — tier set to expired");
+      return;
+    }
+
+    // Admin preferred; oldest user as fallback
+    const keepUser = allUsers.find(u => u.role === "admin") ?? allUsers[0];
+    const readOnlyIds = allUsers.filter(u => u.id !== keepUser.id).map(u => u.id);
+
+    // ── 2. Find all projects and pick the oldest one to keep visible ────────
+    const allProjects = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.organizationId, orgId))
+      .orderBy(projectsTable.createdAt);
+
+    const keepProjectId = allProjects[0]?.id ?? null;
+    const hideProjectIds = allProjects.slice(1).map(p => p.id);
+
+    // ── 3. Apply all changes (idempotent — safe to run repeatedly) ──────────
+
+    // Ensure the kept user is NOT read-only (clears any previous override)
+    await db
+      .update(usersTable)
+      .set({ isReadOnlyOverride: false, updatedAt: new Date() })
+      .where(eq(usersTable.id, keepUser.id));
+
+    // Mark all other users as read-only
+    if (readOnlyIds.length > 0) {
+      await db
+        .update(usersTable)
+        .set({ isReadOnlyOverride: true, updatedAt: new Date() })
+        .where(inArray(usersTable.id, readOnlyIds));
+    }
+
+    // Ensure the kept project is visible
+    if (keepProjectId !== null) {
+      await db
+        .update(projectsTable)
+        .set({ visibleOnFree: true, updatedAt: new Date() })
+        .where(eq(projectsTable.id, keepProjectId));
+    }
+
+    // Hide all extra projects
+    if (hideProjectIds.length > 0) {
+      await db
+        .update(projectsTable)
+        .set({ visibleOnFree: false, updatedAt: new Date() })
+        .where(inArray(projectsTable.id, hideProjectIds));
+    }
+
+    // ── 4. Downgrade the org tier ───────────────────────────────────────────
     await db
       .update(organizationsTable)
       .set({ subscriptionTier: "expired", updatedAt: new Date() })
       .where(eq(organizationsTable.id, orgId));
-    logger.info({ orgId }, "[trial-downgrade] No active users — tier set to expired");
-    return;
-  }
 
-  // Admin preferred; oldest user as fallback
-  const keepUser = allUsers.find(u => u.role === "admin") ?? allUsers[0];
-  const readOnlyIds = allUsers.filter(u => u.id !== keepUser.id).map(u => u.id);
+    logger.info(
+      {
+        orgId,
+        orgName,
+        keptUserId: keepUser.id,
+        readOnlyUserCount: readOnlyIds.length,
+        keptProjectId: keepProjectId,
+        hiddenProjectCount: hideProjectIds.length,
+      },
+      "[trial-downgrade] Org downgraded trial → expired",
+    );
 
-  // ── 2. Find all projects and pick the oldest one to keep visible ──────────
-  const allProjects = await db
-    .select({ id: projectsTable.id })
-    .from(projectsTable)
-    .where(eq(projectsTable.organizationId, orgId))
-    .orderBy(projectsTable.createdAt);
-
-  const keepProjectId = allProjects[0]?.id ?? null;
-  const hideProjectIds = allProjects.slice(1).map(p => p.id);
-
-  // ── 3. Apply all changes (idempotent — safe to run repeatedly) ────────────
-
-  // Ensure the kept user is NOT read-only (clears any previous override)
-  await db
-    .update(usersTable)
-    .set({ isReadOnlyOverride: false, updatedAt: new Date() })
-    .where(eq(usersTable.id, keepUser.id));
-
-  // Mark all other users as read-only
-  if (readOnlyIds.length > 0) {
-    await db
-      .update(usersTable)
-      .set({ isReadOnlyOverride: true, updatedAt: new Date() })
-      .where(inArray(usersTable.id, readOnlyIds));
-  }
-
-  // Ensure the kept project is visible
-  if (keepProjectId !== null) {
-    await db
-      .update(projectsTable)
-      .set({ visibleOnFree: true, updatedAt: new Date() })
-      .where(eq(projectsTable.id, keepProjectId));
-  }
-
-  // Hide all extra projects
-  if (hideProjectIds.length > 0) {
-    await db
-      .update(projectsTable)
-      .set({ visibleOnFree: false, updatedAt: new Date() })
-      .where(inArray(projectsTable.id, hideProjectIds));
-  }
-
-  // ── 4. Downgrade the org tier ─────────────────────────────────────────────
-  await db
-    .update(organizationsTable)
-    .set({ subscriptionTier: "expired", updatedAt: new Date() })
-    .where(eq(organizationsTable.id, orgId));
-
-  logger.info(
-    {
-      orgId,
-      orgName,
-      keptUserId: keepUser.id,
-      readOnlyUserCount: readOnlyIds.length,
-      keptProjectId: keepProjectId,
-      hiddenProjectCount: hideProjectIds.length,
-    },
-    "[trial-downgrade] Org downgraded trial → expired",
-  );
-
-  // ── 5. Audit log — fire-and-forget, never blocks or throws ────────────────
-  await createAuditLog({
-    organizationId: orgId,
-    userId: keepUser.id,
-    action: "trial_downgraded",
-    entityType: "organization",
-    entityId: orgId,
-    entityTitle: orgName,
-    details: {
-      keptUserId: keepUser.id,
-      readOnlyUserCount: readOnlyIds.length,
-      keptProjectId: keepProjectId ?? null,
-      hiddenProjectCount: hideProjectIds.length,
-      downgradedAt: new Date().toISOString(),
-    },
+    // ── 5. Audit log — DB-only, runs inside the tenant tx ───────────────────
+    // S-2: attribute the action to the SYSTEM principal, not the retained human
+    // user — the downgrade is performed by the scheduler, not by keepUser.
+    await createAuditLog({
+      organizationId: orgId,
+      userId: undefined,
+      actorRole: "system",
+      action: "trial_downgraded",
+      entityType: "organization",
+      entityId: orgId,
+      entityTitle: orgName,
+      details: {
+        keptUserId: keepUser.id,
+        readOnlyUserCount: readOnlyIds.length,
+        keptProjectId: keepProjectId ?? null,
+        hiddenProjectCount: hideProjectIds.length,
+        downgradedAt: new Date().toISOString(),
+      },
+    });
   });
 }
 

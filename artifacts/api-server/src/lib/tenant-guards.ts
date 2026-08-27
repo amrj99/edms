@@ -15,6 +15,7 @@
 import type { Request, Response } from "express";
 import { canAccessProject } from "./can-access-project.js";
 import { isSystemOwner } from "./auth.js";
+import { tenantRead } from "../middlewares/tenant-scope.js";
 
 /**
  * Returns true if the caller may access `projectId` (system_owner, owning org, or
@@ -29,7 +30,9 @@ export async function assertProjectAccess(
   opts: { notFoundOnDeny?: boolean } = {},
 ): Promise<boolean> {
   const user = req.user!;
-  const { allowed } = await canAccessProject(user.id, user.organizationId, projectId, isSystemOwner(user));
+  // tenantRead: reuse the active tenant tx if any (inside withTenant / GET auto-wrap),
+  // else open a SHORT read tx under the marker (writes), else pool (unconverted).
+  const { allowed } = await tenantRead(() => canAccessProject(user.id, user.organizationId, projectId, isSystemOwner(user)));
   if (!allowed) {
     if (opts.notFoundOnDeny) res.status(404).json({ error: "Not Found" });
     else res.status(403).json({ error: "Forbidden" });

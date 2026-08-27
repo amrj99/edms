@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { auditLogsTable, usersTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, gte, lte, ilike, or, isNull, count, type SQL } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner, requireRole } from "../lib/auth.js";
+import { tenantRead } from "../middlewares/tenant-scope.js";
 
 const router = Router();
 
@@ -83,57 +84,61 @@ router.get("/", requireAuth, requireRole(...AUDIT_ROLES), async (req, res): Prom
   const dateTo     = qstr(req.query.dateTo);
   const search     = qstr(req.query.search);
 
-  const conditions: SQL<unknown>[] = [];
-
   const currentUser = req.user!;
-  if (!isSystemOwner(currentUser)) {
-    if (!currentUser.organizationId) {
-      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
-      return;
+  if (!isSystemOwner(currentUser) && !currentUser.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+    return;
+  }
+
+  // One short read unit-of-work: org-scoping subqueries (buildOrgCondition) + count + page.
+  const { total, items } = await tenantRead(async () => {
+    const conditions: SQL<unknown>[] = [];
+    if (!isSystemOwner(currentUser)) {
+      conditions.push(await buildOrgCondition(currentUser.organizationId!));
     }
-    conditions.push(await buildOrgCondition(currentUser.organizationId));
-  }
-  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
-  if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
-  if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
-  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
-  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
-  if (dateTo) {
-    const to = new Date(dateTo);
-    to.setHours(23, 59, 59, 999);
-    conditions.push(lte(auditLogsTable.createdAt, to));
-  }
-  if (search) {
-    const q = `%${search}%`;
-    conditions.push(
-      or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
-    );
-  }
+    if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+    if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
+    if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
+    if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
+    if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      conditions.push(lte(auditLogsTable.createdAt, to));
+    }
+    if (search) {
+      const q = `%${search}%`;
+      conditions.push(
+        or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
+      );
+    }
 
-  const where = buildWhere(conditions);
+    const where = buildWhere(conditions);
 
-  const [{ total }] = await db.select({ total: count() }).from(auditLogsTable).where(where);
+    const [{ total }] = await db.select({ total: count() }).from(auditLogsTable).where(where);
 
-  const items = await db.select({
-    log: auditLogsTable,
-    user: {
-      id: usersTable.id,
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      email: usersTable.email,
-    },
-    project: {
-      id: projectsTable.id,
-      name: projectsTable.name,
-      code: projectsTable.code,
-    },
-  }).from(auditLogsTable)
-    .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
-    .leftJoin(projectsTable, eq(auditLogsTable.projectId, projectsTable.id))
-    .where(where)
-    .orderBy(desc(auditLogsTable.createdAt))
-    .limit(lim)
-    .offset(offset);
+    const items = await db.select({
+      log: auditLogsTable,
+      user: {
+        id: usersTable.id,
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        email: usersTable.email,
+      },
+      project: {
+        id: projectsTable.id,
+        name: projectsTable.name,
+        code: projectsTable.code,
+      },
+    }).from(auditLogsTable)
+      .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
+      .leftJoin(projectsTable, eq(auditLogsTable.projectId, projectsTable.id))
+      .where(where)
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(lim)
+      .offset(offset);
+    return { total, items };
+  });
 
   const totalPages = Math.ceil(total / lim);
 
@@ -163,56 +168,58 @@ router.get("/export-xlsx", requireAuth, requireRole(...AUDIT_ROLES), async (req,
   const dateTo     = qstr(req.query.dateTo);
   const search     = qstr(req.query.search);
 
-  const conditions: SQL<unknown>[] = [];
-
   const currentUser = req.user!;
-  if (!isSystemOwner(currentUser)) {
-    if (!currentUser.organizationId) {
-      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
-      return;
+  if (!isSystemOwner(currentUser) && !currentUser.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+    return;
+  }
+
+  const items = await tenantRead(async () => {
+    const conditions: SQL<unknown>[] = [];
+    if (!isSystemOwner(currentUser)) {
+      conditions.push(await buildOrgCondition(currentUser.organizationId!));
     }
-    conditions.push(await buildOrgCondition(currentUser.organizationId));
-  }
-  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
-  if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
-  if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
-  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
-  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
-  if (dateTo) {
-    const to = new Date(dateTo);
-    to.setHours(23, 59, 59, 999);
-    conditions.push(lte(auditLogsTable.createdAt, to));
-  }
-  if (search) {
-    const q = `%${search}%`;
-    conditions.push(
-      or(
-        ilike(auditLogsTable.entityTitle, q),
-        ilike(auditLogsTable.action, q),
-        ilike(auditLogsTable.entityType, q),
-      ) as SQL<unknown>
-    );
-  }
+    if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+    if (entityType && entityType !== "_all") conditions.push(eq(auditLogsTable.entityType, entityType));
+    if (action     && action     !== "_all") conditions.push(eq(auditLogsTable.action,     action));
+    if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId,     parseInt(userId)));
+    if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      conditions.push(lte(auditLogsTable.createdAt, to));
+    }
+    if (search) {
+      const q = `%${search}%`;
+      conditions.push(
+        or(
+          ilike(auditLogsTable.entityTitle, q),
+          ilike(auditLogsTable.action, q),
+          ilike(auditLogsTable.entityType, q),
+        ) as SQL<unknown>
+      );
+    }
 
-  const where = buildWhere(conditions);
+    const where = buildWhere(conditions);
 
-  const items = await db.select({
-    log: auditLogsTable,
-    user: {
-      firstName: usersTable.firstName,
-      lastName: usersTable.lastName,
-      email: usersTable.email,
-    },
-    project: {
-      name: projectsTable.name,
-      code: projectsTable.code,
-    },
-  }).from(auditLogsTable)
-    .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
-    .leftJoin(projectsTable, eq(auditLogsTable.projectId, projectsTable.id))
-    .where(where)
-    .orderBy(desc(auditLogsTable.createdAt))
-    .limit(10000);
+    return db.select({
+      log: auditLogsTable,
+      user: {
+        firstName: usersTable.firstName,
+        lastName: usersTable.lastName,
+        email: usersTable.email,
+      },
+      project: {
+        name: projectsTable.name,
+        code: projectsTable.code,
+      },
+    }).from(auditLogsTable)
+      .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
+      .leftJoin(projectsTable, eq(auditLogsTable.projectId, projectsTable.id))
+      .where(where)
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(10000);
+  });
 
   res.json({
     data: items.map(({ log, user, project }) => ({
@@ -245,47 +252,50 @@ router.get("/export", requireAuth, requireRole(...AUDIT_ROLES), async (req, res)
   const dateTo     = qstr(req.query.dateTo);
   const search     = qstr(req.query.search);
 
-  const conditions: SQL<unknown>[] = [];
-
   const currentUser = req.user!;
-  if (!isSystemOwner(currentUser)) {
-    if (!currentUser.organizationId) {
-      res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
-      return;
+  if (!isSystemOwner(currentUser) && !currentUser.organizationId) {
+    res.status(403).json({ error: "Forbidden", message: "No organization assigned" });
+    return;
+  }
+
+  // DB read in a short tenant unit; CSV assembly + res.send happen OUTSIDE the tx.
+  const logs = await tenantRead(async () => {
+    const conditions: SQL<unknown>[] = [];
+    if (!isSystemOwner(currentUser)) {
+      conditions.push(await buildOrgCondition(currentUser.organizationId!));
     }
-    conditions.push(await buildOrgCondition(currentUser.organizationId));
-  }
-  if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
-  if (entityType && entityType !== "_all" && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType));
-  if (action     && action     !== "_all" && action     !== "all") conditions.push(eq(auditLogsTable.action,     action));
-  if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId, parseInt(userId)));
-  if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
-  if (dateTo) {
-    const d = new Date(dateTo);
-    d.setHours(23, 59, 59, 999);
-    conditions.push(lte(auditLogsTable.createdAt, d));
-  }
-  if (search) {
-    const q = `%${search}%`;
-    conditions.push(
-      or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
-    );
-  }
+    if (projectId  && projectId  !== "_all") conditions.push(eq(auditLogsTable.projectId,  parseInt(projectId)));
+    if (entityType && entityType !== "_all" && entityType !== "all") conditions.push(eq(auditLogsTable.entityType, entityType));
+    if (action     && action     !== "_all" && action     !== "all") conditions.push(eq(auditLogsTable.action,     action));
+    if (userId     && userId     !== "_all") conditions.push(eq(auditLogsTable.userId, parseInt(userId)));
+    if (dateFrom) conditions.push(gte(auditLogsTable.createdAt, new Date(dateFrom)));
+    if (dateTo) {
+      const d = new Date(dateTo);
+      d.setHours(23, 59, 59, 999);
+      conditions.push(lte(auditLogsTable.createdAt, d));
+    }
+    if (search) {
+      const q = `%${search}%`;
+      conditions.push(
+        or(ilike(auditLogsTable.entityTitle, q), ilike(auditLogsTable.action, q), ilike(auditLogsTable.entityType, q)) as SQL<unknown>
+      );
+    }
 
-  const where = buildWhere(conditions);
+    const where = buildWhere(conditions);
 
-  const logs = await db.select({
-    log: auditLogsTable,
-    user: {
-      firstName: usersTable.firstName,
-      lastName:  usersTable.lastName,
-      email:     usersTable.email,
-    },
-  }).from(auditLogsTable)
-    .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
-    .where(where)
-    .orderBy(desc(auditLogsTable.createdAt))
-    .limit(5000);
+    return db.select({
+      log: auditLogsTable,
+      user: {
+        firstName: usersTable.firstName,
+        lastName:  usersTable.lastName,
+        email:     usersTable.email,
+      },
+    }).from(auditLogsTable)
+      .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
+      .where(where)
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(5000);
+  });
 
   const headers = ["ID", "Date/Time", "User", "Action", "Entity Type", "Entity Title", "Project ID"];
   const rows = logs.map(({ log, user }) => [

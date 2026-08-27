@@ -1,4 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import { AsyncLocalStorage } from "node:async_hooks";
 import pg from "pg";
 import * as schema from "./schema";
 
@@ -46,7 +48,111 @@ function parsePostgresUrl(url: string): pg.PoolConfig {
 }
 
 export const pool = new Pool(parsePostgresUrl(process.env.DATABASE_URL));
-export const db = drizzle(pool, { schema });
+
+// The pool-backed Drizzle instance. Used directly ONLY for non-request work
+// (migrations, server bootstrap, background jobs) where there is no tenant to
+// scope to. Request code must NOT import this — it uses `db` (below), which
+// routes into the per-request tenant transaction.
+const baseDb = drizzle(pool, { schema });
+
+// ─── DEBT-010 ③ — transaction-local tenant context (path A) ───────────────────
+// AsyncLocalStorage carries the current request's tenant transaction. Inside a
+// `runInTenantTx(...)` scope, `currentDb()` (and the `db` Proxy) resolve to that
+// single transaction — the one on which `SET LOCAL app.current_org_id /
+// app.is_system_owner` was applied — so RLS is evaluated with the right context
+// on the SAME connection. Outside any scope (migrate/bootstrap/bg), they resolve
+// to the pool-backed `baseDb`. This is transaction-LOCAL: the context never
+// leaks to another request and never persists on a reused pooled connection.
+type TenantTx = Parameters<Parameters<typeof baseDb.transaction>[0]>[0];
+interface TenantStore { tx: TenantTx; orgId: number | null; isSystemOwner: boolean; userId: number | null }
+
+export const dbContext = new AsyncLocalStorage<TenantStore>();
+
+/**
+ * Marks that execution is inside an authenticated HTTP request that MUST be
+ * tenant-scoped. Set by the request middleware. Its presence flips the `db`
+ * Proxy to FAIL-CLOSED: inside a request, DB access is only allowed via a tenant
+ * transaction (runInTenantTx) — a bare `db` call with no active tx throws rather
+ * than silently falling back to the pool (which would run with no RLS context).
+ * Non-request code (bootstrap, migrations, tests, background jobs) never sets
+ * this marker and keeps the pool-backed fallback.
+ */
+export const requestContext = new AsyncLocalStorage<{ userId: number; orgId: number | null; isSystemOwner: boolean }>();
+
+/** The DB handle for the current execution: the tenant transaction if inside a
+ *  runInTenantTx scope, otherwise the pool-backed base instance — UNLESS we are
+ *  inside a tenant request with no tx, which is a fail-closed error. */
+export function currentDb(): TenantTx | typeof baseDb {
+  const store = dbContext.getStore();
+  if (store) return store.tx;
+  if (requestContext.getStore()) {
+    throw new Error(
+      "Fail-closed DB access: `db` used inside a tenant request without an active " +
+      "transaction. Wrap DB work in withTenant()/runInTenantTx(); never fall back to " +
+      "the pool inside a tenant scope (it would bypass the RLS tenant context).",
+    );
+  }
+  return baseDb;
+}
+
+/** `db` transparently forwards to `currentDb()` so existing `import { db }` call
+ *  sites become tenant-transaction-scoped inside a request with zero changes,
+ *  and remain pool-backed for explicit non-request code. Inside a request without
+ *  a tx it throws (fail-closed) — no silent pool fallback. */
+export const db = new Proxy(baseDb, {
+  get(_t, prop, receiver) {
+    const active = currentDb();
+    const value = Reflect.get(active as object, prop, receiver);
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(active) : value;
+  },
+}) as typeof baseDb;
+
+/**
+ * Run `fn` inside a single tenant transaction with the RLS context applied via
+ * SET LOCAL (transaction-scoped). Keep the unit-of-work SHORT — do external I/O
+ * (R2/email/etc.) OUTSIDE this scope so a connection is never held during I/O.
+ */
+export async function runInTenantTx<T>(
+  ctx: { orgId: number | null; isSystemOwner: boolean; userId?: number | null },
+  fn: () => Promise<T>,
+): Promise<T> {
+  const userId = ctx.userId ?? null;
+  return baseDb.transaction(async (tx) => {
+    await tx.execute(sql`SELECT set_config('app.current_org_id', ${ctx.orgId == null ? "" : String(ctx.orgId)}, true)`);
+    await tx.execute(sql`SELECT set_config('app.is_system_owner', ${ctx.isSystemOwner ? "true" : "false"}, true)`);
+    // DEBT-010 Decision B: transaction-local user context for per-user / membership-aware RLS.
+    // Missing user context ⇒ '' ⇒ per-user/collaborative predicates that need it evaluate to
+    // NULL/false ⇒ zero rows (fail-closed).
+    await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId == null ? "" : String(userId)}, true)`);
+    return dbContext.run({ tx, orgId: ctx.orgId, isSystemOwner: ctx.isSystemOwner, userId }, fn);
+  });
+}
+
+/**
+ * DEBT-010 Decision B — named background/system contexts (NOT a general bypass).
+ *
+ * Background jobs run from timers / detached callbacks with NO request ALS, so bare
+ * `db` would hit the pool with no RLS context. These two helpers give them an
+ * EXPLICIT, minimal tenant context so RLS is enforced under `edms_app`:
+ *
+ *   withSystemTenantTx(orgId, fn) — a per-org system-actor unit of work. Sets the
+ *     org context with is_system_owner=false and NO human user (current_user_id
+ *     empty). Category-A tenant jobs (skill/reminder/trial-downgrade/migrations)
+ *     open ONE of these PER ORG (never one tx across many orgs). It never
+ *     impersonates a human — recipient user ids are written as data columns, not
+ *     as the session user. Keep external I/O (email/AI) OUTSIDE this tx.
+ *
+ *   withSystemContext(fn) — the ONLY platform-wide escape (Category B). Sets
+ *     is_system_owner=true so RLS admits all tenants for a genuine global op
+ *     (search reindex). Named + allowlisted + static-guarded. Do external I/O
+ *     (Elasticsearch push) OUTSIDE the tx.
+ */
+export function withSystemTenantTx<T>(orgId: number, fn: () => Promise<T>): Promise<T> {
+  return runInTenantTx({ orgId, isSystemOwner: false, userId: null }, fn);
+}
+export function withSystemContext<T>(fn: () => Promise<T>): Promise<T> {
+  return runInTenantTx({ orgId: null, isSystemOwner: true, userId: null }, fn);
+}
 
 export * from "./schema";
 export * from "./document-type-utils";

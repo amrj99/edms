@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { db } from "@workspace/db";
+import { db, currentDb } from "@workspace/db";
 import { documentsTable, documentFilesTable, foldersTable, documentRevisionsTable, usersTable, wfInstancesTable, wfInstanceTransitionsTable, wfTemplateStagesTable, tasksTable, projectsTable, projectMembersTable, notificationsTable, organizationsTable, orgConfigTable, documentSequencesTable, transmittalsTable, transmittalItemsTable, submissionChainsTable, submissionChainDocumentsTable, correspondenceTable, correspondenceDocumentsTable, documentDepartmentsTable, departmentsTable } from "@workspace/db";
 import { PLANS } from "../lib/plans.js";
 import { getOrgPlan } from "../lib/plan-service.js";
@@ -20,7 +20,8 @@ import { emitToUser } from "../lib/socket.js";
 import { applyDocumentReviewDecision, isValidReviewDecision, type ReviewDecision } from "../lib/document-review.js";
 import { TenantIsolationError } from '../lib/errors.js';
 import { evaluateRules } from "../lib/rule-engine.js";
-import { classifyItem } from "../lib/ai-service.js";
+import { classifyDetached } from "../lib/ai/classification-events.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { uploadBuffer } from "../lib/orgStorage.js";
 import { insertDocumentFileRow, compensateStorage, type WrittenObject, type CompensationResidual } from "../lib/document-file-write.js";
 import { storageQuota, type QuotaCheckResult } from "../lib/storage-quota.js";
@@ -83,149 +84,153 @@ router.use(requireAuth, requireProjectAccess());
 router.get("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
+  const loaded = await tenantRead(async () => {
+    const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+    if (!allowed) return { denied: true as const };
+    const folders = await db.select({
+      id: foldersTable.id,
+      name: foldersTable.name,
+      projectId: foldersTable.projectId,
+      organizationId: foldersTable.organizationId,
+      parentId: foldersTable.parentId,
+      createdAt: foldersTable.createdAt,
+    }).from(foldersTable)
+      .where(eq(foldersTable.projectId, projectId))
+      .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
+    const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
+      .from(documentsTable)
+      .where(eq(documentsTable.projectId, projectId))
+      .groupBy(documentsTable.folderId);
+    return { denied: false as const, folders, docCounts };
+  });
+  if (loaded.denied) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
     return;
   }
-  const folders = await db.select({
-    id: foldersTable.id,
-    name: foldersTable.name,
-    projectId: foldersTable.projectId,
-    organizationId: foldersTable.organizationId,
-    parentId: foldersTable.parentId,
-    createdAt: foldersTable.createdAt,
-  }).from(foldersTable)
-    .where(eq(foldersTable.projectId, projectId))
-    .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
-  const docCounts = await db.select({ folderId: documentsTable.folderId, cnt: count() })
-    .from(documentsTable)
-    .where(eq(documentsTable.projectId, projectId))
-    .groupBy(documentsTable.folderId);
+  const { folders, docCounts } = loaded;
   const countMap = new Map(docCounts.filter(d => d.folderId).map(d => [d.folderId!, Number(d.cnt)]));
   res.json({ items: folders.map(f => ({ ...f, documentCount: countMap.get(f.id) ?? 0 })) });
 });
 
-router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/folders", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-    return;
-  }
   const { name, parentId } = req.body;
   if (!name?.trim()) { res.status(400).json({ error: "name is required" }); return; }
-  const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
-  res.status(201).json({ ...folder, documentCount: 0 });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+      if (!allowed) { result = { status: 403, body: { error: "Forbidden", message: "You are not a member of this project" } }; return; }
+      const [folder] = await db.insert(foldersTable).values({ name: name.trim(), projectId, parentId: parentId ?? null }).returning();
+      result = { status: 201, body: { ...folder, documentCount: 0 } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.put("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const folderId = requireInt(req.params.folderId);
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-    return;
-  }
   const { name, parentId } = req.body;
   const update: Record<string, any> = {};
   if (name !== undefined) update.name = name.trim();
   if (parentId !== undefined) update.parentId = parentId === null ? null : parseInt(parentId);
   if (!Object.keys(update).length) { res.status(400).json({ error: "nothing to update" }); return; }
-  const [folder] = await db.update(foldersTable)
-    .set(update)
-    .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)))
-    .returning();
-  if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
-  res.json(folder);
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+      if (!allowed) { result = { status: 403, body: { error: "Forbidden", message: "You are not a member of this project" } }; return; }
+      const [folder] = await db.update(foldersTable)
+        .set(update)
+        .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)))
+        .returning();
+      if (!folder) { result = { status: 404, body: { error: "folder not found" } }; return; }
+      result = { status: 200, body: folder };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/folders/:folderId", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const folderId = requireInt(req.params.folderId);
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!allowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" });
-    return;
-  }
-  const [folder] = await db.select().from(foldersTable)
-    .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
-  if (!folder) { res.status(404).json({ error: "folder not found" }); return; }
-  // Move child folders to parent
-  await db.update(foldersTable)
-    .set({ parentId: folder.parentId ?? null })
-    .where(eq(foldersTable.parentId, folderId));
-  // Unset folderId on documents
-  await db.update(documentsTable)
-    .set({ folderId: folder.parentId ?? null })
-    .where(and(eq(documentsTable.folderId, folderId), eq(documentsTable.projectId, projectId)));
-  await db.delete(foldersTable).where(eq(foldersTable.id, folderId));
-  res.status(204).send();
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const { allowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+      if (!allowed) { result = { status: 403, body: { error: "Forbidden", message: "You are not a member of this project" } }; return; }
+      const [folder] = await db.select().from(foldersTable)
+        .where(and(eq(foldersTable.id, folderId), eq(foldersTable.projectId, projectId)));
+      if (!folder) { result = { status: 404, body: { error: "folder not found" } }; return; }
+      await db.update(foldersTable).set({ parentId: folder.parentId ?? null }).where(eq(foldersTable.parentId, folderId));
+      await db.update(documentsTable)
+        .set({ folderId: folder.parentId ?? null })
+        .where(and(eq(documentsTable.folderId, folderId), eq(documentsTable.projectId, projectId)));
+      await db.delete(foldersTable).where(eq(foldersTable.id, folderId));
+      result = { status: 204, body: null };
+    });
+    if (result!.status === 204) { res.status(204).send(); return; }
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // POST /folders/copy-from — copy folder tree from another project in same org
-router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/folders/copy-from", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const { sourceProjectId } = req.body;
   if (!sourceProjectId) { res.status(400).json({ error: "sourceProjectId required" }); return; }
-  // Verify source project is in same org
-  const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
-  const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
-  if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
-    res.status(403).json({ error: "Source project not in same organization" }); return;
-  }
-  const sourceFolders = await db.select({
-    id: foldersTable.id,
-    name: foldersTable.name,
-    parentId: foldersTable.parentId,
-  }).from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
-  // Insert in two passes: roots first, then children (BFS)
-  const idMap = new Map<number, number>();
-  const roots = sourceFolders.filter(f => !f.parentId);
-  const children = sourceFolders.filter(f => f.parentId);
-  for (const f of roots) {
-    const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: null }).returning();
-    idMap.set(f.id, created.id);
-  }
-  // Up to 5 levels
-  let remaining = children;
-  for (let pass = 0; pass < 5 && remaining.length; pass++) {
-    const next: typeof remaining = [];
-    for (const f of remaining) {
-      const newParent = idMap.get(f.parentId!);
-      if (newParent !== undefined) {
-        const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: newParent }).returning();
-        idMap.set(f.id, created.id);
-      } else {
-        next.push(f);
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [srcProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, sourceProjectId));
+      const [dstProject] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
+      if (!srcProject || !dstProject || srcProject.organizationId !== dstProject.organizationId) {
+        result = { status: 403, body: { error: "Source project not in same organization" } }; return;
       }
-    }
-    remaining = next;
-  }
-  const newFolders = await db.select({
-    id: foldersTable.id,
-    name: foldersTable.name,
-    projectId: foldersTable.projectId,
-    organizationId: foldersTable.organizationId,
-    parentId: foldersTable.parentId,
-    createdAt: foldersTable.createdAt,
-  }).from(foldersTable)
-    .where(eq(foldersTable.projectId, projectId))
-    .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
-  res.json({ folders: newFolders, copiedCount: idMap.size });
+      const sourceFolders = await db.select({
+        id: foldersTable.id, name: foldersTable.name, parentId: foldersTable.parentId,
+      }).from(foldersTable).where(eq(foldersTable.projectId, sourceProjectId));
+      const idMap = new Map<number, number>();
+      const roots = sourceFolders.filter(f => !f.parentId);
+      const children = sourceFolders.filter(f => f.parentId);
+      for (const f of roots) {
+        const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: null }).returning();
+        idMap.set(f.id, created.id);
+      }
+      let remaining = children;
+      for (let pass = 0; pass < 5 && remaining.length; pass++) {
+        const nextArr: typeof remaining = [];
+        for (const f of remaining) {
+          const newParent = idMap.get(f.parentId!);
+          if (newParent !== undefined) {
+            const [created] = await db.insert(foldersTable).values({ name: f.name, projectId, parentId: newParent }).returning();
+            idMap.set(f.id, created.id);
+          } else {
+            nextArr.push(f);
+          }
+        }
+        remaining = nextArr;
+      }
+      const newFolders = await db.select({
+        id: foldersTable.id, name: foldersTable.name, projectId: foldersTable.projectId,
+        organizationId: foldersTable.organizationId, parentId: foldersTable.parentId, createdAt: foldersTable.createdAt,
+      }).from(foldersTable)
+        .where(eq(foldersTable.projectId, projectId))
+        .orderBy(sql`${foldersTable.parentId} NULLS FIRST`, asc(foldersTable.name));
+      result = { status: 200, body: { folders: newFolders, copiedCount: idMap.size } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Documents
 router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
-  const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
-  if (!projectAccessAllowed) {
-    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
-  }
   const { discipline, documentType, status, folderId, page, limit, search, source, issuedBy, direction } = req.query;
   const lim = Math.min(parseInt(limit as string || "50"), 200);
   const pg = Math.max(1, parseInt(page as string || "1"));
@@ -261,46 +266,58 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
 
   const where = and(...conditions) as SQL;
 
-  // ── Query 1: total count (SQL) ─────────────────────────────────────────────
-  const [{ totalCount }] = await db
-    .select({ totalCount: count() })
-    .from(documentsTable)
-    .where(where);
+  // Project access gate + all read queries in ONE short read tx (one snapshot).
+  const loaded = await tenantRead(async () => {
+    const { allowed: projectAccessAllowed } = await canAccessProject(caller.id, caller.organizationId, projectId, isSystemOwner(caller));
+    if (!projectAccessAllowed) return { denied: true as const };
 
-  // ── Query 2: paginated page data (SQL LIMIT/OFFSET) ────────────────────────
-  const docs = await db.select({
-    doc: documentsTable,
-    createdBy: usersTable,
-    folder: foldersTable,
-  }).from(documentsTable)
-    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .where(where)
-    .orderBy(desc(documentsTable.updatedAt))
-    .limit(lim)
-    .offset((pg - 1) * lim);
+    // ── Query 1: total count (SQL) ─────────────────────────────────────────────
+    const [{ totalCount }] = await db
+      .select({ totalCount: count() })
+      .from(documentsTable)
+      .where(where);
 
-  // ── Department enforcement gate ────────────────────────────────────────────
-  // PHASE_D_ENFORCE_DEPT=false (current default): resolveListAndEnforce fires
-  // shadow logging asynchronously and returns an empty deniedDocIds — zero
-  // impact on response shape or latency.
-  //
-  // NOTE: if PHASE_D_ENFORCE_DEPT=true is ever enabled, the `total` returned
-  // here will NOT account for denied documents on OTHER pages — only the current
-  // page is evaluated. Accurate total-after-enforcement requires a separate
-  // refactor: (1) fetch all matching doc IDs in a lightweight ID-only query,
-  // (2) run enforcement on the full ID set, (3) subtract denied IDs from total,
-  // (4) re-paginate. Do NOT enable enforcement without that refactor.
-  const { deniedDocIds } = await resolveListAndEnforce({
-    userId:    caller.id,
-    userRole:  caller.role,
-    documents: docs.map(({ doc }) => ({
-      id:             doc.id,
-      projectId:      doc.projectId,
-      isConfidential: doc.isConfidential ?? false,
-    })),
-    endpoint: "GET /api/projects/:projectId/documents",
+    // ── Query 2: paginated page data (SQL LIMIT/OFFSET) ────────────────────────
+    const docs = await db.select({
+      doc: documentsTable,
+      createdBy: usersTable,
+      folder: foldersTable,
+    }).from(documentsTable)
+      .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
+      .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+      .where(where)
+      .orderBy(desc(documentsTable.updatedAt))
+      .limit(lim)
+      .offset((pg - 1) * lim);
+
+    // ── Department enforcement gate ────────────────────────────────────────────
+    // PHASE_D_ENFORCE_DEPT=false (current default): resolveListAndEnforce fires
+    // shadow logging asynchronously and returns an empty deniedDocIds — zero
+    // impact on response shape or latency.
+    //
+    // NOTE: if PHASE_D_ENFORCE_DEPT=true is ever enabled, the `total` returned
+    // here will NOT account for denied documents on OTHER pages — only the current
+    // page is evaluated. Accurate total-after-enforcement requires a separate
+    // refactor: (1) fetch all matching doc IDs in a lightweight ID-only query,
+    // (2) run enforcement on the full ID set, (3) subtract denied IDs from total,
+    // (4) re-paginate. Do NOT enable enforcement without that refactor.
+    const { deniedDocIds } = await resolveListAndEnforce({
+      userId:    caller.id,
+      userRole:  caller.role,
+      documents: docs.map(({ doc }) => ({
+        id:             doc.id,
+        projectId:      doc.projectId,
+        isConfidential: doc.isConfidential ?? false,
+      })),
+      endpoint: "GET /api/projects/:projectId/documents",
+    });
+    return { denied: false as const, totalCount, docs, deniedDocIds };
   });
+
+  if (loaded.denied) {
+    res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
+  }
+  const { totalCount, docs, deniedDocIds } = loaded;
 
   const pageDocs = deniedDocIds.size > 0
     ? docs.filter(d => !deniedDocIds.has(d.doc.id))
@@ -323,31 +340,26 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   });
 });
 
-router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!req.body || typeof req.body !== "object") {
     res.status(400).json({ error: "Request body is missing or invalid. Ensure Content-Type is application/json." });
     return;
   }
 
-  // Project access gate — replaces prior TenantIsolationError for cross-org callers.
-  // Party contributors may upload; party observers may not (PARTY_CEILING_V1).
-  // Intra-org and member callers are unaffected (existing behavior preserved).
-  const { allowed: projectAccessAllowed, mode: accessMode, partyRole } = await canAccessProject(
+  // Project access gate (db reads → short read tx under the marker).
+  const { allowed: projectAccessAllowed, mode: accessMode, partyRole } = await tenantRead(() => canAccessProject(
     req.user!.id, req.user!.organizationId, projectId, isSystemOwner(req.user!),
-  );
+  ));
   if (!projectAccessAllowed) {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
   if (accessMode === "party" && !isWithinPartyCeiling(partyRole!, "upload_document")) {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" }); return;
   }
-  // BUG-005 fix: intra-org callers must also clear the role gate. Creating a document
-  // is a write (canCreate = document_controller+); previously only project ACCESS +
-  // party ceiling were checked, so a read-only viewer/member could create via the API
-  // (UI hid the button but the endpoint did not enforce). Mirrors PUT/DELETE.
+  // BUG-005 fix: intra-org callers must also clear the role gate (canCreate = DC+).
   if (accessMode !== "party") {
-    const { role: effRole } = await resolveEffectiveRole(req.user!, projectId);
+    const { role: effRole } = await tenantRead(() => resolveEffectiveRole(req.user!, projectId));
     if (!DocumentPermissions.canCreate(effRole)) {
       res.status(403).json({ error: "Forbidden", message: "Your role does not permit creating documents (requires document controller or above)" }); return;
     }
@@ -360,12 +372,17 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
     return;
   }
 
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let doc: typeof documentsTable.$inferSelect | undefined;
+    await withTenant(async () => {
+
   // Validate metadata against the resolved fields for this document type (if mapped)
   const [projForMetadata] = await db.select({ organizationId: projectsTable.organizationId })
     .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
   const metaCheck = await validateDocumentMetadata(projForMetadata?.organizationId ?? null, documentType, metadata && typeof metadata === "object" ? metadata : {});
   if (!metaCheck.ok) {
-    res.status(400).json({ error: "Bad Request", message: metaCheck.message });
+    result = { status: 400, body: { error: "Bad Request", message: metaCheck.message } };
     return;
   }
 
@@ -422,13 +439,13 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
       .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, resolvedDocNumber)))
       .limit(1);
     if (dup.length > 0) {
-      res.status(409).json({
+      result = { status: 409, body: {
         error: "Document number already exists in this project",
         code: "DUPLICATE_DOCUMENT_NUMBER",
         existingDocumentId: dup[0].id,
         existingTitle: dup[0].title,
         documentNumber: resolvedDocNumber,
-      }); return;
+      } }; return;
     }
   }
 
@@ -439,9 +456,7 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
   // failure could leave a revision-less document). Best-effort enrichment (AI,
   // rules, notifications, email) stays AFTER the commit — a document create must
   // not fail because a notification did.
-  let doc!: typeof documentsTable.$inferSelect;
-  await db.transaction(async (tx) => {
-    const [inserted] = await tx.insert(documentsTable).values({
+    const [inserted] = await db.insert(documentsTable).values({
       documentNumber: resolvedDocNumber, title: title.trim(), documentType, discipline,
       revision: revision || "A",
       status: status || "draft",
@@ -456,7 +471,7 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
     }).returning();
 
     // Initial revision — atomic with the document.
-    await tx.insert(documentRevisionsTable).values({
+    await db.insert(documentRevisionsTable).values({
       documentId: inserted.id,
       organizationId: inserted.organizationId,
       revision: inserted.revision,
@@ -467,16 +482,15 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
       createdById: req.user!.id,
     });
 
-    await createAuditLogTx(tx, {
+    await createAuditLogTx(currentDb() as Parameters<Parameters<typeof db.transaction>[0]>[0], {
       userId: req.user!.id,
       organizationId: inserted.organizationId ?? undefined,
       action: "create", entityType: "document", entityId: inserted.id, entityTitle: inserted.title, projectId,
     });
 
-    // Primary file's one-to-many row — atomic with the document (owner-org tenant,
-    // consistent with B2.3a; previously a swallowed best-effort insert with NULL org).
+    // Primary file's one-to-many row — atomic with the document.
     if (fileUrl && fileName) {
-      await tx.insert(documentFilesTable).values({
+      await db.insert(documentFilesTable).values({
         documentId: inserted.id,
         organizationId: inserted.organizationId,
         fileUrl,
@@ -488,99 +502,108 @@ router.post("/", requireAuth, parseBody(createDocumentSchema), async (req: Reque
     }
 
     doc = inserted;
+    result = { status: 201, body: null };
   });
 
-  // AI classification (non-blocking — enhances metadata and is persisted to document record)
+  if (result!.status !== 201) { res.status(result!.status).json(result!.body); return; }
+  const created = doc!;
+
+  // ─── Post-commit side effects (no business tx held) ───────────────────────────
+  // AI classification — AWAITED but DETACHED (AI I/O + infra-db outside any tenant tx);
+  // result is persisted via a short withTenant() update and returned in the response.
   let aiClassification: { category?: string; tags?: string[]; priority?: string } = {};
   try {
-    aiClassification = await classifyItem({
-      type: "document",
-      organizationId: req.user!.organizationId,
-      title: doc.title,
-      documentType: doc.documentType,
-      discipline: doc.discipline,
-    }) ?? {};
+    aiClassification = await classifyDetached(
+      { organizationId: req.user!.organizationId ?? null, itemType: "document" },
+      { title: created.title, documentType: created.documentType, discipline: created.discipline },
+    ) ?? {};
     if (aiClassification.tags?.length || aiClassification.priority) {
-      await db.update(documentsTable).set({
+      await withTenant(() => db.update(documentsTable).set({
         aiTags: aiClassification.tags ?? [],
         aiPriority: aiClassification.priority ?? null,
-      }).where(eq(documentsTable.id, doc.id));
+      }).where(eq(documentsTable.id, created.id)));
     }
   } catch (_) {}
 
-  // Rules engine — evaluate and execute matching automation rules
+  // Rules engine — DB-only subsystem → its own short tenant tx (best-effort).
   try {
     const orgId = req.user!.organizationId;
     if (orgId) {
-      await evaluateRules({
+      await withTenant(() => evaluateRules({
         type: "document",
         orgId,
         projectId,
-        documentType: doc.documentType,
-        discipline: doc.discipline,
-        subject: doc.title,
+        documentType: created.documentType,
+        discipline: created.discipline,
+        subject: created.title,
         senderUserId: req.user!.id,
-        entityId: doc.id,
-        entityTitle: doc.title,
+        entityId: created.id,
+        entityTitle: created.title,
         triggeredByUserId: req.user!.id,
-      });
+      }));
     }
   } catch (_) {}
 
-  // Notify project members about the new document upload (excluding the uploader)
+  // In-app notifications (RLS) — short tenant tx (best-effort).
   try {
-    const members = await db.select({ userId: projectMembersTable.userId })
-      .from(projectMembersTable)
-      .where(eq(projectMembersTable.projectId, projectId));
-    const memberIds = members.map(m => m.userId).filter(uid => uid !== req.user!.id);
-    if (memberIds.length > 0) {
-      const [uploader] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-        .from(usersTable).where(eq(usersTable.id, req.user!.id));
+    await withTenant(async () => {
+      const members = await db.select({ userId: projectMembersTable.userId })
+        .from(projectMembersTable)
+        .where(eq(projectMembersTable.projectId, projectId));
+      const memberIds = members.map(m => m.userId).filter(uid => uid !== req.user!.id);
+      if (memberIds.length > 0) {
+        const [uploader] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+          .from(usersTable).where(eq(usersTable.id, req.user!.id));
+        const uploaderName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : "Someone";
+        await db.insert(notificationsTable).values(
+          memberIds.map(uid => ({
+            userId: uid,
+            type: "document_uploaded" as const,
+            title: `New document: ${created.documentNumber}`,
+            message: `${uploaderName} uploaded "${created.title}" (${created.documentNumber} Rev ${created.revision})`,
+            projectId,
+            entityType: "document",
+            entityId: created.id,
+            actionUrl: `/projects/${projectId}`,
+          }))
+        );
+      }
+    });
+  } catch (_) {}
+
+  // Email — lookups in a short tenant tx; dispatchNotification (email) post-commit.
+  try {
+    const { uploaderName, project, filtered } = await withTenant(async () => {
+      const [uploader] = await db
+        .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
+        .from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
       const uploaderName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : "Someone";
-      await db.insert(notificationsTable).values(
-        memberIds.map(uid => ({
-          userId: uid,
-          type: "document_uploaded" as const,
-          title: `New document: ${doc.documentNumber}`,
-          message: `${uploaderName} uploaded "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})`,
-          projectId,
-          entityType: "document",
-          entityId: doc.id,
-          actionUrl: `/projects/${projectId}`,
-        }))
-      );
-    }
-  } catch (_) {}
-
-  // Email notification for document_uploaded (non-blocking, respects user prefs)
-  try {
-    const [uploader] = await db
-      .select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
-      .from(usersTable).where(eq(usersTable.id, req.user!.id)).limit(1);
-    const uploaderName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : "Someone";
-    const [project] = await db
-      .select({ name: projectsTable.name })
-      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
-    const filtered = recipients.filter(r => r.userId !== req.user!.id);
+      const [project] = await db
+        .select({ name: projectsTable.name })
+        .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      const recipients = await getProjectRecipientsByRole(projectId, ["admin", "project_manager"]);
+      const filtered = recipients.filter(r => r.userId !== req.user!.id);
+      return { uploaderName, project, filtered };
+    });
     await dispatchNotification({
       event: "document_uploaded",
       recipients: filtered,
       sendEmail: (to) => sendDocumentUploadedEmail({
         to,
-        documentNumber: doc.documentNumber ?? "",
-        documentTitle: doc.title,
-        revision: doc.revision ?? "A",
+        documentNumber: created.documentNumber ?? "",
+        documentTitle: created.title,
+        revision: created.revision ?? "A",
         uploadedBy: uploaderName,
         projectName: project?.name ?? "Unknown Project",
-        documentType: doc.documentType ?? undefined,
-        discipline: doc.discipline ?? undefined,
+        documentType: created.documentType ?? undefined,
+        discipline: created.discipline ?? undefined,
         projectId,
       }),
     });
   } catch (_) {}
 
-  res.status(201).json({ ...doc, aiClassification, createdByName: undefined, folderName: undefined });
+  res.status(201).json({ ...created, aiClassification, createdByName: undefined, folderName: undefined });
+  } catch (e) { next(e); }
 });
 
 // GET /check-number?number=X — check if a document number already exists in this project
@@ -589,7 +612,7 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
   const number = (req.query.number as string)?.trim();
   if (!number) { res.status(400).json({ error: "number query param required" }); return; }
 
-  const existing = await db.select({
+  const existing = await tenantRead(() => db.select({
     id: documentsTable.id,
     title: documentsTable.title,
     revision: documentsTable.revision,
@@ -598,7 +621,7 @@ router.get("/check-number", requireAuth, async (req: Request<ProjectParams>, res
   })
     .from(documentsTable)
     .where(and(eq(documentsTable.projectId, projectId), eq(documentsTable.documentNumber, number)))
-    .limit(1);
+    .limit(1));
 
   if (existing.length > 0) {
     res.json({
@@ -617,49 +640,62 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
-  const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
-    caller.id, caller.organizationId, projectId, isSystemOwner(caller),
-  );
-  if (!projectAccessAllowed) {
+
+  // Access check + all reads + enforcement gate in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const { allowed: projectAccessAllowed, projectOrgId } = await canAccessProject(
+      caller.id, caller.organizationId, projectId, isSystemOwner(caller),
+    );
+    if (!projectAccessAllowed) return { kind: "forbidden" as const };
+
+    const docs = await db.select({
+      doc: documentsTable,
+      createdBy: usersTable,
+      folder: foldersTable,
+    }).from(documentsTable)
+      .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
+      .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+      .limit(1);
+
+    if (!docs[0]) return { kind: "notfound" as const };
+
+    // Fetch active workflow engine instance (if any) for this document
+    const wfInstances = await db.select({
+      wf: wfInstancesTable,
+      stage: wfTemplateStagesTable,
+    }).from(wfInstancesTable)
+      .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
+      .where(and(eq(wfInstancesTable.documentId, id), eq(wfInstancesTable.status, "active")))
+      .limit(1);
+
+    const { doc } = docs[0];
+
+    // Resolver + enforcement gate — system allowed this project-scoped access.
+    // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
+    // MUST be awaited before res.json() so enforcement can block if flag is enabled.
+    const { enforcedDeny } = await resolveAndEnforce(
+      {
+        userId: caller.id, userRole: caller.role, documentId: id, projectId,
+        isConfidential: doc.isConfidential ?? false,
+        userOrgId:     caller.organizationId,
+        documentOrgId: projectOrgId ?? undefined,
+      },
+      true,
+    );
+    if (enforcedDeny) return { kind: "denied" as const };
+
+    return { kind: "ok" as const, docRow: docs[0], wfInstances };
+  });
+
+  if (loaded.kind === "forbidden") {
     res.status(403).json({ error: "Forbidden", message: "You are not a member of this project" }); return;
   }
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (loaded.kind === "denied") { res.status(403).json({ error: "Forbidden" }); return; }
 
-  const docs = await db.select({
-    doc: documentsTable,
-    createdBy: usersTable,
-    folder: foldersTable,
-  }).from(documentsTable)
-    .leftJoin(usersTable, eq(documentsTable.createdById, usersTable.id))
-    .leftJoin(foldersTable, eq(documentsTable.folderId, foldersTable.id))
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .limit(1);
-
-  if (!docs[0]) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Fetch active workflow engine instance (if any) for this document
-  const wfInstances = await db.select({
-    wf: wfInstancesTable,
-    stage: wfTemplateStagesTable,
-  }).from(wfInstancesTable)
-    .leftJoin(wfTemplateStagesTable, eq(wfInstancesTable.currentStageId, wfTemplateStagesTable.id))
-    .where(and(eq(wfInstancesTable.documentId, id), eq(wfInstancesTable.status, "active")))
-    .limit(1);
-
-  const { doc, createdBy, folder } = docs[0];
-
-  // Resolver + enforcement gate — system allowed this project-scoped access.
-  // resolveAndEnforce() handles shadow logging AND enforcement (enforcement off by default).
-  // MUST be awaited before res.json() so enforcement can block if flag is enabled.
-  const { enforcedDeny } = await resolveAndEnforce(
-    {
-      userId: caller.id, userRole: caller.role, documentId: id, projectId,
-      isConfidential: doc.isConfidential ?? false,
-      userOrgId:     caller.organizationId,
-      documentOrgId: projectOrgId ?? undefined,
-    },
-    true,
-  );
-  if (enforcedDeny) { res.status(403).json({ error: "Forbidden" }); return; }
+  const { doc, createdBy, folder } = loaded.docRow;
+  const { wfInstances } = loaded;
 
   res.json({
     ...doc,
@@ -670,201 +706,191 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
   });
 });
 
-router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
 
   const { title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles, source, issuedBy, direction } = req.body;
 
-  // Object-level scoping (B2.7-FIX): the document must belong to the project in
-  // the URL. Without the projectId predicate a caller with access to project X
-  // could target a document in project Y by id (the update below no-ops but the
-  // lookup would otherwise succeed and leak existence). id-only was the gap.
-  const existing = await db.select().from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!existing[0]) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let doc: typeof documentsTable.$inferSelect | undefined;
+    await withTenant(async () => {
+      // Object-level scoping (B2.7-FIX): document must belong to the URL project.
+      const existing = await db.select().from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!existing[0]) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  // Resolve effective role (respects project-level overrides, delegations, project member roles)
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+      const canEdit = DocumentPermissions.canEdit(effectiveRole) || existing[0].createdById === caller.id;
+      if (!canEdit) { result = { status: 403, body: { error: "Forbidden", message: "You do not have permission to edit this document" } }; return; }
 
-  // DC+ or the document creator may edit
-  const canEdit = DocumentPermissions.canEdit(effectiveRole) || existing[0].createdById === caller.id;
-  if (!canEdit) { res.status(403).json({ error: "Forbidden", message: "You do not have permission to edit this document" }); return; }
+      const currentStatus = existing[0].status;
+      const statusChanging = status !== undefined && status !== currentStatus;
+      if (statusChanging) {
+        if (!DocumentPermissions.canEdit(effectiveRole)) {
+          result = { status: 403, body: { error: "Forbidden", message: "Only document controllers and above can change document status" } }; return;
+        }
+        const transitionError = checkStatusTransition(currentStatus, status, effectiveRole);
+        if (transitionError) { result = { status: 403, body: { error: "Forbidden", message: transitionError.message } }; return; }
+      }
 
-  const currentStatus = existing[0].status;
-  const statusChanging = status !== undefined && status !== currentStatus;
+      if (metadata !== undefined && metadata !== null) {
+        const [projForMetadata] = await db.select({ organizationId: projectsTable.organizationId })
+          .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+        const metaCheck = await validateDocumentMetadata(
+          projForMetadata?.organizationId ?? null,
+          documentType ?? existing[0].documentType,
+          typeof metadata === "object" ? metadata : {},
+          (existing[0].metadata as Record<string, unknown>) ?? {},
+        );
+        if (!metaCheck.ok) { result = { status: 400, body: { error: "Bad Request", message: metaCheck.message } }; return; }
+      }
 
-  // Status changes: enforce role minimum and valid state-machine transition
-  if (statusChanging) {
-    if (!DocumentPermissions.canEdit(effectiveRole)) {
-      res.status(403).json({ error: "Forbidden", message: "Only document controllers and above can change document status" }); return;
-    }
-    const transitionError = checkStatusTransition(currentStatus, status, effectiveRole);
-    if (transitionError) {
-      res.status(403).json({ error: "Forbidden", message: transitionError.message }); return;
-    }
-  }
+      // Atomic edit: update + new revision (if changed) + audits (all in this tx).
+      const [updated] = await db.update(documentsTable)
+        .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, direction: direction === "incoming" || direction === "outgoing" ? direction : (direction === null ? null : existing[0].direction), updatedAt: new Date() })
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+        .returning();
 
-  // Validate metadata against the resolved fields for this document type (if mapped),
-  // only when the caller is actually submitting a metadata payload.
-  if (metadata !== undefined && metadata !== null) {
-    const [projForMetadata] = await db.select({ organizationId: projectsTable.organizationId })
-      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    const metaCheck = await validateDocumentMetadata(
-      projForMetadata?.organizationId ?? null,
-      documentType ?? existing[0].documentType,
-      typeof metadata === "object" ? metadata : {},
-      (existing[0].metadata as Record<string, unknown>) ?? {},
-    );
-    if (!metaCheck.ok) {
-      res.status(400).json({ error: "Bad Request", message: metaCheck.message });
-      return;
-    }
-  }
+      if (revision && revision !== existing[0].revision) {
+        const isNewFile = !!fileUrl;
+        await db.insert(documentRevisionsTable).values({
+          documentId: id,
+          organizationId: updated.organizationId,
+          revision: revision,
+          status: status || currentStatus,
+          fileUrl: fileUrl || existing[0].fileUrl,
+          fileName: fileName || existing[0].fileName,
+          comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
+          createdById: req.user!.id,
+          fileCarriedForward: !isNewFile,
+        });
+      }
 
-  // ── B2.3d: atomic edit ────────────────────────────────────────────────────
-  // The document update, its new revision row (when the revision changes), and
-  // both audits are ONE transaction: an edit must never leave the document at a
-  // new revision string with no matching revision record, nor a status change
-  // with no status_change audit (the old code wrote them separately).
-  let doc!: typeof documentsTable.$inferSelect;
-  await db.transaction(async (tx) => {
-    const [updated] = await tx.update(documentsTable)
-      .set({ title, documentType, discipline, revision, status, description, folderId, fileUrl, fileName, fileSize, metadata, additionalFiles: additionalFiles ?? existing[0].additionalFiles, source, issuedBy, direction: direction === "incoming" || direction === "outgoing" ? direction : (direction === null ? null : existing[0].direction), updatedAt: new Date() })
-      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-      .returning();
-
-    // Save revision record if revision changed — atomic with the update.
-    if (revision && revision !== existing[0].revision) {
-      const isNewFile = !!fileUrl;
-      await tx.insert(documentRevisionsTable).values({
-        documentId: id,
-        organizationId: updated.organizationId,
-        revision: revision,
-        status: status || currentStatus,
-        fileUrl: fileUrl || existing[0].fileUrl,
-        fileName: fileName || existing[0].fileName,
-        comment: (req.body.revisionNotes?.trim()) || (isNewFile ? `Updated to revision ${revision}` : `Revision ${revision} — no new file uploaded`),
-        createdById: req.user!.id,
-        fileCarriedForward: !isNewFile,
-      });
-    }
-
-    if (statusChanging) {
-      await createAuditLogTx(tx, {
+      const auditTx = currentDb() as Parameters<Parameters<typeof db.transaction>[0]>[0];
+      if (statusChanging) {
+        await createAuditLogTx(auditTx, {
+          userId: req.user!.id,
+          organizationId: updated.organizationId ?? undefined,
+          action: "status_change", entityType: "document", entityId: id, entityTitle: updated.title, projectId,
+          details: { fromStatus: currentStatus, toStatus: status, via: "manual_edit", actorRole: effectiveRole },
+        });
+      }
+      await createAuditLogTx(auditTx, {
         userId: req.user!.id,
         organizationId: updated.organizationId ?? undefined,
-        action: "status_change",
-        entityType: "document",
-        entityId: id,
-        entityTitle: updated.title,
-        projectId,
-        details: { fromStatus: currentStatus, toStatus: status, via: "manual_edit", actorRole: effectiveRole },
+        action: "update", entityType: "document", entityId: id, entityTitle: updated.title, projectId,
       });
-    }
-
-    await createAuditLogTx(tx, {
-      userId: req.user!.id,
-      organizationId: updated.organizationId ?? undefined,
-      action: "update", entityType: "document", entityId: id, entityTitle: updated.title, projectId,
+      doc = updated;
+      result = { status: 200, body: null };
     });
 
-    doc = updated;
-  });
-  res.json({ ...doc });
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    res.json({ ...doc! });
+  } catch (e) { next(e); }
 });
 
 // Statuses that are protected from deletion (lifecycle governance).
 // Only sysAdmin can hard-delete these, and must provide a mandatory reason.
 const LIFECYCLE_LOCKED_STATUSES = new Set(["approved", "approved_with_comments", "issued", "archived", "obsolete", "superseded"]);
 
-router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const { reason } = req.body ?? {};
 
-  const [existing] = await db.select({ createdById: documentsTable.createdById, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!existing) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select({ createdById: documentsTable.createdById, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status }).from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!existing) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  const isLocked = LIFECYCLE_LOCKED_STATUSES.has(existing.status);
+      const isLocked = LIFECYCLE_LOCKED_STATUSES.has(existing.status);
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
 
-  // Resolve effective role for this project context
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+      if (isLocked) {
+        if (!DocumentPermissions.canAdminOverrideApproval(effectiveRole)) {
+          result = { status: 403, body: { error: "Forbidden", message: `Documents with status '${existing.status}' cannot be deleted. Use Archive or Mark Obsolete instead.`, suggestion: "archive_or_obsolete" } }; return;
+        }
+        if (!reason?.trim()) { result = { status: 400, body: { error: "A reason is required to hard-delete a lifecycle-locked document" } }; return; }
+      } else {
+        const canDelete = DocumentPermissions.canDelete(effectiveRole, existing.status) || existing.createdById === caller.id;
+        if (!canDelete) { result = { status: 403, body: { error: "Forbidden", message: "Only document controllers, project managers, admins, or the document creator can delete documents in early stages" } }; return; }
+      }
 
-  if (isLocked) {
-    // Lifecycle-locked documents can only be hard-deleted by admin+ with a mandatory reason
-    if (!DocumentPermissions.canAdminOverrideApproval(effectiveRole)) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: `Documents with status '${existing.status}' cannot be deleted. Use Archive or Mark Obsolete instead.`,
-        suggestion: "archive_or_obsolete",
-      }); return;
-    }
-    if (!reason?.trim()) {
-      res.status(400).json({ error: "A reason is required to hard-delete a lifecycle-locked document" }); return;
-    }
-  } else {
-    // Unlocked documents (draft, under_review): DC+ or creator can delete
-    const canDelete = DocumentPermissions.canDelete(effectiveRole, existing.status) || existing.createdById === caller.id;
-    if (!canDelete) { res.status(403).json({ error: "Forbidden", message: "Only document controllers, project managers, admins, or the document creator can delete documents in early stages" }); return; }
-  }
-
-  await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
-  await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
-  await createAuditLog({
-    userId: caller.id,
-    action: isLocked ? "hard_delete" : "delete",
-    entityType: "document",
-    entityId: id,
-    entityTitle: `${existing.documentNumber} — ${existing.title}`,
-    projectId,
-    details: isLocked ? { reason: reason?.trim(), priorStatus: existing.status } : undefined,
-  });
-  res.status(204).send();
+      await db.delete(documentRevisionsTable).where(eq(documentRevisionsTable.documentId, id));
+      await db.delete(documentsTable).where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
+      await createAuditLog({
+        userId: caller.id,
+        action: isLocked ? "hard_delete" : "delete",
+        entityType: "document",
+        entityId: id,
+        entityTitle: `${existing.documentNumber} — ${existing.title}`,
+        projectId,
+        details: isLocked ? { reason: reason?.trim(), priorStatus: existing.status } : undefined,
+      });
+      result = { status: 204, body: null };
+    });
+    if (result!.status === 204) { res.status(204).send(); return; }
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // PATCH /:id/folder — move document to a different folder (or root)
-router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.patch("/:id/folder", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const { folderId } = req.body;  // null = move to root
-  const [doc] = await db.update(documentsTable)
-    .set({ folderId: folderId ?? null, updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning();
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
-  res.json({ id: doc.id, folderId: doc.folderId });
+  try {
+    const doc = await withTenant(async () => {
+      const [d] = await db.update(documentsTable)
+        .set({ folderId: folderId ?? null, updatedAt: new Date() })
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+        .returning();
+      return d;
+    });
+    if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+    res.json({ id: doc.id, folderId: doc.folderId });
+  } catch (e) { next(e); }
 });
 
 router.get("/:id/revisions", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const id = requireInt(req.params.id);
   const user = req.user!;
 
-  // Tenant isolation: verify the document belongs to the user's org before returning revisions
-  if (!isSystemOwner(user) && user.organizationId) {
-    const [doc] = await db.select({ organizationId: documentsTable.organizationId })
-      .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
-    if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
-    if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
-      throw new TenantIsolationError({
-        route: req.path, method: req.method,
-        userId: user.id, userOrgId: user.organizationId,
-        attemptedResourceType: "document_revisions", attemptedResourceId: id,
-        resourceOrgId: doc.organizationId,
-      });
+  // Tenant isolation + revisions read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    // Tenant isolation: verify the document belongs to the user's org before returning revisions
+    if (!isSystemOwner(user) && user.organizationId) {
+      const [doc] = await db.select({ organizationId: documentsTable.organizationId })
+        .from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+      if (!doc) return { kind: "notfound" as const };
+      if (doc.organizationId !== null && doc.organizationId !== user.organizationId) {
+        throw new TenantIsolationError({
+          route: req.path, method: req.method,
+          userId: user.id, userOrgId: user.organizationId,
+          attemptedResourceType: "document_revisions", attemptedResourceId: id,
+          resourceOrgId: doc.organizationId,
+        });
+      }
     }
-  }
 
-  const revisions = await db.select({
-    rev: documentRevisionsTable,
-    user: usersTable,
-  }).from(documentRevisionsTable)
-    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
-    .where(eq(documentRevisionsTable.documentId, id))
-    .orderBy(desc(documentRevisionsTable.createdAt));
+    const revisions = await db.select({
+      rev: documentRevisionsTable,
+      user: usersTable,
+    }).from(documentRevisionsTable)
+      .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+      .where(eq(documentRevisionsTable.documentId, id))
+      .orderBy(desc(documentRevisionsTable.createdAt));
+    return { kind: "ok" as const, revisions };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  const { revisions } = loaded;
 
   res.json({
     revisions: revisions.map(({ rev, user }) => ({
@@ -887,18 +913,61 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   // router-wide project gate validates :projectId against the caller's org, but
   // without binding the lookup to projectId a caller could read another
   // project's document activity by bare id (cross-project/tenant IDOR).
-  const [activityDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!activityDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // All DB reads (tenant-isolation check + the four activity sources) run in ONE
+  // short read tx; the merge/serialization compute happens OUTSIDE it below.
+  const loaded = await tenantRead(async () => {
+    const [activityDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!activityDoc) return { kind: "notfound" as const };
+
+    // 1 ── Revisions ───────────────────────────────────────────────────────────
+    const revisionRows = await db
+      .select({ rev: documentRevisionsTable, user: usersTable })
+      .from(documentRevisionsTable)
+      .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
+      .where(eq(documentRevisionsTable.documentId, docId))
+      .orderBy(desc(documentRevisionsTable.createdAt));
+
+    // 2 ── Transmittals (via transmittal_items join) ───────────────────────────
+    const txRows = await db
+      .select({
+        tx:   transmittalsTable,
+        item: transmittalItemsTable,
+      })
+      .from(transmittalItemsTable)
+      .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+      .where(eq(transmittalItemsTable.documentId, docId))
+      .orderBy(desc(transmittalsTable.createdAt));
+
+    // 3 ── Submission Chains (via submission_chain_documents join) ─────────────
+    const chainRows = await db
+      .select({
+        chain: submissionChainsTable,
+        doc:   submissionChainDocumentsTable,
+      })
+      .from(submissionChainDocumentsTable)
+      .innerJoin(submissionChainsTable, eq(submissionChainDocumentsTable.chainId, submissionChainsTable.id))
+      .where(eq(submissionChainDocumentsTable.documentId, docId))
+      .orderBy(desc(submissionChainDocumentsTable.addedAt));
+
+    // 4 ── Correspondence (via correspondence_documents join table) ───────────────
+    const corrRows = await db
+      .select({
+        corr: correspondenceTable,
+        link: correspondenceDocumentsTable,
+      })
+      .from(correspondenceDocumentsTable)
+      .innerJoin(correspondenceTable, eq(correspondenceDocumentsTable.correspondenceId, correspondenceTable.id))
+      .where(eq(correspondenceDocumentsTable.documentId, docId))
+      .orderBy(desc(correspondenceTable.createdAt));
+
+    return { kind: "ok" as const, revisionRows, txRows, chainRows, corrRows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  const { revisionRows, txRows, chainRows, corrRows } = loaded;
 
   // 1 ── Revisions ───────────────────────────────────────────────────────────
-  const revisionRows = await db
-    .select({ rev: documentRevisionsTable, user: usersTable })
-    .from(documentRevisionsTable)
-    .leftJoin(usersTable, eq(documentRevisionsTable.createdById, usersTable.id))
-    .where(eq(documentRevisionsTable.documentId, docId))
-    .orderBy(desc(documentRevisionsTable.createdAt));
-
   const revisionEvents = revisionRows.map(({ rev, user }) => ({
     id:     `rev-${rev.id}`,
     type:   "revision" as const,
@@ -915,16 +984,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
   }));
 
   // 2 ── Transmittals (via transmittal_items join) ───────────────────────────
-  const txRows = await db
-    .select({
-      tx:   transmittalsTable,
-      item: transmittalItemsTable,
-    })
-    .from(transmittalItemsTable)
-    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
-    .where(eq(transmittalItemsTable.documentId, docId))
-    .orderBy(desc(transmittalsTable.createdAt));
-
   // Deduplicate by transmittal ID (a document may appear multiple times in one transmittal)
   const seenTx = new Set<number>();
   const transmittalEvents = txRows
@@ -948,16 +1007,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
     }));
 
   // 3 ── Submission Chains (via submission_chain_documents join) ─────────────
-  const chainRows = await db
-    .select({
-      chain: submissionChainsTable,
-      doc:   submissionChainDocumentsTable,
-    })
-    .from(submissionChainDocumentsTable)
-    .innerJoin(submissionChainsTable, eq(submissionChainDocumentsTable.chainId, submissionChainsTable.id))
-    .where(eq(submissionChainDocumentsTable.documentId, docId))
-    .orderBy(desc(submissionChainDocumentsTable.addedAt));
-
   // Deduplicate by chain ID
   const seenChain = new Set<number>();
   const chainEvents = chainRows
@@ -977,16 +1026,6 @@ router.get("/:id/activity", requireAuth, async (req: Request<ProjectParams>, res
     }));
 
   // 4 ── Correspondence (via correspondence_documents join table) ───────────────
-  const corrRows = await db
-    .select({
-      corr: correspondenceTable,
-      link: correspondenceDocumentsTable,
-    })
-    .from(correspondenceDocumentsTable)
-    .innerJoin(correspondenceTable, eq(correspondenceDocumentsTable.correspondenceId, correspondenceTable.id))
-    .where(eq(correspondenceDocumentsTable.documentId, docId))
-    .orderBy(desc(correspondenceTable.createdAt));
-
   const seenCorr = new Set<number>();
   const correspondenceEvents = corrRows
     .filter(({ corr }) => { if (seenCorr.has(corr.id)) return false; seenCorr.add(corr.id); return true; })
@@ -1021,30 +1060,36 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
   // Tenant isolation: bind the document to the route projectId before returning
   // its review history, otherwise the bare-id lookup leaks another project's
   // workflow transitions (cross-project/tenant IDOR).
-  const [reviewDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!reviewDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // Tenant-isolation check + workflow instance/transition reads in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [reviewDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!reviewDoc) return { kind: "notfound" as const };
 
-  // Look up workflow instances for this document, then their transitions
-  const instances = await db.select({ id: wfInstancesTable.id })
-    .from(wfInstancesTable)
-    .where(eq(wfInstancesTable.documentId, id));
+    // Look up workflow instances for this document, then their transitions
+    const instances = await db.select({ id: wfInstancesTable.id })
+      .from(wfInstancesTable)
+      .where(eq(wfInstancesTable.documentId, id));
 
-  if (instances.length === 0) {
-    res.json({ history: [] }); return;
-  }
+    if (instances.length === 0) return { kind: "empty" as const };
 
-  const instanceIds = instances.map(i => i.id);
+    const instanceIds = instances.map(i => i.id);
 
-  const transitions = await db.select({
-    transition: wfInstanceTransitionsTable,
-    actor: usersTable,
-    toStage: wfTemplateStagesTable,
-  }).from(wfInstanceTransitionsTable)
-    .leftJoin(usersTable, eq(wfInstanceTransitionsTable.actorId, usersTable.id))
-    .leftJoin(wfTemplateStagesTable, eq(wfInstanceTransitionsTable.toStageId, wfTemplateStagesTable.id))
-    .where(inArray(wfInstanceTransitionsTable.instanceId, instanceIds))
-    .orderBy(desc(wfInstanceTransitionsTable.createdAt));
+    const transitions = await db.select({
+      transition: wfInstanceTransitionsTable,
+      actor: usersTable,
+      toStage: wfTemplateStagesTable,
+    }).from(wfInstanceTransitionsTable)
+      .leftJoin(usersTable, eq(wfInstanceTransitionsTable.actorId, usersTable.id))
+      .leftJoin(wfTemplateStagesTable, eq(wfInstanceTransitionsTable.toStageId, wfTemplateStagesTable.id))
+      .where(inArray(wfInstanceTransitionsTable.instanceId, instanceIds))
+      .orderBy(desc(wfInstanceTransitionsTable.createdAt));
+    return { kind: "ok" as const, transitions };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  if (loaded.kind === "empty") { res.json({ history: [] }); return; }
+  const { transitions } = loaded;
 
   res.json({
     history: transitions.map(({ transition, actor, toStage }) => ({
@@ -1058,7 +1103,7 @@ router.get("/:id/reviews", requireAuth, async (req: Request<ProjectParams>, res)
   });
 });
 
-router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const caller = req.user!;
   // Direct approve is an admin override only — normal approvals go through the Workflow Engine
   if (!isSysAdmin(caller)) {
@@ -1071,78 +1116,81 @@ router.post("/:id/approve", requireAuth, async (req: Request<ProjectParams>, res
 
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
-
-  // Tenant isolation: org-level admins may only approve documents in their own org
-  if (!isSystemOwner(caller)) {
-    const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
-      .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    if (!projCheck) { res.status(404).json({ error: "Not Found" }); return; }
-    if (projCheck.organizationId !== caller.organizationId) {
-      throw new TenantIsolationError({ userId: caller.id, userOrgId: caller.organizationId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
-    }
-  }
-  const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
-
-  // Tenant isolation: the document must belong to the route projectId.
-  // applyDocumentReviewDecision updates by id only, so without this bound check
-  // an admin could approve a document in another project by bare id (IDOR).
-  const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!boundDoc) { res.status(404).json({ error: "Not Found" }); return; }
-
   const reviewer = req.user as any;
   const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
+  const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
-  const doc = await applyDocumentReviewDecision({
-    documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment,
-  });
-  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let doc: Awaited<ReturnType<typeof applyDocumentReviewDecision>> | undefined;
+    await withTenant(async () => {
+      // Tenant isolation (throws TenantIsolationError → global handler)
+      if (!isSystemOwner(caller)) {
+        const [projCheck] = await db.select({ organizationId: projectsTable.organizationId })
+          .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+        if (!projCheck) { result = { status: 404, body: { error: "Not Found" } }; return; }
+        if (projCheck.organizationId !== caller.organizationId) {
+          throw new TenantIsolationError({ userId: caller.id, userOrgId: caller.organizationId, resourceOrgId: projCheck.organizationId, resource: "project", resourceId: projectId });
+        }
+      }
+      const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!boundDoc) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  await createAuditLog({
-    userId: req.user!.id, action: "approve", entityType: "document",
-    entityId: id, entityTitle: doc.title, projectId, details: { decision },
-  });
+      const d = await applyDocumentReviewDecision({ documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment });
+      if (!d) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      doc = d;
 
-  if (decision === "approved" && doc.createdById) {
-    const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
-    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    if (creator?.email) {
-      dispatchNotification({
-        event: "document_approved",
-        recipients: [{ userId: doc.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
-        sendEmail: (to) => sendDocumentApprovedEmail({
-          to: to[0],
-          documentNumber: doc.documentNumber ?? "",
-          documentTitle: doc.title,
-          revision: doc.revision ?? "01",
-          approvedBy: reviewerName,
-          projectName: project?.name ?? "Unknown Project",
-          comment,
-          projectId,
-        }),
-      }).catch(() => {});
-    }
-    // In-app notification to the document creator
-    if (doc.createdById && doc.createdById !== req.user!.id) {
-      try {
+      await createAuditLog({
+        userId: req.user!.id, action: "approve", entityType: "document",
+        entityId: id, entityTitle: d.title, projectId, details: { decision },
+      });
+
+      // In-app notification to the creator (RLS table — inside the tx)
+      if (decision === "approved" && d.createdById && d.createdById !== req.user!.id) {
         await db.insert(notificationsTable).values({
-          userId: doc.createdById,
+          userId: d.createdById,
           type: "document_approved" as const,
-          title: `Document approved: ${doc.documentNumber}`,
-          message: `${reviewerName} approved "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})${comment ? ` — ${comment}` : ""}`,
+          title: `Document approved: ${d.documentNumber}`,
+          message: `${reviewerName} approved "${d.title}" (${d.documentNumber} Rev ${d.revision})${comment ? ` — ${comment}` : ""}`,
           projectId: projectId || null,
           entityType: "document",
           entityId: id,
           actionUrl: `/projects/${projectId}`,
         });
+      }
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    const d = doc!;
+
+    // Email (post-commit) — lookups in a short tx + dispatchNotification outside any tx.
+    if (decision === "approved" && d.createdById) {
+      try {
+        const { creator, project } = await withTenant(async () => {
+          const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, d.createdById!)).limit(1);
+          const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+          return { creator, project };
+        });
+        if (creator?.email) {
+          dispatchNotification({
+            event: "document_approved",
+            recipients: [{ userId: d.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
+            sendEmail: (to) => sendDocumentApprovedEmail({
+              to: to[0], documentNumber: d.documentNumber ?? "", documentTitle: d.title,
+              revision: d.revision ?? "01", approvedBy: reviewerName, projectName: project?.name ?? "Unknown Project", comment, projectId,
+            }),
+          }).catch(() => {});
+        }
       } catch (_) {}
     }
-  }
 
-  res.json({ ...doc });
+    res.json({ ...d });
+  } catch (e) { next(e); }
 });
 
-router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const caller = req.user!;
   // Direct reject is an admin override only — normal rejections go through the Workflow Engine
   if (!isSysAdmin(caller)) {
@@ -1155,218 +1203,220 @@ router.post("/:id/reject", requireAuth, async (req: Request<ProjectParams>, res)
 
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
-  const decision: ReviewDecision =
-    (rawDecision === "rejected" || rawDecision === "for_revision")
-      ? rawDecision
-      : "for_revision";
-
-  // Tenant isolation: the document must belong to the route projectId.
-  // applyDocumentReviewDecision updates by id only, so without this bound check
-  // an admin could reject a document in another project by bare id (IDOR).
-  const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!boundDoc) { res.status(404).json({ error: "Not Found" }); return; }
-
+  const decision: ReviewDecision = (rawDecision === "rejected" || rawDecision === "for_revision") ? rawDecision : "for_revision";
   const reviewer = req.user as any;
   const reviewerName = `${reviewer.firstName} ${reviewer.lastName}`;
 
-  const doc = await applyDocumentReviewDecision({
-    documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment,
-  });
-  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let doc: Awaited<ReturnType<typeof applyDocumentReviewDecision>> | undefined;
+    await withTenant(async () => {
+      const [boundDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!boundDoc) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  await createAuditLog({
-    userId: req.user!.id, action: "reject", entityType: "document",
-    entityId: id, entityTitle: doc.title, projectId, details: { decision },
-  });
+      const d = await applyDocumentReviewDecision({ documentId: id, projectId, decision, reviewerId: req.user!.id, reviewerName, comment });
+      if (!d) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      doc = d;
 
-  if (doc.createdById) {
-    const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, doc.createdById)).limit(1);
-    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    if (creator?.email) {
-      dispatchNotification({
-        event: "document_rejected",
-        recipients: [{ userId: doc.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
-        sendEmail: (to) => sendDocumentRejectedEmail({
-          to: to[0],
-          documentNumber: doc.documentNumber ?? "",
-          documentTitle: doc.title,
-          revision: doc.revision ?? "01",
-          rejectedBy: reviewerName,
-          projectName: project?.name ?? "Unknown Project",
-          comment,
-          projectId,
-        }),
-      }).catch(() => {});
-    }
-    // In-app notification to the document creator
-    if (doc.createdById !== req.user!.id) {
-      try {
+      await createAuditLog({
+        userId: req.user!.id, action: "reject", entityType: "document",
+        entityId: id, entityTitle: d.title, projectId, details: { decision },
+      });
+
+      if (d.createdById && d.createdById !== req.user!.id) {
         const decisionLabel = decision === "rejected" ? "rejected" : "returned for revision";
         await db.insert(notificationsTable).values({
-          userId: doc.createdById,
+          userId: d.createdById,
           type: "document_rejected" as const,
-          title: `Document ${decisionLabel}: ${doc.documentNumber}`,
-          message: `${reviewerName} ${decisionLabel} "${doc.title}" (${doc.documentNumber} Rev ${doc.revision})${comment ? ` — ${comment}` : ""}`,
+          title: `Document ${decisionLabel}: ${d.documentNumber}`,
+          message: `${reviewerName} ${decisionLabel} "${d.title}" (${d.documentNumber} Rev ${d.revision})${comment ? ` — ${comment}` : ""}`,
           projectId: projectId || null,
           entityType: "document",
           entityId: id,
           actionUrl: `/projects/${projectId}`,
         });
+      }
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    const d = doc!;
+
+    if (d.createdById) {
+      try {
+        const { creator, project } = await withTenant(async () => {
+          const [creator] = await db.select().from(usersTable).where(eq(usersTable.id, d.createdById!)).limit(1);
+          const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+          return { creator, project };
+        });
+        if (creator?.email) {
+          dispatchNotification({
+            event: "document_rejected",
+            recipients: [{ userId: d.createdById, email: creator.email, name: `${creator.firstName} ${creator.lastName}`.trim() }],
+            sendEmail: (to) => sendDocumentRejectedEmail({
+              to: to[0], documentNumber: d.documentNumber ?? "", documentTitle: d.title,
+              revision: d.revision ?? "01", rejectedBy: reviewerName, projectName: project?.name ?? "Unknown Project", comment, projectId,
+            }),
+          }).catch(() => {});
+        }
       } catch (_) {}
     }
-  }
 
-  res.json({ ...doc });
+    res.json({ ...d });
+  } catch (e) { next(e); }
 });
 
-router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/submit-review", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
   const { reviewerIds, comment } = req.body;
 
-  // [A-4] Validate every reviewerId belongs to the caller's org before mutating.
-  // Without this check an attacker who knows another org's user ID can create a
-  // task record assigned to that user. Skip for system_owner (null organizationId).
-  if (reviewerIds?.length > 0 && caller.organizationId) {
-    const validReviewers = await db.select({ id: usersTable.id })
-      .from(usersTable)
-      .where(and(inArray(usersTable.id, reviewerIds), eq(usersTable.organizationId, caller.organizationId)));
-    if (validReviewers.length !== reviewerIds.length) {
-      res.status(422).json({ error: "reviewerIds must all belong to the same organization" });
-      return;
-    }
-  }
-
-  const [doc] = await db.update(documentsTable)
-    .set({ status: "under_review", updatedAt: new Date() })
-    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
-    .returning();
-  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
-
-  // Create review tasks for each assigned reviewer
-  if (reviewerIds?.length > 0) {
-    const taskValues = reviewerIds.map((uid: number) => ({
-      title: `Review document: ${doc.title}`,
-      description: `Please review document ${doc.documentNumber} - ${doc.title}`,
-      status: "pending" as const,
-      priority: "medium" as const,
-      assignedToId: uid,
-      createdById: req.user!.id,
-      projectId,
-      organizationId: caller.organizationId ?? undefined,
-      sourceType: "document" as const,
-      sourceId: id,
-    }));
-    await db.insert(tasksTable).values(taskValues);
-  }
-
-  await createAuditLog({ userId: req.user!.id, organizationId: caller.organizationId ?? undefined, action: "submit_review", entityType: "document", entityId: id, entityTitle: doc.title, projectId });
-
-  // In-app notification: notify each reviewer about the approval request
-  if (reviewerIds?.length > 0) {
-    try {
-      const submitter = req.user as any;
-      const submitterName = `${submitter.firstName} ${submitter.lastName}`.trim();
-      const reviewerUserIds = reviewerIds.filter((uid: number) => uid !== req.user!.id);
-      if (reviewerUserIds.length > 0) {
-        const inserted = await db.insert(notificationsTable).values(
-          reviewerUserIds.map((uid: number) => ({
-            userId: uid,
-            type: "document_approval_request" as const,
-            title: `Document review request: ${doc.documentNumber}`,
-            message: `${submitterName} submitted "${doc.title}" (${doc.documentNumber} Rev ${doc.revision}) for your review`,
-            projectId: projectId || null,
-            entityType: "document",
-            entityId: id,
-            actionUrl: `/projects/${projectId}`,
-          }))
-        ).returning();
-        // Real-time: notify each reviewer immediately
-        for (const n of inserted) emitToUser(n.userId, "notification:new", n);
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let doc: typeof documentsTable.$inferSelect | undefined;
+    let insertedNotifs: (typeof notificationsTable.$inferSelect)[] = [];
+    await withTenant(async () => {
+      // [A-4] Validate every reviewerId belongs to the caller's org before mutating.
+      if (reviewerIds?.length > 0 && caller.organizationId) {
+        const validReviewers = await db.select({ id: usersTable.id })
+          .from(usersTable)
+          .where(and(inArray(usersTable.id, reviewerIds), eq(usersTable.organizationId, caller.organizationId)));
+        if (validReviewers.length !== reviewerIds.length) {
+          result = { status: 422, body: { error: "reviewerIds must all belong to the same organization" } }; return;
+        }
       }
-    } catch (_) {}
-  }
 
-  // Email reviewers that they have a document to review
-  if (reviewerIds?.length > 0) {
-    const reviewers = await db.select().from(usersTable).where(
-      // @ts-ignore — in operator
-      sql`${usersTable.id} = ANY(${reviewerIds})`
-    );
-    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
-    const submitter = req.user!;
-    const reviewerEmails = reviewers.map((r: any) => r.email).filter(Boolean);
-    if (reviewerEmails.length > 0) {
-      sendReviewSubmittedEmail({
-        to: reviewerEmails,
-        documentNumber: doc.documentNumber ?? "",
-        documentTitle: doc.title,
-        revision: doc.revision ?? "01",
-        submittedBy: `${(submitter as any).firstName} ${(submitter as any).lastName}`,
-        projectName: project?.name ?? "Unknown Project",
-        comment,
-        projectId,
-        documentId: id,
-      }).catch(() => {});
+      const [d] = await db.update(documentsTable)
+        .set({ status: "under_review", updatedAt: new Date() })
+        .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
+        .returning();
+      if (!d) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      doc = d;
+
+      if (reviewerIds?.length > 0) {
+        const taskValues = reviewerIds.map((uid: number) => ({
+          title: `Review document: ${d.title}`,
+          description: `Please review document ${d.documentNumber} - ${d.title}`,
+          status: "pending" as const,
+          priority: "medium" as const,
+          assignedToId: uid,
+          createdById: req.user!.id,
+          projectId,
+          organizationId: caller.organizationId ?? undefined,
+          sourceType: "document" as const,
+          sourceId: id,
+        }));
+        await db.insert(tasksTable).values(taskValues);
+      }
+
+      await createAuditLog({ userId: req.user!.id, organizationId: caller.organizationId ?? undefined, action: "submit_review", entityType: "document", entityId: id, entityTitle: d.title, projectId });
+
+      // In-app notifications (RLS) — inside the tx.
+      if (reviewerIds?.length > 0) {
+        const submitter = req.user as any;
+        const submitterName = `${submitter.firstName} ${submitter.lastName}`.trim();
+        const reviewerUserIds = reviewerIds.filter((uid: number) => uid !== req.user!.id);
+        if (reviewerUserIds.length > 0) {
+          insertedNotifs = await db.insert(notificationsTable).values(
+            reviewerUserIds.map((uid: number) => ({
+              userId: uid,
+              type: "document_approval_request" as const,
+              title: `Document review request: ${d.documentNumber}`,
+              message: `${submitterName} submitted "${d.title}" (${d.documentNumber} Rev ${d.revision}) for your review`,
+              projectId: projectId || null,
+              entityType: "document",
+              entityId: id,
+              actionUrl: `/projects/${projectId}`,
+            }))
+          ).returning();
+        }
+      }
+      result = { status: 200, body: null };
+    });
+
+    if (result!.status !== 200) { res.status(result!.status).json(result!.body); return; }
+    const d = doc!;
+
+    // Real-time socket emits (post-commit, no db).
+    for (const n of insertedNotifs) emitToUser(n.userId, "notification:new", n);
+
+    // Email reviewers — lookup in a short tx, send (fire-and-forget) post-commit.
+    if (reviewerIds?.length > 0) {
+      try {
+        const { reviewerEmails, project } = await withTenant(async () => {
+          const reviewers = await db.select().from(usersTable).where(sql`${usersTable.id} = ANY(${reviewerIds})`);
+          const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+          return { reviewerEmails: reviewers.map((r: any) => r.email).filter(Boolean), project };
+        });
+        if (reviewerEmails.length > 0) {
+          sendReviewSubmittedEmail({
+            to: reviewerEmails,
+            documentNumber: d.documentNumber ?? "", documentTitle: d.title, revision: d.revision ?? "01",
+            submittedBy: `${(caller as any).firstName} ${(caller as any).lastName}`,
+            projectName: project?.name ?? "Unknown Project", comment, projectId, documentId: id,
+          }).catch(() => {});
+        }
+      } catch (_) {}
     }
-  }
 
-  res.json({ ...doc });
+    res.json({ ...d });
+  } catch (e) { next(e); }
 });
 
 // ─── Share link ───────────────────────────────────────────────────────────────
-router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/share", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const { expiresInDays, password } = req.body;
-
-  // Verify the project belongs to the caller's org — prevents cross-tenant share
-  // creation when the document's own organizationId is NULL (legacy unseeded data).
-  const [project] = await db.select({ id: projectsTable.id })
-    .from(projectsTable)
-    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
-    .limit(1);
-  if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
+  // Token material + bcrypt OUTSIDE the tenant transaction (CPU-bound).
   const token = crypto.randomBytes(32).toString("hex");
   const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
   const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
-  const [doc] = await db.update(documentsTable)
-    .set({
-      shareToken: hashToken(token),
-      shareExpiresAt: expiresAt,
-      sharePasswordHash: passwordHash ?? undefined,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
-    .returning({ id: documentsTable.id, shareExpiresAt: documentsTable.shareExpiresAt });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Verify the project belongs to the caller's org (prevents cross-tenant share).
+      const [project] = await db.select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
+        .limit(1);
+      if (!project) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  if (!doc) { res.status(404).json({ error: "Not found" }); return; }
+      const [doc] = await db.update(documentsTable)
+        .set({
+          shareToken: hashToken(token),
+          shareExpiresAt: expiresAt,
+          sharePasswordHash: passwordHash ?? undefined,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)))
+        .returning({ id: documentsTable.id, shareExpiresAt: documentsTable.shareExpiresAt });
+      if (!doc) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  await createAuditLog({
-    userId: req.user!.id, action: "share", entityType: "document",
-    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
-  });
-
-  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
-  res.json({
-    shareUrl: `${baseUrl}/shared/document/${token}`,
-    shareToken: token,
-    expiresAt,
-  });
+      await createAuditLog({
+        userId: req.user!.id, action: "share", entityType: "document",
+        entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
+      });
+      const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+      result = { status: 200, body: { shareUrl: `${baseUrl}/shared/document/${token}`, shareToken: token, expiresAt } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id/share", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
-  await db.update(documentsTable)
-    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId)));
-  res.json({ success: true });
+  try {
+    await withTenant(() => db.update(documentsTable)
+      .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))));
+    res.json({ success: true });
+  } catch (e) { next(e); }
 });
 
 // ─── Document Files (one-to-many attachments) ─────────────────────────────────
@@ -1376,18 +1426,24 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
 
-  // Verify document belongs to project
-  const [doc] = await db.select().from(documentsTable)
-    .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+  // Verify document belongs to project + fetch files in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [doc] = await db.select().from(documentsTable)
+      .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
+    if (!doc) return { kind: "notfound" as const };
 
-  const files = await db.select({
-    file: documentFilesTable,
-    uploader: usersTable,
-  }).from(documentFilesTable)
-    .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
-    // B2.3b-1: hide soft-deleted files from normal listings.
-    .where(and(eq(documentFilesTable.documentId, docId), isNull(documentFilesTable.deletedAt)));
+    const files = await db.select({
+      file: documentFilesTable,
+      uploader: usersTable,
+    }).from(documentFilesTable)
+      .leftJoin(usersTable, eq(documentFilesTable.uploadedById, usersTable.id))
+      // B2.3b-1: hide soft-deleted files from normal listings.
+      .where(and(eq(documentFilesTable.documentId, docId), isNull(documentFilesTable.deletedAt)));
+    return { kind: "ok" as const, files };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Document not found" }); return; }
+  const { files } = loaded;
 
   res.json({
     files: files.map(({ file, uploader }) => ({
@@ -1400,13 +1456,31 @@ router.get("/:id/files", requireAuth, async (req: Request<ProjectParams>, res): 
 // POST /api/projects/:projectId/documents/:id/files — add files to a document
 // Accepts multipart/form-data with field "files" (one or many).
 // Optional form fields: documentId (ignored, taken from URL), metadata (JSON string).
-router.post("/:id/files", requireAuth, upload.array("files"), async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/files", requireAuth, upload.array("files"), async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
 
+  // Non-DB input checks first (no tenant context needed).
+  const uploadedFiles = req.files as Express.Multer.File[] | undefined;
+  if (!uploadedFiles || uploadedFiles.length === 0) {
+    res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." }); return;
+  }
+  // Content-based safety check — catches HTML/SVG regardless of declared MIME or extension
+  const contentError = validateUploadedFiles(uploadedFiles);
+  if (contentError) {
+    res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError }); return;
+  }
+
+  try {
+  // ── Pre-upload authorization + quota — ONE short read/tenant tx that COMMITS
+  //    before any storage I/O (no DB connection held during the upload). ────────
+  const pre = await withTenant(async (): Promise<
+    | { kind: "fail"; status: number; body: unknown }
+    | { kind: "ok"; doc: typeof documentsTable.$inferSelect; storageOrgId: number | null; uploadedByName: string | undefined; quotaResult: QuotaCheckResult | null; totalNewBytes: number }
+  > => {
   const [doc] = await db.select().from(documentsTable)
     .where(and(eq(documentsTable.id, docId), eq(documentsTable.projectId, projectId)));
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+  if (!doc) { return { kind: "fail", status: 404, body: { error: "Document not found" } }; }
 
   // Party ceiling (PARTY_CEILING_V1): a party CONTRIBUTOR may add files/revisions;
   // a party OBSERVER may not. The router-wide gate only proves project ACCESS —
@@ -1414,27 +1488,15 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   // create handler's enforcement here (adding a file/revision is an upload).
   const access = await canAccessProject(req.user!.id, req.user!.organizationId, projectId, isSystemOwner(req.user!));
   if (access.mode === "party" && !isWithinPartyCeiling(access.partyRole!, "upload_document")) {
-    res.status(403).json({ error: "Forbidden", message: "Your party role does not permit uploading documents" });
-    return;
+    return { kind: "fail", status: 403, body: { error: "Forbidden", message: "Your party role does not permit uploading documents" } };
   }
   // BUG-005 fix: intra-org callers must clear the role gate too (canCreate = DC+).
   // Adding a file/revision is a write; a viewer/member must not upload via the API.
   if (access.mode !== "party") {
     const { role: effRole } = await resolveEffectiveRole(req.user!, projectId);
     if (!DocumentPermissions.canCreate(effRole)) {
-      res.status(403).json({ error: "Forbidden", message: "Your role does not permit uploading files (requires document controller or above)" }); return;
+      return { kind: "fail", status: 403, body: { error: "Forbidden", message: "Your role does not permit uploading files (requires document controller or above)" } };
     }
-  }
-
-  const uploadedFiles = req.files as Express.Multer.File[] | undefined;
-  if (!uploadedFiles || uploadedFiles.length === 0) {
-    res.status(400).json({ error: "No files provided. Send files as multipart/form-data with field name 'files'." }); return;
-  }
-
-  // Content-based safety check — catches HTML/SVG regardless of declared MIME or extension
-  const contentError = validateUploadedFiles(uploadedFiles);
-  if (contentError) {
-    res.status(400).json({ error: "UNSAFE_FILE_TYPE", message: contentError }); return;
   }
 
   // ── Storage/quota tenant = DOCUMENT owner (B2.3a, Alternative A / ADR-011) ─
@@ -1475,10 +1537,10 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       .where(eq(usersTable.id, req.user!.id))
       .limit(1);
     if (uploader && !uploader.emailVerifiedAt) {
-      res.status(403).json({
+      return { kind: "fail", status: 403, body: {
         error: "EMAIL_NOT_VERIFIED",
         message: "Please verify your email address before uploading files. Check your inbox for a verification link.",
-      }); return;
+      } };
     }
   }
 
@@ -1494,12 +1556,11 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       .limit(1);
     if (isExpiredPlan(uploadOrgCheck?.subscriptionTier) && uploadOrgCheck?.trialEndsAt !== null) {
       // Generic message — never leak the OWNER org's plan/quota details to a
-      // party contributor from another org. Details are logged/visible only to
-      // the owner org's admins.
-      res.status(403).json({
+      // party contributor from another org.
+      return { kind: "fail", status: 403, body: {
         error: "UPLOAD_BLOCKED",
         message: "File uploads are not available for this project right now.",
-      }); return;
+      } };
     }
   }
 
@@ -1523,12 +1584,12 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       .limit(1);
 
     if (orgMeta?.subscriptionTier === "trial" && orgMeta.trialEndsAt && new Date() > new Date(orgMeta.trialEndsAt)) {
-      res.status(403).json({
+      return { kind: "fail", status: 403, body: {
         error: isForeignUploader ? "UPLOAD_BLOCKED" : "TRIAL_EXPIRED",
         message: isForeignUploader
           ? "File uploads are not available for this project right now."
           : "Your 14-day trial has ended. Upgrade to a paid plan to continue uploading files.",
-      }); return;
+      } };
     }
 
     // Per-plan file size enforcement (owner org's plan).
@@ -1539,29 +1600,36 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
       const oversized = uploadedFiles.filter(f => f.size / (1024 * 1024) > maxFileSizeMb);
       if (oversized.length > 0) {
         const names = oversized.map(f => f.originalname).join(", ");
-        res.status(413).json({
+        return { kind: "fail", status: 413, body: {
           error: "FILE_TOO_LARGE",
           message: isForeignUploader
             ? "One or more files exceed the upload size limit for this project."
             : `File(s) exceed the ${maxFileSizeMb >= 1024 ? `${maxFileSizeMb / 1024} GB` : `${maxFileSizeMb} MB`} upload limit on your ${plan.name} plan: ${names}`,
-        }); return;
+        } };
       }
     }
 
     // Storage quota enforcement via StorageQuotaService (C-2) — owner org's quota.
     _quotaResult = await storageQuota.check(storageOrgId, _totalNewBytes, req.user!.id);
     if (!_quotaResult.allowed) {
-      res.status(403).json(
+      return { kind: "fail", status: 403, body:
         isForeignUploader
           ? { error: "STORAGE_QUOTA_EXCEEDED", message: "This project has reached its storage limit. Contact the project owner." }
           : { error: "STORAGE_QUOTA_EXCEEDED", message: _quotaResult.reason, used: _quotaResult.used, quota: _quotaResult.quota },
-      ); return;
+      };
     }
   }
   // ────────────────────────────────────────────────────────────────────────
 
   const uploader = await db.select().from(usersTable).where(eq(usersTable.id, req.user!.id)).then(r => r[0]);
   const uploadedByName = uploader ? `${uploader.firstName} ${uploader.lastName}`.trim() : undefined;
+
+  return { kind: "ok", doc, storageOrgId, uploadedByName, quotaResult: _quotaResult, totalNewBytes: _totalNewBytes };
+  });
+
+  if (pre.kind === "fail") { res.status(pre.status).json(pre.body); return; }
+  const { doc, storageOrgId, uploadedByName } = pre;
+  const _quotaResult = pre.quotaResult;
 
   // ── B2.3a: Document File Upload Atomicity ────────────────────────────────
   // Storage lives outside PostgreSQL, so a DB transaction alone cannot undo a
@@ -1646,7 +1714,11 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
   // ── Phase 2: single DB transaction — rows + audit + quota, all-or-nothing ──
   const results: Array<Record<string, unknown>> = [];
   try {
-    await db.transaction(async (tx) => {
+    // Phase 2 is the SAME single DB transaction, now the request's tenant tx.
+    // Helpers that take an explicit tx use currentDb() (the active tenant tx) —
+    // they never open a side transaction.
+    await withTenant(async () => {
+      const tx = currentDb() as Parameters<Parameters<typeof db.transaction>[0]>[0];
       results.length = 0; // guard against a retried transaction body double-appending
       for (const w of written) {
         const dbFile = await insertDocumentFileRow(tx, w.values);
@@ -1700,32 +1772,32 @@ router.post("/:id/files", requireAuth, upload.array("files"), async (req: Reques
 
   emitToUser(req.user!.id, "document:updated", { documentId: docId });
   res.status(201).json({ files: results });
+  } catch (e) { next(e); }
 });
 
 // DELETE /api/projects/:projectId/documents/:id/files/:fileId
-router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
   const fileId = requireInt(req.params.fileId);
   const caller = req.user!;
 
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    let statusOnly = 0; // 204 with no body
+    await withTenant(async () => {
   // ── B2.3b-1: SOFT delete (owner-org only) ─────────────────────────────────
-  // Owner-org tenant guard: the parent document must belong to the caller's org.
-  // A party contributor from another org is denied here — file deletion is NOT
-  // granted by the upload capability; B2.3b-1 is owner-org only.
   const [doc] = await db.select().from(documentsTable)
     .where(and(
       eq(documentsTable.id, docId),
       eq(documentsTable.projectId, projectId),
       isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!),
     ));
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+  if (!doc) { result = { status: 404, body: { error: "Document not found" } }; return; }
 
-  // Role authorization (NOT org-match alone): use the approved, status-gated
-  // document-delete permission — same model as whole-document delete.
   const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
   if (!isSystemOwner(caller) && !DocumentPermissions.canDelete(effectiveRole, doc.status)) {
-    res.status(403).json({ error: "Forbidden", message: "You do not have permission to delete files on this document" });
+    result = { status: 403, body: { error: "Forbidden", message: "You do not have permission to delete files on this document" } };
     return;
   }
 
@@ -1756,22 +1828,20 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
   // NO storage delete, NO quota change, NO row delete — the object is retained
   // for FILE_RETENTION_DAYS; physical removal + quota decrement are the (gated)
   // B2.3b-2 purge worker.
+  // ── F1: ATOMIC conditional soft-delete (decided by the UPDATE predicate) ──
   const now = new Date();
   let softDeleted: { id: number; fileName: string } | undefined;
-  await db.transaction(async (tx) => {
-    const [updated] = await tx.update(documentFilesTable)
-      .set({ deletedAt: now, deletedById: caller.id, purgeAfter: computeFilePurgeAfter(now) })
-      .where(and(
-        eq(documentFilesTable.id, fileId),
-        eq(documentFilesTable.documentId, docId),
-        isNull(documentFilesTable.deletedAt),
-      ))
-      .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
-    // No active file matched (absent, or already soft-deleted by a concurrent
-    // request) → write NOTHING (no audit) and let the tx commit as a no-op.
-    if (!updated) return;
+  const [updated] = await db.update(documentFilesTable)
+    .set({ deletedAt: now, deletedById: caller.id, purgeAfter: computeFilePurgeAfter(now) })
+    .where(and(
+      eq(documentFilesTable.id, fileId),
+      eq(documentFilesTable.documentId, docId),
+      isNull(documentFilesTable.deletedAt),
+    ))
+    .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
+  if (updated) {
     softDeleted = updated;
-    await createAuditLogTx(tx, {
+    await createAuditLogTx(currentDb() as Parameters<Parameters<typeof db.transaction>[0]>[0], {
       userId: caller.id,
       organizationId: doc.organizationId ?? undefined, // owner-org attribution
       action: "file_delete_requested",
@@ -1780,82 +1850,81 @@ router.delete("/:id/files/:fileId", requireAuth, async (req: Request<ProjectPara
       entityTitle: `${doc.title} — deleted file: ${updated.fileName}`,
       projectId,
     });
-  });
+  }
 
-  if (!softDeleted) { res.status(404).json({ error: "File not found" }); return; }
-  res.status(204).end();
+  if (!softDeleted) { result = { status: 404, body: { error: "File not found" } }; return; }
+  statusOnly = 204;
+    });
+
+    if (statusOnly === 204) { res.status(204).end(); return; }
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // POST /api/projects/:projectId/documents/:id/files/:fileId/restore — B2.3b-1
 // Restore a soft-deleted file (its storage object is still present). Same
 // owner-org + role authorization as delete. Quota and storage are unchanged.
-router.post("/:id/files/:fileId/restore", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/files/:fileId/restore", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const docId = requireInt(req.params.id);
   const fileId = requireInt(req.params.fileId);
   const caller = req.user!;
 
-  const [doc] = await db.select().from(documentsTable)
-    .where(and(
-      eq(documentsTable.id, docId),
-      eq(documentsTable.projectId, projectId),
-      isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!),
-    ));
-  if (!doc) { res.status(404).json({ error: "Document not found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [doc] = await db.select().from(documentsTable)
+        .where(and(
+          eq(documentsTable.id, docId),
+          eq(documentsTable.projectId, projectId),
+          isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!),
+        ));
+      if (!doc) { result = { status: 404, body: { error: "Document not found" } }; return; }
 
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
-  if (!isSystemOwner(caller) && !DocumentPermissions.canDelete(effectiveRole, doc.status)) {
-    res.status(403).json({ error: "Forbidden", message: "You do not have permission to restore files on this document" });
-    return;
-  }
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+      if (!isSystemOwner(caller) && !DocumentPermissions.canDelete(effectiveRole, doc.status)) {
+        result = { status: 403, body: { error: "Forbidden", message: "You do not have permission to restore files on this document" } };
+        return;
+      }
 
-  // ── F1: ATOMIC conditional restore ────────────────────────────────────────
-  // The transition is decided by the UPDATE predicate. `deletedAt IS NOT NULL`
-  // means only a soft-deleted file transitions: two concurrent restores →
-  // exactly one row updated → exactly one restore audit. Scoped by documentId
-  // (parent org-verified above); the same TEMPORARY LEGACY EXCEPTION documented
-  // on the delete handler applies here (organization_id omitted from the
-  // predicate only because it is NULL for legacy rows — not the final design).
-  let restored: { id: number; fileName: string } | undefined;
-  await db.transaction(async (tx) => {
-    const [updated] = await tx.update(documentFilesTable)
-      .set({ deletedAt: null, deletedById: null, purgeAfter: null })
-      .where(and(
-        eq(documentFilesTable.id, fileId),
-        eq(documentFilesTable.documentId, docId),
-        isNotNull(documentFilesTable.deletedAt),
-      ))
-      .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
-    if (!updated) return;
-    restored = updated;
-    await createAuditLogTx(tx, {
-      userId: caller.id,
-      organizationId: doc.organizationId ?? undefined,
-      action: "file_restored",
-      entityType: "document",
-      entityId: docId,
-      entityTitle: `${doc.title} — restored file: ${updated.fileName}`,
-      projectId,
+      // ── F1: ATOMIC conditional restore (decided by the UPDATE predicate) ──
+      const [updated] = await db.update(documentFilesTable)
+        .set({ deletedAt: null, deletedById: null, purgeAfter: null })
+        .where(and(
+          eq(documentFilesTable.id, fileId),
+          eq(documentFilesTable.documentId, docId),
+          isNotNull(documentFilesTable.deletedAt),
+        ))
+        .returning({ id: documentFilesTable.id, fileName: documentFilesTable.fileName });
+      if (updated) {
+        await createAuditLogTx(currentDb() as Parameters<Parameters<typeof db.transaction>[0]>[0], {
+          userId: caller.id,
+          organizationId: doc.organizationId ?? undefined,
+          action: "file_restored",
+          entityType: "document",
+          entityId: docId,
+          entityTitle: `${doc.title} — restored file: ${updated.fileName}`,
+          projectId,
+        });
+        result = { status: 200, body: { id: updated.id, restored: true } };
+        return;
+      }
+
+      // No transition — distinguish 404 (absent) from 409 (active). Read-only.
+      const [exists] = await db.select({ id: documentFilesTable.id })
+        .from(documentFilesTable)
+        .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)))
+        .limit(1);
+      if (!exists) { result = { status: 404, body: { error: "File not found" } }; return; }
+      result = { status: 409, body: { error: "NOT_DELETED", message: "File is not deleted" } };
     });
-  });
-
-  if (restored) { res.status(200).json({ id: restored.id, restored: true }); return; }
-
-  // No transition happened. Distinguish 404 (file absent) from 409 (file is
-  // active — restoring an active file is a conflict, not a no-op). This read is
-  // used ONLY to pick the error code; it never decides the transition (which the
-  // conditional UPDATE above already, atomically, did not perform).
-  const [exists] = await db.select({ id: documentFilesTable.id })
-    .from(documentFilesTable)
-    .where(and(eq(documentFilesTable.id, fileId), eq(documentFilesTable.documentId, docId)))
-    .limit(1);
-  if (!exists) { res.status(404).json({ error: "File not found" }); return; }
-  res.status(409).json({ error: "NOT_DELETED", message: "File is not deleted" });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // ─── Lifecycle transitions: archive and obsolete ──────────────────────────────
 
-router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
@@ -1868,36 +1937,33 @@ router.patch("/:id/archive", requireAuth, async (req: Request<ProjectParams>, re
     res.status(403).json({ error: "Only project managers and admins can archive documents" }); return;
   }
 
-  const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
-    .from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
-    .limit(1);
-  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
+        .from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
+        .limit(1);
+      if (!doc) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      if (doc.status === "archived") { result = { status: 400, body: { error: "Document is already archived" } }; return; }
 
-  if (doc.status === "archived") {
-    res.status(400).json({ error: "Document is already archived" }); return;
-  }
-
-  const [updated] = await db.update(documentsTable)
-    .set({ status: "archived", updatedAt: new Date() })
-    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
-    .returning();
-
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId,
-    action: "archive",
-    entityType: "document",
-    entityId: id,
-    entityTitle: `${doc.documentNumber} — ${doc.title}`,
-    projectId,
-    details: { reason: reason.trim(), previousStatus: doc.status },
-  });
-
-  res.json(updated);
+      const [updated] = await db.update(documentsTable)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
+        .returning();
+      await createAuditLog({
+        userId: caller.id, organizationId: caller.organizationId,
+        action: "archive", entityType: "document", entityId: id,
+        entityTitle: `${doc.documentNumber} — ${doc.title}`, projectId,
+        details: { reason: reason.trim(), previousStatus: doc.status },
+      });
+      result = { status: 200, body: updated };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
-router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const id = requireInt(req.params.id);
   const caller = req.user!;
@@ -1910,33 +1976,30 @@ router.patch("/:id/obsolete", requireAuth, async (req: Request<ProjectParams>, r
     res.status(403).json({ error: "Only project managers and admins can mark documents obsolete" }); return;
   }
 
-  const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
-    .from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
-    .limit(1);
-  if (!doc) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [doc] = await db.select({ id: documentsTable.id, title: documentsTable.title, documentNumber: documentsTable.documentNumber, status: documentsTable.status })
+        .from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId), isSystemOwner(caller) ? undefined : eq(documentsTable.organizationId, caller.organizationId!)))
+        .limit(1);
+      if (!doc) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      if (doc.status === "obsolete") { result = { status: 400, body: { error: "Document is already marked obsolete" } }; return; }
 
-  if (doc.status === "obsolete") {
-    res.status(400).json({ error: "Document is already marked obsolete" }); return;
-  }
-
-  const [updated] = await db.update(documentsTable)
-    .set({ status: "obsolete", updatedAt: new Date() })
-    .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
-    .returning();
-
-  await createAuditLog({
-    userId: caller.id,
-    organizationId: caller.organizationId,
-    action: "mark_obsolete",
-    entityType: "document",
-    entityId: id,
-    entityTitle: `${doc.documentNumber} — ${doc.title}`,
-    projectId,
-    details: { reason: reason.trim(), previousStatus: doc.status, supersededByDocumentId: supersededByDocumentId ?? null },
-  });
-
-  res.json(updated);
+      const [updated] = await db.update(documentsTable)
+        .set({ status: "obsolete", updatedAt: new Date() })
+        .where(orgScopedWhere(caller, documentsTable.id, id, documentsTable.organizationId))
+        .returning();
+      await createAuditLog({
+        userId: caller.id, organizationId: caller.organizationId,
+        action: "mark_obsolete", entityType: "document", entityId: id,
+        entityTitle: `${doc.documentNumber} — ${doc.title}`, projectId,
+        details: { reason: reason.trim(), previousStatus: doc.status, supersededByDocumentId: supersededByDocumentId ?? null },
+      });
+      result = { status: 200, body: updated };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // ─── Document Departments (Phase B — data layer, no enforcement) ──────────────
@@ -1948,82 +2011,82 @@ router.get("/:id/departments", requireAuth, async (req: Request<ProjectParams>, 
 
   // Tenant isolation: verify the document belongs to the route projectId before
   // listing its departments (bare-id lookup is a cross-project/tenant IDOR).
-  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  // Tenant-isolation check + departments read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+    if (!deptDoc) return { kind: "notfound" as const };
 
-  const rows = await db
-    .select({
-      id:           departmentsTable.id,
-      code:         departmentsTable.code,
-      name:         departmentsTable.name,
-      assignedAt:   documentDepartmentsTable.assignedAt,
-    })
-    .from(documentDepartmentsTable)
-    .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
-    .where(eq(documentDepartmentsTable.documentId, id));
-  res.json(rows);
+    const rows = await db
+      .select({
+        id:           departmentsTable.id,
+        code:         departmentsTable.code,
+        name:         departmentsTable.name,
+        assignedAt:   documentDepartmentsTable.assignedAt,
+      })
+      .from(documentDepartmentsTable)
+      .innerJoin(departmentsTable, eq(departmentsTable.id, documentDepartmentsTable.departmentId))
+      .where(eq(documentDepartmentsTable.documentId, id));
+    return { kind: "ok" as const, rows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not Found" }); return; }
+  res.json(loaded.rows);
 });
 
 // POST /api/projects/:projectId/documents/:id/departments  { departmentId }
-router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/:id/departments", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { departmentId } = req.body;
   if (!departmentId) { res.status(400).json({ error: "departmentId is required" }); return; }
 
-  // Tenant isolation: the document must belong to the route projectId before we
-  // assign a department to it (bare-id insert is a cross-project/tenant IDOR).
-  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!deptDoc) { result = { status: 404, body: { error: "Not Found" } }; return; }
 
-  // Multi-tenant guard: department must belong to the same org as the project
-  const [project] = await db
-    .select({ organizationId: projectsTable.organizationId })
-    .from(projectsTable)
-    .where(eq(projectsTable.id, projectId))
-    .limit(1);
-  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+      const [project] = await db.select({ organizationId: projectsTable.organizationId })
+        .from(projectsTable).where(eq(projectsTable.id, projectId)).limit(1);
+      if (!project) { result = { status: 404, body: { error: "Project not found" } }; return; }
 
-  const [dept] = await db
-    .select({ organizationId: departmentsTable.organizationId })
-    .from(departmentsTable)
-    .where(eq(departmentsTable.id, parseInt(departmentId)))
-    .limit(1);
-  if (!dept) { res.status(404).json({ error: "Department not found" }); return; }
+      const [dept] = await db.select({ organizationId: departmentsTable.organizationId })
+        .from(departmentsTable).where(eq(departmentsTable.id, parseInt(departmentId))).limit(1);
+      if (!dept) { result = { status: 404, body: { error: "Department not found" } }; return; }
+      if (dept.organizationId !== project.organizationId) {
+        result = { status: 403, body: { error: "Department does not belong to this document's organization" } }; return;
+      }
 
-  if (dept.organizationId !== project.organizationId) {
-    res.status(403).json({ error: "Department does not belong to this document's organization" }); return;
-  }
-
-  const [row] = await db
-    .insert(documentDepartmentsTable)
-    .values({ documentId: id, departmentId: parseInt(departmentId) })
-    .onConflictDoNothing()
-    .returning();
-  res.status(201).json(row ?? { ok: true });
+      const [row] = await db.insert(documentDepartmentsTable)
+        .values({ documentId: id, departmentId: parseInt(departmentId) })
+        .onConflictDoNothing()
+        .returning();
+      result = { status: 201, body: row ?? { ok: true } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // DELETE /api/projects/:projectId/documents/:id/departments/:departmentId
-router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
+router.delete("/:id/departments/:departmentId", requireAuth, async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const departmentId = requireInt(req.params.departmentId);
   const projectId = requireInt(req.params.projectId);
 
-  // Tenant isolation: verify the document belongs to the route projectId before
-  // removing a department assignment (bare-id delete is a cross-tenant IDOR).
-  const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!deptDoc) { res.status(404).json({ error: "Not Found" }); return; }
-
-  await db
-    .delete(documentDepartmentsTable)
-    .where(and(
-      eq(documentDepartmentsTable.documentId, id),
-      eq(documentDepartmentsTable.departmentId, departmentId),
-    ));
-  res.json({ ok: true });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [deptDoc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+        .where(and(eq(documentsTable.id, id), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!deptDoc) { result = { status: 404, body: { error: "Not Found" } }; return; }
+      await db.delete(documentDepartmentsTable)
+        .where(and(eq(documentDepartmentsTable.documentId, id), eq(documentDepartmentsTable.departmentId, departmentId)));
+      result = { status: 200, body: { ok: true } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 export default router;

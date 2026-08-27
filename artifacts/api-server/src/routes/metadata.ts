@@ -4,6 +4,7 @@ import { metadataFieldsTable, documentTypesTable, normalizeDocTypeCode } from "@
 import type { MetadataField } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, ne } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { requireInt } from "../lib/params";
 import { logger } from "../lib/logger.js";
@@ -150,34 +151,42 @@ router.get("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =>
       res.status(400).json({ error: "Bad Request", message: "documentTypeId requires an organization context" });
       return;
     }
-    const [docType] = await db
-      .select()
-      .from(documentTypesTable)
-      .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
+    let docType: typeof documentTypesTable.$inferSelect | undefined;
+    let fields: MetadataField[] | undefined;
+    await tenantRead(async () => {
+      [docType] = await db
+        .select()
+        .from(documentTypesTable)
+        .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
+      if (!docType) return;
+      fields = await resolveMetadataFields(orgId, documentTypeId);
+    });
     if (!docType) {
       res.status(400).json({ error: "Bad Request", message: "documentTypeId does not exist for this organization" });
       return;
     }
-    const fields = await resolveMetadataFields(orgId, documentTypeId);
     res.json({ fields });
     return;
   }
 
-  const fields = await db
-    .select()
-    .from(metadataFieldsTable)
-    .where(
-      and(
-        eq(metadataFieldsTable.isActive, true),
-        orgId
-          ? or(
-              eq(metadataFieldsTable.organizationId, orgId),
-              isNull(metadataFieldsTable.organizationId),
-            )
-          : isNull(metadataFieldsTable.organizationId),
-      ),
-    )
-    .orderBy(metadataFieldsTable.name);
+  let fields: MetadataField[] | undefined;
+  await tenantRead(async () => {
+    fields = await db
+      .select()
+      .from(metadataFieldsTable)
+      .where(
+        and(
+          eq(metadataFieldsTable.isActive, true),
+          orgId
+            ? or(
+                eq(metadataFieldsTable.organizationId, orgId),
+                isNull(metadataFieldsTable.organizationId),
+              )
+            : isNull(metadataFieldsTable.organizationId),
+        ),
+      )
+      .orderBy(metadataFieldsTable.name);
+  });
   res.json({ fields });
 });
 
@@ -189,10 +198,13 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
   }
   const orgId = req.orgId ?? null;
 
+  try {
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
   let resolvedDocumentTypeId: number | null = null;
   if (documentTypeId != null) {
     if (!orgId) {
-      res.status(400).json({ error: "Bad Request", message: "documentTypeId requires an organization context" });
+      result = { status: 400, body: { error: "Bad Request", message: "documentTypeId requires an organization context" } };
       return;
     }
     const [docType] = await db
@@ -200,7 +212,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
       .from(documentTypesTable)
       .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
     if (!docType) {
-      res.status(400).json({ error: "Bad Request", message: "documentTypeId does not exist for this organization" });
+      result = { status: 400, body: { error: "Bad Request", message: "documentTypeId does not exist for this organization" } };
       return;
     }
     resolvedDocumentTypeId = docType.id;
@@ -227,7 +239,7 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
       const message = samePartitionMatch[0].isActive
         ? `A field named "${name}" already exists and applies to this document type`
         : `A field named "${name}" already exists in this scope but is disabled. Reactivate it instead of creating a new field.`;
-      res.status(409).json({ error: "Conflict", message });
+      result = { status: 409, body: { error: "Conflict", message } };
       return;
     }
 
@@ -249,29 +261,30 @@ router.post("/", requireAuth, requireOrgScope, async (req, res): Promise<void> =
       const message = crossPartitionMatch[0].isActive
         ? `A field named "${name}" already exists and applies to this document type`
         : `A field named "${name}" already exists in this scope but is disabled. Reactivate it instead of creating a new field.`;
-      res.status(409).json({ error: "Conflict", message });
+      result = { status: 409, body: { error: "Conflict", message } };
       return;
     }
   }
 
-  try {
-    const [field] = await db
-      .insert(metadataFieldsTable)
-      .values({
-        organizationId: orgId,
-        name,
-        label,
-        fieldType,
-        options: options || [],
-        required: required ?? false,
-        appliesTo: appliesTo || "document",
-        documentTypeId: resolvedDocumentTypeId,
-      })
-      .returning();
-    res.status(201).json(field);
+  const [field] = await db
+    .insert(metadataFieldsTable)
+    .values({
+      organizationId: orgId,
+      name,
+      label,
+      fieldType,
+      options: options || [],
+      required: required ?? false,
+      appliesTo: appliesTo || "document",
+      documentTypeId: resolvedDocumentTypeId,
+    })
+    .returning();
+  result = { status: 201, body: field };
+  });
+  res.status(result!.status).json(result!.body);
   } catch (err: any) {
     if ((err?.code ?? err?.cause?.code) === "23505") {
-      res.status(409).json({ error: "Conflict", message: `A field named "${name}" already exists and applies to this document type` });
+      res.status(409).json({ error: "Conflict", message: `A field named "${req.body?.name}" already exists and applies to this document type` });
       return;
     }
     logger.error({ err }, "[metadata] POST / error");
@@ -289,20 +302,25 @@ router.patch("/:id", requireAuth, requireOrgScope, async (req, res): Promise<voi
     return;
   }
 
+  let existingName = "";
+  try {
+  let result: { status: number; body: unknown } | undefined;
+  await withTenant(async () => {
   const where = orgId
     ? and(eq(metadataFieldsTable.id, id), eq(metadataFieldsTable.organizationId, orgId))
     : and(eq(metadataFieldsTable.id, id), isNull(metadataFieldsTable.organizationId));
 
   const [existing] = await db.select().from(metadataFieldsTable).where(where);
   if (!existing) {
-    res.status(404).json({ error: "Not Found", message: "Metadata field not found" });
+    result = { status: 404, body: { error: "Not Found", message: "Metadata field not found" } };
     return;
   }
+  existingName = existing.name;
 
   const updates: Partial<typeof metadataFieldsTable.$inferInsert> = {};
   if (label !== undefined) {
     if (!label?.trim()) {
-      res.status(400).json({ error: "Bad Request", message: "label cannot be empty" });
+      result = { status: 400, body: { error: "Bad Request", message: "label cannot be empty" } };
       return;
     }
     updates.label = label.trim();
@@ -317,7 +335,7 @@ router.patch("/:id", requireAuth, requireOrgScope, async (req, res): Promise<voi
       resolvedDocumentTypeId = null;
     } else {
       if (!orgId) {
-        res.status(400).json({ error: "Bad Request", message: "documentTypeId requires an organization context" });
+        result = { status: 400, body: { error: "Bad Request", message: "documentTypeId requires an organization context" } };
         return;
       }
       const [docType] = await db
@@ -325,7 +343,7 @@ router.patch("/:id", requireAuth, requireOrgScope, async (req, res): Promise<voi
         .from(documentTypesTable)
         .where(and(eq(documentTypesTable.id, documentTypeId), eq(documentTypesTable.organizationId, orgId)));
       if (!docType) {
-        res.status(400).json({ error: "Bad Request", message: "documentTypeId does not exist for this organization" });
+        result = { status: 400, body: { error: "Bad Request", message: "documentTypeId does not exist for this organization" } };
         return;
       }
       resolvedDocumentTypeId = docType.id;
@@ -352,21 +370,22 @@ router.patch("/:id", requireAuth, requireOrgScope, async (req, res): Promise<voi
       const message = crossPartitionMatch[0].isActive
         ? `A field named "${existing.name}" already exists and applies to this document type`
         : `A field named "${existing.name}" already exists in this scope but is disabled. Reactivate it instead of creating a new field.`;
-      res.status(409).json({ error: "Conflict", message });
+      result = { status: 409, body: { error: "Conflict", message } };
       return;
     }
   }
 
-  try {
-    const [field] = await db
-      .update(metadataFieldsTable)
-      .set(updates)
-      .where(eq(metadataFieldsTable.id, id))
-      .returning();
-    res.json(field);
+  const [field] = await db
+    .update(metadataFieldsTable)
+    .set(updates)
+    .where(eq(metadataFieldsTable.id, id))
+    .returning();
+  result = { status: 200, body: field };
+  });
+  res.status(result!.status).json(result!.body);
   } catch (err: any) {
     if ((err?.code ?? err?.cause?.code) === "23505") {
-      res.status(409).json({ error: "Conflict", message: `A field named "${existing.name}" already exists and applies to this document type` });
+      res.status(409).json({ error: "Conflict", message: `A field named "${existingName}" already exists and applies to this document type` });
       return;
     }
     logger.error({ err }, "[metadata] PATCH /:id error");

@@ -16,10 +16,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import {
-  db, organizationsTable, usersTable, projectsTable, projectMembersTable, documentsTable,
+  organizationsTable, usersTable, projectsTable, projectMembersTable, documentsTable,
 } from "@workspace/db";
 import { signToken } from "../lib/auth.js";
-import { truncateAllTables } from "./helpers/index.js";
+import { truncateAllTables, getTestDb } from "./helpers/index.js";
+// DEBT-010: fixtures seed RLS tables, so they use the OWNER pool (getTestDb), not the
+// app pool (@workspace/db `db` = edms_app), which is fail-closed without a tenant context.
+const db = getTestDb();
 import app from "../app.js";
 
 const FAKE_HASH = "$2b$12$testplaceholder00000000000000000000000000000000000000000";

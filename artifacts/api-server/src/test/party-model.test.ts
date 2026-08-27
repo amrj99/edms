@@ -297,12 +297,14 @@ describe("PATCH /api/projects/:id/collaboration-mode", () => {
     expect(res.body.collaborationMode).toBe("org_only");
   });
 
-  it("party member cannot access project while mode=org_only (403)", async () => {
+  it("party member cannot access project while mode=org_only (404 — RLS hides existence)", async () => {
     const res = await api()
       .get(`/api/projects/${projectId}`)
       .set(authHeader("member", userObserver.id, orgObserver.id));
 
-    expect(res.status).toBe(403);
+    // DEBT-010: under edms_app the project row is invisible to a non-party caller, so the
+    // existence check returns 404 (stronger information-hiding) rather than 403. Denied either way.
+    expect(res.status).toBe(404);
   });
 
   it("intra-org member still accesses project while mode=org_only (200)", async () => {
@@ -356,12 +358,13 @@ describe("GET /api/projects/:id — party access gate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("unrelated org member is forbidden (403)", async () => {
+  it("unrelated org member is forbidden (404 — RLS hides existence)", async () => {
     const res = await api()
       .get(`/api/projects/${projectId}`)
       .set(authHeader("member", userOther.id, orgOther.id));
 
-    expect(res.status).toBe(403);
+    // DEBT-010: invisible project row → 404 instead of 403 under edms_app. Denied either way.
+    expect(res.status).toBe(404);
   });
 });
 
@@ -426,20 +429,22 @@ describe("org_only gate — access revoked for all party members", () => {
       .send({ collaborationMode: "parties" });
   });
 
-  it("observer is blocked when mode=org_only (403)", async () => {
+  it("observer is blocked when mode=org_only (404 — RLS hides existence)", async () => {
     const res = await api()
       .get(`/api/projects/${projectId}`)
       .set(authHeader("member", userObserver.id, orgObserver.id));
 
-    expect(res.status).toBe(403);
+    // DEBT-010: invisible project row → 404 instead of 403 under edms_app. Denied either way.
+    expect(res.status).toBe(404);
   });
 
-  it("contributor is blocked when mode=org_only (403)", async () => {
+  it("contributor is blocked when mode=org_only (404 — RLS hides existence)", async () => {
     const res = await api()
       .get(`/api/projects/${projectId}`)
       .set(authHeader("member", userContributor.id, orgContributor.id));
 
-    expect(res.status).toBe(403);
+    // DEBT-010: invisible project row → 404 instead of 403 under edms_app. Denied either way.
+    expect(res.status).toBe(404);
   });
 });
 
@@ -461,12 +466,13 @@ describe("cross-project isolation", () => {
     projectBId = pRes.body.id;
   });
 
-  it("observer (party on project A) cannot access project B (403)", async () => {
+  it("observer (party on project A) cannot access project B (404 — RLS hides existence)", async () => {
     const res = await api()
       .get(`/api/projects/${projectBId}`)
       .set(authHeader("member", userObserver.id, orgObserver.id));
 
-    expect(res.status).toBe(403);
+    // DEBT-010: project B invisible to this party → 404 instead of 403 under edms_app. Denied either way.
+    expect(res.status).toBe(404);
   });
 
   it("contributor (party on project A) cannot access documents in project B (403)", async () => {

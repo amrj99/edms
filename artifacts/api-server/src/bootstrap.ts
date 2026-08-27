@@ -6,11 +6,14 @@
 //
 // Two phases, deliberately separated:
 //   1. runCriticalStartup() — awaited BEFORE the server listens.
-//        - integrity + RLS are FATAL: if they fail the server must not accept
-//          requests (throws → index.ts exits non-zero).
-//        - seeds/backfill/module-reset are awaited but non-fatal (logged), matching
-//          the app's prior "continue anyway" semantics — now ordered and awaited
-//          instead of racing as fire-and-forget promises.
+//        - The runtime runs as least-privilege edms_app (DML only). ALL DDL/schema/
+//          security installation (drizzle migrations, plan tables, integrity
+//          constraints, membership-aware RLS) is owned by the MIGRATOR (migrate.ts),
+//          NOT here.
+//        - RLS PRESENCE check is FATAL: if the migrator has not installed the model
+//          the server must not accept requests (throws → index.ts exits non-zero).
+//        - seed(dev)/backfill/module-reset are awaited but non-fatal (logged) and are
+//          DML-only runtime init — ordered, not fire-and-forget.
 //   2. startBackgroundJobs() — timers/schedulers, started only after critical
 //        init succeeds. Returns a handle so every timer can be stopped explicitly
 //        (graceful shutdown, and deterministic teardown in tests).
@@ -18,11 +21,10 @@
 import { logger } from "./lib/logger.js";
 import { backfillOrgConfig } from "./lib/backfill-org-config.js";
 import { seedDefaultAdmin } from "./lib/seed.js";
-import { seedPlans } from "./lib/seed-plans.js";
-import { runIntegrityMigrations } from "./lib/integrity-migrations.js";
 import { resetModulesToPlan } from "./lib/reset-modules-to-plan.js";
 import { startModuleSyncScheduler, type SchedulerHandle } from "./lib/module-sync-scheduler.js";
-import { initRlsPolicies } from "./lib/rls-init.js";
+import { pool } from "@workspace/db";
+import { assertMembershipRlsInstalled } from "./lib/rls-membership.js";
 import { runScheduledSkills } from "./lib/skill-engine.js";
 import { sendDueDateReminders } from "./lib/reminder-job.js";
 
@@ -44,22 +46,16 @@ export interface StartupHandles {
  * then refuse to start the server.
  */
 export async function runCriticalStartup(): Promise<void> {
-  // ── FATAL: DB constraints must be in place before serving requests ──────────
-  // H1 — FK constraints + orphan detection. If this fails the schema guarantees
-  // the app relies on are absent, so we must not accept traffic.
-  await runIntegrityMigrations();
+  // ── FATAL: schema + RLS must be PRESENT before serving requests ─────────────
+  // DEBT-010: the runtime runs as the least-privilege edms_app role — DML-only, NO
+  // DDL. All privileged schema/DDL/security installation (drizzle migrations, plan
+  // tables + reference seed, H1 integrity constraints, membership-aware RLS) is done
+  // by the deploy-time MIGRATOR (migrate.ts) as the owner/migrator role. Startup only
+  // VERIFIES the membership-aware model is installed (schema `app` + FORCEd RLS +
+  // per-table org_isolation_policy) and refuses to start if the migrator has not run.
+  await assertMembershipRlsInstalled((s) => pool.query(s));
 
-  // ── FATAL: row-level security must be enabled before serving requests ───────
-  // Without RLS, org-isolation policies are missing — a hard security stop.
-  await initRlsPolicies();
-
-  // ── Non-fatal, awaited (ordered, no longer fire-and-forget) ─────────────────
-  // Plans catalog — getResolvedPlan() falls back gracefully if absent, so a
-  // failure here is logged, not fatal.
-  await seedPlans().catch((err) =>
-    logger.error({ err }, "[seed-plans] startup plan seed failed — continuing"),
-  );
-
+  // ── Non-fatal runtime init (DML only — no DDL) ──────────────────────────────
   // Dev-only demo credentials. Never in production.
   if (!isProd) {
     await seedDefaultAdmin().catch((err) =>

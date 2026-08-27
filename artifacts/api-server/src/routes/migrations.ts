@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { fileFilter, MAX_UPLOAD_BYTES } from "../lib/file-validation.js";
-import { db } from "@workspace/db";
+import { db, withSystemTenantTx } from "@workspace/db";
 import {
   migrationJobsTable, migrationItemsTable, documentsTable, foldersTable,
   projectsTable, documentRevisionsTable,
@@ -188,12 +188,20 @@ router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
     .where(eq(migrationJobsTable.id, id));
   res.json({ message: "Analysis started", jobId: id, mode });
 
-  // Fire-and-forget: analyze all items in background, then run conflict detection
+  // Fire-and-forget: analyze all items in background, then run conflict detection.
+  // DEBT-010 Category-A: DB work runs inside a per-job system tenant tx (the job's
+  // org) under edms_app. AI extraction / credit deduction (external I/O) stays
+  // OUTSIDE any tx; only the migration_items writes are wrapped per item.
+  const jobOrgId = job.organizationId;
   setImmediate(async () => {
     try {
-      const items = await db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id));
+      // Read items to process (migration_items — non-RLS, kept in the per-job
+      // tenant tx for scoping consistency).
+      const items = await withSystemTenantTx(jobOrgId, async () =>
+        db.select().from(migrationItemsTable).where(eq(migrationItemsTable.jobId, id)),
+      );
 
-      // Determine whether to use AI based on mode
+      // Determine whether to use AI based on mode (external I/O — OUTSIDE any tx)
       let useAI = false;
       if (mode === "ai") {
         try {
@@ -210,15 +218,18 @@ router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
           const isDrawing = ["dwg", "dxf", "rvt", "ifc"].includes(ext);
 
           if (isDrawing) {
-            await db.update(migrationItemsTable).set({
-              status: "analyzed",
-              confidence: 0,
-              confidenceLabel: "unreadable",
-              analyzedAt: new Date(),
-            }).where(eq(migrationItemsTable.id, item.id));
+            await withSystemTenantTx(jobOrgId, async () => {
+              await db.update(migrationItemsTable).set({
+                status: "analyzed",
+                confidence: 0,
+                confidenceLabel: "unreadable",
+                analyzedAt: new Date(),
+              }).where(eq(migrationItemsTable.id, item.id));
+            });
             continue;
           }
 
+          // (a) AI/heuristic extraction — external I/O, OUTSIDE any tenant tx
           let extracted: Record<string, string | boolean | number> = {};
           let confidence = 40;
 
@@ -242,39 +253,49 @@ router.post("/:id/analyze", requireAuth, async (req, res): Promise<void> => {
           }
 
           const label = confidence >= 85 ? "high" : confidence >= 50 ? "medium" : "low";
-          await db.update(migrationItemsTable).set({
-            status: "analyzed",
-            extractedTitle: String(extracted.title ?? ""),
-            extractedCode: String(extracted.code ?? ""),
-            extractedDiscipline: String(extracted.discipline ?? ""),
-            extractedDocType: String(extracted.docType ?? ""),
-            extractedRevision: String(extracted.revision ?? ""),
-            extractedDate: String(extracted.date ?? ""),
-            extractedIssuer: String(extracted.issuer ?? ""),
-            extractedIsReply: extracted.isReply ? 1 : 0,
-            extractedReplyTo: String(extracted.replyTo ?? ""),
-            confidence,
-            confidenceLabel: label,
-            analyzedAt: new Date(),
-          }).where(eq(migrationItemsTable.id, item.id));
+          // (b) Persist extracted fields INSIDE the per-job tenant tx
+          await withSystemTenantTx(jobOrgId, async () => {
+            await db.update(migrationItemsTable).set({
+              status: "analyzed",
+              extractedTitle: String(extracted.title ?? ""),
+              extractedCode: String(extracted.code ?? ""),
+              extractedDiscipline: String(extracted.discipline ?? ""),
+              extractedDocType: String(extracted.docType ?? ""),
+              extractedRevision: String(extracted.revision ?? ""),
+              extractedDate: String(extracted.date ?? ""),
+              extractedIssuer: String(extracted.issuer ?? ""),
+              extractedIsReply: extracted.isReply ? 1 : 0,
+              extractedReplyTo: String(extracted.replyTo ?? ""),
+              confidence,
+              confidenceLabel: label,
+              analyzedAt: new Date(),
+            }).where(eq(migrationItemsTable.id, item.id));
+          });
         } catch (err) {
-          await db.update(migrationItemsTable).set({
-            status: "failed",
-            errorMessage: String(err),
-          }).where(eq(migrationItemsTable.id, item.id));
+          await withSystemTenantTx(jobOrgId, async () => {
+            await db.update(migrationItemsTable).set({
+              status: "failed",
+              errorMessage: String(err),
+            }).where(eq(migrationItemsTable.id, item.id));
+          });
         }
       }
 
-      // Run conflict detection against existing project documents
-      try {
-        await runConflictDetection(id, job.projectId);
-      } catch (_) {}
+      // Conflict detection (reads documents [RLS] + updates migration_items) and
+      // the job status update run inside the per-job tenant tx.
+      await withSystemTenantTx(jobOrgId, async () => {
+        try {
+          await runConflictDetection(id, job.projectId);
+        } catch (_) {}
 
-      await db.update(migrationJobsTable).set({ status: "awaiting_review", updatedAt: new Date() })
-        .where(eq(migrationJobsTable.id, id));
+        await db.update(migrationJobsTable).set({ status: "awaiting_review", updatedAt: new Date() })
+          .where(eq(migrationJobsTable.id, id));
+      });
     } catch (err) {
-      await db.update(migrationJobsTable).set({ status: "failed", updatedAt: new Date() })
-        .where(eq(migrationJobsTable.id, id));
+      await withSystemTenantTx(jobOrgId, async () => {
+        await db.update(migrationJobsTable).set({ status: "failed", updatedAt: new Date() })
+          .where(eq(migrationJobsTable.id, id));
+      });
     }
   });
 });
@@ -441,10 +462,18 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
     .where(eq(migrationJobsTable.id, id));
   res.json({ message: "Import started", jobId: id });
 
+  // DEBT-010 Category-A: import DB work runs inside per-item system tenant txs
+  // (the job's org) under edms_app. There is NO external network in execute
+  // (only storage-URL string building), so each item's full DB sequence lives
+  // inside one short per-org tx — avoiding a single giant tx over thousands of
+  // items while keeping every unit scoped to the same (job's) org.
+  const jobOrgId = job.organizationId;
   setImmediate(async () => {
     try {
-      const items = await db.select().from(migrationItemsTable)
-        .where(and(eq(migrationItemsTable.jobId, id)));
+      const items = await withSystemTenantTx(jobOrgId, async () =>
+        db.select().from(migrationItemsTable)
+          .where(and(eq(migrationItemsTable.jobId, id))),
+      );
 
       const confirmed = items.filter(i => i.skip !== 1 && i.status !== "skipped");
       const skipped = items.filter(i => i.skip === 1 || i.status === "skipped");
@@ -480,6 +509,7 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
 
       for (const item of confirmed) {
         try {
+          await withSystemTenantTx(jobOrgId, async () => {
           const parts = item.filePath.split("/");
           const folderParts = parts.length > 1 ? parts.slice(0, -1) : [];
           const folderId = folderParts.length > 0 ? await getOrCreateFolder(folderParts) : null;
@@ -559,7 +589,7 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
                 correspondenceItems.push(item);
               }
               if (dtype.includes("transmittal")) transmittalItems.push(item);
-              continue;
+              return;
             }
             // If the conflict doc no longer exists, fall through to create new
           }
@@ -609,12 +639,15 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
             correspondenceItems.push(item);
           }
           if (dtype.includes("transmittal")) transmittalItems.push(item);
+          }); // end per-item tenant tx
         } catch (err) {
           failedCount++;
-          await db.update(migrationItemsTable).set({
-            status: "failed",
-            errorMessage: String(err),
-          }).where(eq(migrationItemsTable.id, item.id));
+          await withSystemTenantTx(jobOrgId, async () => {
+            await db.update(migrationItemsTable).set({
+              status: "failed",
+              errorMessage: String(err),
+            }).where(eq(migrationItemsTable.id, item.id));
+          });
         }
       }
 
@@ -623,19 +656,23 @@ router.post("/:id/execute", requireAuth, async (req, res): Promise<void> => {
       if (correspondenceItems.length > 0) generatedRegisters.push("Correspondence Register");
       if (transmittalItems.length > 0) generatedRegisters.push("Transmittal Register");
 
-      await db.update(migrationJobsTable).set({
-        status: "completed",
-        importedCount,
-        skippedCount: skipped.length,
-        failedCount,
-        incompleteCount,
-        revisedCount,
-        generatedRegisters: generatedRegisters as any,
-        updatedAt: new Date(),
-      }).where(eq(migrationJobsTable.id, id));
+      await withSystemTenantTx(jobOrgId, async () => {
+        await db.update(migrationJobsTable).set({
+          status: "completed",
+          importedCount,
+          skippedCount: skipped.length,
+          failedCount,
+          incompleteCount,
+          revisedCount,
+          generatedRegisters: generatedRegisters as any,
+          updatedAt: new Date(),
+        }).where(eq(migrationJobsTable.id, id));
+      });
     } catch (err) {
-      await db.update(migrationJobsTable).set({ status: "failed", updatedAt: new Date() })
-        .where(eq(migrationJobsTable.id, id));
+      await withSystemTenantTx(jobOrgId, async () => {
+        await db.update(migrationJobsTable).set({ status: "failed", updatedAt: new Date() })
+          .where(eq(migrationJobsTable.id, id));
+      });
     }
   });
 });

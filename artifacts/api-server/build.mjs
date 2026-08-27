@@ -104,12 +104,17 @@ async function buildAll() {
     plugins: [],
   });
 
-  // Build migration runner (runs during container startup before the API)
+  // Build migration runner (runs during container startup before the API).
+  // Uses the pino plugin so pino's transport worker files are bundled/rewired for
+  // this standalone entry too — otherwise a pino-pretty transport (any non-production
+  // log config) would fall back to node_modules' thread-stream lib/worker.js, which is
+  // absent from dist. Production (plain JSON) never needs it, but this makes the
+  // deployment artifact self-sufficient in ANY environment. No migration-semantics change.
   await esbuild({
     ...sharedConfig,
     entryPoints: [path.resolve(artifactDir, "src/migrate.ts")],
     outdir: distDir,
-    plugins: [],
+    plugins: [esbuildPluginPino({ transports: ["pino-pretty"] })],
   });
 }
 

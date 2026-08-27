@@ -13,6 +13,7 @@ import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
 import { PLANS } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
 import { encrypt } from "../lib/encryption.js";
 import { getOrgAiQuota, SUBSCRIPTION_TIERS, type SubscriptionTier } from "../lib/ai-service.js";
@@ -33,12 +34,12 @@ router.get("/system-info", requireSysOwner, async (req, res): Promise<void> => {
     return r?.n ?? 0;
   };
 
-  const [users, projects, documents, orgs] = await Promise.all([
+  const [users, projects, documents, orgs] = await tenantRead(() => Promise.all([
     countRow(usersTable),
     countRow(projectsTable),
     countRow(documentsTable),
     countRow(organizationsTable),
-  ]);
+  ]));
 
   // ── P1 fix: stale SMTP env var check ──────────────────────────────────────
   // The email system was migrated from SMTP to Resend. The old SMTP_HOST/
@@ -78,38 +79,47 @@ router.get("/storage-usage", async (req, res): Promise<void> => {
   // Determine which orgs this user may see:
   //   system_owner (no org required) → all orgs
   //   admin                          → their org only
-  let orgs: any[] = [];
-  if (isSystemOwner(user)) {
-    orgs = await db.select().from(organizationsTable);
-  } else if (user.organizationId) {
-    orgs = await db
+  const { orgs, usageRows, configs } = await tenantRead(async () => {
+    let orgs: any[] = [];
+    if (isSystemOwner(user)) {
+      orgs = await db.select().from(organizationsTable);
+    } else if (user.organizationId) {
+      orgs = await db
+        .select()
+        .from(organizationsTable)
+        .where(eq(organizationsTable.id, user.organizationId));
+    }
+
+    if (orgs.length === 0) {
+      return { orgs, usageRows: [] as any[], configs: [] as any[] };
+    }
+
+    const orgIds = orgs.map(o => o.id);
+
+    const usageRows = await db
+      .select({
+        orgId: projectsTable.organizationId,
+        totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
+        docCount: sql<number>`count(${documentsTable.id})::int`,
+      })
+      .from(documentsTable)
+      .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
+      .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
+      .groupBy(projectsTable.organizationId);
+
+    const configs = await db
       .select()
-      .from(organizationsTable)
-      .where(eq(organizationsTable.id, user.organizationId));
-  }
+      .from(orgConfigTable)
+      .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
+
+    return { orgs, usageRows, configs };
+  });
 
   if (orgs.length === 0) {
     res.json({ usage: [] });
     return;
   }
 
-  const orgIds = orgs.map(o => o.id);
-
-  const usageRows = await db
-    .select({
-      orgId: projectsTable.organizationId,
-      totalBytes: sql<number>`coalesce(sum(${documentsTable.fileSize}), 0)::bigint`,
-      docCount: sql<number>`count(${documentsTable.id})::int`,
-    })
-    .from(documentsTable)
-    .leftJoin(projectsTable, eq(documentsTable.projectId, projectsTable.id))
-    .where(sql`${projectsTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`)
-    .groupBy(projectsTable.organizationId);
-
-  const configs = await db
-    .select()
-    .from(orgConfigTable)
-    .where(sql`${orgConfigTable.organizationId} = ANY(ARRAY[${sql.join(orgIds.map(id => sql`${id}`), sql`, `)}]::int[])`);
   const configMap = new Map(configs.map(c => [c.organizationId, c]));
 
   const result = orgs.map(org => {
@@ -142,21 +152,19 @@ router.get("/storage-usage", async (req, res): Promise<void> => {
 router.get("/usage", async (req, res): Promise<void> => {
   const user = req.user!;
 
-  let orgs: any[] = [];
-  if (isSystemOwner(user)) {
-    orgs = await db.select().from(organizationsTable);
-  } else if (user.organizationId) {
-    orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
-  }
+  const { orgs, aggregates } = await tenantRead(async () => {
+    let orgs: any[] = [];
+    if (isSystemOwner(user)) {
+      orgs = await db.select().from(organizationsTable);
+    } else if (user.organizationId) {
+      orgs = await db.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId));
+    }
 
-  const orgIds = orgs.map(o => o.id);
-  if (orgIds.length === 0) { res.json({ orgs: [], totals: {} }); return; }
+    const orgIds = orgs.map(o => o.id);
+    if (orgIds.length === 0) return { orgs, aggregates: null };
 
-  // --- aggregate per-org counts via raw SQL for efficiency ---
-  const [
-    docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
-    itrRows, ncrRows, nocRows, subRows,
-  ] = await Promise.all([
+    // --- aggregate per-org counts via raw SQL for efficiency ---
+    const aggregates = await Promise.all([
     // documents per org (via project)
     db.select({
       orgId: projectsTable.organizationId,
@@ -224,7 +232,17 @@ router.get("/usage", async (req, res): Promise<void> => {
       currentPeriodEnd: subscriptionsTable.currentPeriodEnd,
       paymentFailedAt: subscriptionsTable.paymentFailedAt,
     }).from(subscriptionsTable),
-  ]);
+    ]);
+
+    return { orgs, aggregates };
+  });
+
+  if (!orgs.length) { res.json({ orgs: [], totals: {} }); return; }
+
+  const [
+    docRows, corrRows, trsRows, aiRows, ruleRows, memberRows,
+    itrRows, ncrRows, nocRows, subRows,
+  ] = aggregates!;
 
   const byOrg = (rows: any[], key = "orgId") => new Map(rows.map(r => [r[key], r]));
   const docMap   = byOrg(docRows);
@@ -284,7 +302,7 @@ router.get("/usage", async (req, res): Promise<void> => {
 });
 
 // ─── Update Storage Config per org ────────────────────────────────────────────
-router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<void> => {
+router.put("/storage-config/:orgId", requireSysOwner, async (req, res, next): Promise<void> => {
   const orgId = requireInt(req.params.orgId, "orgId");
   const { storageQuotaMb, storagePath, storageType, s3Endpoint, s3Bucket, s3Region, s3AccessKey, s3SecretKey } = req.body;
 
@@ -298,23 +316,27 @@ router.put("/storage-config/:orgId", requireSysOwner, async (req, res): Promise<
   // Only update secret key if explicitly provided (not empty string placeholder)
   if (s3SecretKey) updateData.s3SecretKey = encrypt(s3SecretKey);
 
-  const existing = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId)).limit(1);
-  if (existing.length === 0) {
-    await db.insert(orgConfigTable).values({ organizationId: orgId, ...updateData });
-  } else {
-    await db.update(orgConfigTable).set(updateData).where(eq(orgConfigTable.organizationId, orgId));
-  }
-  await createAuditLog({
-    userId:         req.user!.id,
-    organizationId: orgId,
-    action:         "storage_config_updated",
-    entityType:     "organization",
-    entityId:       orgId,
-    actorRole:      "system_owner",
-    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
-    details:        { storageType: storageType ?? null, storageQuotaMb: storageQuotaMb ?? null },
-  });
-  res.json({ success: true });
+  try {
+    await withTenant(async () => {
+      const existing = await db.select().from(orgConfigTable).where(eq(orgConfigTable.organizationId, orgId)).limit(1);
+      if (existing.length === 0) {
+        await db.insert(orgConfigTable).values({ organizationId: orgId, ...updateData });
+      } else {
+        await db.update(orgConfigTable).set(updateData).where(eq(orgConfigTable.organizationId, orgId));
+      }
+      await createAuditLog({
+        userId:         req.user!.id,
+        organizationId: orgId,
+        action:         "storage_config_updated",
+        entityType:     "organization",
+        entityId:       orgId,
+        actorRole:      "system_owner",
+        ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+        details:        { storageType: storageType ?? null, storageQuotaMb: storageQuotaMb ?? null },
+      });
+    });
+    res.json({ success: true });
+  } catch (e) { next(e); }
 });
 
 // ─── Backup ───────────────────────────────────────────────────────────────────
@@ -322,20 +344,24 @@ router.get("/backup", requireSysOwner, async (req, res): Promise<void> => {
   const user = req.user!;
   const orgId = user.organizationId;
 
-  let projectsFilter = await db.select().from(projectsTable);
-  if (!isSystemOwner(user) && orgId) {
-    projectsFilter = projectsFilter.filter(p => p.organizationId === orgId);
-  }
-  const projectIds = new Set(projectsFilter.map(p => p.id));
+  const { projectsFilter, allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks } =
+    await tenantRead(async () => {
+      let projectsFilter = await db.select().from(projectsTable);
+      if (!isSystemOwner(user) && orgId) {
+        projectsFilter = projectsFilter.filter(p => p.organizationId === orgId);
+      }
+      const [allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks] = await Promise.all([
+        db.select().from(usersTable),
+        db.select().from(organizationsTable),
+        db.select().from(documentsTable),
+        db.select().from(correspondenceTable),
+        db.select().from(transmittalsTable),
+        db.select().from(tasksTable),
+      ]);
+      return { projectsFilter, allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks };
+    });
 
-  const [allUsers, allOrgs, allDocuments, allCorrespondence, allTransmittals, allTasks] = await Promise.all([
-    db.select().from(usersTable),
-    db.select().from(organizationsTable),
-    db.select().from(documentsTable),
-    db.select().from(correspondenceTable),
-    db.select().from(transmittalsTable),
-    db.select().from(tasksTable),
-  ]);
+  const projectIds = new Set(projectsFilter.map(p => p.id));
 
   const scopeByProject = (rows: any[]) => rows.filter(r => !r.projectId || projectIds.has(r.projectId));
 
@@ -400,6 +426,7 @@ router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
   const restored: Record<string, number> = {};
 
   try {
+    await withTenant(async () => {
     if (Array.isArray(backup.tables.organizations) && backup.tables.organizations.length > 0) {
       for (const org of backup.tables.organizations) {
         await db.insert(organizationsTable).values(org).onConflictDoUpdate({ target: organizationsTable.id, set: { name: org.name, type: org.type, updatedAt: new Date() } });
@@ -427,6 +454,7 @@ router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
       }
       restored.tasks = backup.tables.tasks.length;
     }
+    });
 
     res.json({ success: true, restored, message: "Restore completed successfully." });
   } catch (err: any) {
@@ -436,10 +464,12 @@ router.post("/restore", requireSysOwner, async (req, res): Promise<void> => {
 
 // ─── Test Data Seed ────────────────────────────────────────────────────────────
 // system_owner only — prevents org admins from seeding test data in production.
-router.post("/seed-test-data", requireSysOwner, async (req, res): Promise<void> => {
+router.post("/seed-test-data", requireSysOwner, async (req, res, next): Promise<void> => {
   const userId = req.user!.id;
   const orgId  = req.user!.organizationId;
 
+  try {
+  const seeded = await withTenant(async () => {
   // Get first available project in org
   const projs = await db
     .select({ id: projectsTable.id, name: projectsTable.name, code: projectsTable.code })
@@ -448,8 +478,7 @@ router.post("/seed-test-data", requireSysOwner, async (req, res): Promise<void> 
     .limit(1);
 
   if (projs.length === 0) {
-    res.status(400).json({ error: "No projects found. Create a project first." })
-    return;
+    return { kind: "no-proj" as const };
   }
   const project = projs[0];
   const pid = project.id;
@@ -618,11 +647,16 @@ router.post("/seed-test-data", requireSysOwner, async (req, res): Promise<void> 
   }
   created.meetings = mtgData.length;
 
+  return { kind: "ok" as const, project, created };
+  });
+
+  if (seeded.kind === "no-proj") { res.status(400).json({ error: "No projects found. Create a project first." }); return; }
   res.json({
     success: true,
-    message: `Test data created for project ${project.code} — ${project.name}`,
-    created,
+    message: `Test data created for project ${seeded.project.code} — ${seeded.project.name}`,
+    created: seeded.created,
   });
+  } catch (e) { next(e); }
 });
 
 // ─── Search / Elasticsearch ────────────────────────────────────────────────────
@@ -661,6 +695,9 @@ router.get("/search/status", async (req, res): Promise<void> => {
 router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promise<void> => {
   try {
     const { reindexAll } = await import("../lib/search-service.js");
+    // Cross-tenant bulk platform op (search reindex). reindexAll() reads all tenants'
+    // documents under an explicit system-owner context (is_system_owner=true) and
+    // pushes to Elasticsearch OUTSIDE the tx — the single allowlisted platform-wide escape.
     const result = await reindexAll();
     if (result.indexed === 0 && result.errors === 0) {
       res.json({ success: false, message: "Elasticsearch is not configured. Set ELASTICSEARCH_URL to enable indexing." });
@@ -675,26 +712,30 @@ router.post("/search/reindex", requireMinRole("admin"), async (req, res): Promis
 // ── AI Classification toggle ──────────────────────────────────────────────────
 
 router.get("/ai-classification", requireAuth, async (req, res): Promise<void> => {
-  const [row] = await db.select().from(systemSettingsTable)
-    .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+  const [row] = await tenantRead(() => db.select().from(systemSettingsTable)
+    .where(eq(systemSettingsTable.key, "ai_classification_enabled")));
   const enabled = row ? row.value !== "false" : true;
   res.json({ enabled });
 });
 
-router.put("/ai-classification", requireMinRole("admin"), async (req, res): Promise<void> => {
+router.put("/ai-classification", requireMinRole("admin"), async (req, res, next): Promise<void> => {
   const { enabled } = req.body as { enabled: boolean };
   const value = enabled ? "true" : "false";
-  const existing = await db.select().from(systemSettingsTable)
-    .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
-  if (existing.length > 0) {
-    await db.update(systemSettingsTable)
-      .set({ value, updatedAt: new Date() })
-      .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
-  } else {
-    await db.insert(systemSettingsTable)
-      .values({ key: "ai_classification_enabled", value });
-  }
-  res.json({ enabled });
+  try {
+    await withTenant(async () => {
+      const existing = await db.select().from(systemSettingsTable)
+        .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+      if (existing.length > 0) {
+        await db.update(systemSettingsTable)
+          .set({ value, updatedAt: new Date() })
+          .where(eq(systemSettingsTable.key, "ai_classification_enabled"));
+      } else {
+        await db.insert(systemSettingsTable)
+          .values({ key: "ai_classification_enabled", value });
+      }
+    });
+    res.json({ enabled });
+  } catch (e) { next(e); }
 });
 
 // ─── AI Quota: per-org daily usage ─────────────────────────────────────────────
@@ -704,38 +745,42 @@ router.get("/ai-quota", requireAuth, async (req, res): Promise<void> => {
   const user = req.user!;
 
   if (isSystemOwner(user)) {
-    // system_owner only: return quota summary for every org
-    const configs = await db
-      .select({
-        organizationId: orgConfigTable.organizationId,
-        subscriptionTier: orgConfigTable.subscriptionTier,
-        aiProvider: orgConfigTable.aiProvider,
-        aiModel: orgConfigTable.aiModel,
-        aiDailyLimit: orgConfigTable.aiDailyLimit,
-      })
-      .from(orgConfigTable);
+    // system_owner only: return quota summary for every org.
+    // getOrgAiQuota reads via the `db` proxy, so a single outer tenantRead covers
+    // the config read and the per-org fan-out (nested reads reuse the same tx).
+    const quotas = await tenantRead(async () => {
+      const configs = await db
+        .select({
+          organizationId: orgConfigTable.organizationId,
+          subscriptionTier: orgConfigTable.subscriptionTier,
+          aiProvider: orgConfigTable.aiProvider,
+          aiModel: orgConfigTable.aiModel,
+          aiDailyLimit: orgConfigTable.aiDailyLimit,
+        })
+        .from(orgConfigTable);
 
-    const quotas = await Promise.all(
-      configs.map(async (cfg) => ({
-        organizationId: cfg.organizationId,
-        subscriptionTier: cfg.subscriptionTier,
-        quota: await getOrgAiQuota(cfg.organizationId),
-      }))
-    );
+      return Promise.all(
+        configs.map(async (cfg) => ({
+          organizationId: cfg.organizationId,
+          subscriptionTier: cfg.subscriptionTier,
+          quota: await getOrgAiQuota(cfg.organizationId),
+        }))
+      );
+    });
     res.json({ quotas });
     return;
   }
 
   // admin (org-scoped) and everyone else: own org only
   if (!user.organizationId) { res.status(403).json({ error: "No organization" }); return; }
-  const quota = await getOrgAiQuota(user.organizationId);
+  const quota = await tenantRead(() => getOrgAiQuota(user.organizationId!));
   res.json({ organizationId: user.organizationId, quota });
 });
 
 // ─── Subscription tier — preset AI config bundles ─────────────────────────────
 
 // PUT /api/admin/ai-tier/:orgId — apply a subscription tier to an org (system_owner only)
-router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> => {
+router.put("/ai-tier/:orgId", requireSysOwner, async (req, res, next): Promise<void> => {
 
   const orgId = requireInt(req.params.orgId, "orgId");
   const { tier } = req.body as { tier: SubscriptionTier };
@@ -751,9 +796,6 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
 
   const preset = SUBSCRIPTION_TIERS[tier];
 
-  const existing = await db.select().from(orgConfigTable)
-    .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
-
   const update = {
     subscriptionTier:    tier,
     aiProvider:          preset.aiProvider,
@@ -762,22 +804,28 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
     updatedAt:           new Date(),
   };
 
-  if (existing.length === 0) {
-    await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
-  } else {
-    await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
-  }
-  await createAuditLog({
-    userId:         req.user!.id,
-    organizationId: orgId,
-    action:         "ai_tier_changed",
-    entityType:     "organization",
-    entityId:       orgId,
-    actorRole:      "system_owner",
-    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
-    details:        { tier, applied: preset },
-  });
-  res.json({ organizationId: orgId, tier, applied: preset });
+  try {
+    await withTenant(async () => {
+      const existing = await db.select().from(orgConfigTable)
+        .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
+      if (existing.length === 0) {
+        await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
+      } else {
+        await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
+      }
+      await createAuditLog({
+        userId:         req.user!.id,
+        organizationId: orgId,
+        action:         "ai_tier_changed",
+        entityType:     "organization",
+        entityId:       orgId,
+        actorRole:      "system_owner",
+        ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+        details:        { tier, applied: preset },
+      });
+    });
+    res.json({ organizationId: orgId, tier, applied: preset });
+  } catch (e) { next(e); }
 });
 
 // ─── Per-org AI usage limits ──────────────────────────────────────────────────
@@ -788,7 +836,7 @@ router.put("/ai-tier/:orgId", requireSysOwner, async (req, res): Promise<void> =
  * Body: { aiDailyLimit?: number, aiMonthlyTokenLimit?: number }
  * Both values are optional; 0 means unlimited.
  */
-router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void> => {
+router.put("/ai-limits/:orgId", requireSysOwner, async (req, res, next): Promise<void> => {
 
   const orgId = requireInt(req.params.orgId, "orgId");
 
@@ -806,70 +854,80 @@ router.put("/ai-limits/:orgId", requireSysOwner, async (req, res): Promise<void>
     return;
   }
 
-  const existing = await db.select().from(orgConfigTable)
-    .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
-
-  if (existing.length === 0) {
-    await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
-  } else {
-    await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
-  }
-
-  const quota = await getOrgAiQuota(orgId);
-  await createAuditLog({
-    userId:         req.user!.id,
-    organizationId: orgId,
-    action:         "ai_limits_changed",
-    entityType:     "organization",
-    entityId:       orgId,
-    actorRole:      "system_owner",
-    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
-    details:        { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit },
-  });
-  res.json({ organizationId: orgId, limits: { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit } });
+  try {
+    const quota = await withTenant(async () => {
+      const existing = await db.select().from(orgConfigTable)
+        .where(eq(orgConfigTable.organizationId, orgId)).limit(1);
+      if (existing.length === 0) {
+        await db.insert(orgConfigTable).values({ organizationId: orgId, ...update });
+      } else {
+        await db.update(orgConfigTable).set(update).where(eq(orgConfigTable.organizationId, orgId));
+      }
+      const q = await getOrgAiQuota(orgId);
+      await createAuditLog({
+        userId:         req.user!.id,
+        organizationId: orgId,
+        action:         "ai_limits_changed",
+        entityType:     "organization",
+        entityId:       orgId,
+        actorRole:      "system_owner",
+        ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+        details:        { aiDailyLimit: q.dailyLimit, aiMonthlyTokenLimit: q.monthlyTokenLimit },
+      });
+      return q;
+    });
+    res.json({ organizationId: orgId, limits: { aiDailyLimit: quota.dailyLimit, aiMonthlyTokenLimit: quota.monthlyTokenLimit } });
+  } catch (e) { next(e); }
 });
 
 // ─── Plan Management ──────────────────────────────────────────────────────────
 
 router.get("/org-plans", requireSysOwner, async (req, res): Promise<void> => {
-  const rows = await db
+  const rows = await tenantRead(() => db
     .select({
       orgId: organizationsTable.id,
       orgName: organizationsTable.name,
       planId: sql<string>`COALESCE(${subscriptionsTable.planId}, ${organizationsTable.subscriptionTier}, 'expired')`,
     })
     .from(organizationsTable)
-    .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id));
+    .leftJoin(subscriptionsTable, eq(subscriptionsTable.organizationId, organizationsTable.id)));
   res.json({ plans: rows });
 });
 
-router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res): Promise<void> => {
+router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, res, next): Promise<void> => {
   const orgId = requireInt(req.params.orgId, "orgId");
   const { planId } = req.body as { planId: string };
   if (!planId) { res.status(400).json({ error: "planId is required" }); return; }
   const validPlanIds = ["expired", ...PLANS.map(p => p.id)];
   if (!validPlanIds.includes(planId)) { res.status(400).json({ error: "Invalid planId" }); return; }
-  const [org] = await db.select({ id: organizationsTable.id, name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
-  if (!org) { res.status(404).json({ error: "Organization not found" }); return; }
-  await db.insert(subscriptionsTable)
-    .values({ organizationId: orgId, planId, status: "active" })
-    .onConflictDoUpdate({
-      target: subscriptionsTable.organizationId,
-      set: { planId, status: "active", updatedAt: new Date() },
+
+  try {
+    const outcome = await withTenant(async () => {
+      const [org] = await db.select({ id: organizationsTable.id, name: organizationsTable.name }).from(organizationsTable).where(eq(organizationsTable.id, orgId)).limit(1);
+      if (!org) return { kind: "notfound" as const };
+      await db.insert(subscriptionsTable)
+        .values({ organizationId: orgId, planId, status: "active" })
+        .onConflictDoUpdate({
+          target: subscriptionsTable.organizationId,
+          set: { planId, status: "active", updatedAt: new Date() },
+        });
+      await syncOrgModules(orgId, org.name);
+      await createAuditLog({
+        userId:         req.user!.id,
+        organizationId: orgId,
+        action:         "plan_changed",
+        entityType:     "organization",
+        entityId:       orgId,
+        entityTitle:    org.name,
+        actorRole:      "system_owner",
+        ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
+        details:        { planId },
+      });
+      return { kind: "ok" as const };
     });
-  await syncOrgModules(orgId, org.name);
-  await createAuditLog({
-    userId:         req.user!.id,
-    organizationId: orgId,
-    action:         "plan_changed",
-    entityType:     "organization",
-    entityId:       orgId,
-    entityTitle:    org.name,
-    actorRole:      "system_owner",
-    ipAddress:      (req.headers["cf-connecting-ip"] as string) ?? req.ip,
-    details:        { planId },
-  });
-  res.json({ ok: true, orgId, planId });
+    if (outcome.kind === "notfound") { res.status(404).json({ error: "Organization not found" }); return; }
+    res.json({ ok: true, orgId, planId });
+  } catch (e) { next(e); }
 });
 
 // ─── Access Shadow Log ─────────────────────────────────────────────────────────
@@ -917,12 +975,15 @@ router.get("/shadow-log", requireMinRole("admin"), async (req, res): Promise<voi
     const orgFilter         = needsOrgFilter ? sql` AND u.organization_id = ${user.organizationId}`   : sql``;
     const wherePrefix       = (divergeOnly || needsOrgFilter) ? sql` WHERE 1=1` : sql``;
 
-    const rowsResult  = await db.execute<Record<string, unknown>>(
-      sql`${baseSelect}${wherePrefix}${divergeFilter}${orgFilter} ORDER BY asl.evaluated_at DESC LIMIT ${limit}`
-    );
-    const countResult = await db.execute<Record<string, unknown>>(
-      sql`${baseCount}${wherePrefix}${divergeFilter}${orgFilter}`
-    );
+    const { rowsResult, countResult } = await tenantRead(async () => {
+      const rowsResult  = await db.execute<Record<string, unknown>>(
+        sql`${baseSelect}${wherePrefix}${divergeFilter}${orgFilter} ORDER BY asl.evaluated_at DESC LIMIT ${limit}`
+      );
+      const countResult = await db.execute<Record<string, unknown>>(
+        sql`${baseCount}${wherePrefix}${divergeFilter}${orgFilter}`
+      );
+      return { rowsResult, countResult };
+    });
 
     // Normalise snake_case → camelCase for API response consistency
     const rows = rowsResult.rows.map(r => ({

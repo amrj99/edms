@@ -342,3 +342,285 @@ the current classification unless promoted. See `FIRST_CUSTOMER_GO_LIVE_REPORT.m
   `projects/:id/members`, `tasks/:id`, and the full inventory list → 403/404; own-tenant works; system_owner
   intact; account/reset-password cross-tenant blocked (destructive tests on isolated env only). Do NOT close
   DEBT-009 (and do NOT declare GO-LIVE) until this live pass succeeds.
+
+## DEBT-SEC-A — 🔴 HIGH (SECURITY): runtime DB role is SUPERUSER + BYPASSRLS
+- **Severity:** HIGH · **Status:** OPEN — **Go-Live BLOCKER.** Found 2026-08-22 (read-only diagnostic on
+  Production): `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user` → **`edms` = t / t**.
+- **Impact:** the application connects as a PostgreSQL **superuser with BYPASSRLS** that also owns all 13
+  tenant tables. Consequences: (1) **RLS is 100% inert** for the app — every RLS policy + `FORCE ROW LEVEL
+  SECURITY` is bypassed, so there is NO database-layer isolation backstop; the only tenant isolation is the
+  application layer (DEBT-009). (2) Least-privilege violation — any SQL-injection or app compromise = full DB
+  control (all tenants, DROP, `COPY PROGRAM` OS exec). Fix = least-privilege role separation (DEBT-010 step 1).
+
+## DEBT-010 — 🔴 HIGH: real DB-layer tenant isolation (RLS) + least privilege (EPIC)
+- **Severity:** HIGH · **Status:** IN PROGRESS (isolated env). Defense-in-depth so a forgotten app-layer check
+  cannot leak across tenants. **All work on isolated env; production cutover is a separate gated deploy.**
+- **① fail-closed RLS policy — ✅ DONE (in code, proven on isolated env) 2026-08-22:** the previous policy was
+  **fail-OPEN** (missing `app.current_org_id` ⇒ "sysadmin bypass" ⇒ all tenants' rows visible; `organization_id
+  IS NULL` always visible) and had **no `WITH CHECK`**. Rewritten in `lib/rls-init.ts` (+ mirror in
+  `test/global-setup.ts`) to **fail-closed**: `USING/WITH CHECK ( current_setting('app.is_system_owner',true)
+  ='true' OR organization_id = NULLIF(current_setting('app.current_org_id',true),'')::int )`. Missing context ⇒
+  both NULL ⇒ deny (0 rows). `app.is_system_owner` is server-set only (never client-settable);
+  `middlewares/rls-context.ts` now sets both vars. **Proof:** `test/rls.test.ts` — 16 tests under a
+  non-superuser `rls_tester` role: cross-tenant read 0 · own-org visible · **missing-context 0 (was fail-open)**
+  · **WITH CHECK blocks cross-org INSERT** · cross-org UPDATE affects 0 rows + data unchanged · system_owner
+  global only via the flag. typecheck 0 · full suite 847/847. **Safe to deploy (no prod behaviour change while
+  the app role is still superuser — policy is inert until the role cutover).**
+- **② role separation — ✅ PROVEN on isolated env 2026-08-22:** a throwaway proof built a fresh DB (real
+  schema via the migrator), transferred table ownership to `edms_migrator`, created least-privilege `edms_app`
+  (LOGIN/NOSUPERUSER/NOBYPASSRLS), applied grants + `ALTER DEFAULT PRIVILEGES`, then connected AS `edms_app`
+  and passed the full checklist: not superuser/bypassrls · owns 0 tables · own-tenant visible · cross-tenant 0
+  · missing-context 0 (fail-closed) · system_owner global via flag · WITH CHECK blocks cross-org INSERT · no
+  DDL · default privileges give future migrator tables auto-DML. (Production cutover = still gated.)
+- **③ transaction-local RLS context (path A) — ✅ DONE on isolated env 2026-08-22:** `@workspace/db` now has
+  `AsyncLocalStorage` + `currentDb()` + `runInTenantTx()` + a `db` Proxy (all 829 `import { db }` sites route
+  into the request's tenant transaction with zero changes; pool-backed outside a request). External-I/O
+  inventory first (read-only): no AI/HTTP in handlers; storage is I/O-then-DB (Phase 1/2); email is best-effort
+  post-commit; `correspondence send` email is awaited but OUTSIDE any transaction (auto-commit) — no change
+  needed. Proof `test/db-context-a3.test.ts` (8): same-tx/context · outside-scope=pool · concurrent A/B no
+  context leak · pool-reuse clean · missing-context 0 (fail-closed, non-superuser) · own-only · **no silent
+  wider fallback**. typecheck 0 · full suite **854/854** (Proxy is transparent). *(Remaining for cutover: wire
+  a per-request middleware that calls runInTenantTx — with the few I/O handlers kept as short units-of-work.)*
+- **④ verify-security-posture — ✅ DONE 2026-08-22:** `ops/verify-security-posture.sql` fails the deploy if the
+  runtime role is superuser/bypassrls, owns a tenant table, or a required table lacks ENABLE+FORCE / its single
+  org_isolation_policy, or the fail-closed no-context smoke returns >0 rows. Proven both ways on isolated env
+  (FAILS as `postgres` superuser, POSTURE OK as non-superuser `rls_tester`).
+- **Remaining (gated — production cutover / bigger integration):**
+  - **② production cutover (DEBT-SEC-A):** create `edms_migrator` (owner/DDL) + `edms_app`
+    (LOGIN, NOSUPERUSER, NOBYPASSRLS, DML-only) + GRANTs + `ALTER DEFAULT PRIVILEGES` + move table ownership;
+    move `initRlsPolicies()` from app-startup (`bootstrap.ts`, runs as app role) to the **migration step**
+    (owner role); split `DATABASE_URL`(app) vs `MIGRATION_DATABASE_URL`(migrator) in entrypoint/compose. Keep
+    `edms` as an unused rollback/bootstrap account. **Production cutover = separate approved deploy** (prepare
+    roles → verify externally → switch DATABASE_URL → smoke).
+  - **③ transaction-local RLS context:** replace the session-scoped fire-and-forget `set_config(...,FALSE)`
+    with per-request `SET LOCAL` on one connection (AsyncLocalStorage + `currentDb()`), so the context reliably
+    reaches every query. Architecture decision pending: (A) central `currentDb()` refactor vs (B) transitional
+    handler-wrapped transaction.
+  - **④ verify-security-posture** gate in entrypoint: fail the deploy if runtime role has rolsuper/rolbypassrls,
+    if `edms_app` owns any table, or if any tenant table lacks ENABLE+FORCE / has an unexpected `pg_policy` row.
+  - **⑤ organization_id backfill** for projectId-scoped hot tables (documents/transmittals/project_members) +
+    composite FK `(id, organization_id)` — prerequisite before RLS enforcement (rows must have non-null org).
+  - **⑥ RLS enforcement tests under the real `edms_app` role** (extend the existing `rls_tester` pattern).
+- **③ Hybrid-Y per-request wiring — 🔧 IN PROGRESS (isolated env, owner-approved 2026-08-24):** progressive,
+  **per-router** conversion (fail-closed marker mounted path-scoped, so unconverted routers are unaffected).
+  Contract: **writes use explicit `withTenant()`** (BEGIN→SET LOCAL→work→COMMIT, no 2xx before commit, no tx
+  held during R2/Resend/fs I/O); **reads** use a transitional `makeReadAutoWrap()` (GET/HEAD, DB-only,
+  streaming excluded) logged in `qa/READ_AUTOWRAP_INVENTORY.md` for **Phase D** migration to explicit
+  `withTenant()`. Phases: **A** security-sensitive writes (Users/Roles/Members/Projects/Permissions/Admin) →
+  **B** Documents/Files/Transmittals/Correspondence/Tasks/Meetings → **C** Workflows/Registers/remaining →
+  **D** reads. Invariant: a marked write with no `withTenant()` throws (fail-closed Proxy) + a mount-scan test.
+  - **Leak-free mount primitive `tenantScoped()` (commit `1455288`):** the marker leaked across Express
+    fall-through to unconverted routers sharing a prefix; `tenantScoped()` uses `requestContext.exit()` on
+    fall-through so per-router conversion is safe even inside the nested `/projects` tree. Unauthenticated
+    requests dispatch to the sub-router unscoped (requireAuth still 401). PROOF 7 added.
+  - **Phase A ✅ COMPLETE (commits `64ed976`, `e91615b`, `658cbef`):** all 11 security-sensitive routers
+    converted — users, projects, project-participants/parties/departments/role-overrides/governance,
+    departments, organizations, delegations, admin. Writes → explicit `withTenant()` (discriminated-result
+    restructuring preserves every guard/status; bcrypt + emails OUTSIDE tx; org-create best-effort side
+    effects in their own short tx). Reads via transitional auto-wrapper (see `READ_AUTOWRAP_INVENTORY.md`).
+    admin `search/reindex` uses `runUnscoped()` (cross-tenant bulk + ES I/O); admin `search/status` excluded
+    from auto-wrap. **Verified: typecheck 0 · FULL regression 861/861** (64 files, superuser test role → RLS
+    inert, proves wiring correctness). No billing committed. **Next: Phase B** (Documents/Files/Transmittals/
+    Correspondence/Tasks/Meetings — includes the streaming download routes needing `skipRead` + I/O-outside-tx).
+- **🔴 FINDING (edms_app-gate blocker, tied to ⑤) — active RLS vs cross-org project collaboration:** the
+  `org_isolation_policy` is strictly `organization_id = current_org_id OR is_system_owner`. Once the app runs
+  under non-superuser `edms_app` (item-6 gate), RLS becomes ACTIVE and will **over-restrict** legitimate
+  cross-org project collaboration on the RLS tables (`projects/documents/tasks/correspondence/transmittals`):
+  a member from org B reading/writing an org-A project is filtered (read) / WITH CHECK-blocked or mis-stamped
+  (write). Masked today because prod `edms` is superuser (RLS inert) and tests default to a superuser role.
+  **Does not block the mechanical write conversion** (superuser tests pass; SET LOCAL runs, RLS inert) — it
+  blocks **“full suite green under `edms_app`.”** Decision needed BEFORE that gate (not before conversion):
+  (A) narrow audited `withSystemContext` escape hatch for reviewed cross-org read paths; (B) membership-aware
+  policy (`EXISTS project_members …`, needs `app.current_user_id` in context); (C) ⑤ owner-org denormalization;
+  (D) confirm cross-org collaboration is NOT a first-customer feature and keep the strict policy (document the
+  limit).
+  - **✅ OWNER DECISION (2026-08-24): adopt (B) — membership-aware RLS** for project-collaborative tables.
+    Rationale: cross-org shared-project access is an existing Product Contract behaviour; do not break it to
+    fit RLS, and do not use `withSystemContext` as a daily escape. **Before the `edms_app` gate:** (1) add
+    `app.current_user_id` to the transaction-local context (alongside `current_org_id` + `is_system_owner`);
+    (2) inventory the 13 RLS tables → classify organization-private / project-collaborative / system-global;
+    (3) for project-collaborative tables (projects/documents/tasks/correspondence/transmittals) write a policy
+    allowing ONLY: explicit system_owner OR owner org OR a real project membership/access per the current
+    authority source; (4) membership grants VISIBILITY only — functional write authorization stays in
+    RBAC/app layer, RLS just bounds org/project; (5) `withSystemContext` reserved for real platform ops
+    (e.g. reindex), never general cross-org; (6) tests: OrgA owner OK · OrgB non-member 0/blocked · OrgB
+    authorized member sees ONLY the shared project (not OrgA's other projects) · member of Project X cannot
+    see Project Y (same owner) · removal from membership → access gone next request · spoofed
+    project/org/user context opens nothing; (7) audit `project_members` as an authorization source even if it
+    is not itself made an RLS table. **Does not block Phase A–D mechanical conversion.**
+- **🔴 edms_app-gate item — background jobs need explicit tenant context (owner, 2026-08-24):**
+  request-triggered skill events now use `dispatchSkillEventBackground()` (lib/skill-events.ts) — an
+  EXPLICIT background boundary that carries `{organizationId, userId}` and does NOT inherit the request ALS
+  (proven: `skill-event-background.test.ts`). BUT the skill engine (`executeSkill`) and the scheduler
+  (`startBackgroundJobs`, notification/trial-downgrade schedulers) still access the DB via the pool-backed
+  proxy with NO tenant context. Today that is safe only because the app role is superuser (RLS inert). **Before
+  the `edms_app` cutover:** every background/skill DB access that touches an RLS table MUST run inside its own
+  `runInTenantTx(...)` with the explicit org context (never unrestricted pool), and AI/external I/O must stay
+  OUTSIDE that tx. Full list of background jobs to convert is delivered at Phase B end.
+
+- **③ Hybrid-Y Phase B ✅ COMPLETE (2026-08-25):** all Phase B routers converted + mounted via
+  `tenantScoped()` — transmittals, submission-chains, global-documents, meetings, tasks, correspondence,
+  documents (20 handlers), storage (streaming). Writes = explicit `withTenant()` (capture-result; no 2xx
+  before commit; bcrypt/CPU + external I/O outside the tx). **Subsystem boundaries added (all narrow/named,
+  no general poolDb, no runUnscoped-for-tenant-work):**
+  - `notificationDb` (lib/notifications/notification-db.ts) — pool-backed, notification infra tables only;
+    dispatchNotification runs post-commit. Guard: `tenant-notificationdb-guard.test.ts`.
+  - `dispatchSkillEventBackground` (lib/skill-events.ts) — detaches request ALS, explicit {org,user} ctx.
+  - `dispatchClassificationBackground` + `classifyDetached` (lib/ai/classification-events.ts) — AI detached,
+    explicit ctx, AI I/O outside any tx; classifyDetached is the awaited variant (documents).
+  - `tenantRead()` — context-aware read for authz middlewares/subsystem config (requireProjectAccess,
+    assertProjectAccess, orgStorage.getOrgConfig). Opens a SHORT read tx on writes; reuses tx on GET; pool if unscoped.
+  - **storage streaming**: download/serve routes do `withTenant(authz+metadata) → commit → R2/S3/onprem
+    stream or 302 redirect`; excluded from read auto-wrap via `skipRead`; view-token requests establish the
+    marker from the token identity. Upload keeps I/O-then-short-DB-tx + compensation/orphan verbatim.
+  - **Final Gate:** typecheck 0 · build OK · **full regression 871/871** (69 files) · streaming-after-commit
+    proof 2/2 · guards (runUnscoped 2/2, notificationDb 2/2, skill/classification detachment 4/4).
+  - **Inventories:** `runUnscoped` — 1 call site (admin `search/reindex`). `notificationDb` — 0 refs outside
+    lib/notifications/. Background dispatchers — `dispatchSkillEventBackground` (tasks), `dispatchClassification
+    Background` (correspondence), `classifyDetached` (documents). All guarded by static tests.
+  - **Commits (unpushed, on `release/rc-session-cors-optin-debt004`):** Phase A `64ed976`,`1455288`,`e91615b`,
+    `658cbef`,`00432e0`; Phase B `0944f18`,`9c545b1`,`095d4df`,`9fe66a3`,`c2c1937`,`5463ad2`,`97a63be`,
+    `41f540d` + view-token fix.
+- **③ Hybrid-Y Phase C ✅ COMPLETE (2026-08-25):** every remaining tenant-facing router converted + mounted
+  via `tenantScoped()`. Same rules as A/B (writes = explicit `withTenant()` capture-result, no 2xx before
+  commit; reads auto-wrapped transitionally; DB middleware via `tenantRead()`; external I/O outside the tx;
+  no new general poolDb; no `runUnscoped` expansion).
+  - **Checkpoint 1 (DB-only + read-only)** `b93d268`: metadata, document-types, preferences, modules, profile
+    (password: bcrypt outside the tx via tenantRead+withTenant), external-contacts, deliverables, entities,
+    general (6 correspondence writes, createAuditLog kept inside the tx), config (6 system/org-config writes),
+    rules; read-only mounts dashboard/search/audit-logs/calendar/notification-summary.
+  - **Checkpoint 2A (I/O routers)** `1b69914`: notifications (GET generators run in the read-write auto-wrap
+    tx), registers (15 writes; submit-approval/NOC notifications gathered in-tx → `dispatchNotification`
+    awaited post-commit), chat (in-app notifications in-tx, `emitToChatGroup`/`emitToUser` post-commit).
+  - **Checkpoint 2B (workflow-engine)** `23aacbc`: all 13 writes in `withTenant`; `enrichInstance`/
+    `getTemplateWithStages` response builders run in-tx. Fire-and-forget helpers made tx-correct:
+    `syncDocumentStatus`/`closeOpenWorkflowTask` now atomic (swallow removed); `notifyStageReached` split into
+    `prepareStageNotification` (task lifecycle + in-app notifications in-tx, returns bundle) +
+    `dispatchStageEmail` (email post-commit, non-fatal). **Intended behavior change:** doc-status sync + task
+    lifecycle + in-app notifications are now atomic with the transition; only outbound email stays best-effort.
+  - **Checkpoint 3 (skills)** `4a8ea7c`: CRUD in `withTenant`; `PUT /:id/run` uses **`executeSkillBackground`**
+    (added earlier — detaches request ALS, explicit {org,user,skillId}+trigger, no runUnscoped/pool escape;
+    engine's internal tenant-ctx still deferred to edms_app gate). Test: skill-event-background 3/3.
+  - **Final Gate:** typecheck 0 · build OK · **full regression 872/872** (69 files) · guards passing
+    (runUnscoped, notificationDb still contained, notification-type write-contract — my new chat/registers/
+    workflow in-app inserts are static-literal `type`s).
+  - **Routes left auto-wrapped for Phase D:** the GET/HEAD reads of every `tenantScoped()` router (transitional
+    read tx via `makeReadAutoWrap`); Phase D migrates these to explicit `withTenant()` and removes the wrapper.
+  - **🔴 DEFERRED — NOT converted in Phase C (needs its own design + owner sign-off):** **`/migrations`**
+    (`migrations.ts`) left **bare**. `POST /:id/analyze` and `POST /:id/execute` run `setImmediate(...)`
+    fire-and-forget blocks doing heavy RLS-table writes + AI I/O; under a request marker those background
+    writes fail-closed. This is a genuine background subsystem (distinct from the notification/emit
+    post-commit pattern) — it belongs with the edms_app background-jobs gate below, not the mechanical sweep.
+    Also still bare (by constraint / nature): `/billing` + `/billing/webhook` (out of DEBT-010 scope), `/dev`
+    (non-prod), `health`/`auth` (public/pre-auth).
+- **③ Hybrid-Y Phase D ✅ COMPLETE (2026-08-25):** the transitional read auto-wrapper is GONE. Every
+  GET/HEAD handler across all `tenantScoped()` routers (~120 handlers, 41 routers) now opens its own SHORT
+  `tenantRead()` unit-of-work: reads inside the closure, response serialization OUTSIDE it (no tx held during
+  serialization or I/O). `tenantRead` reuses an active tx, opens a short read tx under the marker, or falls
+  back to the pool when unauthenticated — so cross-org/system_owner reads keep the exact `is_system_owner`
+  context the auto-wrap used. Delivered by 4 parallel mechanical conversion agents (Phase A/B/C-dbonly/
+  C-reads) + admin agent + owner-authored specials, each verified typecheck-clean.
+  - **Non-mechanical specials (hand-done):** notifications `GET /` (generators → short write UoW returning
+    inserted rows; `emitToUser` AFTER commit); correspondence `GET /:id` (conditional mark-as-read WRITE →
+    `withTenant`); search `GET /` (only `sqlSearch` DB wrapped; ES path holds NO tx — fixes the pre-existing
+    tx-across-ES from having no skipRead); audit-logs `GET /export` (CSV built + sent OUTSIDE the tx); config
+    public GETs (pool fallback via `tenantRead` when unauthenticated) + `/session-settings` (direct read +
+    `getOrgSessionPolicy` in ONE unit); admin `/backup` (dump read in tx, serialize outside) + `/ai-quota`
+    (getOrgAiQuota is db-proxy → reuses the one tx).
+  - **Wrapper removed:** `makeReadAutoWrap`/`readAutoWrap`/`getAutoWrappedReadInventory` + the `tenantScoped`
+    `skipRead` option deleted from `middlewares/tenant-scope.ts`; storage/admin mounts drop `skipRead`.
+    `tenantScoped()` now only sets the fail-closed marker + exits on fall-through.
+  - **Static gate** (`phase-d-readautowrap-removed.test.ts`): no production source references the auto-wrapper;
+    no `skipRead` remains; tenant-scope.ts no longer defines it; **bare tenant DB access inside a request
+    marker STILL throws fail-closed** (runtime assertion).
+  - **Final Gate:** typecheck 0 · build OK · **full regression 876/876** (70 files) · A/B concurrency no-leak +
+    fail-closed (no pool fallback) + exit-on-fall-through proofs green · streaming-after-commit proofs green.
+  - **Final tenant boundary state:** every tenant-facing route is fail-closed with EXPLICIT `withTenant()`
+    (writes) / `tenantRead()` (reads) — no implicit request-spanning tx anywhere. Still bare by design:
+    `/migrations` (deferred background subsystem), `/billing`+`/billing/webhook` (out of scope), `/dev`
+    (non-prod), `health`/`auth` (public/pre-auth). `runUnscoped` = 1 allowlisted site (admin reindex);
+    `notificationDb` = notifications-infra only; both statically guarded.
+  - **Commit (unpushed):** `8d00c64`.
+- **④ Membership-aware RLS (Decision B) ✅ IMPLEMENTED + PROVEN on the isolated env (2026-08-25):**
+  org-only RLS replaced with a membership-aware model, enforced under a REAL least-privilege role
+  (`edms_app`, LOGIN/NOSUPERUSER/NOBYPASSRLS) — not a role switch inside a superuser session. RLS =
+  visibility + tenant/project anchoring only; RBAC unchanged and never widened. Design + Security-Definer
+  Gate: `docs/architecture/DEBT-010-membership-aware-rls-design.md`.
+  - **Context:** `app.current_user_id` now threads `runInTenantTx → withTenant → tenantRead`
+    (tx-local `set_config`); missing user context ⇒ per-user/collaborative predicates fail-closed.
+  - **Security-Definer model** (`lib/rls-membership.ts`, single source of truth): schema `app` owned by
+    `edms_rls_owner` (NOLOGIN); authority predicates `SECURITY DEFINER`/`sql STABLE`/`search_path=''`/
+    fully-qualified/no dynamic SQL, EXECUTE revoked from PUBLIC → granted to `edms_app`; they read only
+    NON-RLS lookup tables (no recursion, no dependence on runtime grants). `edms_app` has USAGE-not-CREATE
+    → object shadowing impossible.
+  - **Policies:** still ONE `org_isolation_policy` FOR ALL per table (posture gate intact). Decisions
+    applied — U per-user notifications, X-a column-allowlist triggers (correspondence {is_read,
+    first_read_at,updated_at}; transmittals {status,acknowledged_at,review_outcome,updated_at}), M
+    org-party + user-member for documents, R registers stay org-only. WITH CHECK anchors organization_id
+    to the project owner (no org forge / no cross-project move); X-a triggers apply only to a genuine
+    cross-org session and leave superuser/no-context/same-org to WITH CHECK.
+  - **Tests (real edms_app):** `membership-rls.test.ts` (15) — the owner's full matrix incl. §8 shadowing
+    + search_path drift, §9 removal-revokes, forged context, anti-move, concurrent A/B; and
+    `membership-rls-behavior-comparison.test.ts` (6) — all six legitimate cross-org flows classify
+    **PRODUCT BEHAVIOR PRESERVED / RLS CORRECTED** (not "unchanged at the RLS layer": old RLS would
+    `deny` these cross-org flows, so enforcing `edms_app` under the OLD org-only policy would have BROKEN
+    them; the app allowed them only via the application authorization layer while the superuser role
+    bypassed RLS. The new membership policy makes RLS match that intended behavior — legit=allow,
+    unrelated=deny — so no EXPANDED, no BROKEN; submission-chains N/A). The test's internal verdict token
+    `UNCHANGED` means exactly "product behavior preserved (not BROKEN/EXPANDED)".
+  - **Final Gate:** typecheck 0 · build OK · **full regression 898/898** (72 files).
+  - **Isolated env ONLY:** `lib/rls-init.ts` (prod startup) still org-only — **no cutover**, no
+    `DATABASE_URL` change, no Production roles, no background-job changes. Commit (unpushed): `e56666c`.
+- **🔴 edms_app-gate — background jobs / subsystems still needing tenant context (owner deliverable):**
+  these run on the pool with NO tenant context today (safe only because prod app role is superuser → RLS inert).
+  Before the `edms_app` cutover, each DB access that touches an RLS table MUST use its own `runInTenantTx` with
+  explicit org context (or an audited system_owner context); AI/external I/O stays outside the tx:
+  1. **`reindexAll`** (admin `search/reindex`, via `runUnscoped`) — reads `documents` (RLS) cross-tenant →
+     needs `withSystemContext` (is_system_owner) to read; ES push outside the tx.
+  2. **skill-engine `executeSkill`** + skill cron (`startBackgroundJobs`) — skill actions create tasks/
+     notifications/documents (RLS) → per-org `runInTenantTx`.
+  3. **notification scheduler** (`startNotificationScheduler`) — fires scheduled_notifications; creating
+     in-app `notifications` (RLS) needs per-recipient-org `runInTenantTx`.
+  4. **trial-downgrade scheduler** (`startTrialDowngradeScheduler`) — flips `projects.visible_on_free` (RLS
+     table `projects`) → per-org `runInTenantTx`.
+  5. **module-sync / seeds** (`syncOrgModules`, `seedAISettings`, `seedSecuritySettings`) — org_config /
+     system_settings are non-RLS; safe on pool, but confirm at cutover.
+  6. **migration-wizard background** (`migrations.ts` `analyze`/`execute` `setImmediate` blocks) — write
+     `migration_items`/`documents`/`document_revisions`/`folders` (RLS) + do AI extraction I/O. Must move to a
+     detached background boundary with explicit per-org `runInTenantTx` for the DB side and AI I/O outside the
+     tx (mirrors `dispatchClassificationBackground`). Router `/migrations` stays bare until this lands.
+  `notificationDb` / `classifyDetached` infra reads use non-RLS tables and are safe on the pool under edms_app.
+
+## DEBT-011 — 🟠 HIGH: session not invalidated on role change / user disable
+- **Severity:** HIGH · **Status:** OPEN. A downgraded/disabled user keeps their access JWT (~15 min) because
+  there is **no `auth_version`** and role/disable changes bump nothing (DEBT-003 covered refresh
+  rotation/idle/absolute/logout, NOT immediate privilege-change invalidation).
+- **Fix (planned):** `users.auth_version` column + in JWT; check `is_active` + `auth_version` against DB on every
+  authenticated request (PK lookup, no Redis yet); on role-change/disable run one transaction (`SELECT … FOR
+  UPDATE` → bump `auth_version` → revoke all refresh tokens); prefer the DB role for sensitive authorization
+  over the JWT claim. Regression: old token rejected on the next request; old refresh rejected.
+
+## DEBT-012 — 🔎 read-only investigation PENDING: weekly Sentry (9× document_sequences, 2× CORS)
+- **Status:** OPEN — investigation only, **not touching DEBT-010**, no fix yet (owner directive 2026-08-23).
+- **Signal:** weekly Sentry report — **9 `document_sequences` errors** + **2 CORS errors** on Production.
+- **Context/expectation:** `document_sequences` auto-numbering was fixed (DEBT-005, migration 0034) — these 9
+  may predate the fix, or be a residual edge (e.g., a race on the ON CONFLICT upsert, or a tenant/prod-data
+  case). CORS ×2 may relate to DEBT-001 (disallowed-origin → 500) or the R2 preflight. **To be confirmed by a
+  separate Root-Cause report AFTER the DEBT-010 middleware wiring is complete** — do not infer cause yet.
+- **Action:** after middleware wiring → pull the actual Sentry stack traces / timestamps / affected orgs
+  (read-only) and produce a standalone Root-Cause report. No code change attributed to this until then.
+
+## DEBT-013 — 🟠 MEDIUM (RBAC): `POST /projects/:id/members` has no role gate
+- **Severity:** MEDIUM · **Status:** OPEN (surfaced during DEBT-010 membership-aware RLS Security-Definer Gate).
+- **Where:** `artifacts/api-server/src/routes/projects.ts:459-517`. The handler is `requireAuth` +
+  tenant-isolation only (project must be in the caller's org, else `TenantIsolationError`). There is **no
+  `requireMinRole`/project-admin gate**, so any authenticated **same-org** user — including a `viewer` — can
+  add members (any `role`, including `admin`) to any project in their own org, unaudited. `DELETE
+  /:id/members/:userId` should be reviewed with it.
+- **Impact:** within-tenant privilege escalation (grant self/others a higher project role) + unaudited
+  membership changes. **No cross-org impact and NO effect on membership-aware RLS:** cross-org self-add is
+  blocked (`TenantIsolationError`), and same-org rows are already visible via `organization_id` — so this gap
+  does not widen RLS visibility. It is a pure application-authorization weakness.
+- **Fix (separate track — do NOT fix inside RLS):** add a `requireMinRole('project_manager')` (or
+  project-admin) gate + audit log to the member add/remove routes; keep RLS as visibility-only. Deliberately
+  NOT bundled with DEBT-010 (owner: do not mix RBAC changes into the security-layer change).

@@ -15,6 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import { config as dotenvConfig } from "dotenv";
+import { applyMembershipRls } from "../lib/rls-membership.js";
 
 const { Client } = pg;
 
@@ -59,70 +60,35 @@ export async function setup(): Promise<void> {
     throw new Error(`[test:setup] Schema push failed: ${String(err)}`);
   }
 
-  // Enable RLS policies on the test DB so rls.test.ts can verify them.
-  // initRlsPolicies() is normally called at server startup — we replicate
-  // that here so the test DB mirrors the production DB configuration.
-  console.log("[test:setup] Initialising RLS policies...");
+  // Apply the membership-aware RLS model (DEBT-010 Decision B) to the ISOLATED test
+  // DB: `app` schema + SECURITY DEFINER authority functions + per-category
+  // org_isolation_policy (single FOR ALL per table) + X-a triggers + least-priv
+  // grants. Creates the two roles (edms_rls_owner owner, edms_app runtime) in the
+  // isolated DB only — this is test-harness setup, not a Production role/cutover.
+  console.log("[test:setup] Applying membership-aware RLS (roles + policies)...");
   const client = new Client({ connectionString: testDbUrl });
   await client.connect();
 
-  const RLS_TABLES = [
-    "documents", "document_revisions", "document_files",
-    "projects", "tasks", "notifications", "rules",
-    "correspondence", "transmittals",
-  ];
-  const POLICY_NAME = "org_isolation_policy";
+  await applyMembershipRls((s) => client.query(s), { createRoles: true, appPassword: "edms_app_pw" });
 
-  for (const table of RLS_TABLES) {
-    try {
-      await client.query(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
-      await client.query(`ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY`);
-      await client.query(`DROP POLICY IF EXISTS "${POLICY_NAME}" ON "${table}"`);
-      await client.query(`
-        CREATE POLICY "${POLICY_NAME}" ON "${table}"
-        AS PERMISSIVE FOR ALL
-        USING (
-          organization_id IS NULL
-          OR COALESCE(NULLIF(current_setting('app.current_org_id', TRUE), ''), NULL) IS NULL
-          OR organization_id = NULLIF(current_setting('app.current_org_id', TRUE), '')::integer
-        )
-      `);
-    } catch {
-      // Table may not have organization_id — skip silently
-    }
-  }
-
-  // Create a non-superuser role for RLS tests.
-  // Superusers bypass RLS even with FORCE ROW LEVEL SECURITY.
-  // rls_tester is a regular role that is subject to RLS policies.
+  // Legacy RLS tests connect as `rls_tester`; keep it working under the new model
+  // by giving it the same least-privilege access as edms_app (non-superuser, subject
+  // to RLS). It must be able to EXECUTE the app.* authority functions the policies call.
   await client.query(`
-    DO $$
-    BEGIN
+    DO $$ BEGIN
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rls_tester') THEN
-        CREATE ROLE rls_tester LOGIN PASSWORD 'rls_tester_pw';
+        CREATE ROLE rls_tester LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'rls_tester_pw';
       END IF;
-    END $$
-  `);
-
-  // Grant rls_tester SELECT/INSERT/UPDATE/DELETE on all RLS-protected tables
-  // so the test queries can actually run (just filtered by policy).
-  for (const table of RLS_TABLES) {
-    try {
-      await client.query(
-        `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "${table}" TO rls_tester`,
-      );
-    } catch {
-      // skip tables that don't exist
-    }
-  }
-
-  // Also grant usage on the public schema and all sequences
-  // (needed for INSERT in seed helpers that run as the main user, not rls_tester)
+    END $$;`);
+  await client.query(`REVOKE CREATE ON SCHEMA public FROM rls_tester`);
   await client.query(`GRANT USAGE ON SCHEMA public TO rls_tester`);
+  await client.query(`GRANT USAGE ON SCHEMA app TO rls_tester`);
+  await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rls_tester`);
   await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rls_tester`);
+  await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO rls_tester`);
 
   await client.end();
-  console.log("[test:setup] RLS policies initialised ✓\n");
+  console.log("[test:setup] Membership-aware RLS applied ✓\n");
 }
 
 export async function teardown(): Promise<void> {

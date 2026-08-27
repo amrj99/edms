@@ -9,6 +9,7 @@ import {
   participantRoleEnum,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole } from "../middlewares/require-role.js";
 import { parseBody } from "../lib/validate.js";
 import { requireInt, type ProjectParams } from "../lib/params.js";
@@ -38,9 +39,11 @@ const updateParticipantSchema = z.object({
 
 // ─── Helper: resolve caller org + verify project belongs to it ────────────────
 
+// Pure: returns null if the project does not exist OR is out of the caller's
+// tenant scope (both surface as 404). Performs a DB read → callers must invoke it
+// inside the request's tenant scope (read auto-wrap for GET, withTenant for writes).
 async function resolveProjectOrg(
   req: Request<ProjectParams>,
-  res: any,
 ): Promise<{ projectOrgId: number; projectId: number } | null> {
   const projectId = requireInt(req.params.projectId);
   const caller = (req as any).user;
@@ -51,14 +54,14 @@ async function resolveProjectOrg(
     .where(eq(projectsTable.id, projectId))
     .limit(1);
 
-  if (!project) { res.status(404).json({ error: "Project not found" }); return null; }
+  if (!project) return null;
 
   const projectOrgId = project.organizationId;
 
   // Only system_owner (cross-tenant) may access any project.
   // Org-level admins are still scoped to their own org.
   if (caller.role !== "system_owner" && caller.organizationId !== projectOrgId) {
-    res.status(404).json({ error: "Project not found" }); return null;
+    return null;
   }
 
   return { projectOrgId, projectId };
@@ -67,30 +70,35 @@ async function resolveProjectOrg(
 // ─── GET /api/projects/:projectId/participants ────────────────────────────────
 
 router.get("/participants", async (req: Request<ProjectParams>, res): Promise<void> => {
-  const ctx = await resolveProjectOrg(req, res);
-  if (!ctx) return;
+  const result = await tenantRead(async () => {
+    const ctx = await resolveProjectOrg(req);
+    if (!ctx) return { kind: "notfound" as const };
 
-  const rows = await db
-    .select({
-      id:         projectParticipantsTable.id,
-      role:       projectParticipantsTable.role,
-      notes:      projectParticipantsTable.notes,
-      createdAt:  projectParticipantsTable.createdAt,
-      updatedAt:  projectParticipantsTable.updatedAt,
-      entity: {
-        id:                 entitiesTable.id,
-        name:               entitiesTable.name,
-        type:               entitiesTable.type,
-        country:            entitiesTable.country,
-        registrationNumber: entitiesTable.registrationNumber,
-      },
-    })
-    .from(projectParticipantsTable)
-    .innerJoin(entitiesTable, eq(entitiesTable.id, projectParticipantsTable.entityId))
-    .where(eq(projectParticipantsTable.projectId, ctx.projectId))
-    .orderBy(projectParticipantsTable.role, entitiesTable.name);
+    const rows = await db
+      .select({
+        id:         projectParticipantsTable.id,
+        role:       projectParticipantsTable.role,
+        notes:      projectParticipantsTable.notes,
+        createdAt:  projectParticipantsTable.createdAt,
+        updatedAt:  projectParticipantsTable.updatedAt,
+        entity: {
+          id:                 entitiesTable.id,
+          name:               entitiesTable.name,
+          type:               entitiesTable.type,
+          country:            entitiesTable.country,
+          registrationNumber: entitiesTable.registrationNumber,
+        },
+      })
+      .from(projectParticipantsTable)
+      .innerJoin(entitiesTable, eq(entitiesTable.id, projectParticipantsTable.entityId))
+      .where(eq(projectParticipantsTable.projectId, ctx.projectId))
+      .orderBy(projectParticipantsTable.role, entitiesTable.name);
 
-  res.json(rows);
+    return { kind: "ok" as const, rows };
+  });
+
+  if (result.kind === "notfound") { res.status(404).json({ error: "Project not found" }); return; }
+  res.json(result.rows);
 });
 
 // ─── POST /api/projects/:projectId/participants ───────────────────────────────
@@ -99,51 +107,54 @@ router.post(
   "/participants",
   requireMinRole("admin"),
   parseBody(createParticipantSchema),
-  async (req: Request<ProjectParams>, res): Promise<void> => {
-    const ctx = await resolveProjectOrg(req, res);
-    if (!ctx) return;
-
+  async (req: Request<ProjectParams>, res, next): Promise<void> => {
     const { entityId, role, notes } = req.body as z.infer<typeof createParticipantSchema>;
+    try {
+      const outcome = await withTenant(async () => {
+        const ctx = await resolveProjectOrg(req);
+        if (!ctx) return { kind: "proj-404" as const };
 
-    // Tenant isolation: entity must belong to the same org as the project
-    const [entity] = await db
-      .select({ id: entitiesTable.id })
-      .from(entitiesTable)
-      .where(and(
-        eq(entitiesTable.id, entityId),
-        eq(entitiesTable.organizationId, ctx.projectOrgId),
-      ))
-      .limit(1);
+        // Tenant isolation: entity must belong to the same org as the project
+        const [entity] = await db
+          .select({ id: entitiesTable.id })
+          .from(entitiesTable)
+          .where(and(
+            eq(entitiesTable.id, entityId),
+            eq(entitiesTable.organizationId, ctx.projectOrgId),
+          ))
+          .limit(1);
+        if (!entity) return { kind: "entity-404" as const };
 
-    if (!entity) {
-      res.status(404).json({ error: "Entity not found in this organization" }); return;
-    }
+        // Unique constraint: (project_id, entity_id)
+        const [existing] = await db
+          .select({ id: projectParticipantsTable.id })
+          .from(projectParticipantsTable)
+          .where(and(
+            eq(projectParticipantsTable.projectId, ctx.projectId),
+            eq(projectParticipantsTable.entityId, entityId),
+          ))
+          .limit(1);
+        if (existing) return { kind: "dup" as const };
 
-    // Unique constraint: (project_id, entity_id)
-    const [existing] = await db
-      .select({ id: projectParticipantsTable.id })
-      .from(projectParticipantsTable)
-      .where(and(
-        eq(projectParticipantsTable.projectId, ctx.projectId),
-        eq(projectParticipantsTable.entityId, entityId),
-      ))
-      .limit(1);
+        const [row] = await db
+          .insert(projectParticipantsTable)
+          .values({
+            projectId: ctx.projectId,
+            entityId,
+            role,
+            notes: notes?.trim() || null,
+          })
+          .returning();
+        return { kind: "ok" as const, row };
+      });
 
-    if (existing) {
-      res.status(409).json({ error: "Entity is already a participant in this project" }); return;
-    }
-
-    const [row] = await db
-      .insert(projectParticipantsTable)
-      .values({
-        projectId: ctx.projectId,
-        entityId,
-        role,
-        notes: notes?.trim() || null,
-      })
-      .returning();
-
-    res.status(201).json(row);
+      switch (outcome.kind) {
+        case "proj-404": res.status(404).json({ error: "Project not found" }); return;
+        case "entity-404": res.status(404).json({ error: "Entity not found in this organization" }); return;
+        case "dup": res.status(409).json({ error: "Entity is already a participant in this project" }); return;
+        default: res.status(201).json(outcome.row); return;
+      }
+    } catch (e) { next(e); }
   },
 );
 
@@ -153,36 +164,40 @@ router.put(
   "/participants/:id",
   requireMinRole("admin"),
   parseBody(updateParticipantSchema),
-  async (req: Request<ProjectParams>, res): Promise<void> => {
-    const ctx = await resolveProjectOrg(req, res);
-    if (!ctx) return;
-
+  async (req: Request<ProjectParams>, res, next): Promise<void> => {
     const participantId = requireInt(req.params.id);
-
-    const [existing] = await db
-      .select({ id: projectParticipantsTable.id })
-      .from(projectParticipantsTable)
-      .where(and(
-        eq(projectParticipantsTable.id, participantId),
-        eq(projectParticipantsTable.projectId, ctx.projectId),
-      ))
-      .limit(1);
-
-    if (!existing) { res.status(404).json({ error: "Participant not found" }); return; }
-
     const { role, notes } = req.body as z.infer<typeof updateParticipantSchema>;
+    try {
+      const outcome = await withTenant(async () => {
+        const ctx = await resolveProjectOrg(req);
+        if (!ctx) return { kind: "proj-404" as const };
 
-    const [updated] = await db
-      .update(projectParticipantsTable)
-      .set({
-        ...(role  !== undefined && { role }),
-        ...(notes !== undefined && { notes: notes?.trim() || null }),
-        updatedAt: new Date(),
-      })
-      .where(eq(projectParticipantsTable.id, participantId))
-      .returning();
+        const [existing] = await db
+          .select({ id: projectParticipantsTable.id })
+          .from(projectParticipantsTable)
+          .where(and(
+            eq(projectParticipantsTable.id, participantId),
+            eq(projectParticipantsTable.projectId, ctx.projectId),
+          ))
+          .limit(1);
+        if (!existing) return { kind: "part-404" as const };
 
-    res.json(updated);
+        const [updated] = await db
+          .update(projectParticipantsTable)
+          .set({
+            ...(role  !== undefined && { role }),
+            ...(notes !== undefined && { notes: notes?.trim() || null }),
+            updatedAt: new Date(),
+          })
+          .where(eq(projectParticipantsTable.id, participantId))
+          .returning();
+        return { kind: "ok" as const, updated };
+      });
+
+      if (outcome.kind === "proj-404") { res.status(404).json({ error: "Project not found" }); return; }
+      if (outcome.kind === "part-404") { res.status(404).json({ error: "Participant not found" }); return; }
+      res.json(outcome.updated);
+    } catch (e) { next(e); }
   },
 );
 
@@ -191,28 +206,33 @@ router.put(
 router.delete(
   "/participants/:id",
   requireMinRole("admin"),
-  async (req: Request<ProjectParams>, res): Promise<void> => {
-    const ctx = await resolveProjectOrg(req, res);
-    if (!ctx) return;
-
+  async (req: Request<ProjectParams>, res, next): Promise<void> => {
     const participantId = requireInt(req.params.id);
+    try {
+      const outcome = await withTenant(async () => {
+        const ctx = await resolveProjectOrg(req);
+        if (!ctx) return { kind: "proj-404" as const };
 
-    const [existing] = await db
-      .select({ id: projectParticipantsTable.id })
-      .from(projectParticipantsTable)
-      .where(and(
-        eq(projectParticipantsTable.id, participantId),
-        eq(projectParticipantsTable.projectId, ctx.projectId),
-      ))
-      .limit(1);
+        const [existing] = await db
+          .select({ id: projectParticipantsTable.id })
+          .from(projectParticipantsTable)
+          .where(and(
+            eq(projectParticipantsTable.id, participantId),
+            eq(projectParticipantsTable.projectId, ctx.projectId),
+          ))
+          .limit(1);
+        if (!existing) return { kind: "part-404" as const };
 
-    if (!existing) { res.status(404).json({ error: "Participant not found" }); return; }
+        await db
+          .delete(projectParticipantsTable)
+          .where(eq(projectParticipantsTable.id, participantId));
+        return { kind: "ok" as const };
+      });
 
-    await db
-      .delete(projectParticipantsTable)
-      .where(eq(projectParticipantsTable.id, participantId));
-
-    res.json({ ok: true });
+      if (outcome.kind === "proj-404") { res.status(404).json({ error: "Project not found" }); return; }
+      if (outcome.kind === "part-404") { res.status(404).json({ error: "Participant not found" }); return; }
+      res.json({ ok: true });
+    } catch (e) { next(e); }
   },
 );
 

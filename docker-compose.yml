@@ -40,6 +40,10 @@ services:
       # container using the dev default password. In production, set DATABASE_URL
       # in your .env file — that value always takes precedence over this fallback.
       DATABASE_URL: ${DATABASE_URL:-postgresql://edms:edms_dev_password@postgres:5432/edms}
+      # DEBT-010: migrator/owner role used by migrate.mjs for DDL (schema, constraints,
+      # membership RLS). Falls back to DATABASE_URL when unset — single-role deployments
+      # keep working unchanged. Set it (to the owner/migrator URL) only at the edms_app cutover.
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
       # ⚠️ REQUIRED — no fallback. Generate with: openssl rand -base64 64
       # If JWT_SECRET is missing the API container will refuse to start.
       JWT_SECRET: ${JWT_SECRET}

@@ -14,9 +14,14 @@
 
 set -e
 
-# ── Step 1: Apply pending migrations ─────────────────────────────────────────
-echo "[entrypoint] Running database migrations..."
-node --enable-source-maps /app/artifacts/api-server/dist/migrate.mjs && \
+# ── Step 1: Apply pending migrations (as the MIGRATOR/OWNER role) ─────────────
+# DEBT-010: the migrator does ALL privileged DDL (schema, constraints, membership RLS).
+# It connects via MIGRATION_DATABASE_URL (the owner/migrator role). The app server below
+# runs as DATABASE_URL (the least-privilege edms_app role, DML only). If MIGRATION_DATABASE_URL
+# is unset we fall back to DATABASE_URL — backward compatible with single-role deployments.
+echo "[entrypoint] Running database migrations (migrator role)..."
+MIGRATION_DATABASE_URL="${MIGRATION_DATABASE_URL:-$DATABASE_URL}" \
+  node --enable-source-maps /app/artifacts/api-server/dist/migrate.mjs && \
   echo "[entrypoint] Migrations complete." || {
   echo "[entrypoint] ERROR: Migration failed — aborting startup."
   exit 1
@@ -31,6 +36,6 @@ node --enable-source-maps /app/artifacts/api-server/dist/migrate.mjs && \
 # (seed-document-types.mjs / seed-wf-defaults.mjs) remain available for manual
 # backfill if ever needed, but are intentionally NOT run automatically here.
 
-# ── Start API server ──────────────────────────────────────────────────────────
-echo "[entrypoint] Starting API server..."
+# ── Start API server (as the least-privilege edms_app role via DATABASE_URL) ───
+echo "[entrypoint] Starting API server (runtime role)..."
 exec node --enable-source-maps /app/artifacts/api-server/dist/index.mjs

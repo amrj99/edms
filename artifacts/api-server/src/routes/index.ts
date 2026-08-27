@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { requireOrgScope } from "../lib/org-scope.js";
 import { setRlsContext } from "../middlewares/rls-context.js";
+import { tenantScoped } from "../middlewares/tenant-scope.js";
 import { tenantRateLimit } from "../middlewares/tenant-rate-limit.js";
 import healthRouter from "./health.js";
 import authRouter from "./auth.js";
@@ -156,54 +157,60 @@ router.use((req, res, next) => {
   });
 });
 
-router.use("/organizations", organizationsRouter);
-router.use("/users", usersRouter);
-router.use("/projects", projectsRouter);
-router.use("/projects/:projectId/documents", documentsRouter);
-router.use("/projects/:projectId/correspondence", requireModule("correspondence"), correspondenceRouter);
-router.use("/correspondence", requireModule("correspondence"), correspondenceRouter);
+router.use("/organizations", tenantScoped(organizationsRouter));
+// DEBT-010 Hybrid-Y — converted router: fail-closed tenant scope + transitional
+// read auto-wrapper (writes use explicit withTenant(); reads auto-wrapped).
+router.use("/users", tenantScoped(usersRouter));
+router.use("/projects", tenantScoped(projectsRouter));
+router.use("/projects/:projectId/documents", tenantScoped(documentsRouter));
+router.use("/projects/:projectId/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
+router.use("/correspondence", requireModule("correspondence"), tenantScoped(correspondenceRouter));
 
-router.use("/projects/:projectId/transmittals", requireModule("registers"), transmittalsRouter);
-router.use("/projects/:projectId/submission-chains", requireModule("registers"), submissionChainsRouter);
-router.use("/projects/:projectId", projectDepartmentsRouter);
-router.use("/projects/:projectId", projectParticipantsRouter);
-router.use("/projects/:projectId", projectPartiesRouter);
-router.use("/tasks", tasksRouter);
-router.use("/metadata-fields", metadataRouter);
-router.use("/dashboard", dashboardRouter);
-router.use("/search", searchRouter);
-router.use("/audit-logs", auditLogsRouter);
+router.use("/projects/:projectId/transmittals", requireModule("registers"), tenantScoped(transmittalsRouter));
+router.use("/projects/:projectId/submission-chains", requireModule("registers"), tenantScoped(submissionChainsRouter));
+router.use("/projects/:projectId", tenantScoped(projectDepartmentsRouter));
+router.use("/projects/:projectId", tenantScoped(projectParticipantsRouter));
+router.use("/projects/:projectId", tenantScoped(projectPartiesRouter));
+router.use("/tasks", tenantScoped(tasksRouter));
+router.use("/metadata-fields", tenantScoped(metadataRouter));
+router.use("/dashboard", tenantScoped(dashboardRouter));
+router.use("/search", tenantScoped(searchRouter));
+router.use("/audit-logs", tenantScoped(auditLogsRouter));
 
-router.use("/general", generalRouter);
-router.use("/notifications", notificationsRouter);
-router.use("/config", configRouter);
-router.use("/storage", storageRouter);
-router.use("/admin", adminRouter);
-router.use("/documents", globalDocumentsRouter);
-router.use("/projects/:projectId", requireModule("registers"), registersRouter);
-router.use("/projects/:projectId", requireModule("deliverables"), deliverablesRouter);
-router.use("/user", preferencesRouter);
-router.use("/profile", profileRouter);
-router.use("/meetings", requireModule("meetings"), meetingsRouter);
-router.use("/chat", requireModule("chat"), chatRouter);
-router.use("/modules", modulesRouter);
+router.use("/general", tenantScoped(generalRouter));
+router.use("/notifications", tenantScoped(notificationsRouter));
+router.use("/config", tenantScoped(configRouter));
+// storage download/stream routes (objects/onpremise/s3-object/r2-object/public-objects)
+// do external I/O (R2/S3/fs stream or 302 redirect) on GET: each does its own
+// withTenant(authz+metadata) → commit → stream/redirect (no tx held during I/O).
+router.use("/storage", tenantScoped(storageRouter));
+// /admin/search/status does external I/O (Elasticsearch) on GET with no DB access.
+router.use("/admin", tenantScoped(adminRouter));
+router.use("/documents", tenantScoped(globalDocumentsRouter));
+router.use("/projects/:projectId", requireModule("registers"), tenantScoped(registersRouter));
+router.use("/projects/:projectId", requireModule("deliverables"), tenantScoped(deliverablesRouter));
+router.use("/user", tenantScoped(preferencesRouter));
+router.use("/profile", tenantScoped(profileRouter));
+router.use("/meetings", requireModule("meetings"), tenantScoped(meetingsRouter));
+router.use("/chat", requireModule("chat"), tenantScoped(chatRouter));
+router.use("/modules", tenantScoped(modulesRouter));
 if (process.env.NODE_ENV !== "production") {
   router.use("/dev", devRouter);
 }
-router.use("/calendar", calendarRouter);
-router.use("/", notificationSummaryRouter);
-router.use("/rules", rulesRouter);
-router.use("/skills", skillsRouter);
+router.use("/calendar", tenantScoped(calendarRouter));
+router.use("/", tenantScoped(notificationSummaryRouter));
+router.use("/rules", tenantScoped(rulesRouter));
+router.use("/skills", tenantScoped(skillsRouter));
 router.use("/migrations", migrationsRouter);
 
-router.use("/workflow-engine", requireModule("workflow_engine"), workflowEngineRouter);
-router.use("/delegations", delegationsRouter);
-router.use("/projects/:projectId", projectRoleOverridesRouter);
-router.use("/projects/:projectId", projectGovernanceRouter);
+router.use("/workflow-engine", requireModule("workflow_engine"), tenantScoped(workflowEngineRouter));
+router.use("/delegations", tenantScoped(delegationsRouter));
+router.use("/projects/:projectId", tenantScoped(projectRoleOverridesRouter));
+router.use("/projects/:projectId", tenantScoped(projectGovernanceRouter));
 
-router.use("/departments", departmentsRouter);
-router.use("/external-contacts", externalContactsRouter);
-router.use("/document-types", documentTypesRouter);
-router.use("/entities", entitiesRouter);
+router.use("/departments", tenantScoped(departmentsRouter));
+router.use("/external-contacts", tenantScoped(externalContactsRouter));
+router.use("/document-types", tenantScoped(documentTypesRouter));
+router.use("/entities", tenantScoped(entitiesRouter));
 
 export default router;
