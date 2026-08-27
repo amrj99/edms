@@ -181,8 +181,8 @@ export async function applyMembershipRls(
         SELECT EXISTS (
           SELECT 1 FROM public.notifications n
           WHERE n.user_id = p_user_id
-            AND n.type = p_type
-            AND n.entity_type = p_entity_type
+            AND n.type::text = p_type              -- notifications.type is an enum; cast to compare with the text arg under search_path=''
+            AND n.entity_type::text = p_entity_type -- entity_type may also be enum; cast is a no-op when it is already text
             AND n.entity_id = p_entity_id
             AND n.created_at > p_since
         ) INTO found;
