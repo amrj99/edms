@@ -55,6 +55,20 @@ async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
   const pendingEmails: Array<() => void> = [];
 
   await withSystemTenantTx(orgId, async () => {
+    // F7: dedup existence check via the SECURITY DEFINER helper. A direct SELECT on
+    // notifications is blind here (per-user RLS + no session user), so it re-inserted
+    // duplicates every run. The helper answers boolean-only, fail-closed for users
+    // outside the current session org, and never mutates the caller's context.
+    const alreadySent = async (
+      uid: number, type: string, entityType: string, entityId: number,
+    ): Promise<boolean> => {
+      const r: any = await db.execute(
+        sql`SELECT app.recent_notification_exists(${uid}, ${type}, ${entityType}, ${entityId}, ${yesterday}) AS found`,
+      );
+      const rows = Array.isArray(r) ? r : r?.rows;
+      return rows?.[0]?.found === true;
+    };
+
     // Overdue tasks with an assignee (tasks is RLS; explicit org filter added too).
     const overdueTasks = await db
       .select({ id: tasksTable.id, title: tasksTable.title, assigneeId: tasksTable.assignedToId, projectId: tasksTable.projectId })
@@ -70,18 +84,7 @@ async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
     for (const task of overdueTasks) {
       if (!task.assigneeId) continue;
       // Check if we already sent a reminder in the last 24h
-      const [existing] = await db
-        .select({ id: notificationsTable.id })
-        .from(notificationsTable)
-        .where(and(
-          eq(notificationsTable.userId, task.assigneeId),
-          eq(notificationsTable.type, "task_overdue"),
-          eq(notificationsTable.entityType, "task"),
-          eq(notificationsTable.entityId, task.id),
-          sql`${notificationsTable.createdAt} > ${yesterday}`,
-        ))
-        .limit(1);
-      if (existing) continue;
+      if (await alreadySent(task.assigneeId, "task_overdue", "task", task.id)) continue;
       await db.insert(notificationsTable).values({
         userId: task.assigneeId,
         type: "task_overdue",
@@ -141,18 +144,7 @@ async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
 
     for (const item of overdueItems) {
       if (!item.assignedToId) continue;
-      const [existing] = await db
-        .select({ id: notificationsTable.id })
-        .from(notificationsTable)
-        .where(and(
-          eq(notificationsTable.userId, item.assignedToId),
-          eq(notificationsTable.type, "task_overdue"),
-          eq(notificationsTable.entityType, "action_item"),
-          eq(notificationsTable.entityId, item.id),
-          sql`${notificationsTable.createdAt} > ${yesterday}`,
-        ))
-        .limit(1);
-      if (existing) continue;
+      if (await alreadySent(item.assignedToId, "task_overdue", "action_item", item.id)) continue;
       await db.insert(notificationsTable).values({
         userId: item.assignedToId,
         type: "task_overdue",
@@ -206,18 +198,7 @@ async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
 
       for (const userId of recipientIds) {
         // Dedup: skip if we sent an overdue notification for this instance in last 24h
-        const [existing] = await db
-          .select({ id: notificationsTable.id })
-          .from(notificationsTable)
-          .where(and(
-            eq(notificationsTable.userId, userId),
-            eq(notificationsTable.type, "workflow_action_required"),
-            eq(notificationsTable.entityType, "workflow"),
-            eq(notificationsTable.entityId, inst.id),
-            sql`${notificationsTable.createdAt} > ${yesterday}`,
-          ))
-          .limit(1);
-        if (existing) continue;
+        if (await alreadySent(userId, "workflow_action_required", "workflow", inst.id)) continue;
 
         await db.insert(notificationsTable).values({
           userId,
@@ -300,18 +281,7 @@ async function processOrgReminders(orgId: number, now: Date, yesterday: Date) {
 
       for (const userId of recipientIds) {
         // Dedup: skip if we already sent an SLA reminder today for this instance
-        const [existing] = await db
-          .select({ id: notificationsTable.id })
-          .from(notificationsTable)
-          .where(and(
-            eq(notificationsTable.userId, userId),
-            eq(notificationsTable.type, "workflow_sla_reminder"),
-            eq(notificationsTable.entityType, "workflow"),
-            eq(notificationsTable.entityId, inst.id),
-            sql`${notificationsTable.createdAt} > ${yesterday}`,
-          ))
-          .limit(1);
-        if (existing) continue;
+        if (await alreadySent(userId, "workflow_sla_reminder", "workflow", inst.id)) continue;
 
         const daysLeft = Math.ceil((dueMs - now.getTime()) / (24 * 60 * 60 * 1000));
         await db.insert(notificationsTable).values({

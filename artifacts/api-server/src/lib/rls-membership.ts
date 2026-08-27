@@ -98,6 +98,11 @@ export async function applyMembershipRls(
   // The owner (definer) needs SELECT on the NON-RLS authority tables it reads.
   await run(`GRANT SELECT ON public.project_parties, public.project_members,
     public.correspondence_recipients, public.correspondence_cc, public.users TO ${OWNER_ROLE}`);
+  // F7: the dedup DEFINER app.recent_notification_exists() reads public.notifications
+  // (RLS-FORCED, per-user). The owner is NOBYPASSRLS, so the function itself adopts the
+  // target user's context transaction-locally (and restores it) to satisfy the per-user
+  // policy — but it still needs table-level SELECT privilege here. No policy change.
+  await run(`GRANT SELECT ON public.notifications TO ${OWNER_ROLE}`);
 
   // ── Session-context accessors (GUC-only; SECURITY INVOKER, pinned path) ──────
   await run(`
@@ -146,11 +151,56 @@ export async function applyMembershipRls(
            SELECT 1 FROM public.users u WHERE u.id = p_user_id AND u.organization_id = p_org_id
          ) $fn$;`);
 
+  // ── F7: dedup existence probe (SECURITY DEFINER, boolean-only) ───────────────
+  // Background reminder jobs run under withSystemTenantTx (org set, NO session user),
+  // so a direct SELECT on notifications (per-user RLS) sees zero rows and the dedup
+  // guard re-inserts duplicates every run. This helper answers ONLY the boolean
+  // "does a recent matching notification exist" for a user IN THE CURRENT SESSION ORG.
+  //   • boolean-only — never returns rows/metadata.
+  //   • tenant guard via app.user_in_org(user, session_org()) — fail-closed; cannot be
+  //     used to probe another tenant (no cross-tenant existence oracle).
+  //   • the owner is NOBYPASSRLS, so it briefly adopts the target user's context
+  //     (tx-local) to satisfy the UNCHANGED per-user policy, then RESTORES it on EVERY
+  //     path (success or exception) via an inner block that re-raises. No RLS change.
+  await run(`
+    CREATE OR REPLACE FUNCTION app.recent_notification_exists(
+      p_user_id integer, p_type text, p_entity_type text, p_entity_id integer, p_since timestamptz
+    ) RETURNS boolean
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS
+    $fn$
+    DECLARE
+      prev  text;
+      found boolean;
+    BEGIN
+      IF NOT app.user_in_org(p_user_id, app.session_org()) THEN
+        RETURN false;  -- fail-closed: no org / other tenant
+      END IF;
+      prev := pg_catalog.current_setting('app.current_user_id', true);
+      BEGIN
+        PERFORM pg_catalog.set_config('app.current_user_id', p_user_id::text, true);
+        SELECT EXISTS (
+          SELECT 1 FROM public.notifications n
+          WHERE n.user_id = p_user_id
+            AND n.type = p_type
+            AND n.entity_type = p_entity_type
+            AND n.entity_id = p_entity_id
+            AND n.created_at > p_since
+        ) INTO found;
+        PERFORM pg_catalog.set_config('app.current_user_id', COALESCE(prev, ''), true);
+      EXCEPTION WHEN OTHERS THEN
+        PERFORM pg_catalog.set_config('app.current_user_id', COALESCE(prev, ''), true);
+        RAISE;
+      END;
+      RETURN found;
+    END
+    $fn$;`);
+
   // Own the definer functions with the owner role; lock EXECUTE to the runtime role.
   const FUNCS = [
     "app.session_org()", "app.session_user()", "app.is_sysowner()",
     "app.org_has_party_row(integer, integer)", "app.user_is_project_member(integer, integer)",
     "app.user_is_corr_recipient(integer, integer)", "app.user_in_org(integer, integer)",
+    "app.recent_notification_exists(integer, text, text, integer, timestamptz)",
   ];
   for (const f of FUNCS) {
     await run(`ALTER FUNCTION ${f} OWNER TO ${OWNER_ROLE}`);
@@ -372,5 +422,27 @@ export async function assertMembershipRlsInstalled(exec: SqlExec): Promise<void>
     throw new Error(
       `[rls] membership-aware RLS incomplete — run the migrator before starting. Problems: ${problems.join(", ")}`,
     );
+  }
+
+  // F7: verify the dedup DEFINER exists with the correct owner, SECURITY DEFINER, and
+  // a pinned search_path. The runtime relies on it for duplicate-free reminders.
+  const fn = await queryRows(
+    exec,
+    `SELECT p.prosecdef AS secdef,
+            pg_get_userbyid(p.proowner) AS owner,
+            COALESCE(array_to_string(p.proconfig, ','), '') AS cfg
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'app' AND p.proname = 'recent_notification_exists'`,
+  );
+  if (fn.length === 0) {
+    throw new Error(`[rls] app.recent_notification_exists is missing — run the migrator before starting.`);
+  }
+  const f = fn[0];
+  const fnProblems: string[] = [];
+  if (!f.secdef) fnProblems.push("not SECURITY DEFINER");
+  if (f.owner !== OWNER_ROLE) fnProblems.push(`owner is "${f.owner}", expected "${OWNER_ROLE}"`);
+  if (!String(f.cfg).includes("search_path=")) fnProblems.push("search_path not pinned");
+  if (fnProblems.length > 0) {
+    throw new Error(`[rls] app.recent_notification_exists misconfigured: ${fnProblems.join(", ")}`);
   }
 }
