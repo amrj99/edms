@@ -252,11 +252,13 @@ describe("Phase 6C — GET /api/projects party discovery", () => {
     expect(res.status).toBe(200);
     expect(listIds(res.body)).not.toContain(projectOrgOnlyId);
 
-    // The detail gate agrees: canAccessProject denies org_only for non-owner orgs
+    // The detail gate agrees: the project is denied to non-owner orgs. Under edms_app the
+    // org_only row is invisible to the party (RLS), so the existence check returns 404
+    // (stronger information-hiding) instead of 403. Denied either way. (DEBT-010)
     const detail = await api()
       .get(`/api/projects/${projectOrgOnlyId}`)
       .set(authHeader("member", partyUser.id, orgParty.id));
-    expect(detail.status).toBe(403);
+    expect(detail.status).toBe(404);
   });
 
   it("L9: visibleOnFree=false party project is hidden from the party list", async () => {

@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { orgConfigTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -90,7 +91,10 @@ router.get("/", async (req, res): Promise<void> => {
     return;
   }
 
-  const modules = await getModulesForOrg(orgId);
+  let modules: OrgModules | undefined;
+  await tenantRead(async () => {
+    modules = await getModulesForOrg(orgId);
+  });
   res.json({ modules });
 });
 
@@ -123,7 +127,10 @@ router.put("/", requireRole("admin", "system_owner"), async (req, res): Promise<
   }
 
   const modules = mergeModules(raw);
-  const updated = await setModulesForOrg(orgId, modules);
+  let updated: OrgModules | undefined;
+  await withTenant(async () => {
+    updated = await setModulesForOrg(orgId, modules);
+  });
   res.json({ modules: updated });
 });
 

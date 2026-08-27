@@ -3,13 +3,17 @@ import { db } from "@workspace/db";
 import { deliverablesTable, documentsTable, projectsTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { requireAuth } from "../lib/auth.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams} from '../lib/params';
 
 const router = Router({ mergeParams: true });
 
 async function checkProjectOwnership(req: Request, res: Response, projectId: number): Promise<boolean> {
-  const [project] = await db.select({ organizationId: projectsTable.organizationId })
-    .from(projectsTable).where(eq(projectsTable.id, projectId));
+  let project: { organizationId: number } | undefined;
+  await tenantRead(async () => {
+    [project] = await db.select({ organizationId: projectsTable.organizationId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId));
+  });
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return false;
@@ -26,17 +30,23 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
 
 router.get("/deliverables", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const rows = await db.select({
-    d: deliverablesTable,
-    doc: { documentNumber: documentsTable.documentNumber, title: documentsTable.title },
-  })
-    .from(deliverablesTable)
-    .leftJoin(documentsTable, eq(deliverablesTable.linkedDocumentId, documentsTable.id))
-    .where(eq(deliverablesTable.projectId, projectId))
-    .orderBy(desc(deliverablesTable.createdAt));
+  let ok = false;
+  let rows: { d: typeof deliverablesTable.$inferSelect; doc: { documentNumber: string; title: string } | null }[] | undefined;
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    rows = await db.select({
+      d: deliverablesTable,
+      doc: { documentNumber: documentsTable.documentNumber, title: documentsTable.title },
+    })
+      .from(deliverablesTable)
+      .leftJoin(documentsTable, eq(deliverablesTable.linkedDocumentId, documentsTable.id))
+      .where(eq(deliverablesTable.projectId, projectId))
+      .orderBy(desc(deliverablesTable.createdAt));
+  });
+  if (!ok) return;
   res.json({
-    deliverables: rows.map(r => ({
+    deliverables: rows!.map(r => ({
       ...r.d,
       linkedDocumentNumber: r.doc?.documentNumber,
       linkedDocumentTitle: r.doc?.title,
@@ -46,9 +56,15 @@ router.get("/deliverables", requireAuth, async (req: Request<ProjectParams>, res
 
 router.get("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
-  if (!await checkProjectOwnership(req, res, projectId)) return;
-  const [row] = await db.select().from(deliverablesTable)
-    .where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  let ok = false;
+  let row: typeof deliverablesTable.$inferSelect | undefined;
+  await tenantRead(async () => {
+    ok = await checkProjectOwnership(req, res, projectId);
+    if (!ok) return;
+    [row] = await db.select().from(deliverablesTable)
+      .where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  });
+  if (!ok) return;
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
@@ -58,19 +74,22 @@ router.post("/deliverables", requireAuth, async (req: Request<ProjectParams>, re
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { deliverableId, title, type, plannedDate, actualDate, status, responsible, linkedDocumentId, remarks } = req.body;
   if (!title) { res.status(400).json({ error: "title is required" }); return; }
-  const [row] = await db.insert(deliverablesTable).values({
-    deliverableId: deliverableId || `DEL-${Date.now()}`,
-    title, type,
-    plannedDate: plannedDate ? new Date(plannedDate) : undefined,
-    actualDate: actualDate ? new Date(actualDate) : undefined,
-    status: status ?? "not_started",
-    responsible,
-    linkedDocumentId: linkedDocumentId ? parseInt(linkedDocumentId) : undefined,
-    remarks,
-    projectId,
-    createdById: req.user!.id,
-  }).returning();
-  res.status(201).json(row);
+  let created: typeof deliverablesTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [created] = await db.insert(deliverablesTable).values({
+      deliverableId: deliverableId || `DEL-${Date.now()}`,
+      title, type,
+      plannedDate: plannedDate ? new Date(plannedDate) : undefined,
+      actualDate: actualDate ? new Date(actualDate) : undefined,
+      status: status ?? "not_started",
+      responsible,
+      linkedDocumentId: linkedDocumentId ? parseInt(linkedDocumentId) : undefined,
+      remarks,
+      projectId,
+      createdById: req.user!.id,
+    }).returning();
+  });
+  res.status(201).json(created);
 });
 
 router.put("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
@@ -78,18 +97,21 @@ router.put("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>,
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { title, type, plannedDate, actualDate, status, responsible, linkedDocumentId, remarks } = req.body;
-  const [row] = await db.update(deliverablesTable)
-    .set({
-      title, type,
-      plannedDate: plannedDate ? new Date(plannedDate) : undefined,
-      actualDate: actualDate ? new Date(actualDate) : undefined,
-      status, responsible,
-      linkedDocumentId: linkedDocumentId ? parseInt(linkedDocumentId) : undefined,
-      remarks,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(deliverablesTable.id, id), eq(deliverablesTable.projectId, projectId)))
-    .returning();
+  let row: typeof deliverablesTable.$inferSelect | undefined;
+  await withTenant(async () => {
+    [row] = await db.update(deliverablesTable)
+      .set({
+        title, type,
+        plannedDate: plannedDate ? new Date(plannedDate) : undefined,
+        actualDate: actualDate ? new Date(actualDate) : undefined,
+        status, responsible,
+        linkedDocumentId: linkedDocumentId ? parseInt(linkedDocumentId) : undefined,
+        remarks,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(deliverablesTable.id, id), eq(deliverablesTable.projectId, projectId)))
+      .returning();
+  });
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });
@@ -97,7 +119,9 @@ router.put("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>,
 router.delete("/deliverables/:id", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  await db.delete(deliverablesTable).where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  await withTenant(async () => {
+    await db.delete(deliverablesTable).where(and(eq(deliverablesTable.id, requireInt(req.params.id)), eq(deliverablesTable.projectId, projectId)));
+  });
   res.json({ ok: true });
 });
 

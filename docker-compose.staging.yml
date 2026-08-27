@@ -55,6 +55,8 @@ services:
       NODE_ENV: production
       PORT: 8080
       DATABASE_URL: ${DATABASE_URL}
+      # DEBT-010: migrator/owner role for migrate.mjs (DDL). Falls back to DATABASE_URL when unset.
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
       JWT_SECRET: ${JWT_SECRET}
       REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}

@@ -34,7 +34,7 @@
  *   Max drift: 1 MB per file. Corrected by nightly reconcile().
  */
 
-import { db } from "@workspace/db";
+import { db, withSystemTenantTx } from "@workspace/db";
 import {
   organizationsTable,
   documentFilesTable,
@@ -304,6 +304,11 @@ export class StorageQuotaService {
     orgId: number,
     trigger: "nightly_job" | "manual",
   ): Promise<ReconcileResult> {
+    // DEBT-010 (Category A): reconcile is a standalone per-org service op (nightly job /
+    // manual admin), not tied to a request. It reads/writes this org's rows under RLS, so
+    // it runs inside an explicit per-org system context (org anchored, is_system_owner=false,
+    // no human user). Short DB unit; no external I/O.
+    return withSystemTenantTx(orgId, async () => {
     const [org] = await db
       .select({ storageUsedMb: organizationsTable.storageUsedMb })
       .from(organizationsTable)
@@ -349,6 +354,7 @@ export class StorageQuotaService {
     }
 
     return { orgId, resourceKey: this.resourceKey, counterBefore, groundTruth, delta, updated };
+    });
   }
 
   // ─── Private helpers ───────────────────────────────────────────────────────

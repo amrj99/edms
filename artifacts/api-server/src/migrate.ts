@@ -27,8 +27,14 @@
  *   can reference it safely.  IF NOT EXISTS makes every call idempotent.
  */
 
+// MUST be first — binds DATABASE_URL to MIGRATION_DATABASE_URL (the migrator/owner role)
+// BEFORE @workspace/db creates its pool. See migrate-env.ts.
+import "./migrate-env.js";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { pool, db } from "@workspace/db";
+import { applyMembershipRls } from "./lib/rls-membership.js";
+import { seedPlans } from "./lib/seed-plans.js";
+import { runIntegrityMigrations } from "./lib/integrity-migrations.js";
 import { createHash } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -58,6 +64,29 @@ async function main() {
     await ensureEnumValues();
     await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
     console.log("[migrate] All migrations applied successfully.");
+
+    // ── DEBT-010: ALL privileged schema/DDL work runs HERE (migrator/owner role) ─
+    // The runtime app pool (edms_app) is least-privilege DML-only and must NEVER run
+    // DDL. Schema bootstrap (plan tables + trial/verification columns) and the H1
+    // integrity constraints therefore run in the migrator, before RLS is installed.
+    // Both are idempotent (CREATE/ALTER … IF NOT EXISTS, ON CONFLICT).
+    console.log("[migrate] Bootstrapping plan catalog + reference seed (seedPlans)...");
+    await seedPlans();
+    console.log("[migrate] Applying integrity constraints (runIntegrityMigrations)...");
+    await runIntegrityMigrations();
+
+    // ── DEBT-010: install/upgrade the membership-aware RLS model ─────────────────
+    // The migrator is the SINGLE authoritative installer of RLS (schema `app` +
+    // SECURITY DEFINER functions + per-table org_isolation_policy + X-a triggers +
+    // least-privilege grants). Runs here as the migrator/owner role, NEVER from the
+    // runtime app pool (edms_app has no CREATE and cannot install policies). Idempotent
+    // and upgrades in place from the legacy org-only baseline. edms_app grants are
+    // applied only once the (out-of-band, real-secret) edms_app role exists.
+    console.log("[migrate] Installing/upgrading membership-aware RLS (applyMembershipRls)...");
+    const rls = await applyMembershipRls((s) => pool.query(s));
+    console.log(
+      `[migrate] membership-aware RLS applied ✓ (edms_app grants: ${rls.appRoleGranted ? "applied" : "deferred — edms_app role not present yet"}).`,
+    );
   } finally {
     await pool.end();
   }

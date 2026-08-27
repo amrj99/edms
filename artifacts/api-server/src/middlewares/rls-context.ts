@@ -30,10 +30,16 @@ import { logger } from "../lib/logger.js";
 export async function setRlsContext(req: Request, _res: Response, next: NextFunction): Promise<void> {
   if (!req.user) return next();
 
-  const value = isSystemOwner(req.user) ? "" : String(req.user.organizationId ?? "");
+  // DEBT-010: the policy is now FAIL-CLOSED. We set two server-controlled vars:
+  //   app.current_org_id   → the caller's org (empty for system_owner)
+  //   app.is_system_owner  → 'true' ONLY for a real system_owner (never client-settable)
+  // The client can never influence these — they derive from the verified session.
+  const orgId = String(req.user.organizationId ?? "");
+  const isOwner = isSystemOwner(req.user) ? "true" : "false";
 
   try {
-    await db.execute(sql`SELECT set_config('app.current_org_id', ${value}, FALSE)`);
+    await db.execute(sql`SELECT set_config('app.current_org_id', ${orgId}, FALSE)`);
+    await db.execute(sql`SELECT set_config('app.is_system_owner', ${isOwner}, FALSE)`);
   } catch (err) {
     logger.warn({ err }, "RLS ctx: set_config failed — continuing without DB-session context");
   }

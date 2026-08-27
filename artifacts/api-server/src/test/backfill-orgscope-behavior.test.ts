@@ -15,10 +15,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { eq } from "drizzle-orm";
 import {
-  db, organizationsTable, usersTable, projectsTable, projectMembersTable, documentsTable,
+  organizationsTable, usersTable, projectsTable, projectMembersTable, documentsTable,
 } from "@workspace/db";
 import { signToken } from "../lib/auth.js";
-import { truncateAllTables } from "./helpers/index.js";
+import { truncateAllTables, getTestDb } from "./helpers/index.js";
+// DEBT-010: fixtures seed RLS tables → OWNER pool (getTestDb), not app pool (edms_app).
+const db = getTestDb();
 import app from "../app.js";
 
 const FAKE_HASH = "$2b$12$testplaceholder00000000000000000000000000000000000000000";

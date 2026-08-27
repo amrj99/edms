@@ -18,6 +18,7 @@ import {param, paramInt, requireInt, type ProjectParams, type ProjectItemParams}
 import { orgScopedWhere } from "../lib/org-scope.js";
 import { canAccessProject } from "../lib/can-access-project.js";
 import { requireProjectAccess, denyPartyDestructive, requireProjectAccessContext } from "../middlewares/project-access.js";
+import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { isWithinPartyCeiling } from "../lib/party-ceiling.js";
 import { recipientOrganizationId } from "../lib/transmittal-recipient.js";
 
@@ -64,7 +65,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
 
-  const transmittals = await db
+  const transmittals = await tenantRead(() => db
     .select({
       id: transmittalsTable.id,
       transmittalNumber: transmittalsTable.transmittalNumber,
@@ -106,7 +107,7 @@ router.get("/", async (req: Request<ProjectParams>, res): Promise<void> => {
     .from(transmittalsTable)
     .leftJoin(usersTable, eq(transmittalsTable.createdById, usersTable.id))
     .where(transmittalPartyFilter(caller, projectId))
-    .orderBy(desc(transmittalsTable.createdAt));
+    .orderBy(desc(transmittalsTable.createdAt)));
   res.json(transmittals);
 });
 
@@ -125,51 +126,59 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit viewing transmittals" }); return;
   }
 
-  const [transmittal] = await db
-    .select()
-    .from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), transmittalPartyFilter(caller, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
-
-  const items = await db
-    .select({
-      id: transmittalItemsTable.id,
-      documentId: transmittalItemsTable.documentId,
-      revision: transmittalItemsTable.revision,
-      copies: transmittalItemsTable.copies,
-      purpose: transmittalItemsTable.purpose,
-      reviewCode: transmittalItemsTable.reviewCode,
-      documentNumber: documentsTable.documentNumber,
-      documentTitle: documentsTable.title,
-      documentType: documentsTable.documentType,
-      discipline: documentsTable.discipline,
-      documentStatus: documentsTable.status,
-    })
-    .from(transmittalItemsTable)
-    .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
-    .where(eq(transmittalItemsTable.transmittalId, id));
-
-  // Linked transmittal numbers
-  let sourceTransmittalNumber: string | null = null;
-  let responseTransmittalNumber: string | null = null;
-  let responseTransmittalId: number | null = null;
-
-  if (transmittal.responseToTransmittalId) {
-    const [src] = await db
-      .select({ transmittalNumber: transmittalsTable.transmittalNumber })
+  // Transmittal + items + linked-number lookups in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db
+      .select()
       .from(transmittalsTable)
-      .where(eq(transmittalsTable.id, transmittal.responseToTransmittalId));
-    sourceTransmittalNumber = src?.transmittalNumber ?? null;
-  }
+      .where(and(eq(transmittalsTable.id, id), transmittalPartyFilter(caller, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
 
-  const [resp] = await db
-    .select({ transmittalNumber: transmittalsTable.transmittalNumber, id: transmittalsTable.id })
-    .from(transmittalsTable)
-    .where(eq(transmittalsTable.responseToTransmittalId, id));
-  if (resp) {
-    responseTransmittalNumber = resp.transmittalNumber;
-    responseTransmittalId = resp.id;
-  }
+    const items = await db
+      .select({
+        id: transmittalItemsTable.id,
+        documentId: transmittalItemsTable.documentId,
+        revision: transmittalItemsTable.revision,
+        copies: transmittalItemsTable.copies,
+        purpose: transmittalItemsTable.purpose,
+        reviewCode: transmittalItemsTable.reviewCode,
+        documentNumber: documentsTable.documentNumber,
+        documentTitle: documentsTable.title,
+        documentType: documentsTable.documentType,
+        discipline: documentsTable.discipline,
+        documentStatus: documentsTable.status,
+      })
+      .from(transmittalItemsTable)
+      .leftJoin(documentsTable, eq(transmittalItemsTable.documentId, documentsTable.id))
+      .where(eq(transmittalItemsTable.transmittalId, id));
+
+    // Linked transmittal numbers
+    let sourceTransmittalNumber: string | null = null;
+    let responseTransmittalNumber: string | null = null;
+    let responseTransmittalId: number | null = null;
+
+    if (transmittal.responseToTransmittalId) {
+      const [src] = await db
+        .select({ transmittalNumber: transmittalsTable.transmittalNumber })
+        .from(transmittalsTable)
+        .where(eq(transmittalsTable.id, transmittal.responseToTransmittalId));
+      sourceTransmittalNumber = src?.transmittalNumber ?? null;
+    }
+
+    const [resp] = await db
+      .select({ transmittalNumber: transmittalsTable.transmittalNumber, id: transmittalsTable.id })
+      .from(transmittalsTable)
+      .where(eq(transmittalsTable.responseToTransmittalId, id));
+    if (resp) {
+      responseTransmittalNumber = resp.transmittalNumber;
+      responseTransmittalId = resp.id;
+    }
+
+    return { kind: "ok" as const, transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  const { transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId } = loaded;
 
   res.json({ ...transmittal, items, sourceTransmittalNumber, responseTransmittalNumber, responseTransmittalId });
 });
@@ -178,7 +187,7 @@ router.get("/:id", async (req: Request<ProjectItemParams>, res): Promise<void> =
 // Two-path authorization:
 //   - Party members: canAccessProject() gate + PARTY_CEILING_V1 (contributor only)
 //   - Intra-org / member path: original role gate (admin / pm / dc)
-router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
+router.post("/", async (req: Request<ProjectParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
 
@@ -196,188 +205,209 @@ router.post("/", async (req: Request<ProjectParams>, res): Promise<void> => {
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, documentIds, direction, partyType, reviewCode, toUserId, reference } = req.body;
   if (!subject) { res.status(400).json({ error: "Subject is required" }); return; }
 
-  // Generate transmittal number
-  const existing = await db
-    .select({ count: transmittalsTable.id })
-    .from(transmittalsTable)
-    .where(eq(transmittalsTable.projectId, projectId));
-  const seq = String(existing.length + 1).padStart(4, "0");
-  const [project] = await db.select({ code: projectsTable.code }).from(projectsTable).where(eq(projectsTable.id, projectId));
-  const transmittalNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
+  try {
+    const transmittal = await withTenant(async () => {
+      // Generate transmittal number
+      const existing = await db
+        .select({ count: transmittalsTable.id })
+        .from(transmittalsTable)
+        .where(eq(transmittalsTable.projectId, projectId));
+      const seq = String(existing.length + 1).padStart(4, "0");
+      const [project] = await db.select({ code: projectsTable.code }).from(projectsTable).where(eq(projectsTable.id, projectId));
+      const transmittalNumber = `TRS-${project?.code ?? "PRJ"}-${seq}`;
 
-  let initialStatus: "draft" | "sent" | "acknowledged" | "rejected" = "draft";
-  if (reviewCode === "A" || reviewCode === "B") initialStatus = "acknowledged";
-  else if (reviewCode === "D") initialStatus = "rejected";
+      let initialStatus: "draft" | "sent" | "acknowledged" | "rejected" = "draft";
+      if (reviewCode === "A" || reviewCode === "B") initialStatus = "acknowledged";
+      else if (reviewCode === "D") initialStatus = "rejected";
 
-  const [transmittal] = await db.insert(transmittalsTable).values({
-    transmittalNumber,
-    subject,
-    description,
-    purpose: purpose || "for_information",
-    dueDate: dueDate ? new Date(dueDate) : undefined,
-    toExternal,
-    externalEmails: externalEmails ?? null,
-    ccEmails: ccEmails ?? null,
-    organizationId: req.user!.organizationId ?? null,
-    toUserId: toUserId ?? null,
-    reference: reference ?? null,
-    projectId,
-    createdById: req.user!.id,
-    direction: direction ?? null,
-    partyType: partyType ?? null,
-    reviewCode: reviewCode ?? null,
-    status: initialStatus,
-  }).returning();
+      const [trs] = await db.insert(transmittalsTable).values({
+        transmittalNumber,
+        subject,
+        description,
+        purpose: purpose || "for_information",
+        dueDate: dueDate ? new Date(dueDate) : undefined,
+        toExternal,
+        externalEmails: externalEmails ?? null,
+        ccEmails: ccEmails ?? null,
+        organizationId: req.user!.organizationId ?? null,
+        toUserId: toUserId ?? null,
+        reference: reference ?? null,
+        projectId,
+        createdById: req.user!.id,
+        direction: direction ?? null,
+        partyType: partyType ?? null,
+        reviewCode: reviewCode ?? null,
+        status: initialStatus,
+      }).returning();
 
-  // Add documents
-  if (documentIds?.length) {
-    await db.insert(transmittalItemsTable).values(
-      documentIds.map((docId: number) => ({
-        transmittalId: transmittal.id,
-        documentId: docId,
-      }))
-    );
-  }
+      // Add documents
+      if (documentIds?.length) {
+        await db.insert(transmittalItemsTable).values(
+          documentIds.map((docId: number) => ({
+            transmittalId: trs.id,
+            documentId: docId,
+          }))
+        );
+      }
 
-  // Log creation history
-  const actor = req.user as any;
-  const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
-  await db.insert(transmittalHistoryTable).values({
-    transmittalId: transmittal.id,
-    eventType: "created",
-    description: `Transmittal created${direction ? ` (${direction})` : ""}${partyType ? ` for ${partyType}` : ""}`,
-    performedByName: actorName,
-  });
+      // Log creation history
+      const actor = req.user as any;
+      const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+      await db.insert(transmittalHistoryTable).values({
+        transmittalId: trs.id,
+        eventType: "created",
+        description: `Transmittal created${direction ? ` (${direction})` : ""}${partyType ? ` for ${partyType}` : ""}`,
+        performedByName: actorName,
+      });
 
-  await createAuditLog({
-    userId: req.user!.id,
-    action: "create",
-    entityType: "transmittal",
-    entityId: transmittal.id,
-    details: { transmittalNumber },
-  });
+      await createAuditLog({
+        userId: req.user!.id,
+        action: "create",
+        entityType: "transmittal",
+        entityId: trs.id,
+        details: { transmittalNumber },
+      });
+      return trs;
+    });
 
-  res.status(201).json(transmittal);
+    res.status(201).json(transmittal);
+  } catch (e) { next(e); }
 });
 
 // Update transmittal
-router.put("/:id", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.put("/:id", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { subject, description, purpose, dueDate, toExternal, externalEmails, ccEmails, status, direction, partyType, reviewCode, toUserId, reference } = req.body;
 
-  const [existing] = await db.select().from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [existing] = await db.select().from(transmittalsTable)
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+      if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+      if (existing.status === "acknowledged") {
+        result = { status: 409, body: { error: "Conflict", message: "This transmittal has been acknowledged and cannot be modified", currentStatus: existing.status } };
+        return;
+      }
 
-  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-  if (existing.status === "acknowledged") {
-    res.status(409).json({ error: "Conflict", message: "This transmittal has been acknowledged and cannot be modified", currentStatus: existing.status });
-    return;
-  }
+      let resolvedStatus = status;
+      const reviewCodeChanged = reviewCode !== undefined && reviewCode !== existing?.reviewCode;
+      if (reviewCode !== undefined) {
+        if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "acknowledged";
+        else if (reviewCode === "C") resolvedStatus = "sent";
+        else if (reviewCode === "D") resolvedStatus = "rejected";
+      }
 
-  let resolvedStatus = status;
-  const reviewCodeChanged = reviewCode !== undefined && reviewCode !== existing?.reviewCode;
-  if (reviewCode !== undefined) {
-    if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "acknowledged";
-    else if (reviewCode === "C") resolvedStatus = "sent";
-    else if (reviewCode === "D") resolvedStatus = "rejected";
-  }
+      const [transmittal] = await db.update(transmittalsTable)
+        .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, externalEmails: externalEmails ?? undefined, ccEmails: ccEmails ?? undefined, status: resolvedStatus, direction, partyType, reviewCode, toUserId, reference, updatedAt: new Date() })
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
+        .returning();
 
-  const [transmittal] = await db.update(transmittalsTable)
-    .set({ subject, description, purpose, dueDate: dueDate ? new Date(dueDate) : undefined, toExternal, externalEmails: externalEmails ?? undefined, ccEmails: ccEmails ?? undefined, status: resolvedStatus, direction, partyType, reviewCode, toUserId, reference, updatedAt: new Date() })
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
-    .returning();
-
-  if (reviewCodeChanged && reviewCode) {
-    const actor = req.user as any;
-    const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
-    const codeLabels: Record<string, string> = { A: "Approved", B: "Approved with Comments", C: "Revise and Resubmit", D: "Rejected" };
-    await db.insert(transmittalHistoryTable).values({
-      transmittalId: id,
-      eventType: "review_code_set",
-      description: `Review code set to ${reviewCode} — ${codeLabels[reviewCode] ?? reviewCode}`,
-      performedByName: actorName,
+      if (reviewCodeChanged && reviewCode) {
+        const actor = req.user as any;
+        const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+        const codeLabels: Record<string, string> = { A: "Approved", B: "Approved with Comments", C: "Revise and Resubmit", D: "Rejected" };
+        await db.insert(transmittalHistoryTable).values({
+          transmittalId: id,
+          eventType: "review_code_set",
+          description: `Review code set to ${reviewCode} — ${codeLabels[reviewCode] ?? reviewCode}`,
+          performedByName: actorName,
+        });
+      }
+      result = { status: 200, body: transmittal };
     });
-  }
 
-  res.json(transmittal);
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Send transmittal
-router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/send", requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
-  const [transmittal] = await db.update(transmittalsTable)
-    .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
-    .where(orgScopedWhere(req.user!, transmittalsTable.id, id, transmittalsTable.organizationId))
-    .returning();
-  if (!transmittal) { res.status(404).json({ error: "Not Found" }); return; }
-  const actor = req.user as any;
-  const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
-  await db.insert(transmittalHistoryTable).values({
-    transmittalId: id,
-    eventType: "sent",
-    description: `Transmittal sent${transmittal?.toExternal ? ` to ${transmittal.toExternal}` : ""}`,
-    performedByName: actorName,
-  });
-  await createAuditLog({
-    userId: req.user!.id, action: "update", entityType: "transmittal",
-    entityId: id, details: { action: "sent" },
-  });
+  try {
+    const transmittal = await withTenant(async () => {
+      const [t] = await db.update(transmittalsTable)
+        .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
+        .where(orgScopedWhere(req.user!, transmittalsTable.id, id, transmittalsTable.organizationId))
+        .returning();
+      if (!t) return null;
+      const actor = req.user as any;
+      const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+      await db.insert(transmittalHistoryTable).values({
+        transmittalId: id,
+        eventType: "sent",
+        description: `Transmittal sent${t?.toExternal ? ` to ${t.toExternal}` : ""}`,
+        performedByName: actorName,
+      });
+      await createAuditLog({
+        userId: req.user!.id, action: "update", entityType: "transmittal",
+        entityId: id, details: { action: "sent" },
+      });
+      return t;
+    });
 
-  // Auto-create review task when purpose is "for_review"
-  if (transmittal?.purpose === "for_review" && transmittal.projectId) {
-    try {
-      const dueDate = transmittal.dueDate ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      // Find the project manager for this project
-      const [pm] = await db
-        .select({ userId: projectMembersTable.userId })
-        .from(projectMembersTable)
-        .where(and(eq(projectMembersTable.projectId, transmittal.projectId), eq(projectMembersTable.role, "project_manager")))
-        .limit(1);
-      const autoAssignee = transmittal.toUserId ?? pm?.userId ?? req.user!.id;
-      const [task] = await db.insert(tasksTable).values({
-        title: `Review transmittal: ${transmittal.transmittalNumber}`,
-        description: transmittal.subject ?? undefined,
-        priority: "high",
-        status: "pending",
-        projectId: transmittal.projectId,
-        createdById: req.user!.id,
-        assignedToId: autoAssignee,
-        sourceId: transmittal.id,
-        dueDate,
-      }).returning();
-      // Notify assignee if different from sender
-      if (autoAssignee !== req.user!.id) {
-        await db.insert(notificationsTable).values({
-          userId: autoAssignee,
-          type: "task_assigned",
-          title: "Review task assigned",
-          message: `Please review transmittal ${transmittal.transmittalNumber}: ${transmittal.subject}`,
-          projectId: transmittal.projectId,
-          entityType: "task",
-          entityId: task.id,
-          actionUrl: `/tasks`,
+    if (!transmittal) { res.status(404).json({ error: "Not Found" }); return; }
+
+    // Auto-create review task when purpose is "for_review" — BEST-EFFORT, in its
+    // OWN short transaction so a failure here never rolls back the send (matches
+    // the prior "never block send response" semantics).
+    if (transmittal.purpose === "for_review" && transmittal.projectId) {
+      try {
+        await withTenant(async () => {
+          const dueDate = transmittal.dueDate ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+          // Find the project manager for this project
+          const [pm] = await db
+            .select({ userId: projectMembersTable.userId })
+            .from(projectMembersTable)
+            .where(and(eq(projectMembersTable.projectId, transmittal.projectId!), eq(projectMembersTable.role, "project_manager")))
+            .limit(1);
+          const autoAssignee = transmittal.toUserId ?? pm?.userId ?? req.user!.id;
+          const [task] = await db.insert(tasksTable).values({
+            title: `Review transmittal: ${transmittal.transmittalNumber}`,
+            description: transmittal.subject ?? undefined,
+            priority: "high",
+            status: "pending",
+            projectId: transmittal.projectId!,
+            createdById: req.user!.id,
+            assignedToId: autoAssignee,
+            sourceId: transmittal.id,
+            dueDate,
+          }).returning();
+          // Notify assignee if different from sender
+          if (autoAssignee !== req.user!.id) {
+            await db.insert(notificationsTable).values({
+              userId: autoAssignee,
+              type: "task_assigned",
+              title: "Review task assigned",
+              message: `Please review transmittal ${transmittal.transmittalNumber}: ${transmittal.subject}`,
+              projectId: transmittal.projectId!,
+              entityType: "task",
+              entityId: task.id,
+              actionUrl: `/tasks`,
+            });
+          }
+          // Notify the designated recipient that a transmittal is waiting for their review
+          if (transmittal.toUserId) {
+            await db.insert(notificationsTable).values({
+              userId: transmittal.toUserId,
+              type: "transmittal_received",
+              title: "Transmittal received for review",
+              message: `${transmittal.transmittalNumber}: ${transmittal.subject ?? ""}${transmittal.dueDate ? ` — due ${transmittal.dueDate.toLocaleDateString()}` : ""}`,
+              projectId: transmittal.projectId!,
+              entityType: "transmittal",
+              entityId: id,
+              actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
+            });
+          }
         });
+      } catch (e) {
+        // never block send response
       }
-      // Notify the designated recipient that a transmittal is waiting for their review
-      if (transmittal.toUserId) {
-        await db.insert(notificationsTable).values({
-          userId: transmittal.toUserId,
-          type: "transmittal_received",
-          title: "Transmittal received for review",
-          message: `${transmittal.transmittalNumber}: ${transmittal.subject ?? ""}${transmittal.dueDate ? ` — due ${transmittal.dueDate.toLocaleDateString()}` : ""}`,
-          projectId: transmittal.projectId,
-          entityType: "transmittal",
-          entityId: id,
-          actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
-        });
-      }
-    } catch (e) {
-      // never block send response
     }
-  }
 
-  res.json(transmittal);
+    res.json(transmittal);
+  } catch (e) { next(e); }
 });
 
 // Acknowledge transmittal
@@ -386,7 +416,7 @@ router.post("/:id/send", requireRole("admin", "project_manager", "document_contr
 //   Gate 2: party mode only — isWithinPartyCeiling("acknowledge_transmittal")
 //   Gate 3: org check — system_owner: bypass; party: recipient org only
 //                       intra-org: sender org OR recipient org (broader, as before)
-router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const caller = req.user!;
@@ -399,104 +429,104 @@ router.post("/:id/acknowledge", async (req: Request<ProjectItemParams>, res): Pr
     res.status(403).json({ error: "Forbidden", message: "Your party role does not permit acknowledging transmittals" }); return;
   }
 
-  // Fetch transmittal (read-only) scoped to this project
-  const [trs] = await db
-    .select({
-      organizationId: transmittalsTable.organizationId,
-      toUserId: transmittalsTable.toUserId,
-    })
-    .from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-  if (!trs) { res.status(404).json({ error: "Not found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Fetch transmittal (read-only) scoped to this project
+      const [trs] = await db
+        .select({
+          organizationId: transmittalsTable.organizationId,
+          toUserId: transmittalsTable.toUserId,
+        })
+        .from(transmittalsTable)
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+      if (!trs) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  // Gate 3: org-level check
-  if (!isSystemOwner(caller)) {
-    const callerOrgId = caller.organizationId;
+      // Gate 3: org-level check
+      if (!isSystemOwner(caller)) {
+        const callerOrgId = caller.organizationId;
+        let toUserOrgId: number | null | undefined;
+        if (trs.toUserId) {
+          const [toUser] = await db
+            .select({ organizationId: usersTable.organizationId })
+            .from(usersTable)
+            .where(eq(usersTable.id, trs.toUserId));
+          toUserOrgId = toUser?.organizationId;
+        }
+        const recipientOrgId = recipientOrganizationId(trs.toUserId, toUserOrgId);
 
-    // Pre-fetch recipient org (used by recipientOrganizationId utility)
-    let toUserOrgId: number | null | undefined;
-    if (trs.toUserId) {
-      const [toUser] = await db
-        .select({ organizationId: usersTable.organizationId })
-        .from(usersTable)
-        .where(eq(usersTable.id, trs.toUserId));
-      toUserOrgId = toUser?.organizationId;
-    }
-    const recipientOrgId = recipientOrganizationId(trs.toUserId, toUserOrgId);
-
-    if (accessMode === "party") {
-      // Party: recipient org only (acknowledge is a recipient action)
-      if (recipientOrgId !== callerOrgId) {
-        res.status(403).json({
-          error: "Forbidden",
-          message: "Your organization is not the recipient of this transmittal",
-        }); return;
+        if (accessMode === "party") {
+          if (recipientOrgId !== callerOrgId) {
+            result = { status: 403, body: { error: "Forbidden", message: "Your organization is not the recipient of this transmittal" } }; return;
+          }
+        } else {
+          const isSenderOrg = trs.organizationId != null && trs.organizationId === callerOrgId;
+          const isRecipientOrg = recipientOrgId === callerOrgId;
+          if (!isSenderOrg && !isRecipientOrg) {
+            result = { status: 403, body: { error: "Forbidden", message: "You must be from the sender or recipient organization to acknowledge this transmittal" } }; return;
+          }
+        }
       }
-    } else {
-      // Intra-org: sender org OR recipient org (broader, established in Phase 6A)
-      const isSenderOrg = trs.organizationId != null && trs.organizationId === callerOrgId;
-      const isRecipientOrg = recipientOrgId === callerOrgId;
-      if (!isSenderOrg && !isRecipientOrg) {
-        res.status(403).json({
-          error: "Forbidden",
-          message: "You must be from the sender or recipient organization to acknowledge this transmittal",
-        }); return;
-      }
-    }
-  }
 
-  const [transmittal] = await db.update(transmittalsTable)
-    .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
-    .returning();
-  const actor = req.user as any;
-  const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
-  await db.insert(transmittalHistoryTable).values({
-    transmittalId: id,
-    eventType: "acknowledged",
-    description: "Transmittal acknowledged by recipient",
-    performedByName: actorName,
-  });
-  if (transmittal) {
-    // Auto-close the linked review task created when the transmittal was sent
-    await db.update(tasksTable)
-      .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(tasksTable.sourceId, id), inArray(tasksTable.status, ["pending", "in_progress"])));
-    // Notify the original sender (DC) that their transmittal was acknowledged
-    if (transmittal.createdById && transmittal.createdById !== actor?.id) {
-      await db.insert(notificationsTable).values({
-        userId: transmittal.createdById,
-        type: "transmittal_acknowledged",
-        title: "Transmittal acknowledged",
-        message: `${transmittal.transmittalNumber} has been acknowledged by the recipient`,
-        projectId: transmittal.projectId,
-        entityType: "transmittal",
-        entityId: id,
-        actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
+      const [transmittal] = await db.update(transmittalsTable)
+        .set({ status: "acknowledged", acknowledgedAt: new Date(), updatedAt: new Date() })
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
+        .returning();
+      const actor = req.user as any;
+      const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
+      await db.insert(transmittalHistoryTable).values({
+        transmittalId: id,
+        eventType: "acknowledged",
+        description: "Transmittal acknowledged by recipient",
+        performedByName: actorName,
       });
-    }
-  }
-  res.json(transmittal);
+      if (transmittal) {
+        // Auto-close the linked review task created when the transmittal was sent
+        await db.update(tasksTable)
+          .set({ status: "completed", completedAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(tasksTable.sourceId, id), inArray(tasksTable.status, ["pending", "in_progress"])));
+        // Notify the original sender (DC) that their transmittal was acknowledged
+        if (transmittal.createdById && transmittal.createdById !== actor?.id) {
+          await db.insert(notificationsTable).values({
+            userId: transmittal.createdById,
+            type: "transmittal_acknowledged",
+            title: "Transmittal acknowledged",
+            message: `${transmittal.transmittalNumber} has been acknowledged by the recipient`,
+            projectId: transmittal.projectId,
+            entityType: "transmittal",
+            entityId: id,
+            actionUrl: `/projects/${transmittal.projectId}/transmittals/${id}`,
+          });
+        }
+      }
+      result = { status: 200, body: transmittal };
+    });
+
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Complete review — compute rolled-up outcome, apply document statuses, create response draft
-router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const actor = req.user as any;
   const actorName = `${actor?.firstName ?? ""} ${actor?.lastName ?? ""}`.trim() || "System";
   const { reviewComment } = req.body;
 
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
   const [transmittal] = await db.select().from(transmittalsTable)
     .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+  if (!transmittal) { result = { status: 404, body: { error: "Not found" } }; return; }
 
   // Assignment check: caller is the designated recipient/sender, or admin+ override
   const { role: effectiveRole } = await resolveEffectiveRole(actor, projectId);
   const isAssigned = transmittal.toUserId === actor.id || transmittal.createdById === actor.id;
   const basis = checkAssignmentBasedPermission(effectiveRole, isAssigned, "reviewer");
   if (!basis) {
-    res.status(403).json({ error: "Forbidden", message: "You must be the designated recipient to complete this review, or an admin to override" }); return;
+    result = { status: 403, body: { error: "Forbidden", message: "You must be the designated recipient to complete this review, or an admin to override" } }; return;
   }
 
   if (basis === "admin_override") {
@@ -511,7 +541,7 @@ router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (re
   const [existingResponse] = await db.select({ id: transmittalsTable.id })
     .from(transmittalsTable).where(eq(transmittalsTable.responseToTransmittalId, id));
   if (existingResponse) {
-    res.status(409).json({ error: "A response transmittal already exists for this transmittal" });
+    result = { status: 409, body: { error: "A response transmittal already exists for this transmittal" } };
     return;
   }
 
@@ -522,11 +552,11 @@ router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (re
     reviewCode: transmittalItemsTable.reviewCode,
   }).from(transmittalItemsTable).where(eq(transmittalItemsTable.transmittalId, id));
 
-  if (items.length === 0) { res.status(400).json({ error: "No items on this transmittal" }); return; }
+  if (items.length === 0) { result = { status: 400, body: { error: "No items on this transmittal" } }; return; }
 
   const unreviewed = items.filter(i => !i.reviewCode);
   if (unreviewed.length > 0) {
-    res.status(400).json({ error: `${unreviewed.length} item(s) still need a review code` });
+    result = { status: 400, body: { error: `${unreviewed.length} item(s) still need a review code` } };
     return;
   }
 
@@ -661,14 +691,21 @@ router.post("/:id/complete-review", requireAuth, denyPartyDestructive, async (re
     });
   }
 
-  res.json({
-    reviewOutcome: worstCode,
-    responseTrs: response,
-    sideEffects: {
-      createdTransmittal: { id: response.id, transmittalNumber: response.transmittalNumber, reference: response.reference ?? null },
-      acknowledgmentApplied: true,
+  result = {
+    status: 200,
+    body: {
+      reviewOutcome: worstCode,
+      responseTrs: response,
+      sideEffects: {
+        createdTransmittal: { id: response.id, transmittalNumber: response.transmittalNumber, reference: response.reference ?? null },
+        acknowledgmentApplied: true,
+      },
     },
-  });
+  };
+    });
+
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Get transmittal history
@@ -679,14 +716,20 @@ router.get("/:id/history", async (req: Request<ProjectItemParams>, res): Promise
   // Tenant isolation: bind the transmittal to the route projectId before
   // returning its history. The router-wide gate validates :projectId against the
   // caller's org, but a bare-id lookup would leak another project's history.
-  const [transmittal] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+  // Tenant-isolation check + history read in ONE short read tx.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
 
-  const rows = await db.select().from(transmittalHistoryTable)
-    .where(eq(transmittalHistoryTable.transmittalId, id))
-    .orderBy(desc(transmittalHistoryTable.createdAt));
-  res.json({ history: rows });
+    const rows = await db.select().from(transmittalHistoryTable)
+      .where(eq(transmittalHistoryTable.transmittalId, id))
+      .orderBy(desc(transmittalHistoryTable.createdAt));
+    return { kind: "ok" as const, rows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  res.json({ history: loaded.rows });
 });
 
 // ─── AI-assisted suggest-links ────────────────────────────────────────────────
@@ -718,29 +761,50 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
   // Tenant isolation: bind the transmittal to the route projectId. A bare-id
   // lookup would let a caller build suggest-links against another project's
   // transmittal (cross-project/tenant IDOR).
-  const [transmittal] = await db.select().from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)));
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+  // ALL DB reads (transmittal check + linked items + candidate document/
+  // correspondence sets) run in ONE short read tx; the Jaccard/lexical scoring
+  // compute happens OUTSIDE the tx below.
+  const loaded = await tenantRead(async () => {
+    const [transmittal] = await db.select().from(transmittalsTable)
+      .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)));
+    if (!transmittal) return { kind: "notfound" as const };
+
+    // Already-linked document IDs (exclude from suggestions)
+    const linkedItems = await db.select({ documentId: transmittalItemsTable.documentId })
+      .from(transmittalItemsTable)
+      .where(eq(transmittalItemsTable.transmittalId, transmittalId));
+
+    // Candidate documents
+    const docs = await db.select({
+      id: documentsTable.id,
+      documentNumber: documentsTable.documentNumber,
+      title: documentsTable.title,
+      description: documentsTable.description,
+      status: documentsTable.status,
+      revision: documentsTable.revision,
+      documentType: documentsTable.documentType,
+    }).from(documentsTable).where(eq(documentsTable.projectId, projectId));
+
+    // Candidate correspondence
+    const corrRows = await db.select({
+      id: correspondenceTable.id,
+      referenceNumber: correspondenceTable.referenceNumber,
+      subject: correspondenceTable.subject,
+      status: correspondenceTable.status,
+      createdAt: correspondenceTable.createdAt,
+      direction: correspondenceTable.direction,
+    }).from(correspondenceTable).where(eq(correspondenceTable.projectId, projectId));
+
+    return { kind: "ok" as const, transmittal, linkedItems, docs, corrRows };
+  });
+
+  if (loaded.kind === "notfound") { res.status(404).json({ error: "Not found" }); return; }
+  const { transmittal, linkedItems, docs, corrRows } = loaded;
 
   const queryText = `${transmittal.subject ?? ""} ${transmittal.description ?? ""}`;
   const queryTokens = tokenize(queryText);
 
-  // Already-linked document IDs (exclude from suggestions)
-  const linkedItems = await db.select({ documentId: transmittalItemsTable.documentId })
-    .from(transmittalItemsTable)
-    .where(eq(transmittalItemsTable.transmittalId, transmittalId));
   const linkedDocIds = new Set(linkedItems.map(i => i.documentId));
-
-  // Candidate documents
-  const docs = await db.select({
-    id: documentsTable.id,
-    documentNumber: documentsTable.documentNumber,
-    title: documentsTable.title,
-    description: documentsTable.description,
-    status: documentsTable.status,
-    revision: documentsTable.revision,
-    documentType: documentsTable.documentType,
-  }).from(documentsTable).where(eq(documentsTable.projectId, projectId));
 
   const docSuggestions = docs
     .filter(d => !linkedDocIds.has(d.id))
@@ -753,15 +817,6 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
     .slice(0, 8);
 
   // Candidate correspondence
-  const corrRows = await db.select({
-    id: correspondenceTable.id,
-    referenceNumber: correspondenceTable.referenceNumber,
-    subject: correspondenceTable.subject,
-    status: correspondenceTable.status,
-    createdAt: correspondenceTable.createdAt,
-    direction: correspondenceTable.direction,
-  }).from(correspondenceTable).where(eq(correspondenceTable.projectId, projectId));
-
   const corrSuggestions = corrRows
     .map(c => ({
       ...c,
@@ -775,226 +830,260 @@ router.get("/:id/suggest-links", async (req: Request<ProjectItemParams>, res): P
 });
 
 // Add document to transmittal
-router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/items", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const transmittalId = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { documentId, revision, copies, purpose } = req.body;
-  // Object scoping: the transmittal must belong to THIS project, and the
-  // document being attached must belong to THIS project too (no cross-project
-  // transmittal/document mixing by id).
-  const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
-  if (!trs) { res.status(404).json({ error: "Transmittal not found" }); return; }
-  const [d] = await db.select({ id: documentsTable.id }).from(documentsTable)
-    .where(and(eq(documentsTable.id, documentId), eq(documentsTable.projectId, projectId))).limit(1);
-  if (!d) { res.status(404).json({ error: "Document not found in this project" }); return; }
-  const [item] = await db.insert(transmittalItemsTable).values({
-    transmittalId, documentId, revision, copies, purpose,
-  }).returning();
-  res.status(201).json(item);
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Object scoping: the transmittal must belong to THIS project, and the
+      // document being attached must belong to THIS project too.
+      const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+        .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
+      if (!trs) { result = { status: 404, body: { error: "Transmittal not found" } }; return; }
+      const [d] = await db.select({ id: documentsTable.id }).from(documentsTable)
+        .where(and(eq(documentsTable.id, documentId), eq(documentsTable.projectId, projectId))).limit(1);
+      if (!d) { result = { status: 404, body: { error: "Document not found in this project" } }; return; }
+      const [item] = await db.insert(transmittalItemsTable).values({
+        transmittalId, documentId, revision, copies, purpose,
+      }).returning();
+      result = { status: 201, body: item };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Remove document from transmittal
-router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
+router.delete("/:id/items/:itemId", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res, next): Promise<void> => {
   const transmittalId = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const itemId = requireInt(req.params.itemId);
-  // Object scoping: the item must belong to THIS transmittal, which must belong
-  // to THIS project — never delete an item by bare id.
-  const [item] = await db.select({ id: transmittalItemsTable.id }).from(transmittalItemsTable)
-    .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
-    .where(and(
-      eq(transmittalItemsTable.id, itemId),
-      eq(transmittalItemsTable.transmittalId, transmittalId),
-      eq(transmittalsTable.projectId, projectId),
-    )).limit(1);
-  if (!item) { res.status(404).json({ error: "Item not found" }); return; }
-  await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
-  res.json({ success: true });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Object scoping: the item must belong to THIS transmittal, which must belong to THIS project.
+      const [item] = await db.select({ id: transmittalItemsTable.id }).from(transmittalItemsTable)
+        .innerJoin(transmittalsTable, eq(transmittalItemsTable.transmittalId, transmittalsTable.id))
+        .where(and(
+          eq(transmittalItemsTable.id, itemId),
+          eq(transmittalItemsTable.transmittalId, transmittalId),
+          eq(transmittalsTable.projectId, projectId),
+        )).limit(1);
+      if (!item) { result = { status: 404, body: { error: "Item not found" } }; return; }
+      await db.delete(transmittalItemsTable).where(eq(transmittalItemsTable.id, itemId));
+      result = { status: 200, body: { success: true } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Set per-item review code — assignment-based: must be the designated recipient or admin+
-router.patch("/:id/items/:itemId", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res): Promise<void> => {
+router.patch("/:id/items/:itemId", requireAuth, denyPartyDestructive, async (req: Request<ProjectItemParams & { itemId: string }>, res, next): Promise<void> => {
   const transmittalId = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const itemId = requireInt(req.params.itemId);
   const caller = req.user!;
   const { reviewCode } = req.body;
 
-  // Fetch transmittal to check assignment
-  const [transmittal] = await db.select({
-    toUserId: transmittalsTable.toUserId,
-    createdById: transmittalsTable.createdById,
-  }).from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)))
-    .limit(1);
-  if (!transmittal) { res.status(404).json({ error: "Transmittal not found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Fetch transmittal to check assignment
+      const [transmittal] = await db.select({
+        toUserId: transmittalsTable.toUserId,
+        createdById: transmittalsTable.createdById,
+      }).from(transmittalsTable)
+        .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId)))
+        .limit(1);
+      if (!transmittal) { result = { status: 404, body: { error: "Transmittal not found" } }; return; }
 
-  const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
+      const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
 
-  // Assignment check: caller is the designated recipient, or admin+ override
-  const isAssigned = transmittal.toUserId === caller.id || transmittal.createdById === caller.id;
-  const basis = checkAssignmentBasedPermission(effectiveRole, isAssigned, "reviewer");
-  if (!basis) {
-    res.status(403).json({ error: "Forbidden", message: "You must be the designated recipient to set review codes, or an admin to override" }); return;
-  }
+      // Assignment check: caller is the designated recipient, or admin+ override
+      const isAssigned = transmittal.toUserId === caller.id || transmittal.createdById === caller.id;
+      const basis = checkAssignmentBasedPermission(effectiveRole, isAssigned, "reviewer");
+      if (!basis) {
+        result = { status: 403, body: { error: "Forbidden", message: "You must be the designated recipient to set review codes, or an admin to override" } }; return;
+      }
 
-  if (basis === "admin_override") {
-    await createAuditLog({
-      userId: caller.id, organizationId: caller.organizationId,
-      action: "admin_override_review_code", entityType: "transmittal_item",
-      entityId: itemId, projectId, details: { reviewCode, transmittalId },
+      if (basis === "admin_override") {
+        await createAuditLog({
+          userId: caller.id, organizationId: caller.organizationId,
+          action: "admin_override_review_code", entityType: "transmittal_item",
+          entityId: itemId, projectId, details: { reviewCode, transmittalId },
+        });
+      }
+
+      // Object scoping: the item must belong to the transmittal in this project.
+      const [updated] = await db.update(transmittalItemsTable)
+        .set({ reviewCode: reviewCode ?? null })
+        .where(and(eq(transmittalItemsTable.id, itemId), eq(transmittalItemsTable.transmittalId, transmittalId)))
+        .returning();
+      if (!updated) { result = { status: 404, body: { error: "Item not found" } }; return; }
+      result = { status: 200, body: updated };
     });
-  }
-
-  // Object scoping: the item must belong to the transmittal in this project.
-  const [updated] = await db.update(transmittalItemsTable)
-    .set({ reviewCode: reviewCode ?? null })
-    .where(and(eq(transmittalItemsTable.id, itemId), eq(transmittalItemsTable.transmittalId, transmittalId)))
-    .returning();
-  if (!updated) { res.status(404).json({ error: "Item not found" }); return; }
-  res.json(updated);
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Create / update share link
-router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
   const { expiresInDays, password } = req.body;
 
-  // Verify the project belongs to the caller's org — prevents cross-tenant share creation
-  // even when the transmittal's own organizationId is NULL (legacy unseeded data).
-  const [project] = await db.select({ id: projectsTable.id })
-    .from(projectsTable)
-    .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
-    .limit(1);
-  if (!project) { res.status(404).json({ error: "Not found" }); return; }
-
+  // Token material + bcrypt hashing OUTSIDE the tenant transaction (CPU-bound).
   const token = crypto.randomBytes(32).toString("hex");
   const days = Math.min(Math.max(parseInt(expiresInDays) || 30, 1), 90);
   const expiresAt = new Date(Date.now() + days * 86400000);
   const passwordHash = password ? await hashPassword(password) : null;
 
-  const [transmittal] = await db.update(transmittalsTable)
-    .set({
-      shareToken: hashToken(token),
-      shareExpiresAt: expiresAt,
-      sharePasswordHash: passwordHash ?? undefined,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
-    .returning({ id: transmittalsTable.id, shareExpiresAt: transmittalsTable.shareExpiresAt });
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Verify the project belongs to the caller's org — prevents cross-tenant share creation
+      // even when the transmittal's own organizationId is NULL (legacy unseeded data).
+      const [project] = await db.select({ id: projectsTable.id })
+        .from(projectsTable)
+        .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organizationId, req.user!.organizationId!)))
+        .limit(1);
+      if (!project) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  if (!transmittal) { res.status(404).json({ error: "Not found" }); return; }
+      const [transmittal] = await db.update(transmittalsTable)
+        .set({
+          shareToken: hashToken(token),
+          shareExpiresAt: expiresAt,
+          sharePasswordHash: passwordHash ?? undefined,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
+        .returning({ id: transmittalsTable.id, shareExpiresAt: transmittalsTable.shareExpiresAt });
+      if (!transmittal) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-  await createAuditLog({
-    userId: req.user!.id, action: "share", entityType: "transmittal",
-    entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
-  });
+      await createAuditLog({
+        userId: req.user!.id, action: "share", entityType: "transmittal",
+        entityId: id, details: { expiresInDays: days, passwordProtected: !!password },
+      });
 
-  const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
-  res.json({
-    shareUrl: `${baseUrl}/shared/transmittal/${token}`,
-    shareToken: token,
-    expiresAt,
-  });
+      const baseUrl = process.env.APP_URL ?? `https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost"}`;
+      result = { status: 200, body: { shareUrl: `${baseUrl}/shared/transmittal/${token}`, shareToken: token, expiresAt } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Upload external file and add as transmittal attachment (creates a stub doc)
-router.post("/:id/upload-attachment", denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.post("/:id/upload-attachment", denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   const transmittalId = requireInt(req.params.id);
   const { fileName, fileUrl, fileSize } = req.body;
   if (!fileName || !fileUrl) { res.status(400).json({ error: "fileName and fileUrl required" }); return; }
 
-  // Object scoping: the target transmittal must belong to THIS project before we
-  // create a document + item under it (was unscoped — any authenticated user
-  // could inject a document into any project's transmittal by id).
-  const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
-    .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
-  if (!trs) { res.status(404).json({ error: "Transmittal not found" }); return; }
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      // Object scoping: the target transmittal must belong to THIS project.
+      const [trs] = await db.select({ id: transmittalsTable.id }).from(transmittalsTable)
+        .where(and(eq(transmittalsTable.id, transmittalId), eq(transmittalsTable.projectId, projectId))).limit(1);
+      if (!trs) { result = { status: 404, body: { error: "Transmittal not found" } }; return; }
 
-  // Create a stub document record for the external file
-  const [doc] = await db.insert(documentsTable).values({
-    documentNumber: `EXT-${Date.now().toString().slice(-6)}`,
-    title: fileName,
-    documentType: "external",
-    revision: "1",
-    status: "issued",
-    projectId,
-    createdById: (req as any).user!.id,
-    fileUrl,
-    fileName,
-    fileSize: fileSize ?? 0,
-  }).returning();
+      // Create a stub document record for the external file
+      const [doc] = await db.insert(documentsTable).values({
+        documentNumber: `EXT-${Date.now().toString().slice(-6)}`,
+        title: fileName,
+        documentType: "external",
+        revision: "1",
+        status: "issued",
+        projectId,
+        createdById: (req as any).user!.id,
+        fileUrl,
+        fileName,
+        fileSize: fileSize ?? 0,
+      }).returning();
 
-  // Add as transmittal item
-  const [item] = await db.insert(transmittalItemsTable).values({
-    transmittalId,
-    documentId: doc.id,
-    purpose: "external_attachment",
-  }).returning();
-
-  res.status(201).json({ ...item, documentTitle: doc.title, documentNumber: doc.documentNumber, documentType: doc.documentType });
+      // Add as transmittal item
+      const [item] = await db.insert(transmittalItemsTable).values({
+        transmittalId,
+        documentId: doc.id,
+        purpose: "external_attachment",
+      }).returning();
+      result = { status: 201, body: { ...item, documentTitle: doc.title, documentNumber: doc.documentNumber, documentType: doc.documentType } };
+    });
+    res.status(result!.status).json(result!.body);
+  } catch (e) { next(e); }
 });
 
 // Revoke share link
-router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res): Promise<void> => {
+router.delete("/:id/share", requireRole("admin", "project_manager", "document_controller"), denyPartyDestructive, async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
   const id = requireInt(req.params.id);
   const projectId = requireInt(req.params.projectId);
-  // Object scoping: the transmittal must belong to this project (was by bare id).
-  await db.update(transmittalsTable)
-    .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
-    .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-  res.json({ success: true });
+  try {
+    await withTenant(async () => {
+      // Object scoping: the transmittal must belong to this project (was by bare id).
+      await db.update(transmittalsTable)
+        .set({ shareToken: null, shareExpiresAt: null, sharePasswordHash: null, updatedAt: new Date() })
+        .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+    });
+    res.json({ success: true });
+  } catch (e) { next(e); }
 });
 
 // ─── Workflow Approval ────────────────────────────────────────────────────────
 router.post(
   "/:id/submit-approval",
   requireRole("admin", "project_manager", "document_controller"),
-  async (req: Request<ProjectItemParams>, res): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
     const id = requireInt(req.params.id);
     const projectId = requireInt(req.params.projectId);
-    const [existing] = await db.select().from(transmittalsTable)
-      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    const [row] = await db.update(transmittalsTable)
-      .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
-      .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
-      .returning();
-    await createAuditLog({
-      userId: req.user!.id, action: "approval_submitted", entityType: "transmittal",
-      entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
-    });
-    res.json(row);
+    try {
+      let result: { status: number; body: unknown } | undefined;
+      await withTenant(async () => {
+        const [existing] = await db.select().from(transmittalsTable)
+          .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
+        if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+        const [row] = await db.update(transmittalsTable)
+          .set({ approvalStatus: "pending", approvedById: null, approvalComment: null, approvedAt: null, updatedAt: new Date() })
+          .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)))
+          .returning();
+        await createAuditLog({
+          userId: req.user!.id, action: "approval_submitted", entityType: "transmittal",
+          entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
+        });
+        result = { status: 200, body: row };
+      });
+      res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   }
 );
 
 router.post(
   "/:id/approve",
   requireAuth,
-  async (req: Request<ProjectItemParams>, res): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
     const id = requireInt(req.params.id);
     const projectId = requireInt(req.params.projectId);
     const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     // Direct transmittal approval is an admin-override action only
     const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
     if (!isSysAdmin(caller) && effectiveRole !== "admin") {
-      res.status(403).json({ error: "Forbidden", message: "Direct transmittal approval is an admin override. Normal approvals go through the workflow engine." }); return;
+      result = { status: 403, body: { error: "Forbidden", message: "Direct transmittal approval is an admin override. Normal approvals go through the workflow engine." } }; return;
     }
     if (!comment?.trim()) {
-      res.status(400).json({ error: "A comment is required for admin override approvals" }); return;
+      result = { status: 400, body: { error: "A comment is required for admin override approvals" } }; return;
     }
 
     const decision: ReviewDecision = isValidReviewDecision(rawDecision) ? rawDecision : "approved";
 
     const [existing] = await db.select().from(transmittalsTable)
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to approve" }); return; }
+    if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+    if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to approve" } }; return; }
 
     const [row] = await db.update(transmittalsTable)
       .set({
@@ -1075,26 +1164,32 @@ router.post(
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
       details: { comment, decision },
     });
-    res.json(row);
+    result = { status: 200, body: row };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   }
 );
 
 router.post(
   "/:id/reject",
   requireAuth,
-  async (req: Request<ProjectItemParams>, res): Promise<void> => {
+  async (req: Request<ProjectItemParams>, res, next): Promise<void> => {
     const id = requireInt(req.params.id);
     const projectId = requireInt(req.params.projectId);
     const caller = req.user!;
     const { comment, decision: rawDecision } = req.body;
 
+    try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
     // Direct transmittal rejection is an admin-override action only; comment is mandatory
     const { role: effectiveRole } = await resolveEffectiveRole(caller, projectId);
     if (!isSysAdmin(caller) && effectiveRole !== "admin") {
-      res.status(403).json({ error: "Forbidden", message: "Direct transmittal rejection is an admin override. Normal rejections go through the workflow engine." }); return;
+      result = { status: 403, body: { error: "Forbidden", message: "Direct transmittal rejection is an admin override. Normal rejections go through the workflow engine." } }; return;
     }
     if (!comment?.trim()) {
-      res.status(400).json({ error: "A comment is required for admin override rejections" }); return;
+      result = { status: 400, body: { error: "A comment is required for admin override rejections" } }; return;
     }
 
     const decision: ReviewDecision =
@@ -1102,8 +1197,8 @@ router.post(
 
     const [existing] = await db.select().from(transmittalsTable)
       .where(and(eq(transmittalsTable.id, id), eq(transmittalsTable.projectId, projectId)));
-    if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-    if (existing.approvalStatus !== "pending") { res.status(409).json({ error: "Record must be in pending state to reject" }); return; }
+    if (!existing) { result = { status: 404, body: { error: "Not found" } }; return; }
+    if (existing.approvalStatus !== "pending") { result = { status: 409, body: { error: "Record must be in pending state to reject" } }; return; }
 
     const [row] = await db.update(transmittalsTable)
       .set({
@@ -1141,7 +1236,10 @@ router.post(
       entityId: id, entityTitle: row.transmittalNumber, projectId: row.projectId,
       details: { comment, decision },
     });
-    res.json(row);
+    result = { status: 200, body: row };
+    });
+    res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
   }
 );
 

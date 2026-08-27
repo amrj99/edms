@@ -16,9 +16,7 @@ const calls: string[] = [];
 const mk = (name: string, impl?: () => Promise<unknown>) =>
   vi.fn(async () => { calls.push(name); return impl ? impl() : undefined; });
 
-const integrity = mk("integrity");
 const rls = mk("rls");
-const plans = mk("plans");
 const admin = mk("admin");
 const backfill = mk("backfill");
 const resetModules = mk("resetModules");
@@ -27,9 +25,12 @@ const startModuleSync = vi.fn(() => { calls.push("moduleSync"); return { stop: m
 const skills = vi.fn(async () => {});
 const reminders = vi.fn(async () => {});
 
-vi.mock("../lib/integrity-migrations.js", () => ({ runIntegrityMigrations: () => integrity() }));
-vi.mock("../lib/rls-init.js", () => ({ initRlsPolicies: () => rls() }));
-vi.mock("../lib/seed-plans.js", () => ({ seedPlans: () => plans() }));
+// DEBT-010: the runtime does NO DDL and no schema/RLS install — those moved to the
+// migrator (migrate.ts). Startup only VERIFIES RLS is present (read-only, FATAL) via
+// assertMembershipRlsInstalled; the pool it reads is mocked. integrity-migrations and
+// seed-plans are NOT imported by bootstrap anymore, so they are not mocked here.
+vi.mock("@workspace/db", () => ({ pool: { query: vi.fn(async () => ({ rows: [] })) } }));
+vi.mock("../lib/rls-membership.js", () => ({ assertMembershipRlsInstalled: () => rls() }));
 vi.mock("../lib/seed.js", () => ({ seedDefaultAdmin: () => admin() }));
 vi.mock("../lib/backfill-org-config.js", () => ({ backfillOrgConfig: () => backfill() }));
 vi.mock("../lib/reset-modules-to-plan.js", () => ({ resetModulesToPlan: () => resetModules() }));
@@ -45,27 +46,24 @@ beforeEach(() => {
 });
 
 describe("bootstrap — critical startup", () => {
-  it("awaits integrity and RLS FIRST, before seeds", async () => {
+  it("VERIFIES RLS FIRST, before the runtime-init (DML) steps", async () => {
     await runCriticalStartup();
-    // integrity + rls must precede the seed steps
-    expect(calls[0]).toBe("integrity");
-    expect(calls[1]).toBe("rls");
-    expect(calls).toContain("plans");
-    expect(calls.indexOf("rls")).toBeLessThan(calls.indexOf("plans"));
+    // The read-only RLS presence check is the first (and only FATAL) step, before
+    // the non-fatal DML runtime init. No DDL/install steps run in the runtime.
+    expect(calls[0]).toBe("rls");
+    expect(calls).toContain("backfill");
+    expect(calls.indexOf("rls")).toBeLessThan(calls.indexOf("backfill"));
   });
 
-  it("REJECTS when integrity migrations fail (server must not start)", async () => {
-    integrity.mockRejectedValueOnce(new Error("integrity boom"));
-    await expect(runCriticalStartup()).rejects.toThrow("integrity boom");
-  });
-
-  it("REJECTS when RLS init fails (security-critical)", async () => {
+  it("REJECTS when the RLS presence check fails (security-critical)", async () => {
+    // assertMembershipRlsInstalled throwing (migrator hasn't installed RLS) must
+    // stop the server from listening — the sole FATAL startup contract.
     rls.mockRejectedValueOnce(new Error("rls boom"));
     await expect(runCriticalStartup()).rejects.toThrow("rls boom");
   });
 
-  it("does NOT reject when a non-fatal seed fails (server still starts)", async () => {
-    plans.mockRejectedValueOnce(new Error("plans boom"));
+  it("does NOT reject when a non-fatal runtime-init step fails (server still starts)", async () => {
+    backfill.mockRejectedValueOnce(new Error("backfill boom"));
     await expect(runCriticalStartup()).resolves.toBeUndefined();
   });
 });

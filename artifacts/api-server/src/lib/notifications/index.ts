@@ -10,13 +10,16 @@
  * it is the delivery mechanism itself, not a notification preference.
  */
 
-import { db } from "@workspace/db";
 import {
   userPreferencesTable,
   orgNotificationSettingsTable,
   notificationLogsTable,
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
+// DEBT-010: notification prefs/settings/logs run on the narrow pool-backed
+// notificationDb (post-commit, outside any tenant tx — never hold a connection
+// across the awaited email). See notification-db.ts for the contract/proof.
+import { notificationDb as db } from "./notification-db.js";
 import type { NotificationPrefs } from "@workspace/db";
 
 // ─── Event Registry ────────────────────────────────────────────────────────────

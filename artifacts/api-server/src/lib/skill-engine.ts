@@ -11,6 +11,7 @@
 import { and, desc, eq, inArray, lt, notInArray, ne, sql } from "drizzle-orm";
 import {
   db,
+  withSystemTenantTx,
   skillDefinitionsTable, skillExecutionsTable,
   documentsTable, correspondenceTable,
   tasksTable, projectsTable, projectMembersTable, notificationsTable, usersTable,
@@ -27,7 +28,31 @@ interface SkillContext {
   eventData?: Record<string, unknown>;
 }
 
-type SkillHandler = (skill: SkillDefinition, context: SkillContext) => Promise<unknown>;
+/**
+ * DEBT-010 Category-A I/O split: an email the handler PREPARED inside the tenant
+ * tx (recipients + subject/body). External send happens AFTER the tx commits so a
+ * tenant connection is never held across the Resend call.
+ */
+interface PreparedEmail {
+  to: string[];
+  subject: string;
+  html: string;
+}
+
+/**
+ * A handler's outcome, separated so the caller can commit DB work first and only
+ * then perform external I/O:
+ *   • result — the summary object recorded in skill_executions.result.
+ *   • emails — email payloads to send AFTER the tenant tx commits (may be empty).
+ * All DB reads/writes (including in-app notification inserts) happen inside the
+ * per-org tx; nothing here sends email while the tx is open.
+ */
+interface SkillOutcome {
+  result: unknown;
+  emails: PreparedEmail[];
+}
+
+type SkillHandler = (skill: SkillDefinition, context: SkillContext) => Promise<SkillOutcome>;
 
 // ─── Dispatch table ───────────────────────────────────────────────────────────
 
@@ -45,6 +70,7 @@ const HANDLERS: Record<string, SkillHandler> = {
  * Never throws — captures all errors in the execution log.
  */
 export async function executeSkill(skillId: number, context: SkillContext): Promise<void> {
+  // skill_definitions is NON-RLS; this read may stay on the pool (outside any tx).
   const [skill] = await db
     .select()
     .from(skillDefinitionsTable)
@@ -55,43 +81,66 @@ export async function executeSkill(skillId: number, context: SkillContext): Prom
   if (!skill) return;
   if (!skill.isEnabled && context.triggeredByType !== "manual") return;
 
-  // Insert a running row
-  const [exec] = await db
-    .insert(skillExecutionsTable)
-    .values({
-      skillId:         skill.id,
-      organizationId:  skill.organizationId,
-      triggeredByType: context.triggeredByType,
-      triggeredById:   context.triggeredById ?? null,
-      status:          "running",
-      executedAt:      new Date(),
-    })
-    .returning();
+  const orgId = skill.organizationId;
+
+  // Insert a running row — inside the skill's per-org system tenant tx (edms_app).
+  const [exec] = await withSystemTenantTx(orgId, () =>
+    db
+      .insert(skillExecutionsTable)
+      .values({
+        skillId:         skill.id,
+        organizationId:  skill.organizationId,
+        triggeredByType: context.triggeredByType,
+        triggeredById:   context.triggeredById ?? null,
+        status:          "running",
+        executedAt:      new Date(),
+      })
+      .returning(),
+  );
 
   const key    = `${skill.triggerType}:${skill.handlerType}`;
   const handler = HANDLERS[key];
   const start  = Date.now();
 
   if (!handler) {
-    await db
-      .update(skillExecutionsTable)
-      .set({ status: "failed", errorMessage: `No handler for key "${key}"`, durationMs: 0 })
-      .where(eq(skillExecutionsTable.id, exec.id));
+    await withSystemTenantTx(orgId, () =>
+      db
+        .update(skillExecutionsTable)
+        .set({ status: "failed", errorMessage: `No handler for key "${key}"`, durationMs: 0 })
+        .where(eq(skillExecutionsTable.id, exec.id)),
+    );
     return;
   }
 
   try {
-    const result = await handler(skill, context);
-    await db
-      .update(skillExecutionsTable)
-      .set({ status: "success", result: result as any, durationMs: Date.now() - start })
-      .where(eq(skillExecutionsTable.id, exec.id));
+    // (a) Handler DB reads/writes + in-app notification inserts run inside the
+    //     per-org tenant tx, returning the email payload(s) to send afterwards.
+    const outcome = await withSystemTenantTx(orgId, () => handler(skill, context));
+
+    // (b) External I/O OUTSIDE the tx: send prepared emails only after commit.
+    //     Email failure never fails the skill (matches prior .catch(() => {})).
+    for (const mail of outcome.emails) {
+      if (mail.to.length) {
+        await sendEmail(mail.to, mail.subject, mail.html).catch(() => {});
+      }
+    }
+
+    await withSystemTenantTx(orgId, () =>
+      db
+        .update(skillExecutionsTable)
+        .set({ status: "success", result: outcome.result as any, durationMs: Date.now() - start })
+        .where(eq(skillExecutionsTable.id, exec.id)),
+    );
   } catch (err: any) {
     logger.warn({ err, skillId, key }, "skill-engine: execution error");
-    await db
-      .update(skillExecutionsTable)
-      .set({ status: "failed", errorMessage: err?.message ?? String(err), durationMs: Date.now() - start })
-      .where(eq(skillExecutionsTable.id, exec.id));
+    await withSystemTenantTx(orgId, () =>
+      db
+        .update(skillExecutionsTable)
+        .set({ status: "failed", errorMessage: err?.message ?? String(err), durationMs: Date.now() - start })
+        .where(eq(skillExecutionsTable.id, exec.id)),
+    ).catch((updateErr) =>
+      logger.warn({ err: updateErr, skillId, key }, "skill-engine: failed to record failure"),
+    );
   }
 }
 
@@ -230,7 +279,7 @@ interface WeeklyReportConfig {
 async function handleWeeklyDocumentReport(
   skill: SkillDefinition,
   _context: SkillContext,
-): Promise<unknown> {
+): Promise<SkillOutcome> {
   const cfg = skill.config as WeeklyReportConfig;
   const recipientIds = cfg.recipients ?? [];
   const orgId        = skill.organizationId;
@@ -266,7 +315,7 @@ async function handleWeeklyDocumentReport(
     byProject.get(pid)!.counts[row.status] = Number(row.count);
   }
 
-  if (!byProject.size) return { message: "No documents found", recipients: recipientIds.length };
+  if (!byProject.size) return { result: { message: "No documents found", recipients: recipientIds.length }, emails: [] };
 
   const recipients = await resolveRecipients(recipientIds);
   const weekStr    = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -306,17 +355,18 @@ async function handleWeeklyDocumentReport(
       <p style="color:#9ca3af;font-size:12px;margin-top:24px;">This is an automated report from ArcScale EDMS.</p>
     </div>`;
 
-  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
-  if (emailAddresses.length) {
-    await sendEmail(emailAddresses, `Weekly Document Report — ${weekStr}`, html).catch(() => {});
-  }
-
-  // In-app notifications
+  // In-app notifications (DB write — stays inside the tenant tx).
   for (const r of recipients) {
     await insertNotification(r.id, "Weekly Document Report", `Your weekly document report is ready. ${byProject.size} project(s) included.`);
   }
 
-  return { projectCount: byProject.size, recipientCount: recipients.length };
+  // Prepare email for sending AFTER the tx commits (external I/O out of the tx).
+  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
+  const emails: PreparedEmail[] = emailAddresses.length
+    ? [{ to: emailAddresses, subject: `Weekly Document Report — ${weekStr}`, html }]
+    : [];
+
+  return { result: { projectCount: byProject.size, recipientCount: recipients.length }, emails };
 }
 
 // ─── Handler 2: Unapproved Correspondence Reminder ────────────────────────────
@@ -330,7 +380,7 @@ interface UnapprovedCorrConfig {
 async function handleUnapprovedCorrespondenceReminder(
   skill: SkillDefinition,
   _context: SkillContext,
-): Promise<unknown> {
+): Promise<SkillOutcome> {
   const cfg          = skill.config as UnapprovedCorrConfig;
   const hoursAgo     = cfg.checkAfterHours ?? 48;
   const recipientIds = cfg.recipients ?? [];
@@ -350,7 +400,7 @@ async function handleUnapprovedCorrespondenceReminder(
       ),
     );
 
-  if (!pending.length) return { pendingCount: 0, message: "No pending correspondence" };
+  if (!pending.length) return { result: { pendingCount: 0, message: "No pending correspondence" }, emails: [] };
 
   const recipients = await resolveRecipients(recipientIds);
   const listText   = pending.slice(0, 10).map((c) => `<li>${c.subject} (since ${c.createdAt.toLocaleDateString()})</li>`).join("");
@@ -363,16 +413,17 @@ async function handleUnapprovedCorrespondenceReminder(
       <p style="color:#9ca3af;font-size:12px;margin-top:24px;">Automated reminder from ArcScale EDMS.</p>
     </div>`;
 
-  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
-  if (emailAddresses.length) {
-    await sendEmail(emailAddresses, `Reminder: ${pending.length} Correspondence Pending Action`, html).catch(() => {});
-  }
-
   for (const r of recipients) {
     await insertNotification(r.id, "Correspondence Pending Action", `${pending.length} correspondence item(s) have been pending for over ${hoursAgo} hours.`);
   }
 
-  return { pendingCount: pending.length, recipientCount: recipients.length };
+  // Prepare email for sending AFTER the tx commits (external I/O out of the tx).
+  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
+  const emails: PreparedEmail[] = emailAddresses.length
+    ? [{ to: emailAddresses, subject: `Reminder: ${pending.length} Correspondence Pending Action`, html }]
+    : [];
+
+  return { result: { pendingCount: pending.length, recipientCount: recipients.length }, emails };
 }
 
 // ─── Handler 3: Technical Document Reminder ───────────────────────────────────
@@ -386,7 +437,7 @@ interface TechDocConfig {
 async function handleTechnicalDocumentReminder(
   skill: SkillDefinition,
   _context: SkillContext,
-): Promise<unknown> {
+): Promise<SkillOutcome> {
   const cfg          = skill.config as TechDocConfig;
   const intervalDays = cfg.intervalDays ?? 2;
   const docTypes     = cfg.documentTypes ?? [];
@@ -407,7 +458,7 @@ async function handleTechnicalDocumentReminder(
       ),
     );
 
-  if (!pending.length) return { pendingCount: 0, message: "No pending technical documents" };
+  if (!pending.length) return { result: { pendingCount: 0, message: "No pending technical documents" }, emails: [] };
 
   const recipients = await resolveRecipients(recipientIds);
   const listText   = pending.slice(0, 10).map(
@@ -422,16 +473,17 @@ async function handleTechnicalDocumentReminder(
       <p style="color:#9ca3af;font-size:12px;margin-top:24px;">Automated reminder from ArcScale EDMS.</p>
     </div>`;
 
-  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
-  if (emailAddresses.length) {
-    await sendEmail(emailAddresses, `Reminder: ${pending.length} Document(s) Pending Review`, html).catch(() => {});
-  }
-
   for (const r of recipients) {
     await insertNotification(r.id, "Documents Pending Review", `${pending.length} document(s) have been pending review for over ${intervalDays} day(s).`);
   }
 
-  return { pendingCount: pending.length, recipientCount: recipients.length };
+  // Prepare email for sending AFTER the tx commits (external I/O out of the tx).
+  const emailAddresses = recipients.map((r) => r.email).filter(Boolean);
+  const emails: PreparedEmail[] = emailAddresses.length
+    ? [{ to: emailAddresses, subject: `Reminder: ${pending.length} Document(s) Pending Review`, html }]
+    : [];
+
+  return { result: { pendingCount: pending.length, recipientCount: recipients.length }, emails };
 }
 
 // ─── Handler 4: Auto Project Status Change ────────────────────────────────────
@@ -439,9 +491,9 @@ async function handleTechnicalDocumentReminder(
 async function handleAutoProjectStatusChange(
   skill: SkillDefinition,
   context: SkillContext,
-): Promise<unknown> {
+): Promise<SkillOutcome> {
   const projectId = context.eventData?.projectId as number | undefined;
-  if (!projectId) return { skipped: true, reason: "No projectId in event data" };
+  if (!projectId) return { result: { skipped: true, reason: "No projectId in event data" }, emails: [] };
 
   const [project] = await db
     .select()
@@ -449,7 +501,7 @@ async function handleAutoProjectStatusChange(
     .where(eq(projectsTable.id, projectId))
     .limit(1);
 
-  if (!project || project.organizationId !== skill.organizationId) return { skipped: true };
+  if (!project || project.organizationId !== skill.organizationId) return { result: { skipped: true }, emails: [] };
 
   const results: string[] = [];
 
@@ -523,5 +575,5 @@ async function handleAutoProjectStatusChange(
     }
   }
 
-  return { projectId, actions: results };
+  return { result: { projectId, actions: results }, emails: [] };
 }

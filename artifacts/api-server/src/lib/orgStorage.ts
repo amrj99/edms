@@ -18,16 +18,27 @@ import { ObjectStorageService } from "./objectStorage.js";
 import { decrypt } from "./encryption.js";
 import { getEffectiveOnPremPath, isCloudStorageAvailable, ensureDir } from "./storageConfig.js";
 import { StorageNotConfiguredError } from "./errors.js";
+import { tenantRead } from "../middlewares/tenant-scope.js";
 
 const cloudStorage = new ObjectStorageService();
 
-/** Returns the org config for a given org, or null if not found. */
+/**
+ * Returns the org config for a given org, or null if not found.
+ *
+ * DEBT-010: org_config is a non-RLS config table read by explicit organizationId.
+ * The read goes through tenantRead() so it works under the request fail-closed
+ * marker — opening a SHORT read tx that COMMITS before any storage I/O (this fn is
+ * the only DB access in orgStorage; requestUpload/uploadBuffer/getR2/getS3 then do
+ * their storage I/O with no DB connection held). Outside a request → pool, as before.
+ */
 async function getOrgConfig(organizationId: number) {
-  const [cfg] = await db
-    .select()
-    .from(orgConfigTable)
-    .where(eq(orgConfigTable.organizationId, organizationId));
-  return cfg ?? null;
+  return tenantRead(async () => {
+    const [cfg] = await db
+      .select()
+      .from(orgConfigTable)
+      .where(eq(orgConfigTable.organizationId, organizationId));
+    return cfg ?? null;
+  });
 }
 
 /**

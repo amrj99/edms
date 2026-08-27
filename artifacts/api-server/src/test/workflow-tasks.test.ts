@@ -15,7 +15,6 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import supertest from "supertest";
-import { db } from "@workspace/db";
 import {
   organizationsTable, usersTable, projectsTable, documentsTable,
   wfTemplatesTable, wfTemplateStagesTable, wfInstancesTable, wfInstanceTransitionsTable,
@@ -23,6 +22,9 @@ import {
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { signToken } from "../lib/auth.js";
+import { getTestDb } from "./helpers/index.js";
+// DEBT-010: fixtures seed RLS tables → OWNER pool (getTestDb), not app pool (edms_app).
+const db = getTestDb();
 import app from "../app.js";
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────

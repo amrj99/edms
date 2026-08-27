@@ -22,10 +22,28 @@ config({ path: path.join(apiRoot, ".env.test"), override: false });
 // Enforce test environment
 process.env.NODE_ENV = "test";
 
-// Route DATABASE_URL to the test DB
+// Route DATABASE_URL to the test DB.
+// DEBT-010 Application-under-edms_app posture: the RUNTIME app pool (@workspace/db) runs as
+// the least-privilege `edms_app` role so routes execute with RLS *actually enforced* — the
+// same posture as production cutover. Fixtures / migrations / truncation use the OWNER role
+// (TEST_DATABASE_URL) via getTestPool()/global-setup — a separate connection — so seeding
+// RLS tables is not itself blocked by RLS.
+//
+// Default: derive the edms_app URL from TEST_DATABASE_URL (swap credentials). Override with
+// an explicit APP_DATABASE_URL, or set APP_DB_ROLE=owner to run the app as the owner (the
+// legacy superuser posture) for debugging only.
 const testDbUrl = process.env.TEST_DATABASE_URL;
-if (testDbUrl) {
-  process.env.DATABASE_URL = testDbUrl;
+function toEdmsAppUrl(url: string): string {
+  return url.replace(/^(postgresql:\/\/)[^@]+(@)/, "$1edms_app:edms_app_pw$2");
+}
+let appDbUrl: string | undefined;
+if (process.env.APP_DATABASE_URL) {
+  appDbUrl = process.env.APP_DATABASE_URL;
+} else if (testDbUrl) {
+  appDbUrl = process.env.APP_DB_ROLE === "owner" ? testDbUrl : toEdmsAppUrl(testDbUrl);
+}
+if (appDbUrl) {
+  process.env.DATABASE_URL = appDbUrl;
 }
 
 // Silence pino in tests (set LOG_LEVEL=debug to see logs while debugging)
