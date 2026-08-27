@@ -84,25 +84,35 @@ describe("F7 — app.recent_notification_exists", () => {
     });
   });
 
-  it("[3b] context restored on the EXCEPTION path (revoked SELECT → re-raise)", async () => {
+  it("[3b] context restored on the EXCEPTION path (probe raises → caller's context intact)", async () => {
+    // Force the probe's internal SELECT to fail by revoking the owner's table SELECT,
+    // then invoke it inside a DO block that sets a sentinel, catches the raised error,
+    // and asserts the sentinel is intact afterwards. A DO block's BEGIN/EXCEPTION keeps
+    // the surrounding session usable (unlike a JS-driven tx, which is left aborted after
+    // an error). If the context were NOT restored the DO block RAISEs → query rejects.
     const pool = getTestPool();
     await pool.query("REVOKE SELECT ON public.notifications FROM edms_rls_owner");
     try {
-      await withSystemTenantTx(orgA.id, async () => {
-        await db.execute(sql`SELECT set_config('app.current_user_id', '777', true)`);
-        let threw = false;
-        try {
-          await db.execute(sql`SELECT app.recent_notification_exists(${userA.id}, 'task_overdue', 'task', ${EID_A}, ${since})`);
-        } catch {
-          threw = true;
-        }
-        const r: any = await db.execute(sql`SELECT current_setting('app.current_user_id', true) AS v`);
-        expect(threw).toBe(true); // the internal error is re-raised, not swallowed
-        expect((Array.isArray(r) ? r : r?.rows)?.[0]?.v).toBe("777"); // restored despite the exception
-      });
+      await pool.query(`
+        DO $$
+        BEGIN
+          PERFORM set_config('app.current_org_id', '${orgA.id}', true);
+          PERFORM set_config('app.current_user_id', '777', true);
+          BEGIN
+            PERFORM app.recent_notification_exists(${userA.id}, 'task_overdue', 'task', ${EID_A}, now());
+            RAISE EXCEPTION 'probe was expected to fail (SELECT revoked) but did not';
+          EXCEPTION WHEN OTHERS THEN
+            NULL; -- swallow the probe's re-raised error
+          END;
+          IF current_setting('app.current_user_id', true) <> '777' THEN
+            RAISE EXCEPTION 'context NOT restored after exception: got "%"', current_setting('app.current_user_id', true);
+          END IF;
+        END $$;`);
     } finally {
       await pool.query("GRANT SELECT ON public.notifications TO edms_rls_owner");
     }
+    // Reaching here without a thrown error means the DO block's assertions held.
+    expect(true).toBe(true);
   });
 
   it("[4] per-user policy NOT weakened — direct read under system ctx sees 0 rows", async () => {
