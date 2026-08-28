@@ -12,7 +12,7 @@
  *   activeFileUrl – URL of the currently selected attachment (for highlight)
  */
 import { useState, useRef } from "react";
-import { withViewToken } from "@/lib/view-url";
+import { openStorageFile, downloadStorageFile } from "@/lib/storage-access";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   File, FileText, Trash2, Download, Eye, Plus, Loader2,
@@ -141,29 +141,10 @@ export function DocumentFilesPanel({
   }
 
   async function handleDownload(file: DocumentFile) {
-    const url = file.fileUrl;
-    const filename = file.fileName;
-    const isInternal = url?.startsWith("/api/storage/") || url?.startsWith("/objects/");
-    if (!url || !isInternal) {
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      return;
-    }
-    const tok = localStorage.getItem("edms_token");
     try {
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
-      if (!r.ok) throw new Error();
-      const blob = await r.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = filename;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      await downloadStorageFile(file.fileUrl, file.fileName);
     } catch {
-      window.open(url, "_blank");
+      toast({ title: "Could not download file. Please try again.", variant: "destructive" });
     }
   }
 
@@ -259,16 +240,9 @@ export function DocumentFilesPanel({
                         if (onPreview) {
                           onPreview(file);
                         } else {
-                          (async () => {
-                            const url = file.fileUrl;
-                            if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
-                            const tok = localStorage.getItem("edms_token");
-                            try {
-                              const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                              if (r.ok) { const { token } = await r.json(); window.open(withViewToken(url, token), "_blank"); }
-                              else window.open(url, "_blank");
-                            } catch { window.open(url, "_blank"); }
-                          })();
+                          openStorageFile(file.fileUrl).catch(() =>
+                            toast({ title: "Could not open file. Please try again.", variant: "destructive" }),
+                          );
                         }
                       }}
                     >

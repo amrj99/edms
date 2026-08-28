@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { downloadStorageFile } from "@/lib/storage-access";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -221,10 +222,16 @@ export default function DocumentDetailPage() {
           </div>
           <div className="flex gap-2 shrink-0">
             {doc.fileUrl && (
-              <Button asChild variant="outline" size="sm">
-                <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer">
-                  <Download className="h-3.5 w-3.5 mr-1.5" /> Download
-                </a>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadStorageFile(doc.fileUrl, doc.fileName || doc.title || "download").catch(() =>
+                    toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+                  )
+                }
+              >
+                <Download className="h-3.5 w-3.5 mr-1.5" /> Download
               </Button>
             )}
             {/* Lifecycle actions — only for PM/admin on non-terminal documents */}

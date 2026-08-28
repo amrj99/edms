@@ -52,6 +52,31 @@ Standing constraints (no cleanup approved):
 - **Do NOT edit `__drizzle_migrations` manually** (INSERT/UPDATE/DELETE).
 - **Any future migration MUST carry a `when` newer than the current max** and pass the normal migration gate — otherwise drizzle's watermark algorithm will silently skip it.
 
+## F8 — Storage direct-download requires a view-token (PRE-EXISTING, not a cutover regression)
+
+**Observed (Phase 8, prod browser):** opening certain documents navigated the browser directly to a bare `/api/storage/r2-object/org_15%2F…png?orgId=15` (no `vt=` token) → `{"error":"Unauthorized","message":"No token provided"}`.
+
+**Root cause / fault domain — FRONTEND storage-open path.** The `r2-object` route is `requireAuthOrViewToken`: a direct browser navigation carries no `Authorization` header, so the URL must first be wrapped via `/api/storage/view-token` (adds `?vt=<token>`) or fetched with the Bearer header. Most UI open paths do wrap it (`use-preview-url.ts`, `view-url.ts`, `documents.tsx`, `project-detail.tsx`, `DocumentFilesPanel.tsx`), but at least one open/download entrypoint navigates to the bare stored serve-URL (`orgStorage.ts` builds `/api/storage/r2-object/…?orgId=`). Known DEBT-008 area (`view-url.test.ts` uses this exact R2 URL shape).
+
+**Cutover-related? NO — pre-existing.** (1) `requireAuthOrViewToken` guarded r2-object already at `9fb48613` (pre-cutover). (2) **Zero frontend files changed in the RC** (`origin/main..c937038`) and only `api` was rebuilt → served frontend is byte-identical pre/post. (3) `No token provided` originates in the JWT middleware **before any DB access** → independent of the edms→edms_app switch.
+
+**Security impact:** none negative — the route correctly **rejects** unauthenticated access (401, no data, no bypass). Secure-by-default.
+
+**User impact:** certain document open/download actions fail to load the file in-browser (broken preview/download for those paths). Pre-existing UX defect.
+
+**Smallest correct fix (do NOT weaken auth / do NOT make storage public):** the offending frontend open/download path must wrap the stored storage URL with a view-token (same pattern as `view-url.ts`/`use-preview-url.ts`) or use an authenticated blob fetch, before navigation. Requires a **frontend** change + frontend rebuild/deploy — separate from the backend-only DEBT-010 cutover.
+
+**Verdict impact:** does NOT block the DB-role cutover (which is functioning: smoke 401-not-500, RLS enforced, no 500s/leaks). Classified **Fix-before-broad-use (frontend)** — follow-up, not a rollback trigger. | Medium (UX) | Follow-up |
+
+## Cutover isolation evidence is COMPOSITE (not any single check)
+
+The `/projects/1` UI attempt is only **supplementary** app-level evidence (it returned "Project not found" with no data and no 500 — but project 1's existence was not owner-confirmed, so it is not proof on its own). The authoritative cross-tenant isolation proof for the cutover is the combination of:
+1. **DB canary as `edms_app` on real prod data** → `other_orgs_visible = 0` and `no_ctx_documents = 0`.
+2. `edms_app` = `NOSUPERUSER` + `NOBYPASSRLS`.
+3. Membership RLS FORCEd on all 13 tables (13 `org_isolation_policy` via `app.*`).
+4. UI for the org-15 account lists only its own project (16), no foreign orgs.
+5. `/projects/1` returned no data and no 500 — **supplementary** app-level signal only.
+
 ## PRODUCTION GATE BLOCKER (from F6, original mandate — now satisfied by the Phase A/B audit above) — read-only migration/schema-drift audit
 
 Before **any** future Production migration, a **read-only** audit MUST run and be reviewed. It must determine:
@@ -82,6 +107,14 @@ Hard constraints:
 - **Rejected — Option D**: broadening the `notifications` USING clause to let the system/org context read other users' rows — this weakens the per-user isolation just proven in Test 7. Do not do.
 
 Verify any chosen fix on Staging (re-run the F7 scenario: multiple reminder runs must NOT accumulate duplicates) before production. | Medium | **Fix-before-production** |
+
+**STATUS: FIXED & VERIFIED ON STAGING (B′, commits `5ab02d1`+`da9eff4`).** Live F7 Staging Gate results:
+- Existing overdue tasks (entity 3,4): reminder boot-run after the fix left counts UNCHANGED (4→4) — no increase (dedup now sees prior rows).
+- Clean owner-fixture task (entity 5, no synchronous notif): across TWO reminder cycles over container restarts → exactly **1** `task_overdue` ("is past its due date") — created on cycle 1, deduped on cycle 2 (dedup survives process restart).
+- `enum = text` operator bug caught live and fixed (`n.type::text` / `n.entity_type::text` under `search_path=''`).
+- `notifications` policy byte-unchanged (USING per-user); Test 7 isolation intact (A=[1], B=[2,1], C=[3]); runtime = `edms_app` (super/bypass=false); no `permission denied`/context errors.
+- Pre-fix duplicate rows already in staging (entity 3,4 = 4 each; plus synchronous create-time ones) are historical data left in place — optional cleanup, not required by the fix.
+- Unit tests (`f7-reminder-dedup.test.ts`, #1–#4) run in CI (no local DB here).
 
 ## Notes
 - F1/F2 discovered in Tests 2/4/5; F3 during staging deploy prep; F4 during Test 7 (Notifications).

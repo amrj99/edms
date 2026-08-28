@@ -5,6 +5,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
+import { StorageLink } from "@/components/storage-link";
 import { useModules } from "@/hooks/use-modules";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -402,9 +403,9 @@ function MessageBubble({
               <div className="flex items-center gap-2">
                 <Paperclip className="h-4 w-4 flex-shrink-0" />
                 <div>
-                  <a href={message.fileUrl} target="_blank" rel="noopener noreferrer" className="underline font-medium text-sm">
+                  <StorageLink fileUrl={message.fileUrl ?? ""} className="underline font-medium text-sm">
                     {message.fileName ?? "Attachment"}
-                  </a>
+                  </StorageLink>
                   {message.fileSize && (
                     <div className="text-xs opacity-70">{formatFileSize(message.fileSize)}</div>
                   )}

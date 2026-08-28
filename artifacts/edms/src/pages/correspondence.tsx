@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { StorageLink } from "@/components/storage-link";
 import { FileDropZone } from "@/components/file-drop-zone";
 import { RecipientAutocomplete, type RecipientUser } from "@/components/recipient-autocomplete";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -1047,7 +1048,7 @@ export default function CorrespondencePage() {
                           <Paperclip className="h-3 w-3 text-muted-foreground shrink-0" />
                           <span className="truncate flex-1">{att.fileName ?? att.name ?? "Attachment"}</span>
                           {att.fileUrl && (
-                            <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0 text-xs">Download</a>
+                            <StorageLink fileUrl={att.fileUrl} download filename={att.fileName} className="text-primary hover:underline shrink-0 text-xs">Download</StorageLink>
                           )}
                         </div>
                       ))}
@@ -1183,16 +1184,14 @@ export default function CorrespondencePage() {
                               {reply.attachments?.length > 0 && (
                                 <div className="mt-2 pt-2 border-t flex flex-wrap gap-1">
                                   {reply.attachments.map((att: any, ai: number) => (
-                                    <a
+                                    <StorageLink
                                       key={ai}
-                                      href={att.fileUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                      fileUrl={att.fileUrl}
                                       className="inline-flex items-center gap-1 text-[10px] bg-background border rounded px-1.5 py-0.5 text-muted-foreground hover:text-primary"
                                     >
                                       <Paperclip className="h-2.5 w-2.5" />
                                       {att.fileName || "Attachment"}
-                                    </a>
+                                    </StorageLink>
                                   ))}
                                 </div>
                               )}
@@ -1487,23 +1486,22 @@ export default function CorrespondencePage() {
                       </div>
                       {att.kind === "ref" && att.fileUrl && (
                         <>
-                          <a
-                            href={att.fileUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <StorageLink
+                            fileUrl={att.fileUrl}
                             className="text-primary hover:underline shrink-0 flex items-center gap-0.5"
                             title="Open"
                           >
                             <ExternalLink className="h-3 w-3" />
-                          </a>
-                          <a
-                            href={att.fileUrl}
+                          </StorageLink>
+                          <StorageLink
+                            fileUrl={att.fileUrl}
                             download
+                            filename={att.name}
                             className="text-muted-foreground hover:text-foreground shrink-0 flex items-center gap-0.5"
                             title="Download"
                           >
                             <Download className="h-3 w-3" />
-                          </a>
+                          </StorageLink>
                         </>
                       )}
                       <button

@@ -44,7 +44,8 @@ import { AuditLogPanel } from "@/components/governance/AuditLogPanel";
 import { RoleMatrix } from "@/components/governance/RoleMatrix";
 import { ProjectPartiesTab } from "@/components/governance/ProjectPartiesTab";
 import { useAuth } from "@/lib/auth";
-import { withViewToken } from "@/lib/view-url";
+import { openStorageFile, downloadStorageFile } from "@/lib/storage-access";
+import { StorageLink } from "@/components/storage-link";
 import { usePermissions } from "@/hooks/usePermissions";
 import { SubmittalsTab } from "@/components/submittals/SubmittalsTab";
 
@@ -130,9 +131,9 @@ function RevisionHistorySheet({ doc, projectId, open, onClose }: { doc: any; pro
                     {idx === 0 && <Badge variant="default" className="text-[10px]">Latest</Badge>}
                   </div>
                   {rev.fileUrl && (
-                    <a href={rev.fileUrl} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline flex items-center gap-1">
+                    <StorageLink fileUrl={rev.fileUrl} download filename={rev.fileName} className="text-xs text-primary hover:underline flex items-center gap-1">
                       <FileDown className="h-3 w-3" /> Download
-                    </a>
+                    </StorageLink>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -1389,24 +1390,11 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                       {doc.fileUrl && (
                         <Button
                           variant="ghost" size="icon" className="h-8 w-8" title="Download"
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation();
-                            const url = doc.fileUrl as string;
-                            const filename = doc.fileName || doc.title || "download";
-                            const tok = localStorage.getItem("edms_token");
-                            const isInternal = url.startsWith("/api/storage/") || url.startsWith("/objects/");
-                            if (!isInternal) { window.open(url, "_blank"); return; }
-                            try {
-                              const vtr = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                              const { token } = vtr.ok ? await vtr.json() : { token: null };
-                              const fetchUrl = token ? withViewToken(url, token) : url;
-                              const r = await fetch(fetchUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
-                              if (!r.ok) throw new Error();
-                              const blob = await r.blob();
-                              const blobUrl = URL.createObjectURL(blob);
-                              const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
-                              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                            } catch { window.open(url, "_blank"); }
+                            downloadStorageFile(doc.fileUrl as string, doc.fileName || doc.title || "download").catch(() =>
+                              toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+                            );
                           }}
                         >
                           <Download className="h-4 w-4" />
@@ -1750,35 +1738,21 @@ function DocumentTab({ projectId, projectCode, projectName, onCreateTransmittal,
                 <>
                   <Button
                     variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
-                    onClick={async () => {
-                      const url = docPreview.fileUrl;
-                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
-                      const tok = localStorage.getItem("edms_token");
-                      const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                      if (r.ok) { const { token } = await r.json(); window.open(withViewToken(url, token), "_blank"); }
-                      else window.open(url, "_blank");
-                    }}
+                    onClick={() =>
+                      openStorageFile(docPreview.fileUrl).catch(() =>
+                        toast({ title: "Could not open file. Please try again.", variant: "destructive" }),
+                      )
+                    }
                   >
                     <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
                   </Button>
                   <Button
                     variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
-                    onClick={async () => {
-                      const url = docPreview.fileUrl;
-                      const filename = docPreview.fileName || docPreview.title || "download";
-                      if (!url?.startsWith("/api/storage/")) {
-                        const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
-                      }
-                      const tok = localStorage.getItem("edms_token");
-                      try {
-                        const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
-                        if (!r.ok) throw new Error();
-                        const blob = await r.blob();
-                        const blobUrl = URL.createObjectURL(blob);
-                        const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
-                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                      } catch { window.open(url, "_blank"); }
-                    }}
+                    onClick={() =>
+                      downloadStorageFile(docPreview.fileUrl, docPreview.fileName || docPreview.title || "download").catch(() =>
+                        toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+                      )
+                    }
                   >
                     <FileDown className="h-3.5 w-3.5" /> Download
                   </Button>
@@ -3134,7 +3108,7 @@ function TransmittalsTab({ projectId, projectName, projectCode, prefillDocIds, o
                           })()}
                         </div>
                         {(item.fileUrl || item.documentTitle) && (
-                          <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></a>
+                          <StorageLink fileUrl={item.fileUrl} download filename={item.fileName} className="text-primary hover:underline shrink-0"><Download className="h-3 w-3" /></StorageLink>
                         )}
                         <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 text-destructive hover:bg-destructive/10 shrink-0" onClick={() => removeItemMutation.mutate({ transmittalId: selected.id, itemId: item.id })}>
                           <X className="h-3 w-3" />
@@ -3786,9 +3760,9 @@ function CorrespondenceTab({ projectId }: { projectId: number }) {
                         {att.kind === "upload" && <span className="text-muted-foreground">{(att.size / 1024).toFixed(0)} KB</span>}
                       </div>
                       {att.kind === "ref" && att.fileUrl && (
-                        <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline shrink-0">
+                        <StorageLink fileUrl={att.fileUrl} className="text-primary hover:underline shrink-0">
                           <ExternalLink className="h-3 w-3" />
-                        </a>
+                        </StorageLink>
                       )}
                       <button
                         type="button"
