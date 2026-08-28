@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { withViewToken } from "@/lib/view-url";
+import { openStorageFile, downloadStorageFile } from "@/lib/storage-access";
 import { unwrapList } from "@/lib/unwrap-list";
 import { Link, useLocation } from "wouter";
 import { DocumentFilesPanel } from "@/components/documents/DocumentFilesPanel";
@@ -657,24 +657,11 @@ export default function DocumentsPage() {
                       {doc.fileUrl && (
                         <Button
                           variant="ghost" size="icon" className="h-7 w-7" title="Download"
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation();
-                            const url = doc.fileUrl as string;
-                            const filename = doc.fileName || doc.title || "download";
-                            const tok = localStorage.getItem("edms_token");
-                            const isInternal = url.startsWith("/api/storage/") || url.startsWith("/objects/");
-                            if (!isInternal) { window.open(url, "_blank"); return; }
-                            try {
-                              const vtr = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                              const { token } = vtr.ok ? await vtr.json() : { token: null };
-                              const fetchUrl = token ? withViewToken(url, token) : url;
-                              const r = await fetch(fetchUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
-                              if (!r.ok) throw new Error();
-                              const blob = await r.blob();
-                              const blobUrl = URL.createObjectURL(blob);
-                              const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
-                              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                            } catch { window.open(url, "_blank"); }
+                            downloadStorageFile(doc.fileUrl as string, doc.fileName || doc.title || "download").catch(() =>
+                              toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+                            );
                           }}
                         >
                           <Download className="h-3.5 w-3.5" />
@@ -802,35 +789,21 @@ export default function DocumentsPage() {
                 <>
                   <Button
                     variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
-                    onClick={async () => {
-                      const url = docPreview.fileUrl;
-                      if (!url?.startsWith("/api/storage/")) { window.open(url, "_blank"); return; }
-                      const tok = localStorage.getItem("edms_token");
-                      const r = await fetch(`/api/storage/view-token?url=${encodeURIComponent(url)}`, { headers: { Authorization: `Bearer ${tok}` } });
-                      if (r.ok) { const { token } = await r.json(); window.open(withViewToken(url, token), "_blank"); }
-                      else window.open(url, "_blank");
-                    }}
+                    onClick={() =>
+                      openStorageFile(docPreview.fileUrl).catch(() =>
+                        toast({ title: "Could not open file. Please try again.", variant: "destructive" }),
+                      )
+                    }
                   >
                     <ExternalLink className="h-3.5 w-3.5" /> Open in Tab
                   </Button>
                   <Button
                     variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
-                    onClick={async () => {
-                      const url = docPreview.fileUrl;
-                      const filename = docPreview.fileName || docPreview.title || "download";
-                      if (!url?.startsWith("/api/storage/")) {
-                        const a = document.createElement("a"); a.href = url; a.download = filename; a.click(); return;
-                      }
-                      const tok = localStorage.getItem("edms_token");
-                      try {
-                        const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
-                        if (!r.ok) throw new Error();
-                        const blob = await r.blob();
-                        const blobUrl = URL.createObjectURL(blob);
-                        const a = document.createElement("a"); a.href = blobUrl; a.download = filename; a.click();
-                        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-                      } catch { window.open(url, "_blank"); }
-                    }}
+                    onClick={() =>
+                      downloadStorageFile(docPreview.fileUrl, docPreview.fileName || docPreview.title || "download").catch(() =>
+                        toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+                      )
+                    }
                   >
                     <FileDown className="h-3.5 w-3.5" /> Download
                   </Button>

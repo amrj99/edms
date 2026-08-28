@@ -1,4 +1,6 @@
 import { usePreviewUrl } from "@/hooks/use-preview-url";
+import { openStorageFile, downloadStorageFile } from "@/lib/storage-access";
+import { useToast } from "@/hooks/use-toast";
 import { FileText, Loader2, ExternalLink, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -45,6 +47,7 @@ function isImageMime(mimeType: string | null | undefined, ext: string): boolean 
 }
 
 export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
+  const { toast } = useToast();
   const activeUrl   = overrideFile ? overrideFile.fileUrl  : doc.fileUrl;
   const activeName  = overrideFile ? overrideFile.fileName : (doc.fileName || doc.title || "");
 
@@ -142,31 +145,25 @@ export function DocumentPreviewContent({ doc, overrideFile }: PreviewProps) {
       <FileText className="h-16 w-16 opacity-20" />
       <p className="text-sm">No in-browser preview for this file type.</p>
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" asChild>
-          <a href={authenticatedUrl} target="_blank" rel="noreferrer">
-            <ExternalLink className="h-4 w-4 mr-2" />Open File
-          </a>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            openStorageFile(activeUrl).catch(() =>
+              toast({ title: "Could not open file. Please try again.", variant: "destructive" }),
+            )
+          }
+        >
+          <ExternalLink className="h-4 w-4 mr-2" />Open File
         </Button>
         <Button
           variant="outline"
           size="sm"
-          onClick={async () => {
-            const filename = activeName || "download";
-            try {
-              const tok = localStorage.getItem("edms_token");
-              const r = await fetch(authenticatedUrl, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
-              if (!r.ok) throw new Error();
-              const blob = await r.blob();
-              const blobUrl = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = blobUrl;
-              a.download = filename;
-              a.click();
-              setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-            } catch {
-              window.open(authenticatedUrl, "_blank");
-            }
-          }}
+          onClick={() =>
+            downloadStorageFile(activeUrl, activeName || "download").catch(() =>
+              toast({ title: "Could not download file. Please try again.", variant: "destructive" }),
+            )
+          }
         >
           <FileDown className="h-4 w-4 mr-2" />Download
         </Button>
