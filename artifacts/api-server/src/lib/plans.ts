@@ -160,6 +160,17 @@ export function getPlanByTier(tier: string | null | undefined): PlanConfig | nul
   return PLANS.find(p => p.id === normalized) ?? null;
 }
 
+/**
+ * A "paid" plan is one with a positive price (starter/basic/professional/
+ * enterprise). `trial` and `expired`/`free` are priced 0 → NOT paid. Used by the
+ * change-plan consistency branch so that trialEndsAt / read-only recovery is only
+ * applied when an org actually moves onto a paying plan — never blindly per planId.
+ */
+export function isPaidPlan(planId: string | null | undefined): boolean {
+  const p = getPlanByTier(planId);
+  return !!p && p.priceAed > 0;
+}
+
 export type OrgModuleFlags = {
   dashboard:       boolean;
   deliverables:    boolean;

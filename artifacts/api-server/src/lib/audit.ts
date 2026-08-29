@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { db, dbContext } from "@workspace/db";
 
 /**
  * Structured payload for audit log details.
@@ -97,6 +97,18 @@ function buildAuditInsert(params: AuditLogParams) {
 }
 
 export async function createAuditLog(params: AuditLogParams): Promise<void> {
+  // Fix A (DEBT-010): when this runs INSIDE an open tenant transaction (the `db`
+  // proxy resolves to that tx), a failed INSERT has ALREADY aborted the tx in
+  // Postgres. Swallowing the error here does NOT undo that — the enclosing
+  // runInTenantTx COMMIT silently becomes a ROLLBACK, so the whole business
+  // operation is lost while the handler still returns 200 (a false success).
+  // In that case we MUST propagate so the operation fails loudly and rolls back
+  // honestly (handler → next(err) → 500). Only when running on the bare pool
+  // (genuine fire-and-forget, no tx to poison) do we keep the best-effort swallow.
+  if (dbContext.getStore()) {
+    await db.execute(buildAuditInsert(params));
+    return;
+  }
   try {
     await db.execute(buildAuditInsert(params));
   } catch (err) {
