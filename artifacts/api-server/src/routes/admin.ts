@@ -10,8 +10,9 @@ import {
   projectMembersTable, subscriptionsTable, accessShadowLogTable,
 } from "@workspace/db";
 import { desc, asc, isNull, or as drizzleOr, gt, lt } from "drizzle-orm";
-import { PLANS } from "../lib/plans.js";
+import { PLANS, isPaidPlan } from "../lib/plans.js";
 import { normalizePlanId } from "../lib/plan-normalizer.js";
+import { restoreOrgAfterUpgrade } from "../lib/trial-downgrade-scheduler.js";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
 import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireMinRole, requireSysOwner } from "../middlewares/require-role.js";
@@ -911,6 +912,24 @@ router.post("/organizations/:orgId/change-plan", requireSysOwner, async (req, re
           target: subscriptionsTable.organizationId,
           set: { planId, status: "active", updatedAt: new Date() },
         });
+
+      // ── State-consistency invariant (DEBT-010 onboarding-without-Stripe) ─────
+      // subscriptions.plan_id is the billing SSOT, but the trial-downgrade
+      // scheduler and the project/document upload gates read
+      // organizations.subscription_tier + trial_ends_at DIRECTLY. Moving an org
+      // onto a PAID plan must leave NO state that any path still reads as
+      // "trial" / "trial expired", otherwise the scheduler would later downgrade
+      // a paying customer. This runs inside the same withTenant tx as the
+      // subscription write, so it is atomic. Applied ONLY for paid plans — a
+      // non-paid target (trial/expired) keeps its existing behaviour and its
+      // trial_ends_at is never touched blindly.
+      if (isPaidPlan(planId)) {
+        await db.update(organizationsTable)
+          .set({ subscriptionTier: planId, trialEndsAt: null, updatedAt: new Date() })
+          .where(eq(organizationsTable.id, orgId));
+        await restoreOrgAfterUpgrade(orgId);
+      }
+
       await syncOrgModules(orgId, org.name);
       await createAuditLog({
         userId:         req.user!.id,

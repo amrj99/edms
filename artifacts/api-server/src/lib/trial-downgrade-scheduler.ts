@@ -174,6 +174,32 @@ async function downgradeOrg(orgId: number, orgName: string): Promise<void> {
   });
 }
 
+/**
+ * Inverse of the trial downgrade — clears every read-only override and restores
+ * project visibility for an org. Called from admin change-plan when an org moves
+ * onto a paid plan, so an org previously downgraded to "expired" is fully
+ * recovered (the comment on this module's header long promised this function; it
+ * now exists). No Stripe / billing webhook involved.
+ *
+ * Runs on the caller's `db` — the caller MUST already be inside a tenant tx with
+ * authority over `orgId` (change-plan runs as a system_owner request, so RLS is
+ * bypassed for the cross-org writes). Idempotent: the WHERE clauses only touch
+ * rows that are actually in the downgraded state, so repeat calls are no-ops.
+ */
+export async function restoreOrgAfterUpgrade(orgId: number): Promise<void> {
+  await db
+    .update(usersTable)
+    .set({ isReadOnlyOverride: false, updatedAt: new Date() })
+    .where(and(eq(usersTable.organizationId, orgId), eq(usersTable.isReadOnlyOverride, true)));
+
+  await db
+    .update(projectsTable)
+    .set({ visibleOnFree: true, updatedAt: new Date() })
+    .where(and(eq(projectsTable.organizationId, orgId), eq(projectsTable.visibleOnFree, false)));
+
+  logger.info({ orgId }, "[trial-downgrade] Org restored after upgrade — read-only overrides cleared, projects re-shown");
+}
+
 export function startTrialDowngradeScheduler(): NodeJS.Timeout {
   processExpiredTrials().catch(err =>
     logger.error(err, "[trial-downgrade] Initial run failed"),
