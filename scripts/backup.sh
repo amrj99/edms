@@ -65,20 +65,19 @@ DB_USER="${DB_USER:-edms}"
 DB_NAME="${DB_NAME:-edms}"
 AGE_RECIPIENTS="${AGE_RECIPIENTS:-/etc/edms-age-recipients.txt}"
 
-# Isolated backup credentials (fallback to prod creds during rollout)
-BK_KEY="${BACKUP_R2_ACCESS_KEY:-${R2_ACCESS_KEY:-}}"
-BK_SECRET="${BACKUP_R2_SECRET_KEY:-${R2_SECRET_KEY:-}}"
+# Isolated backup credentials — FAIL-CLOSED: the scoped backup token is required.
+# No fallback to the production R2_* token (a silent fallback would defeat the
+# credential isolation and could hide a missing/rotated backup token).
+BK_KEY="${BACKUP_R2_ACCESS_KEY:-}"
+BK_SECRET="${BACKUP_R2_SECRET_KEY:-}"
 
 echo "[backup] ── ArcScale EDMS Backup (hardened) ── $(date)"
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 if [ -z "${R2_ENDPOINT:-}" ] || [ -z "$BK_KEY" ] || [ -z "$BK_SECRET" ]; then
-  echo "[backup] FATAL: R2 endpoint/credentials not configured (R2_ENDPOINT + BACKUP_R2_* or R2_*)."; exit 1
+  echo "[backup] FATAL: scoped backup creds required — set BACKUP_R2_ACCESS_KEY + BACKUP_R2_SECRET_KEY (+ R2_ENDPOINT). No fallback to prod R2_*."; exit 1
 fi
 command -v aws >/dev/null 2>&1 || { echo "[backup] FATAL: aws CLI not found."; exit 1; }
-if [ "${BACKUP_R2_ACCESS_KEY:-}" = "" ]; then
-  echo "[backup] WARN: BACKUP_R2_ACCESS_KEY unset — using PROD credentials (not isolated). Set the scoped token to complete R1-H3."
-fi
 
 # Encryption is ACTIVE when a recipients file with >=1 age1 line exists.
 ENCRYPT=0; AGE_BIN="$(command -v age || true)"

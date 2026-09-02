@@ -46,13 +46,14 @@ FILES_HEALTHCHECK_URL="${FILES_HEALTHCHECK_URL:-}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK="/tmp/edms-backups"
 
-BK_KEY="${BACKUP_R2_ACCESS_KEY:-${R2_ACCESS_KEY:-}}"
-BK_SECRET="${BACKUP_R2_SECRET_KEY:-${R2_SECRET_KEY:-}}"
+# FAIL-CLOSED: scoped backup token required; no fallback to prod R2_*.
+BK_KEY="${BACKUP_R2_ACCESS_KEY:-}"
+BK_SECRET="${BACKUP_R2_SECRET_KEY:-}"
 
 echo "[backup-files] ── ArcScale EDMS File Backup (encrypted tarball) ── $(date)"
 
 if [ -z "${R2_ENDPOINT:-}" ] || [ -z "$BK_KEY" ] || [ -z "$BK_SECRET" ]; then
-  echo "[backup-files] FATAL: R2 endpoint/credentials not configured."; exit 1
+  echo "[backup-files] FATAL: scoped backup creds required — set BACKUP_R2_ACCESS_KEY + BACKUP_R2_SECRET_KEY (+ R2_ENDPOINT). No fallback to prod R2_*."; exit 1
 fi
 command -v aws >/dev/null 2>&1 || { echo "[backup-files] FATAL: aws CLI not found."; exit 1; }
 

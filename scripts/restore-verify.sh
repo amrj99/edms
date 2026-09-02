@@ -38,9 +38,10 @@ set -euo pipefail
 
 : "${AGE_IDENTITY:?set AGE_IDENTITY to a PRIVATE age key path (this host, off-VPS)}"
 R2_ENDPOINT="${R2_ENDPOINT:?set R2_ENDPOINT}"
-BK_KEY="${BACKUP_R2_ACCESS_KEY:-${R2_ACCESS_KEY:-}}"
-BK_SECRET="${BACKUP_R2_SECRET_KEY:-${R2_SECRET_KEY:-}}"
-[ -n "$BK_KEY" ] && [ -n "$BK_SECRET" ] || { echo "[drill] FATAL: backup R2 credentials not set."; exit 1; }
+# FAIL-CLOSED: scoped backup token required; no fallback to prod R2_*.
+BK_KEY="${BACKUP_R2_ACCESS_KEY:-}"
+BK_SECRET="${BACKUP_R2_SECRET_KEY:-}"
+[ -n "$BK_KEY" ] && [ -n "$BK_SECRET" ] || { echo "[drill] FATAL: scoped backup creds required — set BACKUP_R2_ACCESS_KEY + BACKUP_R2_SECRET_KEY. No fallback to prod R2_*."; exit 1; }
 BACKUP_BUCKET="${BACKUP_BUCKET:-edms-backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-nightly}"
 TEST_PORT="${TEST_PORT:-5459}"
