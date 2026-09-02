@@ -1,178 +1,107 @@
 #!/bin/bash
 # =============================================================================
-# backup-files.sh — ArcScale EDMS nightly on-premise file backup to Cloudflare R2
+# backup-files.sh — ArcScale EDMS on-premise file backup to Cloudflare R2
+#                   HARDENED (R1): dated, age-ENCRYPTED tarball, isolated token
 # =============================================================================
 #
-# Syncs the uploads_data Docker volume to Cloudflare R2.
+# Backs up the on-premise uploads_data Docker volume as a single dated,
+# age-encrypted tarball. Cloud-backed files (storage_type r2/s3) are NOT copied
+# — they already live in the provider and are protected in place (versioning/
+# bucket-lock/lifecycle per the Backup & DR architecture). This never full-copies
+# customer object storage; it only snapshots the small on-premise residual.
 #
-# IMPORTANT — No deletion propagation (v1 / Sprint C-1 policy):
-#   --delete is intentionally omitted. Files removed from the VPS are retained
-#   in R2. This is a safe accumulating mirror. Cleanup policy and R2 versioning
-#   will be defined in a future sprint.
+# ── Change from the previous version ──────────────────────────────────────────
+#   OLD: `aws s3 sync` of individual RAW files → edms-backups/files-mirror/
+#   NEW: tar → age-encrypt → ONE dated object → edms-backups/files-mirror-enc/
+#        + retention. The old files-mirror/ objects are left untouched.
+#   Why: encryption (raw files no longer sit in R2), atomicity, and consistency
+#        with the DB backup. The on-premise set is tiny, so a full dated tarball
+#        is cheap; per-file mirroring is unnecessary here.
 #
-# Usage:
-#   bash /var/www/edms/scripts/backup-files.sh
+# Called by backup.sh after the DB dump; may also run standalone.
 #
-# Called automatically by backup.sh immediately after the DB dump.
-# May also be run standalone for testing or manual sync.
-#
-# Prerequisites on the VPS:
-#   apt-get install -y awscli     (same as backup.sh)
-#   Docker volume edms_uploads_data must exist (created by docker compose up)
-#
-# Required environment variables (set in /var/www/edms/.env or exported):
-#   R2_ENDPOINT       Cloudflare R2 endpoint, e.g. https://<account>.r2.cloudflarestorage.com
-#   R2_ACCESS_KEY     R2 access key ID
-#   R2_SECRET_KEY     R2 secret access key
-#
-# Optional environment variables:
-#   BACKUP_BUCKET        R2 bucket for backups (default: edms-backups)
-#                        Same bucket as backup.sh — files go under a separate prefix.
-#   FILES_PREFIX         R2 key prefix for file mirror (default: files-mirror)
-#   UPLOADS_VOLUME_DIR   Local path to Docker volume data
-#                        (default: /var/lib/docker/volumes/edms_uploads_data/_data)
-#   FILES_HEALTHCHECK_URL  Optional separate healthchecks.io ping URL for file backup.
-#                          Create a separate check at healthchecks.io for file backup
-#                          monitoring independent of the DB backup check.
-#   ENV_FILE             Path to .env file to source (default: /var/www/edms/.env)
-#
-# Behaviour by storage mode:
-#   onpremise   → syncs UPLOADS_VOLUME_DIR to R2 (main use case)
-#   r2 / s3     → skips with informational message (files are in cloud provider already)
-#   Not found   → skips with warning (volume dir missing = new install or different path)
-#
+# Env (from /var/www/edms/.env or exported):
+#   R2_ENDPOINT (required)
+#   BACKUP_R2_ACCESS_KEY/SECRET  (scoped token; falls back to R2_ACCESS_KEY/SECRET)
+#   BACKUP_BUCKET        default: edms-backups
+#   FILES_PREFIX         default: files-mirror-enc
+#   FILES_RETAIN_DAYS    default: 90
+#   AGE_RECIPIENTS       default: /etc/edms-age-recipients.txt  (REQUIRED to run)
+#   UPLOADS_VOLUME_DIR   default: /var/lib/docker/volumes/edms_uploads_data/_data
+#   FILES_HEALTHCHECK_URL  optional independent dead-man ping
+#   ENV_FILE             default: /var/www/edms/.env
 # =============================================================================
 
 set -euo pipefail
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-
 ENV_FILE="${ENV_FILE:-/var/www/edms/.env}"
-if [ -f "$ENV_FILE" ]; then
-  # shellcheck disable=SC1090
-  set -a; source "$ENV_FILE"; set +a
-fi
+if [ -f "$ENV_FILE" ]; then set -a; source "$ENV_FILE"; set +a; fi
 
 BACKUP_BUCKET="${BACKUP_BUCKET:-edms-backups}"
-FILES_PREFIX="${FILES_PREFIX:-files-mirror}"
+FILES_PREFIX="${FILES_PREFIX:-files-mirror-enc}"
+FILES_RETAIN_DAYS="${FILES_RETAIN_DAYS:-90}"
+AGE_RECIPIENTS="${AGE_RECIPIENTS:-/etc/edms-age-recipients.txt}"
 UPLOADS_VOLUME_DIR="${UPLOADS_VOLUME_DIR:-/var/lib/docker/volumes/edms_uploads_data/_data}"
 FILES_HEALTHCHECK_URL="${FILES_HEALTHCHECK_URL:-}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+WORK="/tmp/edms-backups"
 
-# ── Pre-flight checks ─────────────────────────────────────────────────────────
+BK_KEY="${BACKUP_R2_ACCESS_KEY:-${R2_ACCESS_KEY:-}}"
+BK_SECRET="${BACKUP_R2_SECRET_KEY:-${R2_SECRET_KEY:-}}"
 
-echo "[backup-files] ── ArcScale EDMS File Backup ── $(date)"
+echo "[backup-files] ── ArcScale EDMS File Backup (encrypted tarball) ── $(date)"
 
-if [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_ACCESS_KEY:-}" ] || [ -z "${R2_SECRET_KEY:-}" ]; then
-  echo "[backup-files] FATAL: R2 credentials not configured."
-  echo "[backup-files]   Required: R2_ENDPOINT, R2_ACCESS_KEY, R2_SECRET_KEY"
-  echo "[backup-files]   Set these in ${ENV_FILE} or export them before running."
+if [ -z "${R2_ENDPOINT:-}" ] || [ -z "$BK_KEY" ] || [ -z "$BK_SECRET" ]; then
+  echo "[backup-files] FATAL: R2 endpoint/credentials not configured."; exit 1
+fi
+command -v aws >/dev/null 2>&1 || { echo "[backup-files] FATAL: aws CLI not found."; exit 1; }
+
+AGE_BIN="$(command -v age || true)"
+if [ ! -r "$AGE_RECIPIENTS" ] || ! grep -q '^age1' "$AGE_RECIPIENTS"; then
+  echo "[backup-files] FATAL: AGE_RECIPIENTS ($AGE_RECIPIENTS) missing/empty — encryption is mandatory for file backups (R1-H2). Skipping upload."
   exit 1
 fi
+[ -x "$AGE_BIN" ] || { echo "[backup-files] FATAL: 'age' not installed."; exit 1; }
 
-if ! command -v aws &> /dev/null; then
-  echo "[backup-files] FATAL: aws CLI not found. Install with: apt-get install -y awscli"
-  exit 1
-fi
-
-# ── Skip if uploads volume directory is not present ───────────────────────────
-#
-# Possible causes:
-#   - Storage mode is r2 / s3 (files live in cloud, not on VPS disk)
-#   - Docker is not running
-#   - Volume path is customised via UPLOADS_VOLUME_DIR env var
-#
-# This is intentionally non-fatal (exit 0): if you run R2 file storage,
-# this script should not fail your nightly cron job.
-
+# Skip cleanly if there is no on-premise volume (e.g. all storage is r2/s3).
 if [ ! -d "$UPLOADS_VOLUME_DIR" ]; then
-  echo "[backup-files] SKIP: Uploads directory not found: ${UPLOADS_VOLUME_DIR}"
-  echo "[backup-files]   Expected path for Docker-managed on-premise storage."
-  echo "[backup-files]   If using R2 or S3 file storage, files are managed by the cloud provider"
-  echo "[backup-files]   and do not need to be synced here."
-  echo "[backup-files]   If using on-premise storage, verify Docker is running:"
-  echo "[backup-files]     docker volume inspect edms_uploads_data"
-  echo "[backup-files]   Override path with: UPLOADS_VOLUME_DIR=/your/path"
-  exit 0
+  echo "[backup-files] SKIP: uploads dir not found ($UPLOADS_VOLUME_DIR) — cloud storage or new install."; exit 0
 fi
+NFILES=$(find "$UPLOADS_VOLUME_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+if [ "$NFILES" -eq 0 ]; then echo "[backup-files] SKIP: no files in uploads volume."; exit 0; fi
+echo "[backup-files] Local files: ${NFILES}"
 
-# ── Count local files ─────────────────────────────────────────────────────────
+awsbk(){ AWS_ACCESS_KEY_ID="$BK_KEY" AWS_SECRET_ACCESS_KEY="$BK_SECRET" aws "$@" --endpoint-url "$R2_ENDPOINT" --region auto; }
+age_encrypt(){ local args=(); while read -r r; do [ -n "$r" ] && args+=(-r "$r"); done < <(grep '^age1' "$AGE_RECIPIENTS"); "$AGE_BIN" "${args[@]}" -o "$2" "$1"; }
 
-FILES_BEFORE=$(find "$UPLOADS_VOLUME_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
-echo "[backup-files] Local files found: ${FILES_BEFORE} (in ${UPLOADS_VOLUME_DIR})"
+mkdir -p "$WORK"; chmod 700 "$WORK"
+TAR="${WORK}/edms_uploads_${TIMESTAMP}.tar"
+tar -cf "$TAR" -C "$UPLOADS_VOLUME_DIR" . || { echo "[backup-files] FATAL: tar failed."; exit 1; }
+sha256sum "$TAR" | awk '{print $1}' > "${TAR}.sha256"
+age_encrypt "$TAR" "${TAR}.age" || { echo "[backup-files] FATAL: age encryption failed."; exit 1; }
+head -c 30 "${TAR}.age" | grep -q "age-encryption.org" || { echo "[backup-files] FATAL: encrypted tar missing age header."; exit 1; }
+rm -f "$TAR"
+echo "[backup-files] Encrypted tar: $(du -h "${TAR}.age" | cut -f1) (${NFILES} files)"
 
-if [ "$FILES_BEFORE" -eq 0 ]; then
-  echo "[backup-files] SKIP: No files in uploads volume — nothing to sync."
-  echo "[backup-files]   This is expected for a new installation with no uploaded documents."
-  exit 0
-fi
+awsbk s3 cp "${TAR}.age"    "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/edms_uploads_${TIMESTAMP}.tar.age"    --no-progress
+awsbk s3 cp "${TAR}.sha256" "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/edms_uploads_${TIMESTAMP}.tar.sha256" --no-progress
+rm -f "${TAR}.age" "${TAR}.sha256"
+echo "[backup-files] Uploaded to s3://${BACKUP_BUCKET}/${FILES_PREFIX}/"
 
-# ── Sync to R2 ────────────────────────────────────────────────────────────────
-#
-# Flags used:
-#   --size-only   Skip re-uploading files whose size already matches in R2.
-#                 Faster than checksum comparison for large binary files.
-#   --no-progress Suppress per-file progress bars (unsuitable for log output).
-#
-# Flags intentionally NOT used:
-#   --delete      Omitted per C-1 policy — files removed from VPS are retained
-#                 in R2. This keeps the mirror as a safe accumulating backup.
-
-echo "[backup-files] Syncing to R2 s3://${BACKUP_BUCKET}/${FILES_PREFIX}/ ..."
-echo "[backup-files]   Mode: accumulating mirror (no deletion propagation)"
-
-AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
-AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
-aws s3 sync \
-  "$UPLOADS_VOLUME_DIR" \
-  "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/" \
-  --endpoint-url "${R2_ENDPOINT}" \
-  --region auto \
-  --size-only \
-  --no-progress
-
-echo "[backup-files] Sync complete."
-
-# ── Post-sync verification ────────────────────────────────────────────────────
-#
-# Count objects in R2 after sync to confirm upload succeeded.
-# R2 count may exceed local count: the accumulating mirror retains files
-# that were previously deleted from VPS.
-
-R2_COUNT=$(
-  AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
-  AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
-  aws s3 ls \
-    "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/" \
-    --endpoint-url "${R2_ENDPOINT}" \
-    --region auto \
-    --recursive \
-  2>/dev/null | wc -l | tr -d ' '
-)
-
-echo "[backup-files] R2 files-mirror total: ${R2_COUNT} objects (local: ${FILES_BEFORE})"
-
-if [ "$R2_COUNT" -eq 0 ] && [ "$FILES_BEFORE" -gt 0 ]; then
-  echo "[backup-files] WARN: Sync reported success but R2 shows 0 objects."
-  echo "[backup-files]   Check BACKUP_BUCKET and R2 credentials."
-fi
-
-if [ "$R2_COUNT" -lt "$FILES_BEFORE" ]; then
-  GAP=$((FILES_BEFORE - R2_COUNT))
-  echo "[backup-files] WARN: R2 has ${GAP} fewer objects than local files."
-  echo "[backup-files]   Some files may have failed to upload. Check aws s3 sync output above."
-fi
-
-# ── Healthchecks.io ping ──────────────────────────────────────────────────────
+# ── Retention (matches dated tarballs only; old files-mirror/ untouched) ──────
+if date -d "1 day ago" >/dev/null 2>&1; then CUTOFF=$(date -d "${FILES_RETAIN_DAYS} days ago" +%Y%m%d); else CUTOFF=$(date -v-${FILES_RETAIN_DAYS}d +%Y%m%d); fi
+PRUNED=0
+while IFS= read -r f; do
+  fdate=$(echo "$f" | grep -oE '[0-9]{8}' | head -1 || true)
+  if [ -n "$fdate" ] && [ "$fdate" -lt "$CUTOFF" ] 2>/dev/null; then
+    awsbk s3 rm "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/${f}" >/dev/null && { echo "[backup-files] Pruned: ${f}"; PRUNED=$((PRUNED+1)); }
+  fi
+done < <(awsbk s3 ls "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/" | awk '{print $4}' | grep -E '^edms_uploads_[0-9]' || true)
+echo "[backup-files] Pruned ${PRUNED} old file tarball(s)."
 
 if [ -n "${FILES_HEALTHCHECK_URL}" ]; then
-  if curl -fsS --retry 3 --max-time 10 "${FILES_HEALTHCHECK_URL}" > /dev/null; then
-    echo "[backup-files] Dead-man ping sent: ${FILES_HEALTHCHECK_URL}"
-  else
-    echo "[backup-files] WARN: Failed to ping healthchecks.io — file backup monitoring may not register success."
-  fi
+  curl -fsS --retry 3 --max-time 10 "${FILES_HEALTHCHECK_URL}" >/dev/null && echo "[backup-files] Dead-man ping sent." || echo "[backup-files] WARN: files ping failed."
 else
-  echo "[backup-files] NOTE: FILES_HEALTHCHECK_URL not set."
-  echo "[backup-files]   Set it in ${ENV_FILE} to enable independent file backup alerting."
+  echo "[backup-files] NOTE: FILES_HEALTHCHECK_URL not set (R1-H5)."
 fi
-
 echo "[backup-files] ── Done: $(date) ──"
