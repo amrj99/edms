@@ -4,7 +4,9 @@
 > هذا الملف يجيب على سؤال واحد:
 > **"لو مات السيرفر الآن — كيف أعيد كل شيء خلال ساعة؟"**
 >
-> آخر تحديث: 2026-05-27
+> آخر تحديث: 2026-09-02 (محدَّث لتقوية R1)
+
+> ⚠️ **R1 (2026-09):** النسخ الآن **مشفّرة بـage** — لا تُستعاد بدون **مفتاح خاص محفوظ off-VPS** — وتُرفع/تُقرأ عبر **scoped token** (`BACKUP_R2_*`) مقيّد بـ`edms-backups` فقط. الكائنات صارت `nightly/*.dump.age` و`config/*.snap.age` و`files-mirror-enc/*.tar.age`. **الدرل يعمل خارج الـVPS.** الإجراء المشفّر الكامل + off-VPS drill في `docs/operations/BACKUP-AND-RECOVERY.md` (المرجع التفصيلي).
 
 ---
 
@@ -111,8 +113,14 @@ R2_ACCESS_KEY=...
 R2_SECRET_KEY=...
 BACKUP_BUCKET=edms-backups
 HEALTHCHECK_URL=https://hc-ping.com/...
+# ── R1: scoped backup token (edms-backups only) + independent file dead-man ──
+BACKUP_R2_ACCESS_KEY=...
+BACKUP_R2_SECRET_KEY=...
+FILES_HEALTHCHECK_URL=https://hc-ping.com/...
 PHASE_D_ENFORCE_DEPT=true
 ```
+
+> **R1 إضافي على الـVPS:** `apt-get install -y age` + ملف `/etc/edms-age-recipients.txt` (600) يحوي **المفتاحين العامّين** (`age1…`، سطر لكلٍّ). المفاتيح **الخاصة** محفوظة off-site فقط (لا على الـVPS) — تلزم للفكّ عند الاستعادة.
 
 > ⚠️ القيم السرية محفوظة في مكان آمن منفصل عن هذا الملف.
 
@@ -131,54 +139,53 @@ curl -s http://localhost:8080/api/health
 
 ## 4. استرجاع قاعدة البيانات من النسخة الاحتياطية
 
-### أ — عرض النسخ المتاحة في R2
+> ⚠️ **النسخ مشفّرة (`.dump.age`).** يجب فكّها بمفتاح age **خاص** (محفوظ off-site، ليس على هذا الـVPS) **قبل** `pg_restore`. استخدم الـ**scoped token** (`BACKUP_R2_*`) للقراءة.
+
+### أ — تهيئة + عرض النسخ المشفّرة
 
 ```bash
-AWS_ACCESS_KEY_ID=R2_ACCESS_KEY \
-AWS_SECRET_ACCESS_KEY=R2_SECRET_KEY \
-aws s3 ls s3://edms-backups/nightly/ \
-  --endpoint-url https://....r2.cloudflarestorage.com \
-  --region auto
+source /var/www/edms/.env
+a(){ AWS_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_KEY" aws "$@" --endpoint-url "$R2_ENDPOINT" --region auto; }
+a s3 ls s3://edms-backups/nightly/ | grep 'dump.age$'
 ```
 
-### ب — تحميل النسخة المطلوبة
+### ب — تحميل أحدث نسخة مشفّرة
 
 ```bash
-AWS_ACCESS_KEY_ID=R2_ACCESS_KEY \
-AWS_SECRET_ACCESS_KEY=R2_SECRET_KEY \
-aws s3 cp \
-  s3://edms-backups/nightly/edms_YYYYMMDD_HHMMSS.dump \
-  /tmp/restore.dump \
-  --endpoint-url https://....r2.cloudflarestorage.com \
-  --region auto
+LATEST=$(a s3 ls s3://edms-backups/nightly/ | awk '{print $4}' | grep 'dump.age$' | sort | tail -1)
+a s3 cp "s3://edms-backups/nightly/$LATEST" /tmp/db.age
+echo "downloaded: $LATEST"
 ```
 
-### ج — استرجاع قاعدة البيانات
+### ج — الفكّ بمفتاح خاص (off-VPS) ثم الاستعادة
 
 ```bash
-# تأكد أن postgres يعمل أولاً
-docker compose up -d postgres
-sleep 15
+# الفكّ (المفتاح الخاص محفوظ off-site — لا يُوضع على الإنتاج إلا لحظة الاستعادة الطارئة):
+age -d -i /path/to/primary.key -o /tmp/restore.dump /tmp/db.age
 
-# استرجاع النسخة
-docker exec -i edms_postgres pg_restore \
-  -U edms \
-  -d edms \
-  --clean \
-  --if-exists \
-  /tmp/restore.dump
+docker compose up -d postgres && sleep 15
 
-# أو عبر pipe مباشرة
-cat /tmp/restore.dump | docker exec -i edms_postgres pg_restore \
-  -U edms -d edms --clean --if-exists
+# إنشاء دورَي DEBT-010 قبل الاستعادة (وإلّا تفشل GRANTs في الـdump):
+docker exec edms_postgres psql -U edms -d edms \
+  -c "DO \$\$ BEGIN CREATE ROLE edms_app; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;" \
+  -c "DO \$\$ BEGIN CREATE ROLE edms_rls_owner; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$;"
+
+docker exec -i edms_postgres pg_restore -U edms -d edms --clean --if-exists --no-owner < /tmp/restore.dump
+shred -u /tmp/restore.dump /tmp/db.age
+
+# ضبط كلمة سر edms_app لتطابق .env (ليست في الـdump):
+docker exec -it edms_postgres psql -U edms -d edms -c "\\password edms_app"
 ```
 
 ### د — التحقق من الاسترجاع
 
 ```bash
-docker exec edms_postgres psql -U edms -d edms \
-  -c "SELECT COUNT(*) FROM users;"
+docker exec edms_postgres psql -U edms -d edms -c "SELECT COUNT(*) FROM users;"
+# تحقّق الأدوار: edms_app super=f/bypass=f
+docker exec edms_postgres psql -U edms -d edms -c "SELECT rolname,rolsuper,rolbypassrls FROM pg_roles WHERE rolname IN ('edms_app','edms_rls_owner');"
 ```
+
+> **ملفات onpremise:** لاستعادتها فُكّ أحدث `files-mirror-enc/*.tar.age` بنفس المفتاح الخاص وفكّ الـtar إلى volume `edms_uploads_data` (الخطوات في `BACKUP-AND-RECOVERY.md` §6 STEP 7).
 
 ---
 
@@ -226,7 +233,12 @@ chmod 600 /root/.ssh/authorized_keys
 # تثبيت AWS CLI إذا لم يكن موجوداً
 aws --version || (curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip && cd /tmp && unzip -q awscliv2.zip && ./aws/install)
 
-# اختبار السكريبت يدوياً
+# R1: تثبيت age + وضع المفتاحين العامّين (التشفير يتفعّل بوجود الملف)
+apt-get install -y age
+# /etc/edms-age-recipients.txt (600): سطرا age1… العامّان — من مخزنك off-site
+# .env: BACKUP_R2_ACCESS_KEY/SECRET (scoped token) + FILES_HEALTHCHECK_URL
+
+# اختبار السكريبت يدوياً (يجب أن يظهر: Encryption: ON (2 recipient(s)))
 bash /var/www/edms/scripts/backup.sh
 
 # تفعيل النسخ الاحتياطي التلقائي كل ليلة الساعة 2 صباحاً
@@ -291,8 +303,13 @@ fail2ban-client status sshd
 | POSTGRES_PASSWORD | قاعدة البيانات | 180 يوم |
 | JWT_SECRET | توليد tokens للمستخدمين | 180 يوم |
 | REFRESH_TOKEN_SECRET | تجديد جلسات المستخدمين | 180 يوم |
-| R2_ACCESS_KEY | رفع واسترجاع الملفات من R2 | 90 يوم |
-| R2_SECRET_KEY | رفع واسترجاع الملفات من R2 | 90 يوم |
+| R2_ACCESS_KEY | التطبيق: ملفات العملاء (edms-files) | 90 يوم |
+| R2_SECRET_KEY | التطبيق: ملفات العملاء | 90 يوم |
+| BACKUP_R2_ACCESS_KEY | scoped token للنسخ (edms-backups فقط) | 90 يوم |
+| BACKUP_R2_SECRET_KEY | scoped token للنسخ | 90 يوم |
+| age primary private key | **فكّ النسخ المشفّرة** — off-site فقط (لا على VPS) | ثابت (multi-recipient) |
+| age break-glass private key | مفتاح فكّ احتياطي مستقل — off-site | ثابت |
+| FILES_HEALTHCHECK_URL | مراقبة نسخ الملفات | ثابت |
 | OPENROUTER_API_KEY | خدمات الذكاء الاصطناعي | عند الحاجة |
 | RESEND_API_KEY | إرسال البريد الإلكتروني | عند الحاجة |
 | CF_AI_TOKEN | Cloudflare AI | عند الحاجة |

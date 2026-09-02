@@ -1,5 +1,9 @@
 # ArcScale Disaster Recovery Runbook (R1-P4)
 
+> **Canonical, R1-current procedure lives in `docs/operations/BACKUP-AND-RECOVERY.md` §6**
+> (aws CLI + scoped `BACKUP_R2_*` token + age-decrypt + role pre-create). This file is a
+> conceptual companion; where commands differ (e.g. rclone), the canonical doc wins.
+
 **Scenario:** the production VPS (`edms-server`, Hetzner) is gone and its disk is
 unreachable. Goal: bring ArcScale back on a **fresh empty VPS** from off-site
 assets only. Customer files on R2 are independent and survive; this runbook
