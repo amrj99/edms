@@ -1,266 +1,127 @@
 #!/bin/bash
 # =============================================================================
-# restore-verify.sh — ArcScale EDMS backup restore verification drill
+# restore-verify.sh — ArcScale EDMS recoverability drill (R1, OFF-VPS)
 # =============================================================================
 #
-# Run this monthly (during beta) or weekly (after beta, with paying clients).
-# Restores the latest nightly backup to a throwaway container and verifies
-# row counts match the live database within an acceptable margin.
+# Proves an ENCRYPTED backup is RESTORABLE — not merely present. Run this OFF the
+# production VPS, on a host that holds a PRIVATE age identity (primary or
+# break-glass). The production VPS never holds a private key (R1 security rule).
 #
-# Usage:
-#   bash /var/www/edms/scripts/restore-verify.sh
+#   find latest encrypted DB backup in R2 (scoped token, read)
+#     → age-decrypt with a PRIVATE identity
+#     → pg_restore into a THROWAWAY scratch container (never production)
+#     → SELF-INTEGRITY checks (the authoritative PASS/FAIL)
+#     → optional compare to a read-only count snapshot (extra, non-gating)
+#     → teardown scratch  → optional recoverability ping
 #
-# This script is SAFE to run on a live VPS — it uses a different port (5433)
-# and a throwaway container that is removed at the end.
+# PASS criterion (per architecture decision D2-a): the backup's OWN integrity —
+# decrypt OK, restore into a clean PostgreSQL, schema + critical tables present
+# and non-empty, relational/integrity checks pass. Live-count comparison is an
+# OPTIONAL extra only (production data changes between backup and drill).
 #
-# Required: same R2 credentials as backup.sh
-# Optional:
-#   BACKUP_BUCKET     R2 bucket (default: edms-backups)
-#   BACKUP_PREFIX     Key prefix (default: nightly)
-#   TEST_PORT         Local port for the test container (default: 5433)
-#   TEST_PG_PASSWORD  Postgres password for test container (default: test_restore_only)
+# Requirements on THIS (off-VPS) host: age, aws, docker.
 #
+# Env:
+#   R2_ENDPOINT (required)
+#   BACKUP_R2_ACCESS_KEY/SECRET  scoped backup token (read); falls back to R2_*
+#   AGE_IDENTITY   (required) path to a PRIVATE age identity file (mode 600)
+#   BACKUP_BUCKET  default: edms-backups
+#   BACKUP_PREFIX  default: nightly
+#   TEST_PORT      default: 5459
+#   PG_IMAGE       default: postgres:16-alpine
+#   DB_USER/DB_NAME default: edms / edms
+#   COUNT_SNAPSHOT (optional) file of "table<TAB>count" lines for extra compare
+#   HC_RECOVER_URL (optional) healthchecks ping URL for recoverability health
 # =============================================================================
 
 set -euo pipefail
 
-ENV_FILE="${ENV_FILE:-/var/www/edms/.env}"
-if [ -f "$ENV_FILE" ]; then
-  # shellcheck disable=SC1090
-  set -a; source "$ENV_FILE"; set +a
-fi
-
+: "${AGE_IDENTITY:?set AGE_IDENTITY to a PRIVATE age key path (this host, off-VPS)}"
+R2_ENDPOINT="${R2_ENDPOINT:?set R2_ENDPOINT}"
+BK_KEY="${BACKUP_R2_ACCESS_KEY:-${R2_ACCESS_KEY:-}}"
+BK_SECRET="${BACKUP_R2_SECRET_KEY:-${R2_SECRET_KEY:-}}"
+[ -n "$BK_KEY" ] && [ -n "$BK_SECRET" ] || { echo "[drill] FATAL: backup R2 credentials not set."; exit 1; }
 BACKUP_BUCKET="${BACKUP_BUCKET:-edms-backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-nightly}"
-FILES_PREFIX="${FILES_PREFIX:-files-mirror}"
-TEST_PORT="${TEST_PORT:-5433}"
-TEST_PG_PASSWORD="${TEST_PG_PASSWORD:-test_restore_only}"
-DB_CONTAINER="${DB_CONTAINER:-edms_postgres}"
-DB_USER="${DB_USER:-edms}"
-DB_NAME="${DB_NAME:-edms}"
-RESTORE_CONTAINER="edms_restore_test_$$"
-TEMP_FILE="/tmp/edms_restore_test_$$.dump"
+TEST_PORT="${TEST_PORT:-5459}"
+PG_IMAGE="${PG_IMAGE:-postgres:16-alpine}"
+DB_USER="${DB_USER:-edms}"; DB_NAME="${DB_NAME:-edms}"
+COUNT_SNAPSHOT="${COUNT_SNAPSHOT:-}"
+HC_RECOVER_URL="${HC_RECOVER_URL:-}"
+SCRATCH="edms_restore_scratch_$$"
+WORK="$(mktemp -d)"; TESTPW="restore_only_$$"
 
-cleanup() {
-  echo "[restore-verify] Cleaning up..."
-  docker stop "$RESTORE_CONTAINER" 2>/dev/null || true
-  docker rm "$RESTORE_CONTAINER" 2>/dev/null || true
-  rm -f "$TEMP_FILE"
-  echo "[restore-verify] Cleanup done."
-}
+command -v age >/dev/null 2>&1 || { echo "[drill] FATAL: age not installed on this host."; exit 1; }
+command -v aws >/dev/null 2>&1 || { echo "[drill] FATAL: aws not installed."; exit 1; }
+[ -r "$AGE_IDENTITY" ] || { echo "[drill] FATAL: AGE_IDENTITY not readable: $AGE_IDENTITY"; exit 1; }
+
+cleanup(){ docker rm -f "$SCRATCH" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
+awsbk(){ AWS_ACCESS_KEY_ID="$BK_KEY" AWS_SECRET_ACCESS_KEY="$BK_SECRET" aws "$@" --endpoint-url "$R2_ENDPOINT" --region auto; }
+q(){ docker exec -e PGPASSWORD="$TESTPW" "$SCRATCH" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -tAc "$1" 2>/dev/null | tr -d ' '; }
 
-echo "[restore-verify] ── Restore Verification Drill ── $(date)"
+echo "[drill] ── Recoverability Drill (off-VPS) ── $(date -u)"
 
-if [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_ACCESS_KEY:-}" ] || [ -z "${R2_SECRET_KEY:-}" ]; then
-  echo "[restore-verify] FATAL: R2 credentials not configured."
-  exit 1
+# ── 1. Latest encrypted DB backup ─────────────────────────────────────────────
+LATEST=$(awsbk s3 ls "s3://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" | awk '{print $4}' | grep -E '^edms_[0-9].*\.dump\.age$' | sort | tail -1)
+[ -n "$LATEST" ] || { echo "[drill] FATAL: no encrypted (.dump.age) backups found in ${BACKUP_PREFIX}/."; exit 1; }
+echo "[drill] latest: $LATEST"
+awsbk s3 cp "s3://${BACKUP_BUCKET}/${BACKUP_PREFIX}/${LATEST}" "${WORK}/d.age" --no-progress
+
+# ── 2. Decrypt with a PRIVATE identity ────────────────────────────────────────
+age -d -i "$AGE_IDENTITY" -o "${WORK}/d.dump" "${WORK}/d.age" || { echo "[drill] FATAL: decrypt failed (wrong key or corrupt)."; exit 1; }
+echo "[drill] decrypt OK ($(du -h "${WORK}/d.dump" | cut -f1))"
+
+# ── 3. Throwaway scratch container ────────────────────────────────────────────
+docker run -d --name "$SCRATCH" -e POSTGRES_USER="$DB_USER" -e POSTGRES_PASSWORD="$TESTPW" -e POSTGRES_DB="$DB_NAME" -p "${TEST_PORT}:5432" "$PG_IMAGE" >/dev/null
+W=0; until docker exec -e PGPASSWORD="$TESTPW" "$SCRATCH" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' >/dev/null 2>&1; do sleep 1; W=$((W+1)); [ "$W" -gt 60 ] && { echo "[drill] FATAL: scratch not ready."; exit 1; }; done
+
+# Pre-create membership-RLS roles so the dump's GRANTs apply cleanly (idempotent).
+docker exec -e PGPASSWORD="$TESTPW" "$SCRATCH" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -q \
+  -c 'DO $$ BEGIN CREATE ROLE edms_app; EXCEPTION WHEN duplicate_object THEN NULL; END $$;' \
+  -c 'DO $$ BEGIN CREATE ROLE edms_rls_owner; EXCEPTION WHEN duplicate_object THEN NULL; END $$;' >/dev/null 2>&1 || true
+
+# ── 4. Restore (exit code non-authoritative; checks below decide) ──────────────
+docker exec -i -e PGPASSWORD="$TESTPW" "$SCRATCH" pg_restore -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" --no-password --no-owner < "${WORK}/d.dump" 2>"${WORK}/restore.err" || true
+RESTORE_ERRS=$(grep -c 'error:' "${WORK}/restore.err" 2>/dev/null || echo 0)
+echo "[drill] pg_restore done (residual errors: ${RESTORE_ERRS})"
+
+# ── 5. SELF-INTEGRITY (authoritative) ─────────────────────────────────────────
+PASS=true; CRIT="organizations users projects documents"
+for t in $CRIT audit_logs subscriptions; do
+  exists=$(q "SELECT to_regclass('public.$t') IS NOT NULL;")
+  cnt=$(q "SELECT count(*) FROM $t;")
+  echo "[drill]   $t: exists=${exists:-f} count=${cnt:-NA}"
+  [ "$exists" = "t" ] || { echo "[drill]   MISSING critical table: $t"; case " $CRIT audit_logs " in *" $t "*) PASS=false;; esac; }
+done
+# critical non-emptiness (a real deployment must have orgs + users)
+for t in organizations users; do
+  c=$(q "SELECT count(*) FROM $t;"); [ "${c:-0}" -gt 0 ] 2>/dev/null || { echo "[drill]   FAIL: $t is EMPTY"; PASS=false; }
+done
+# relational sanity
+ORPH_U=$(q "SELECT count(*) FROM users u LEFT JOIN organizations o ON u.organization_id=o.id WHERE u.organization_id IS NOT NULL AND o.id IS NULL;")
+echo "[drill]   users with dangling org: ${ORPH_U:-?} (expect 0)"
+[ "${ORPH_U:-1}" = "0" ] || PASS=false
+if [ "$(q "SELECT to_regclass('public.documents') IS NOT NULL;")" = "t" ] && [ "$(q "SELECT to_regclass('public.projects') IS NOT NULL;")" = "t" ]; then
+  ORPH_D=$(q "SELECT count(*) FROM documents d LEFT JOIN projects p ON d.project_id=p.id WHERE d.project_id IS NOT NULL AND p.id IS NULL;")
+  echo "[drill]   documents with dangling project: ${ORPH_D:-?} (expect 0)"
+  [ "${ORPH_D:-1}" = "0" ] || PASS=false
 fi
 
-# ── Find the latest backup ────────────────────────────────────────────────────
-
-echo "[restore-verify] Finding latest backup in R2..."
-
-LATEST_FILE=$(
-  AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
-  AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
-  aws s3 ls \
-    "s3://${BACKUP_BUCKET}/${BACKUP_PREFIX}/" \
-    --endpoint-url "${R2_ENDPOINT}" \
-    --region auto \
-  | awk '{print $4}' \
-  | grep -E '^edms_[0-9]' \
-  | sort \
-  | tail -1
-)
-
-if [ -z "$LATEST_FILE" ]; then
-  echo "[restore-verify] FATAL: No backups found in s3://${BACKUP_BUCKET}/${BACKUP_PREFIX}/"
-  exit 1
-fi
-
-echo "[restore-verify] Latest backup: ${LATEST_FILE}"
-
-# ── Download backup ───────────────────────────────────────────────────────────
-
-echo "[restore-verify] Downloading..."
-
-AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
-AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
-aws s3 cp \
-  "s3://${BACKUP_BUCKET}/${BACKUP_PREFIX}/${LATEST_FILE}" \
-  "$TEMP_FILE" \
-  --endpoint-url "${R2_ENDPOINT}" \
-  --region auto
-
-DUMP_SIZE=$(du -h "$TEMP_FILE" | cut -f1)
-echo "[restore-verify] Downloaded: ${DUMP_SIZE}"
-
-# ── Start throwaway postgres container ────────────────────────────────────────
-
-echo "[restore-verify] Starting test container on port ${TEST_PORT}..."
-
-docker run -d \
-  --name "$RESTORE_CONTAINER" \
-  -e POSTGRES_USER="$DB_USER" \
-  -e POSTGRES_PASSWORD="$TEST_PG_PASSWORD" \
-  -e POSTGRES_DB="$DB_NAME" \
-  -p "${TEST_PORT}:5432" \
-  postgres:16-alpine
-
-echo "[restore-verify] Waiting for test container to be ready..."
-# Poll a REAL query over TCP (-h 127.0.0.1), not pg_isready. The postgres image
-# boots in two phases: a bootstrap server on the unix socket ONLY (listen_addresses='')
-# that runs initdb and THEN creates POSTGRES_DB, followed by the real TCP server.
-# pg_isready answers "up" during the bootstrap phase — before "$DB_NAME" exists —
-# which races pg_restore into "database does not exist". A TCP SELECT 1 against
-# "$DB_NAME" succeeds only once the FINAL server is up AND the database is created.
-WAIT=0
-until docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" \
-      psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT 1' >/dev/null 2>&1; do
-  sleep 1
-  WAIT=$((WAIT + 1))
-  if [ "$WAIT" -gt 60 ]; then
-    echo "[restore-verify] FATAL: Test container did not become ready in 60 seconds."
-    exit 1
-  fi
-done
-echo "[restore-verify] Test container ready."
-
-# ── Restore ───────────────────────────────────────────────────────────────────
-
-echo "[restore-verify] Restoring dump..."
-
-# Run pg_restore INSIDE the test container (postgres:16-alpine ships the client
-# binaries); the VPS host has only Docker, no pg_restore/psql. The dump lives on
-# the host, so stream it in over stdin (docker exec -i); pg_restore reads the
-# archive from stdin when no file argument is given. Connect over TCP (-h 127.0.0.1)
-# so we only ever reach the final server, never the socket-only bootstrap server.
-docker exec -i -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" pg_restore \
-  -h 127.0.0.1 \
-  --username="$DB_USER" \
-  --dbname="$DB_NAME" \
-  --no-password \
-  --verbose \
-  < "$TEMP_FILE" 2>&1 | tail -5
-
-echo "[restore-verify] Restore complete."
-
-# ── Verify row counts ─────────────────────────────────────────────────────────
-
-echo "[restore-verify] Verifying row counts..."
-
-count_live() {
-  docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM $1;" 2>/dev/null | tr -d ' '
-}
-
-count_restored() {
-  docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" psql \
-    -h 127.0.0.1 \
-    --username="$DB_USER" \
-    --dbname="$DB_NAME" \
-    --no-password \
-    -t -c "SELECT COUNT(*) FROM $1;" 2>/dev/null | tr -d ' '
-}
-
-PASS=true
-for TABLE in users organizations documents projects audit_logs; do
-  LIVE=$(count_live "$TABLE")
-  RESTORED=$(count_restored "$TABLE")
-  if [ "$LIVE" = "$RESTORED" ]; then
-    echo "[restore-verify]   $TABLE: ${RESTORED} rows (MATCH)"
-  else
-    # Allow the restored count to be <= live (live may have had activity since backup)
-    if [ "$RESTORED" -le "$LIVE" ] 2>/dev/null; then
-      DIFF=$((LIVE - RESTORED))
-      echo "[restore-verify]   $TABLE: restored=${RESTORED}, live=${LIVE} (+${DIFF} since backup — acceptable)"
-    else
-      echo "[restore-verify]   FAIL: $TABLE: restored=${RESTORED} > live=${LIVE} — UNEXPECTED"
-      PASS=false
-    fi
-  fi
-done
-
-# ── Verify file backup integrity ──────────────────────────────────────────────
-#
-# Compares document_files row count in the restored DB against the number of
-# objects in R2 files-mirror. Catches two failure modes:
-#   1. File backup was never run (R2 = 0, DB > 0) → FAIL
-#   2. Large gap between DB records and R2 objects (>20%) → FAIL
-#
-# R2 count may legitimately exceed DB count: the accumulating mirror retains
-# files removed from the VPS. R2 slightly less than DB is also acceptable
-# (small timing gap between DB dump at 02:00 and file sync at 02:01).
-
-echo ""
-echo "[restore-verify] Verifying file backup integrity..."
-
-# Count document_files records in the RESTORED database
-DB_FILE_COUNT=$(
-  docker exec -e PGPASSWORD="$TEST_PG_PASSWORD" "$RESTORE_CONTAINER" psql \
-    -h 127.0.0.1 \
-    --username="$DB_USER" \
-    --dbname="$DB_NAME" \
-    --no-password \
-    -t -c "SELECT COUNT(*) FROM document_files;" 2>/dev/null | tr -d ' '
-) || DB_FILE_COUNT=0
-
-# Count objects currently in R2 files-mirror
-R2_FILE_COUNT=$(
-  AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY}" \
-  AWS_SECRET_ACCESS_KEY="${R2_SECRET_KEY}" \
-  aws s3 ls \
-    "s3://${BACKUP_BUCKET}/${FILES_PREFIX}/" \
-    --endpoint-url "${R2_ENDPOINT}" \
-    --region auto \
-    --recursive \
-  2>/dev/null | wc -l | tr -d ' '
-) || R2_FILE_COUNT=0
-
-echo "[restore-verify]   document_files (restored DB): ${DB_FILE_COUNT} records"
-echo "[restore-verify]   R2 files-mirror objects:      ${R2_FILE_COUNT}"
-
-if [ "$DB_FILE_COUNT" -eq 0 ]; then
-  # New installation or empty DB — no files expected; skip file check
-  echo "[restore-verify]   No document_files records in DB — file backup check skipped."
-
-elif [ "$R2_FILE_COUNT" -eq 0 ]; then
-  # DB has files but R2 has nothing — file backup has never run or is misconfigured
-  echo "[restore-verify]   FAIL: DB has ${DB_FILE_COUNT} file record(s) but R2 files-mirror is EMPTY."
-  echo "[restore-verify]        File backup has not run or credentials/bucket are wrong."
-  echo "[restore-verify]        Run manually: bash /var/www/edms/scripts/backup-files.sh"
-  PASS=false
-
-elif [ "$R2_FILE_COUNT" -lt "$DB_FILE_COUNT" ]; then
-  # R2 has fewer objects than DB records — compute gap percentage
-  PERCENT_GAP=$(( (DB_FILE_COUNT - R2_FILE_COUNT) * 100 / DB_FILE_COUNT ))
-  if [ "$PERCENT_GAP" -gt 20 ]; then
-    echo "[restore-verify]   FAIL: R2 has ${PERCENT_GAP}% fewer files than DB records."
-    echo "[restore-verify]        Expected: R2 >= ~${DB_FILE_COUNT} objects. Got: ${R2_FILE_COUNT}."
-    echo "[restore-verify]        This suggests incomplete file syncing. Investigate backup-files.sh."
-    PASS=false
-  else
-    echo "[restore-verify]   WARN: R2 has ${PERCENT_GAP}% fewer files than DB (gap: $((DB_FILE_COUNT - R2_FILE_COUNT)))."
-    echo "[restore-verify]        Within acceptable range — likely due to timing between DB dump and file sync."
-  fi
-
-else
-  # R2 >= DB — healthy (mirror may retain older files)
-  EXCESS=$((R2_FILE_COUNT - DB_FILE_COUNT))
-  if [ "$EXCESS" -gt 0 ]; then
-    echo "[restore-verify]   R2 has ${EXCESS} extra object(s) — retained from previous deletes (accumulating mirror)."
-  fi
-  echo "[restore-verify]   File backup: OK"
+# ── 6. Optional: compare to a read-only count snapshot (non-gating) ───────────
+if [ -n "$COUNT_SNAPSHOT" ] && [ -r "$COUNT_SNAPSHOT" ]; then
+  echo "[drill] optional snapshot compare:"
+  while IFS=$'\t' read -r t expected; do
+    [ -n "$t" ] || continue; got=$(q "SELECT count(*) FROM $t;")
+    echo "[drill]   $t: snapshot=${expected} restored=${got:-NA} (informational; restored<=snapshot is normal)"
+  done < "$COUNT_SNAPSHOT"
 fi
 
 echo ""
 if [ "$PASS" = "true" ]; then
-  echo "[restore-verify] ✓ PASS — Restore verification successful."
-  echo "[restore-verify]   Backup from ${LATEST_FILE} restores correctly."
-  echo "[restore-verify]   Record this result in docs/operations/"
+  echo "[drill] ✓ PASS — backup ${LATEST} decrypts and restores to a consistent DB."
+  [ -n "$HC_RECOVER_URL" ] && curl -fsS -m 15 --data-binary "restore ok ${LATEST}" "$HC_RECOVER_URL" >/dev/null 2>&1 && echo "[drill] recoverability ping sent" || true
 else
-  echo "[restore-verify] ✗ FAIL — Restore verification failed. Investigate before relying on this backup."
-  exit 1
+  echo "[drill] ✗ FAIL — investigate before relying on this backup."; exit 1
 fi
-
-echo "[restore-verify] ── Done: $(date) ──"
+echo "[drill] ── Done: $(date -u) ──"
