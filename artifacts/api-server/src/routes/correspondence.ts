@@ -52,7 +52,7 @@ const router = Router({ mergeParams: true });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSelect)[]) {
+async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSelect)[], viewerId?: number) {
   if (items.length === 0) return [];
 
   const itemIds = items.map(i => i.id);
@@ -131,8 +131,18 @@ async function enrichCorrespondence(items: (typeof correspondenceTable.$inferSel
     const recs = recipientMap.get(item.id) || { ids: [], names: [], emails: [] };
     const ccs = ccMap.get(item.id) || { ids: [], names: [], emails: [] };
     const atts = attachmentMap.get(item.id) || [];
+    // Viewer-relative direction/folder. A correspondence is "outgoing/sent" for its
+    // sender but "incoming/inbox" for its recipients (To/CC). The stored direction/folder
+    // are the sender's perspective; recompute per current viewer so recipients see the
+    // item in their Inbox — not Outgoing. When no viewer is given, keep stored values.
+    const isSenderView = viewerId != null && item.fromUserId === viewerId;
+    const isRecipientView = viewerId != null && (recs.ids.includes(viewerId) || ccs.ids.includes(viewerId));
+    const viewerFolder = isSenderView ? item.folder : (isRecipientView ? "inbox" : item.folder);
+    const viewerDirection = isSenderView ? "outgoing" : (isRecipientView ? "incoming" : item.direction);
     return {
       ...item,
+      folder: viewerFolder,
+      direction: viewerDirection,
       fromUserName: fromUser ? `${fromUser.firstName} ${fromUser.lastName}` : undefined,
       fromUserEmail: fromUser?.email,
       toUserIds: recs.ids,
@@ -571,7 +581,7 @@ async function createCorrespondence(
     }
   }
 
-  const enriched = await withTenant(() => enrichCorrespondence([corr]));
+  const enriched = await withTenant(() => enrichCorrespondence([corr], req.user!.id));
   res.status(201).json(enriched[0]);
 }
 
@@ -590,7 +600,7 @@ router.get("/assigned-to-me", requireAuth, async (req: Request<ProjectParams>, r
         sql`${correspondenceTable.status} NOT IN ('closed')`,
       ))
       .orderBy(asc(correspondenceTable.dueDate), desc(correspondenceTable.updatedAt));
-    return enrichCorrespondence(items);
+    return enrichCorrespondence(items, userId);
   });
   res.json({ items: enriched, total: enriched.length });
 });
@@ -667,7 +677,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
     const allItems = await db.select().from(correspondenceTable)
       .where(extraConds.length > 0 ? and(baseFilter, ...extraConds) : baseFilter)
       .orderBy(desc(correspondenceTable.updatedAt));
-    const enriched = await enrichCorrespondence(allItems);
+    const enriched = await enrichCorrespondence(allItems, userId);
     return { status: 200, body: {
       items: enriched,
       total: enriched.length,
@@ -714,7 +724,7 @@ router.get("/", requireAuth, async (req: Request<ProjectParams>, res): Promise<v
   const seen = new Set<number>();
   allItems = allItems.filter(item => { if (seen.has(item.id)) return false; seen.add(item.id); return true; });
 
-  const enriched = await enrichCorrespondence(allItems);
+  const enriched = await enrichCorrespondence(allItems, userId);
   return { status: 200, body: { items: enriched, total: enriched.length, viewAll: false } };
   });
   res.status(out.status).json(out.body);
@@ -773,7 +783,7 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
       if (!items[0].firstReadAt) items[0].firstReadAt = now;
     }
 
-    const enriched = await enrichCorrespondence(items);
+    const enriched = await enrichCorrespondence(items, userId);
     return { status: 200, body: enriched[0] };
   });
   res.status(out.status).json(out.body);
@@ -871,7 +881,7 @@ router.post("/:id/recall", requireAuth, async (req: Request<ProjectParams>, res,
       }).catch(() => {});
     }
 
-    const enriched = await withTenant(() => enrichCorrespondence([recalled!]));
+    const enriched = await withTenant(() => enrichCorrespondence([recalled!], caller.id));
     res.json(enriched[0]);
   } catch (e) { next(e); }
 });
@@ -984,7 +994,7 @@ router.put("/:id", requireAuth, async (req: Request<ProjectParams>, res, next): 
       });
     } catch (_) {}
 
-    const enriched = await withTenant(() => enrichCorrespondence([corr!]));
+    const enriched = await withTenant(() => enrichCorrespondence([corr!], caller.id));
     res.json(enriched[0]);
   } catch (e) { next(e); }
 });
@@ -1091,7 +1101,7 @@ router.post("/:id/reply", requireAuth, async (req: Request<ProjectParams>, res, 
     });
 
     if (result!.status !== 201) { res.status(result!.status).json(result!.body); return; }
-    const enriched = await withTenant(() => enrichCorrespondence([corr!]));
+    const enriched = await withTenant(() => enrichCorrespondence([corr!], req.user!.id));
     res.status(201).json(enriched[0]);
   } catch (e) { next(e); }
 });
