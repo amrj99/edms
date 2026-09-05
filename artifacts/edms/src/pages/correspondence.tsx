@@ -242,6 +242,7 @@ export default function CorrespondencePage() {
     if (found) {
       openedCorrRef.current = openId;
       setSelected(found);
+      setMobilePanel("detail");
       return;
     }
     openedCorrRef.current = openId;
@@ -258,6 +259,7 @@ export default function CorrespondencePage() {
           fromName: item.fromName ?? item.fromUserName,
           projectName: item.projectId ? (pm.get(item.projectId) ?? null) : null,
         });
+        setMobilePanel("detail");
       } catch { /* deep-link fetch failed — leave list as-is */ }
     })();
   }, [allItems, selected]); // eslint-disable-line react-hooks/exhaustive-deps
