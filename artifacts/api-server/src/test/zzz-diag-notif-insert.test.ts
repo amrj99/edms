@@ -42,13 +42,12 @@ async function tryInsert(c: pg.Client, orgVal: number | null) {
 }
 
 describe("DIAG notif insert as edms_app", () => {
-  it("org NULL vs session vs other", async () => {
-    const results = await asApp({ org: orgId, user: actorId }, async (c) => ({
-      nullOrg: await tryInsert(c, null),
-      sessionOrg: await tryInsert(c, orgId),
-      otherOrg: await tryInsert(c, otherOrgId),
-    }));
-    console.log("[DIAG-INSERT] recipient(other same-org user) results:", JSON.stringify(results));
+  it("org NULL vs session vs other (isolated txns)", async () => {
+    const nullOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, null));
+    const sessionOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, orgId));
+    const otherOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, otherOrgId));
+    const nullNoOrgCtx = await asApp({ org: null, user: actorId }, (c) => tryInsert(c, null));
+    console.log("[DIAG-INSERT2]", JSON.stringify({ nullOrg, sessionOrg, otherOrg, nullNoOrgCtx }));
     expect(true).toBe(true);
   });
 });
