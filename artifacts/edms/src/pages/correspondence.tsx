@@ -228,17 +228,39 @@ export default function CorrespondencePage() {
     return [...byId.values()];
   }, [generalItems, projectItems, projects]);
 
-  // Handle ?openCorr=<id> URL param — auto-selects a specific correspondence item
+  // Handle ?openCorr=<id> URL param — open that specific correspondence. If it is in
+  // the loaded list, select it directly; otherwise fetch it by id so a deep-link works
+  // even when the item isn't in the currently-loaded folder/feed (never a blind fall
+  // back to the empty/general list).
+  const openedCorrRef = useRef<string | null>(null);
   useEffect(() => {
-    if (allItems.length === 0) return;
     const params = new URLSearchParams(window.location.search);
     const openId = params.get("openCorr");
-    if (!openId) return;
+    if (!openId || selected) return;
+    if (openedCorrRef.current === openId) return;
     const found = allItems.find((i: any) => String(i.id) === openId);
-    if (found && !selected) {
+    if (found) {
+      openedCorrRef.current = openId;
       setSelected(found);
+      return;
     }
-  }, [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
+    openedCorrRef.current = openId;
+    (async () => {
+      try {
+        const r = await fetch(`/api/correspondence/${openId}`, { credentials: "include" });
+        if (!r.ok) return;
+        const item = await r.json();
+        if (!item || !item.id) return;
+        const pm = new Map(projects.map((p: any) => [p.id, p.name ?? p.code]));
+        setSelected({
+          ...item,
+          _source: item.projectId ? "project" : "general",
+          fromName: item.fromName ?? item.fromUserName,
+          projectName: item.projectId ? (pm.get(item.projectId) ?? null) : null,
+        });
+      } catch { /* deep-link fetch failed — leave list as-is */ }
+    })();
+  }, [allItems, selected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredItems = useMemo(() => {
     let items = allItems;

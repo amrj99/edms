@@ -444,7 +444,7 @@ async function createCorrespondence(
               projectId: effectiveProjectId,
               entityType: "correspondence",
               entityId: corr.id,
-              actionUrl: `/correspondence`,
+              actionUrl: `/correspondence?openCorr=${corr.id}`,
             }))
           );
           return { senderName, senderEmail, allRecipientUsers, project, toUsers, ccUsers };
@@ -741,9 +741,12 @@ router.get("/:id", requireAuth, async (req: Request<ProjectParams>, res): Promis
   const caller = req.user!;
   const userId = caller.id;
 
+  // General endpoint (no projectId in the path): match by id across any scope so a
+  // deep-link (?openCorr=<id>) can fetch a project-scoped item the caller is named on.
+  // The access check below (sender / To / CC / view-all + cross-org guard) authorizes.
   const filter = projectId !== null
     ? and(eq(correspondenceTable.id, id), eq(correspondenceTable.projectId, projectId))
-    : and(eq(correspondenceTable.id, id), isNull(correspondenceTable.projectId));
+    : eq(correspondenceTable.id, id);
 
   // Class B read: this GET conditionally marks the item read (a WRITE), so it runs
   // in a short write unit-of-work. Access-check reads + mark-read + enrich share one tx.

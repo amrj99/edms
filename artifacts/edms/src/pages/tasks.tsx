@@ -277,6 +277,14 @@ export default function Tasks() {
                         <Badge variant="outline" className="text-[10px] text-violet-600 border-violet-300 bg-violet-50 dark:bg-violet-900/20 gap-1">
                           <Brain className="h-2.5 w-2.5" /> Workflow
                         </Badge>
+                      ) : (task as any).sourceType === "correspondence" && (task as any).sourceId ? (
+                        <a
+                          href={`/correspondence?openCorr=${(task as any).sourceId}`}
+                          onClick={(e) => { e.stopPropagation(); e.preventDefault(); navigate(`/correspondence?openCorr=${(task as any).sourceId}`); }}
+                          className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="h-3 w-3" /> View correspondence
+                        </a>
                       ) : (
                         <span className="text-xs text-muted-foreground capitalize">{task.sourceType}</span>
                       )}
@@ -395,7 +403,8 @@ export default function Tasks() {
                         </div>
                       )}
                       <a
-                        href="/correspondence"
+                        href={`/correspondence?openCorr=${c.id}`}
+                        onClick={(e) => { e.preventDefault(); navigate(`/correspondence?openCorr=${c.id}`); }}
                         className="flex items-center gap-1 text-[11px] text-primary hover:underline"
                       >
                         <ExternalLink className="h-3 w-3" /> Open
