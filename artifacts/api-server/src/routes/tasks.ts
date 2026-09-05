@@ -413,7 +413,7 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
         }
       }
       if (bundle.statusNotif) emitToUser(t.createdById!, "notification:new", bundle.statusNotif);
-    } catch (_) {}
+    } catch (e) { console.error("[TASK-NOTIF-DIAG]", (e as any)?.stack || (e as any)?.message || e); }
 
     // Skill event (task_completed) — explicit background boundary AFTER commit.
     if (status === "completed" && t.projectId && req.user?.organizationId) {
