@@ -413,7 +413,7 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
         }
       }
       if (bundle.statusNotif) emitToUser(t.createdById!, "notification:new", bundle.statusNotif);
-    } catch (e) { console.error("[TASK-NOTIF-DIAG]", (e as any)?.stack || (e as any)?.message || e); }
+    } catch (e) { const c=(e as any)?.cause; console.error("[TASK-NOTIF-DIAG] msg=", (e as any)?.message, "| cause.msg=", c?.message, "| cause.code=", c?.code, "| cause.detail=", c?.detail); }
 
     // Skill event (task_completed) — explicit background boundary AFTER commit.
     if (status === "completed" && t.projectId && req.user?.organizationId) {
