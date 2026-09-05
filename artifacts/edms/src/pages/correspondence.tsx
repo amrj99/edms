@@ -215,7 +215,17 @@ export default function CorrespondencePage() {
     });
     const combined = [...generalItems.map((i: any) => normalize(i, "general")),
                       ...projectItems.map((i: any) => normalize(i, "project"))];
-    return combined;
+    // De-duplicate: the same correspondence can be returned by both the general
+    // (/api/correspondence) and per-project (/api/projects/:id/correspondence) feeds.
+    // Keep one row per id, preferring the project-scoped copy for items that belong to
+    // a project so the Projects smart-view/filter still match.
+    const byId = new Map<number, any>();
+    for (const i of combined) {
+      const existing = byId.get(i.id);
+      if (!existing) { byId.set(i.id, i); continue; }
+      if (i._source === "project" && i.projectId) byId.set(i.id, i);
+    }
+    return [...byId.values()];
   }, [generalItems, projectItems, projects]);
 
   // Handle ?openCorr=<id> URL param — auto-selects a specific correspondence item
@@ -923,7 +933,9 @@ export default function CorrespondencePage() {
                     }`}>{selected.priority || "medium"}</span>
                     {selected.status && (
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selected.status] ?? "bg-muted text-muted-foreground"}`}>
-                        {STATUS_LABELS[selected.status] ?? selected.status.replace(/_/g, " ")}
+                        {selected.direction === "incoming" && selected.status === "sent"
+                          ? "Received"
+                          : (STATUS_LABELS[selected.status] ?? selected.status.replace(/_/g, " "))}
                       </span>
                     )}
                     {selected.requiresResponse && (
@@ -977,6 +989,7 @@ export default function CorrespondencePage() {
                   )}
                   {/* Recall button — sender or DC+, only when status is sent/read and not yet opened */}
                   {(selected.fromUserId === user?.id || perms.canCloseCorrespondence) &&
+                    selected.direction !== "incoming" &&
                     !["draft", "recalled"].includes(selected.status) && (
                     <Button
                       variant="outline"

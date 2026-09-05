@@ -371,7 +371,7 @@ export default function Tasks() {
                       </div>
                       <h3 className="text-sm font-semibold truncate">{c.subject}</h3>
                       <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        From: {c.fromName ?? "Unknown"}
+                        From: {c.fromName ?? c.fromUserName ?? "Unknown"}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -381,7 +381,7 @@ export default function Tasks() {
                           : dueSoon ? "border-orange-400 text-orange-600 bg-orange-50 dark:bg-orange-900/20"
                           : "",
                       )}>
-                        {isOverdue ? "Overdue" : c.status}
+                        {isOverdue ? "Overdue" : (c.direction === "incoming" && c.status === "sent" ? "Received" : c.status)}
                       </Badge>
                       {c.dueDate && (
                         <div className={cn(
