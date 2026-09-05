@@ -35,19 +35,19 @@ beforeAll(async () => {
   actorId = a.id; recipientId = b.id;
 });
 
-async function tryInsert(c: pg.Client, orgVal: number | null) {
-  const sql = `INSERT INTO notifications (user_id, organization_id, type, title, message) VALUES ($1, $2, 'task_status_updated', 't', 'm') RETURNING id`;
-  try { const r = await c.query(sql, [recipientId, orgVal]); return `OK id=${r.rows[0].id}`; }
-  catch (e: any) { return `ERR code=${e.code} msg=${e.message}`; }
+async function ins(c: pg.Client, targetUser: number, orgVal: number | null, returning: boolean) {
+  const sql = `INSERT INTO notifications (user_id, organization_id, type, title, message) VALUES ($1, $2, 'task_status_updated', 't', 'm')${returning ? " RETURNING id" : ""}`;
+  try { const r = await c.query(sql, [targetUser, orgVal]); return `OK${returning ? " id=" + r.rows[0].id : " (no-ret)"}`; }
+  catch (e: any) { return `ERR ${e.code}`; }
 }
 
 describe("DIAG notif insert as edms_app", () => {
-  it("org NULL vs session vs other (isolated txns)", async () => {
-    const nullOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, null));
-    const sessionOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, orgId));
-    const otherOrg = await asApp({ org: orgId, user: actorId }, (c) => tryInsert(c, otherOrgId));
-    const nullNoOrgCtx = await asApp({ org: null, user: actorId }, (c) => tryInsert(c, null));
-    console.log("[DIAG-INSERT2]", JSON.stringify({ nullOrg, sessionOrg, otherOrg, nullNoOrgCtx }));
+  it("returning vs no-returning, self vs other (isolated txns, org=session)", async () => {
+    const otherReturning = await asApp({ org: orgId, user: actorId }, (c) => ins(c, recipientId, orgId, true));
+    const otherNoReturning = await asApp({ org: orgId, user: actorId }, (c) => ins(c, recipientId, orgId, false));
+    const selfReturning = await asApp({ org: orgId, user: actorId }, (c) => ins(c, actorId, orgId, true));
+    const otherNoRetNullOrg = await asApp({ org: orgId, user: actorId }, (c) => ins(c, recipientId, null, false));
+    console.log("[DIAG-INSERT3]", JSON.stringify({ otherReturning, otherNoReturning, selfReturning, otherNoRetNullOrg }));
     expect(true).toBe(true);
   });
 });
