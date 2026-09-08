@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { db } from "@workspace/db";
 import {
   inspectionRequestsTable, ncrRecordsTable, nocRecordsTable,
-  projectsTable, usersTable,
+  projectsTable, usersTable, documentsTable,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
@@ -36,6 +36,40 @@ async function checkProjectOwnership(req: Request, res: Response, projectId: num
   return true;
 }
 
+/**
+ * Validate a caller-supplied linkedDocumentId for a register record.
+ * A record may only link to a document in the SAME organization AND the SAME project
+ * (no cross-tenant / cross-project links). Returns:
+ *   { ok:true, value:null }   when not provided (field absent / null / empty)
+ *   { ok:true, value:<id> }   when it references a valid same-org same-project document
+ *   { ok:false }              after sending a 400 (invalid / cross-tenant / cross-project)
+ * Tenant isolation preserved: the lookup is org+project scoped and never trusts a client orgId.
+ */
+async function resolveLinkedDocumentId(
+  raw: unknown, projectId: number, orgId: number | null, res: Response,
+): Promise<{ ok: boolean; value: number | null }> {
+  if (raw === undefined || raw === null || raw === "") return { ok: true, value: null };
+  const docId = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+  if (!Number.isInteger(docId)) {
+    res.status(400).json({ error: "linkedDocumentId must be an integer" });
+    return { ok: false, value: null };
+  }
+  let doc: { id: number } | undefined;
+  await tenantRead(async () => {
+    [doc] = await db.select({ id: documentsTable.id }).from(documentsTable)
+      .where(and(
+        eq(documentsTable.id, docId),
+        eq(documentsTable.projectId, projectId),
+        eq(documentsTable.organizationId, orgId!),
+      )).limit(1);
+  });
+  if (!doc) {
+    res.status(400).json({ error: "linkedDocumentId must reference a document in the same organization and project" });
+    return { ok: false, value: null };
+  }
+  return { ok: true, value: docId };
+}
+
 // ─── ITR / MIR ────────────────────────────────────────────────────────────────
 router.get("/inspection-requests", requireAuth, async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
@@ -55,8 +89,10 @@ router.get("/inspection-requests", requireAuth, async (req: Request<ProjectParam
 router.post("/inspection-requests", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  const { requestNumber, type, description, location, date, status, contractor, linkedCorrespondenceId, remarks, direction, partyType, reviewCode } = req.body;
+  const { requestNumber, type, description, location, date, status, contractor, linkedCorrespondenceId, linkedDocumentId, remarks, direction, partyType, reviewCode } = req.body;
   if (!requestNumber) { res.status(400).json({ error: "requestNumber is required" }); return; }
+  const link = await resolveLinkedDocumentId(linkedDocumentId, projectId, req.user!.organizationId ?? null, res);
+  if (!link.ok) return;
   let resolvedStatus = status ?? "pending";
   if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "passed";
   else if (reviewCode === "C") resolvedStatus = "in_progress";
@@ -66,7 +102,7 @@ router.post("/inspection-requests", requireAuth, requireRole("admin", "project_m
     [created] = await db.insert(inspectionRequestsTable).values({
       requestNumber, type: type ?? "itr", description, location,
       date: date ? new Date(date) : undefined,
-      status: resolvedStatus, contractor, linkedCorrespondenceId, remarks,
+      status: resolvedStatus, contractor, linkedCorrespondenceId, linkedDocumentId: link.value, remarks,
       direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
       organizationId: req.user!.organizationId ?? null,
       projectId, createdById: req.user!.id,
@@ -80,6 +116,12 @@ router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "projec
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { description, location, date, status, contractor, remarks, direction, partyType, reviewCode } = req.body;
+  // Only touch linkedDocumentId when the caller explicitly sends it (preserve existing link otherwise).
+  const hasLink = Object.prototype.hasOwnProperty.call(req.body, "linkedDocumentId");
+  const link = hasLink
+    ? await resolveLinkedDocumentId(req.body.linkedDocumentId, projectId, req.user!.organizationId ?? null, res)
+    : { ok: true, value: null };
+  if (!link.ok) return;
   let resolvedStatus = status;
   if (reviewCode !== undefined && reviewCode !== null) {
     if (reviewCode === "A" || reviewCode === "B") resolvedStatus = "passed";
@@ -89,7 +131,7 @@ router.put("/inspection-requests/:id", requireAuth, requireRole("admin", "projec
   let row: typeof inspectionRequestsTable.$inferSelect | undefined;
   await withTenant(async () => {
     [row] = await db.update(inspectionRequestsTable)
-      .set({ description, location, date: date ? new Date(date) : undefined, status: resolvedStatus, contractor, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
+      .set({ description, location, date: date ? new Date(date) : undefined, status: resolvedStatus, contractor, remarks, direction, partyType, reviewCode, ...(hasLink ? { linkedDocumentId: link.value } : {}), updatedAt: new Date() })
       .where(and(eq(inspectionRequestsTable.id, id), eq(inspectionRequestsTable.projectId, projectId)))
       .returning();
   });
@@ -294,8 +336,10 @@ router.get("/ncr-records", requireAuth, async (req: Request<ProjectParams>, res)
 router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager", "document_controller"), async (req: Request<ProjectParams>, res): Promise<void> => {
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
-  const { reportNumber, type, description, location, raisedBy, status, correctiveAction, closeDate, remarks, direction, partyType, reviewCode } = req.body;
+  const { reportNumber, type, description, location, raisedBy, status, correctiveAction, closeDate, linkedDocumentId, remarks, direction, partyType, reviewCode } = req.body;
   if (!reportNumber) { res.status(400).json({ error: "reportNumber is required" }); return; }
+  const link = await resolveLinkedDocumentId(linkedDocumentId, projectId, req.user!.organizationId ?? null, res);
+  if (!link.ok) return;
   let resolvedStatus = status ?? "open";
   if (reviewCode === "A") resolvedStatus = "closed";
   else if (reviewCode === "B") { resolvedStatus = "in_progress"; }
@@ -305,6 +349,7 @@ router.post("/ncr-records", requireAuth, requireRole("admin", "project_manager",
       reportNumber, type: type ?? "ncr", description, location, raisedBy,
       status: resolvedStatus, correctiveAction,
       closeDate: closeDate ? new Date(closeDate) : undefined,
+      linkedDocumentId: link.value,
       remarks, direction: direction ?? null, partyType: partyType ?? null, reviewCode: reviewCode ?? null,
       organizationId: req.user!.organizationId ?? null,
       projectId, createdById: req.user!.id,
@@ -318,6 +363,11 @@ router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manage
   const projectId = requireInt(req.params.projectId);
   if (!await checkProjectOwnership(req, res, projectId)) return;
   const { description, location, raisedBy, status, correctiveAction, closeDate, remarks, direction, partyType, reviewCode } = req.body;
+  const hasLink = Object.prototype.hasOwnProperty.call(req.body, "linkedDocumentId");
+  const link = hasLink
+    ? await resolveLinkedDocumentId(req.body.linkedDocumentId, projectId, req.user!.organizationId ?? null, res)
+    : { ok: true, value: null };
+  if (!link.ok) return;
   let resolvedStatus = status;
   if (reviewCode !== undefined && reviewCode !== null) {
     if (reviewCode === "A") resolvedStatus = "closed";
@@ -326,7 +376,7 @@ router.put("/ncr-records/:id", requireAuth, requireRole("admin", "project_manage
   let row: typeof ncrRecordsTable.$inferSelect | undefined;
   await withTenant(async () => {
     [row] = await db.update(ncrRecordsTable)
-      .set({ description, location, raisedBy, status: resolvedStatus, correctiveAction, closeDate: closeDate ? new Date(closeDate) : undefined, remarks, direction, partyType, reviewCode, updatedAt: new Date() })
+      .set({ description, location, raisedBy, status: resolvedStatus, correctiveAction, closeDate: closeDate ? new Date(closeDate) : undefined, remarks, direction, partyType, reviewCode, ...(hasLink ? { linkedDocumentId: link.value } : {}), updatedAt: new Date() })
       .where(and(eq(ncrRecordsTable.id, id), eq(ncrRecordsTable.projectId, projectId)))
       .returning();
   });
