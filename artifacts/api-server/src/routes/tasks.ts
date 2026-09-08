@@ -345,8 +345,8 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
     try {
       const actorId = req.user!.id;
       const bundle = await withTenant(async () => {
-        let reassignNotif: typeof notificationsTable.$inferSelect | undefined;
-        let statusNotif: typeof notificationsTable.$inferSelect | undefined;
+        let reassignNotif: Record<string, unknown> | undefined;
+        let statusNotif: Record<string, unknown> | undefined;
         let actorName = "Someone";
         let assignee: { firstName: string; lastName: string; email: string } | undefined;
         let project: { name: string } | null = null;
@@ -355,7 +355,7 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
           const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
             .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
           actorName = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-          [reassignNotif] = await db.insert(notificationsTable).values({
+          const reassignValues = {
             userId: assignedToId,
             type: "task_assigned" as const,
             title: `Task assigned: ${t.title}`,
@@ -364,7 +364,14 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
             entityType: "task",
             entityId: t.id,
             actionUrl: "/tasks",
-          }).returning();
+          };
+          // NB: no RETURNING. The notifications RLS USING policy is per-user
+          // (user_id = app.session_user()); RETURNING a row for ANOTHER user (the
+          // assignee) re-reads it under USING and fails with 42501. A plain INSERT
+          // passes WITH CHECK; the socket payload is built from the values (the client
+          // only uses it to refetch the list). Matches the correspondence_received path.
+          await db.insert(notificationsTable).values(reassignValues);
+          reassignNotif = reassignValues;
           const [a] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName, email: usersTable.email })
             .from(usersTable).where(eq(usersTable.id, assignedToId)).limit(1);
           assignee = a as any;
@@ -379,7 +386,7 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
           const [actor] = await db.select({ firstName: usersTable.firstName, lastName: usersTable.lastName })
             .from(usersTable).where(eq(usersTable.id, actorId)).limit(1);
           const an = actor ? `${actor.firstName} ${actor.lastName}`.trim() : "Someone";
-          [statusNotif] = await db.insert(notificationsTable).values({
+          const statusValues = {
             userId: t.createdById,
             type: "task_status_updated" as const,
             title: `Task status updated: ${t.title}`,
@@ -388,7 +395,11 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
             entityType: "task",
             entityId: t.id,
             actionUrl: "/tasks",
-          }).returning();
+          };
+          // No RETURNING — see the reassign note above: the per-user USING policy blocks
+          // re-reading a row inserted for ANOTHER user (the task creator) with 42501.
+          await db.insert(notificationsTable).values(statusValues);
+          statusNotif = statusValues;
         }
         return { reassignNotif, statusNotif, actorName, assignee, project };
       });
@@ -413,7 +424,7 @@ router.put("/:id", requireAuth, async (req, res, next): Promise<void> => {
         }
       }
       if (bundle.statusNotif) emitToUser(t.createdById!, "notification:new", bundle.statusNotif);
-    } catch (_) {}
+    } catch (e) { console.warn("[tasks] notification dispatch failed:", (e as any)?.message); }
 
     // Skill event (task_completed) — explicit background boundary AFTER commit.
     if (status === "completed" && t.projectId && req.user?.organizationId) {
