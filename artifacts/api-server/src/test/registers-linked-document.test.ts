@@ -7,7 +7,16 @@
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { api, authHeader, createOrg, createUser, createProject, getTestDb, truncateAllTables } from "./helpers/index.js";
-import { documentsTable } from "@workspace/db";
+import { documentsTable, orgConfigTable } from "@workspace/db";
+
+// registers routes are gated by requireModule("registers") — enable modules for the org.
+async function enableModules(orgId: number): Promise<void> {
+  await getTestDb().insert(orgConfigTable).values({
+    organizationId: orgId,
+    modules: { dashboard: true, deliverables: true, registers: true, notifications: true, chat: true, correspondence: true, meetings: true, workflow_engine: true },
+    aiEnabled: false, aiPrivacyMode: false,
+  });
+}
 
 let orgA: number, orgB: number, adminA: number, projA1: number, projA2: number, projB: number;
 let docA1: number, docA2: number, docB: number;
@@ -27,6 +36,8 @@ beforeAll(async () => {
   const oB = await createOrg({ name: "Reg Org B" }); orgB = oB.id;
   const uA = await createUser({ organizationId: orgA, role: "admin", email: "regadmin@a.edms" }); adminA = uA.id;
   const uB = await createUser({ organizationId: orgB, role: "admin", email: "regadmin@b.edms" });
+  await enableModules(orgA);
+  await enableModules(orgB);
   projA1 = (await createProject({ organizationId: orgA })).id;
   projA2 = (await createProject({ organizationId: orgA })).id;
   projB  = (await createProject({ organizationId: orgB })).id;
