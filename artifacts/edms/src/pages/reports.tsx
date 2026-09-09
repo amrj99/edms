@@ -1608,7 +1608,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("itr", ITR_COLS.map(c => c.key));
-  const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
+  const [form, setForm] = useState({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "", linkedDocumentId: "" });
 
   const { data, isLoading, isError: isModuleError, error: queryError } = useQuery({
     queryKey: ["rpt-itr", filters.projectId, projects.map((p: any) => p.id).join(",")],
@@ -1638,6 +1638,18 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
   });
   const allItems: any[] = data?.inspectionRequests ?? [];
 
+  // Documents of the current project — options for the optional linked-document selector.
+  const { data: docsData } = useQuery({
+    queryKey: ["rpt-itr-docs", filters.projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${filters.projectId}/documents?limit=1000`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    enabled: addOpen && filters.projectId !== "_all",
+  });
+  const projectDocs: any[] = unwrapList<any>(docsData, "documents");
+
   const filtered = useMemo(() => {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
@@ -1658,6 +1670,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
           direction: form.direction || null,
           partyType: form.partyType || null,
           reviewCode: form.reviewCode || null,
+          linkedDocumentId: form.linkedDocumentId ? parseInt(form.linkedDocumentId, 10) : undefined,
         }),
       });
       if (!r.ok) throw new Error("Failed");
@@ -1666,7 +1679,7 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["rpt-itr"] });
       setAddOpen(false);
-      setForm({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
+      setForm({ requestNumber: "", type: "itr", description: "", location: "", date: "", status: "pending", contractor: "", remarks: "", direction: "", partyType: "", reviewCode: "", linkedDocumentId: "" });
       toast({ title: "Inspection request added" });
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
@@ -1856,6 +1869,16 @@ function ItrMirRegister({ filters, projects = [] }: { filters: Filters; projects
                 </div>
               )}
               <div className="col-span-2">
+                <Label className="text-xs">Linked Document <span className="text-muted-foreground">(optional)</span></Label>
+                <Select value={form.linkedDocumentId || "_none"} onValueChange={v => setForm(f => ({ ...f, linkedDocumentId: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Link a document (optional)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {projectDocs.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.documentNumber} — {d.title}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2">
                 <Label className="text-xs">{t("remarks")}</Label>
                 <Textarea value={form.remarks} onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))} rows={2} className="mt-1 text-sm" />
               </div>
@@ -1902,7 +1925,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     ...(isCrossOrg ? [{ key: "_orgName", label: t("orgName_label") }, { key: "_projectName", label: t("project_col") }] : []),
   ];
   const { visible: visibleCols, toggle: toggleCol } = useColumnVisibility("ncr", NCR_COLS.map(c => c.key));
-  const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
+  const [form, setForm] = useState({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "", linkedDocumentId: "" });
 
   const { data, isLoading, isError: isModuleError, error: queryError } = useQuery({
     queryKey: ["rpt-ncr", filters.projectId, projects.map((p: any) => p.id).join(",")],
@@ -1932,6 +1955,18 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
   });
   const allItems: any[] = data?.ncrRecords ?? [];
 
+  // Documents of the current project — options for the optional linked-document selector.
+  const { data: docsData } = useQuery({
+    queryKey: ["rpt-ncr-docs", filters.projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${filters.projectId}/documents?limit=1000`);
+      if (!r.ok) throw new Error("Failed");
+      return r.json();
+    },
+    enabled: addOpen && filters.projectId !== "_all",
+  });
+  const projectDocs: any[] = unwrapList<any>(docsData, "documents");
+
   const filtered = useMemo(() => {
     let d = allItems;
     if (filters.status !== "_all") d = d.filter(x => x.status === filters.status);
@@ -1951,6 +1986,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
           direction: form.direction || null,
           partyType: form.partyType || null,
           reviewCode: form.reviewCode || null,
+          linkedDocumentId: form.linkedDocumentId ? parseInt(form.linkedDocumentId, 10) : undefined,
         }),
       });
       if (!r.ok) throw new Error("Failed");
@@ -1959,7 +1995,7 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["rpt-ncr"] });
       setAddOpen(false);
-      setForm({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "" });
+      setForm({ reportNumber: "", type: "ncr", description: "", location: "", raisedBy: "", status: "open", correctiveAction: "", closeDate: "", remarks: "", direction: "", partyType: "", reviewCode: "", linkedDocumentId: "" });
       toast({ title: "NCR/SOR record added" });
     },
     onError: () => toast({ title: "Failed to add record", variant: "destructive" }),
@@ -2152,6 +2188,16 @@ function NcrSorRegister({ filters, projects = [] }: { filters: Filters; projects
               <div className="col-span-2">
                 <Label className="text-xs">{t("correctiveAction")}</Label>
                 <Textarea value={form.correctiveAction} onChange={e => setForm(f => ({ ...f, correctiveAction: e.target.value }))} rows={2} className="mt-1 text-sm" />
+              </div>
+              <div className="col-span-2">
+                <Label className="text-xs">Linked Document <span className="text-muted-foreground">(optional)</span></Label>
+                <Select value={form.linkedDocumentId || "_none"} onValueChange={v => setForm(f => ({ ...f, linkedDocumentId: v === "_none" ? "" : v }))}>
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="Link a document (optional)" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">— None —</SelectItem>
+                    {projectDocs.map((d: any) => <SelectItem key={d.id} value={String(d.id)}>{d.documentNumber} — {d.title}</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </div>
