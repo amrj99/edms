@@ -135,13 +135,16 @@ describe("project participants API", () => {
       expect(res.status).toBe(400);
     });
 
-    it("rejects adding entity from another org (404)", async () => {
+    it("rejects adding entity from another (non-party) org (400)", async () => {
+      // Minimum Fix #2: an entity whose org is neither the project owner nor an
+      // ACTIVE project_party is rejected with 400 (distinct from 404 = entity does
+      // not exist). orgB is not a party on projectA in this suite's setup.
       const res = await api()
         .post(`/api/projects/${projectAId}/participants`)
         .set(authHeader("admin", adminA.id, orgA.id))
         .send({ entityId: entityBId, role: "supplier" });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(400);
     });
 
     it("rejects duplicate entity in same project (409)", async () => {
