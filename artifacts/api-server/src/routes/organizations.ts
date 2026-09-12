@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable, orgConfigTable } from "@workspace/db";
-import { eq, count } from "drizzle-orm";
+import { organizationsTable, usersTable, projectsTable, documentsTable, ncrRecordsTable, orgConfigTable, entitiesTable } from "@workspace/db";
+import { eq, and, count } from "drizzle-orm";
 import { requireAuth, isSysAdmin, isSystemOwner } from "../lib/auth.js";
+import { requireMinRole } from "../middlewares/require-role.js";
 import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { createAuditLog } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
@@ -221,6 +222,81 @@ router.delete("/:id", requireAuth, async (req, res, next): Promise<void> => {
       await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
     });
     res.status(204).send();
+  } catch (e) { next(e); }
+});
+
+// ─── PATCH /api/organizations/:id/canonical-entity ────────────────────────────
+// Supported setter for organizations.entity_id — the single CANONICAL entity of an
+// organization (per the 0022 design: one org → at most one canonical entity; the
+// column is a single nullable FK). This is the supported link that submission-chain
+// custody resolution (resolveCallerParticipant: org.entity_id → participant) needs,
+// replacing the previous DB-only setup path.
+//
+// Rules (minimal — does NOT touch project_participants / project_parties, and adds
+// no hidden auto-link elsewhere):
+//   • Auth: admin+ of THIS org, or system_owner.
+//   • body { entityId: number }  → link/relink to an entity that BELONGS to this org
+//                                   (entities.organization_id === :id). Cross-org
+//                                   entities are rejected 400 (tenant-safe).
+//   • body { entityId: null }    → unlink (clear the canonical entity).
+//   • Audit: organization_entity_linked / organization_entity_unlinked.
+router.patch("/:id/canonical-entity", requireAuth, requireMinRole("admin"), async (req, res, next): Promise<void> => {
+  const id = requireInt(req.params.id);
+  const caller = req.user!;
+  // Tenant guard: an org admin may only link their OWN org; system_owner may target any.
+  if (!isSystemOwner(caller) && caller.organizationId !== id) {
+    res.status(403).json({ error: "Forbidden", message: "You can only set the canonical entity of your own organization." });
+    return;
+  }
+
+  if (!("entityId" in (req.body ?? {}))) {
+    res.status(400).json({ error: "entityId is required (a number to link, or null to unlink)" });
+    return;
+  }
+  const raw = (req.body as { entityId: unknown }).entityId;
+  if (raw !== null && !Number.isInteger(raw)) {
+    res.status(400).json({ error: "entityId must be an integer or null" });
+    return;
+  }
+  const entityId = raw as number | null;
+
+  try {
+    let result: { status: number; body: unknown } | undefined;
+    await withTenant(async () => {
+      const [org] = await db.select({ id: organizationsTable.id, name: organizationsTable.name, entityId: organizationsTable.entityId })
+        .from(organizationsTable).where(eq(organizationsTable.id, id)).limit(1);
+      if (!org) { result = { status: 404, body: { error: "Not Found" } }; return; }
+
+      // Link/relink: the entity must exist AND belong to THIS org (no cross-org link).
+      if (entityId !== null) {
+        const [ent] = await db.select({ id: entitiesTable.id })
+          .from(entitiesTable)
+          .where(and(eq(entitiesTable.id, entityId), eq(entitiesTable.organizationId, id)))
+          .limit(1);
+        if (!ent) {
+          result = { status: 400, body: { error: "entityId must reference an entity that belongs to this organization" } };
+          return;
+        }
+      }
+
+      const [updated] = await db.update(organizationsTable)
+        .set({ entityId, updatedAt: new Date() })
+        .where(eq(organizationsTable.id, id))
+        .returning({ id: organizationsTable.id, entityId: organizationsTable.entityId });
+
+      await createAuditLog({
+        userId: caller.id,
+        organizationId: id,
+        action: entityId === null ? "organization_entity_unlinked" : "organization_entity_linked",
+        entityType: "organization",
+        entityId: id,
+        entityTitle: org.name,
+        details: { previousEntityId: org.entityId ?? null, newEntityId: entityId },
+      });
+
+      result = { status: 200, body: { organizationId: updated.id, entityId: updated.entityId } };
+    });
+    res.status(result!.status).json(result!.body);
   } catch (e) { next(e); }
 });
 
