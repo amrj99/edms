@@ -83,6 +83,13 @@ export const submissionChainsTable = pgTable("submission_chains", {
   // Set automatically when all active-cycle documents reach review code A
   autoClosedAt: timestamp("auto_closed_at"),
 
+  // Slice 2: final decision (A/B) authored at the top of the chain. These are the
+  // first-class home for the terminal approval — distinct from step-level review
+  // comments. Populated only by finalDecision; the approved revision cycle is
+  // activeRevisionCycle (frozen at close) and the outcome is currentStatus.
+  finalDecisionComment: text("final_decision_comment"),
+  finalDecisionById: integer("final_decision_by_id").references(() => usersTable.id),
+
   createdById: integer("created_by_id")
     .references(() => usersTable.id)
     .notNull(),
