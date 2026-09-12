@@ -1,0 +1,3 @@
+ALTER TABLE "submission_chains" ADD COLUMN "final_decision_comment" text;--> statement-breakpoint
+ALTER TABLE "submission_chains" ADD COLUMN "final_decision_by_id" integer;--> statement-breakpoint
+ALTER TABLE "submission_chains" ADD CONSTRAINT "submission_chains_final_decision_by_id_users_id_fk" FOREIGN KEY ("final_decision_by_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;

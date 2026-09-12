@@ -41,6 +41,10 @@ import {
   entitiesTable,
   projectParticipantsTable,
   projectMembersTable,
+  projectsTable,
+  projectPartiesTable,
+  documentsTable,
+  documentRevisionsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -134,6 +138,23 @@ describe("submission chains API — Phase 3", () => {
       .values({ projectId, entityId: entityBId, role: "consultant" })
       .returning();
     participantConsultantId = pQ.id;
+
+    // Cross-org party model: the documents/projects RLS grants a foreign org
+    // write-visibility on the project only when the project is a 'parties' project
+    // and that org has a project_parties row. The final-decision document bridge
+    // (consultant orgB updating orgA's document) needs this — otherwise the
+    // documents WITH CHECK subquery (anchored to the project owner org via an
+    // RLS-filtered projects lookup) resolves NULL for the cross-org actor → 42501.
+    // Note: this is DISTINCT from project_participants, which drives chain custody.
+    // See Architecture Backlog: "Dual Party Model (project_participants vs project_parties)".
+    await db
+      .update(projectsTable)
+      .set({ collaborationMode: "parties" })
+      .where(eq(projectsTable.id, projectId));
+    await db.insert(projectPartiesTable).values([
+      { projectId, organizationId: orgA.id, partyRole: "contributor", addedById: contractorAdmin.id },
+      { projectId, organizationId: orgB.id, partyRole: "contributor", addedById: contractorAdmin.id },
+    ]);
   });
 
   afterAll(async () => {
@@ -409,7 +430,7 @@ describe("submission chains API — Phase 3", () => {
       const res = await api()
         .post(`/api/projects/${projectId}/submission-chains/${chainId}/return`)
         .set(authHeader("admin", contractorAdmin.id, orgA.id))
-        .send({ reviewCode: "B", comments: "Must revise" });
+        .send({ reviewCode: "C", comments: "Must revise" });
 
       expect(res.status).toBe(403);
     });
@@ -451,7 +472,7 @@ describe("submission chains API — Phase 3", () => {
       const res = await api()
         .post(`/api/projects/${projectId}/submission-chains/${newChainId}/return`)
         .set(authHeader("admin", contractorAdmin.id, orgA.id))
-        .send({ reviewCode: "B", comments: "Should not work" });
+        .send({ reviewCode: "C", comments: "Should not work" });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe("CANNOT_RETURN_FROM_ORIGINATOR");
@@ -598,9 +619,12 @@ describe("submission chains API — Phase 3", () => {
         .set(authHeader("admin", consultantAdmin.id, orgB.id));
 
       expect(detail.status).toBe(200);
-      expect(detail.body.actions.canForward).toBe(true);
+      // consultant is stepOrder 2 of a 2-party chain = the FINAL party: it decides,
+      // it does not forward.
+      expect(detail.body.actions.canForward).toBe(false);
+      expect(detail.body.actions.canFinalDecision).toBe(true);
       expect(detail.body.actions.canReview).toBe(true);
-      expect(detail.body.actions.canReturn).toBe(true); // non-originator can return
+      expect(detail.body.actions.canReturn).toBe(true); // non-originator can still return (C/D)
       expect(detail.body.actions.canResubmit).toBe(false);
     });
 
@@ -860,6 +884,189 @@ describe("submission chains API — Phase 3", () => {
       const actions = detail.body.steps.map((s: { action: string }) => s.action);
       expect(actions.filter((a: string) => a === "forward")).toHaveLength(3); // 2 up + 1 resubmit
       expect(actions.filter((a: string) => a === "return")).toHaveLength(2); // initiate + relay
+    });
+  });
+
+  // ─── ш2: final decision (A/B) + document bridge ────────────────────────────────
+  describe("ш2 — final decision + document bridge", () => {
+    // Build a 2-party chain [contractor step1, consultant step2] forwarded to the
+    // final party (consultant), optionally carrying a document at revision cycle 1.
+    async function buildChainAtFinalParty(
+      title: string,
+      withDoc = false,
+    ): Promise<{ chainId: number; documentId?: number }> {
+      let documentId: number | undefined;
+      let documentIds: Array<{ documentId: number; revisionId: number }> = [];
+      if (withDoc) {
+        const [doc] = await db
+          .insert(documentsTable)
+          .values({
+            organizationId: orgA.id, projectId, createdById: contractorAdmin.id,
+            documentNumber: `SC-DOC-${Date.now()}`, title: "Submittal doc",
+            documentType: "general", discipline: "general", revision: "A", status: "draft",
+          })
+          .returning();
+        documentId = doc.id;
+        const [rev] = await db
+          .insert(documentRevisionsTable)
+          .values({ organizationId: orgA.id, documentId: doc.id, revision: "A", status: "draft", createdById: contractorAdmin.id })
+          .returning();
+        documentIds = [{ documentId: doc.id, revisionId: rev.id }];
+      }
+      const createRes = await api()
+        .post(`/api/projects/${projectId}/submission-chains`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ title, ...(withDoc ? { documentIds } : {}) });
+      const cid = createRes.body.id;
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/setup-parties`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({
+          parties: [
+            { participantId: participantContractorId, stepOrder: 1, assignmentStrategy: "role_based" },
+            { participantId: participantConsultantId, stepOrder: 2, assignmentStrategy: "role_based" },
+          ],
+        });
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ toParticipantId: participantConsultantId });
+      return { chainId: cid, documentId };
+    }
+
+    it("A → approved: chain closed, decision fields persisted", async () => {
+      const { chainId } = await buildChainAtFinalParty("Final A chain");
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "A" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.chain.currentStatus).toBe("approved");
+      expect(res.body.chain.autoClosedAt).toBeTruthy();
+      expect(res.body.chain.finalDecisionById).toBe(consultantAdmin.id);
+      expect(res.body.approvedRevisionCycle).toBe(1);
+    });
+
+    it("B → approved_with_comments: final comment persisted first-class", async () => {
+      const { chainId } = await buildChainAtFinalParty("Final B chain");
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "B", comments: "Approved subject to punch-list items" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.chain.currentStatus).toBe("approved_with_comments");
+      expect(res.body.chain.finalDecisionComment).toBe("Approved subject to punch-list items");
+      expect(res.body.chain.finalDecisionById).toBe(consultantAdmin.id);
+    });
+
+    it("B without a comment → 400 COMMENT_REQUIRED", async () => {
+      const { chainId } = await buildChainAtFinalParty("Final B no-comment chain");
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "B" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("COMMENT_REQUIRED");
+    });
+
+    it("C/D rejected by final-decision → 400 INVALID_DECISION_CODE", async () => {
+      const { chainId } = await buildChainAtFinalParty("Final C reject chain");
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "C", comments: "x" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("INVALID_DECISION_CODE");
+    });
+
+    it("non-final party cannot decide → 400 NOT_FINAL_PARTY", async () => {
+      // Fresh chain still at the originator (stepOrder 1, not the final party).
+      const createRes = await api()
+        .post(`/api/projects/${projectId}/submission-chains`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ title: "Not-final decide chain" });
+      const cid = createRes.body.id;
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/setup-parties`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({
+          parties: [
+            { participantId: participantContractorId, stepOrder: 1, assignmentStrategy: "role_based" },
+            { participantId: participantConsultantId, stepOrder: 2, assignmentStrategy: "role_based" },
+          ],
+        });
+
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/final-decision`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ reviewCode: "A" });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("NOT_FINAL_PARTY");
+    });
+
+    it("non-custodian cannot decide → 403", async () => {
+      const { chainId } = await buildChainAtFinalParty("Non-custodian decide chain");
+      // contractor is not the current custodian (consultant holds it).
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ reviewCode: "A" });
+
+      expect(res.status).toBe(403);
+    });
+
+    it("deciding an already-closed chain → 409 CHAIN_NOT_ACTIVE", async () => {
+      const { chainId } = await buildChainAtFinalParty("Double decide chain");
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "A" });
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "A" });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("CHAIN_NOT_ACTIVE");
+    });
+
+    it("A bridges the active-cycle document status → approved", async () => {
+      const { chainId, documentId } = await buildChainAtFinalParty("Bridge chain", true);
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "A" });
+
+      expect(res.status).toBe(200);
+      const [doc] = await db
+        .select({ status: documentsTable.status })
+        .from(documentsTable)
+        .where(eq(documentsTable.id, documentId!));
+      expect(doc.status).toBe("approved");
+    });
+
+    it("terminal chain freezes all actions", async () => {
+      const { chainId } = await buildChainAtFinalParty("Frozen actions chain");
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${chainId}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "A" });
+
+      const detail = await api()
+        .get(`/api/projects/${projectId}/submission-chains/${chainId}`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id));
+
+      const a = detail.body.actions;
+      expect(a.canForward).toBe(false);
+      expect(a.canReturn).toBe(false);
+      expect(a.canResubmit).toBe(false);
+      expect(a.canFinalDecision).toBe(false);
+      expect(a.canReview).toBe(false);
     });
   });
 });

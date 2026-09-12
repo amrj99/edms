@@ -8,6 +8,7 @@ import {
   projectsTable,
   projectParticipantsTable,
   organizationsTable,
+  documentsTable,
 } from "@workspace/db";
 import { eq, and, or, desc, asc } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
@@ -15,6 +16,8 @@ import { requireMinRole } from "../middlewares/require-role.js";
 import { assertProjectAccess } from "../lib/tenant-guards.js";
 import { withTenant, tenantRead } from "../middlewares/tenant-scope.js";
 import { requireInt } from "../lib/params.js";
+import { applyDocumentReviewDecision, type ReviewDecision } from "../lib/document-review.js";
+import { createAuditLog } from "../lib/audit.js";
 import type { Request, Response } from "express";
 import type { ProjectParams, ProjectItemParams } from "../lib/params.js";
 
@@ -198,6 +201,7 @@ type ChainActions = {
   canForward: boolean;
   canReturn: boolean;
   canResubmit: boolean;
+  canFinalDecision: boolean;
 };
 
 function computeActions(
@@ -221,13 +225,20 @@ function computeActions(
   const isActive = chain.currentStatus === "active";
   const isReturned = chain.currentStatus === "returned";
 
+  // Slice 2: the final party (highest stepOrder) takes the terminal decision (A/B)
+  // instead of forwarding. Any non-final custodian forwards up the chain.
+  const maxStepOrder = parties.reduce((m, p) => Math.max(m, p.stepOrder), 0);
+  const hasNext = currentStepOrder !== null && currentStepOrder < maxStepOrder;
+  const isFinalParty = currentStepOrder !== null && currentStepOrder === maxStepOrder;
+
   if (isSysOwner) {
     return {
-      canSetupParties: !partiesReady && noStepsYet,
-      canReview:       isActive && partiesReady,
-      canForward:      isActive && partiesReady,
-      canReturn:       (isActive || isReturned) && partiesReady && currentStepOrder !== null && currentStepOrder > 1,
-      canResubmit:     isReturned && partiesReady && currentStepOrder === 1,
+      canSetupParties:  !partiesReady && noStepsYet,
+      canReview:        isActive && partiesReady,
+      canForward:       isActive && partiesReady && hasNext,
+      canReturn:        (isActive || isReturned) && partiesReady && currentStepOrder !== null && currentStepOrder > 1,
+      canResubmit:      isReturned && partiesReady && currentStepOrder === 1,
+      canFinalDecision: isActive && partiesReady && isFinalParty,
     };
   }
 
@@ -240,11 +251,12 @@ function computeActions(
   const isOriginator = callerParty?.stepOrder === 1;
 
   return {
-    canSetupParties: !partiesReady && noStepsYet && callerOrgId === chain.originatingOrgId,
-    canReview:       isActive && isCurrentCustodian,
-    canForward:      isActive && isCurrentCustodian,
-    canReturn:       (isActive || isReturned) && isCurrentCustodian && !isOriginator,
-    canResubmit:     isReturned && isCurrentCustodian && isOriginator,
+    canSetupParties:  !partiesReady && noStepsYet && callerOrgId === chain.originatingOrgId,
+    canReview:        isActive && isCurrentCustodian,
+    canForward:       isActive && isCurrentCustodian && hasNext,
+    canReturn:        (isActive || isReturned) && isCurrentCustodian && !isOriginator,
+    canResubmit:      isReturned && isCurrentCustodian && isOriginator,
+    canFinalDecision: isActive && isCurrentCustodian && isFinalParty,
   };
 }
 
@@ -739,20 +751,23 @@ router.post(
     const id = requireInt(req.params.id);
     const { reviewCode, comments } = req.body;
 
-    // ш1: reviewCode 'A' (Approved) is never valid for a return in either mode.
-    // Presence/allowed-set is validated below once the chain status (mode) is known:
-    //   initiate (status 'active')   → reviewCode B/C/D required.
+    // ш2: A (Approved) and B (Approved with Comments) are terminal approval
+    // outcomes taken by the final party via POST /:id/final-decision — they are
+    // NOT returns. A return sends the package back down for revision and uses C or
+    // D only. Presence/allowed-set is validated per mode below once the chain
+    // status is known:
+    //   initiate (status 'active')   → reviewCode C/D required.
     //   relay    (status 'returned') → reviewCode optional (history is preserved
     //                                  on the steps; the relaying party may add one).
-    if (reviewCode === "A") {
+    if (reviewCode === "A" || reviewCode === "B") {
       res.status(400).json({
         error: "INVALID_REVIEW_CODE",
-        message: "reviewCode 'A' (Approved) is not valid for a return. Use B, C, or D.",
+        message: "reviewCode 'A'/'B' is an approval outcome — use final-decision. A return uses C or D.",
       });
       return;
     }
-    if (reviewCode && !["B", "C", "D"].includes(reviewCode)) {
-      res.status(400).json({ error: "reviewCode must be B, C, or D for return" });
+    if (reviewCode && !["C", "D"].includes(reviewCode)) {
+      res.status(400).json({ error: "reviewCode must be C or D for return" });
       return;
     }
 
@@ -1018,6 +1033,158 @@ router.post(
     result = { status: 200, body: { chain: updatedChain, step, documents } };
     });
     res.status(result!.status).json(result!.body);
+    } catch (e) { next(e); }
+  },
+);
+
+// ─── Final decision ─────────────────────────────────────────────────────────────
+// Slice 2: the FINAL party (highest stepOrder) closes the chain with a terminal
+// approval. A → approved, B → approved_with_comments (final comment mandatory).
+// C/D are NOT decisions — they go through /return. On decision the chain closes
+// (currentStatus + autoClosedAt), the final decision comment/actor are persisted
+// first-class on the chain, and each active-cycle document's status is bridged via
+// applyDocumentReviewDecision (issued/superseded/void are protected).
+
+router.post(
+  "/:id/final-decision",
+  requireMinRole("reviewer"),
+  async (req: Request<ProjectItemParams>, res: Response, next): Promise<void> => {
+    const projectId = requireInt(req.params.projectId);
+    const id = requireInt(req.params.id);
+    const { reviewCode, comments } = req.body as { reviewCode?: string; comments?: string };
+
+    if (reviewCode !== "A" && reviewCode !== "B") {
+      res.status(400).json({
+        error: "INVALID_DECISION_CODE",
+        message: "final-decision accepts only 'A' (Approved) or 'B' (Approved with Comments). Use /return with C or D to send back.",
+      });
+      return;
+    }
+    if (reviewCode === "B" && !comments?.trim()) {
+      res.status(400).json({
+        error: "COMMENT_REQUIRED",
+        message: "A final approval comment is required for 'B' (Approved with Comments).",
+      });
+      return;
+    }
+
+    try {
+      let result: { status: number; body: unknown } | undefined;
+      await withTenant(async () => {
+        const [chain] = await db
+          .select()
+          .from(submissionChainsTable)
+          .where(and(eq(submissionChainsTable.id, id), eq(submissionChainsTable.projectId, projectId)));
+
+        if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
+
+        if (chain.currentStatus !== "active") {
+          result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only an active chain can be decided.` } };
+          return;
+        }
+        if (chain.currentParticipantId === null) {
+          result = { status: 400, body: { error: "PARTIES_NOT_CONFIGURED", message: "Call setup-parties before deciding." } };
+          return;
+        }
+
+        const caller = req.user!;
+
+        // Authorise: caller must be the current custodian (system_owner bypasses).
+        if (!isSystemOwner(caller)) {
+          const callerParticipant = caller.organizationId
+            ? await resolveCallerParticipant(projectId, caller.organizationId)
+            : null;
+          if (!callerParticipant || callerParticipant.id !== chain.currentParticipantId) {
+            result = { status: 403, body: { error: "Forbidden", message: "Only the current custodian can take the final decision." } };
+            return;
+          }
+        }
+
+        // Terminal only at the FINAL party (highest stepOrder).
+        const parties = await db
+          .select({ participantId: submissionChainAllowedPartiesTable.participantId, stepOrder: submissionChainAllowedPartiesTable.stepOrder })
+          .from(submissionChainAllowedPartiesTable)
+          .where(eq(submissionChainAllowedPartiesTable.chainId, id));
+        const maxStepOrder = parties.reduce((m, p) => Math.max(m, p.stepOrder), 0);
+        const currentParty = parties.find((p) => p.participantId === chain.currentParticipantId);
+        if (!currentParty || currentParty.stepOrder !== maxStepOrder) {
+          result = { status: 400, body: { error: "NOT_FINAL_PARTY", message: "Only the final party in the chain can take the final decision. Forward the chain to the last party first." } };
+          return;
+        }
+
+        const decision: ReviewDecision = reviewCode === "A" ? "approved" : "approved_with_comments";
+        const newStatus = reviewCode === "A" ? "approved" : "approved_with_comments";
+        const decidedAt = new Date();
+        const actor = req.user as any;
+        const actorName = `${actor.firstName ?? ""} ${actor.lastName ?? ""}`.trim() || "System";
+
+        // Stamp the incoming step (the forward that brought the package to the final
+        // party) with the decision code so it also appears on the activity timeline.
+        const [incomingStep] = await db
+          .select()
+          .from(submissionChainStepsTable)
+          .where(and(eq(submissionChainStepsTable.chainId, id), eq(submissionChainStepsTable.toParticipantId, chain.currentParticipantId)))
+          .orderBy(desc(submissionChainStepsTable.stepNumber))
+          .limit(1);
+        if (incomingStep) {
+          await db
+            .update(submissionChainStepsTable)
+            .set({ reviewCode, comments: comments ?? null, reviewedById: caller.id, reviewedAt: decidedAt })
+            .where(eq(submissionChainStepsTable.id, incomingStep.id));
+        }
+
+        // Close the chain — the first-class final-decision fields are the source of truth.
+        const [updatedChain] = await db
+          .update(submissionChainsTable)
+          .set({
+            currentStatus: newStatus as any,
+            autoClosedAt: decidedAt,
+            finalDecisionById: caller.id,
+            finalDecisionComment: comments ?? null,
+            updatedAt: decidedAt,
+          })
+          .where(eq(submissionChainsTable.id, id))
+          .returning();
+
+        // Bridge: apply the decision to the active-cycle documents' status, protecting
+        // terminal document states (issued/superseded/void).
+        const PROTECTED = new Set(["issued", "superseded", "void"]);
+        const activeDocs = await db
+          .select({ documentId: submissionChainDocumentsTable.documentId, status: documentsTable.status })
+          .from(submissionChainDocumentsTable)
+          .leftJoin(documentsTable, eq(submissionChainDocumentsTable.documentId, documentsTable.id))
+          .where(and(eq(submissionChainDocumentsTable.chainId, id), eq(submissionChainDocumentsTable.revisionCycle, chain.activeRevisionCycle)));
+
+        let documentsAffected = 0;
+        for (const d of activeDocs) {
+          if (PROTECTED.has(d.status ?? "")) continue;
+          await applyDocumentReviewDecision({
+            documentId: d.documentId,
+            projectId,
+            decision,
+            reviewerId: caller.id,
+            reviewerName: actorName,
+            comment: comments
+              ? `Submission ${chain.chainNumber} — ${comments}`
+              : `Auto-updated from submission ${chain.chainNumber} final decision (${reviewCode})`,
+          });
+          documentsAffected += 1;
+        }
+
+        await createAuditLog({
+          userId: caller.id,
+          organizationId: caller.organizationId ?? undefined,
+          action: "submission_final_decision",
+          entityType: "submission_chain",
+          entityId: id,
+          entityTitle: chain.chainNumber,
+          projectId,
+          details: { reviewCode, decision, comment: comments ?? null, approvedRevisionCycle: chain.activeRevisionCycle, documentsAffected },
+        });
+
+        result = { status: 200, body: { chain: updatedChain, decision, approvedRevisionCycle: chain.activeRevisionCycle } };
+      });
+      res.status(result!.status).json(result!.body);
     } catch (e) { next(e); }
   },
 );

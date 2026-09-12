@@ -581,6 +581,26 @@ if (["sent", "acknowledged", "void"].includes(existing.status)) {
 
 ---
 
+## Dual Party Model — `project_participants` vs `project_parties`
+
+| الحقل | القيمة |
+|-------|--------|
+| **الحالة** | `DEFERRED` — Architecture Backlog (Non-blocking) |
+| **Category** | Architecture / Multi-Tenant Authorization |
+| **Severity** | MEDIUM — قد يظهر كـ500 للعميل في سيناريو cross-org غير مُهيّأ |
+| **Blocking** | لا يمنع Submission Chain (ش1/ش2)؛ مُلتَفٌّ عليه بالتهيئة الصحيحة |
+| **اكتُشف في** | Submission Chain slice 2 — document-status bridge (CI، 2026-09-12) |
+
+**الملاحظة:** يوجد نموذجان متوازيان للأطراف عبر المؤسسات:
+- **`project_participants`** (+ `organizations.entity_id`) — يقود **Submission Chain**: التسلسل (`stepOrder`)، الحيازة (`currentParticipantId`)، وبوابات forward/return/relay/resubmit/final-decision (كلها handler-gated؛ جداول السلسلة **بلا RLS**).
+- **`project_parties`** (+ `projects.collaboration_mode='parties'`) — يقود **رؤية/كتابة RLS** على `documents`/`document_revisions`/`projects` عبر المؤسسات (`app.org_has_party_row`).
+
+**الأثر المُثبَت:** جسر حالة المستند في `final-decision` (المُقرِّر النهائي عبر org آخر يُحدّث مستند المُصدِّر) يخضع لـ`documents` WITH CHECK المربوط بـ`projects` RLS. سلسلة مُهيّأة عبر `project_participants` فقط على مشروع `collaboration_mode='org_only'` → المُقرِّر cross-org لا يرى المشروع في subquery الـWITH CHECK → **42501 → 500**. الحل الحالي: المشروع cross-org يجب أن يكون `parties`-mode مع صفوف `project_parties` لكل org مشارك (طُبِّق في تهيئة الاختبار؛ **بلا تغيير كود منتج**).
+
+**Backlog (يُعاد تقييمه لاحقًا):** توحيد أو جسر النموذجين — إمّا اشتقاق `project_parties`/collaboration-mode تلقائيًّا عند setup-parties لسلسلة cross-org، أو تنفيذ جسر حالة المستند في سياق org المالك/المُصدِّر، أو توحيد النموذجين في مصدر واحد. **قرار منتج/معماري؛ لا تنفيذ الآن.** يرتبط بـADR-04 (policy وصول Submission Chains).
+
+---
+
 ## الإجراءات المطلوبة من Product
 
 | البند | الإجراء المطلوب | المسؤول |
