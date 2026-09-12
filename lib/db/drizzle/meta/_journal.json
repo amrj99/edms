@@ -253,6 +253,13 @@
       "when": 1789190740176,
       "tag": "0035_submission_chain_final_decision",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789200366232,
+      "tag": "0036_submission_notification_types",
+      "breakpoints": true
     }
   ]
 }

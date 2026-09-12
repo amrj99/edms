@@ -45,6 +45,7 @@ import {
   projectPartiesTable,
   documentsTable,
   documentRevisionsTable,
+  notificationsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -1067,6 +1068,85 @@ describe("submission chains API — Phase 3", () => {
       expect(a.canResubmit).toBe(false);
       expect(a.canFinalDecision).toBe(false);
       expect(a.canReview).toBe(false);
+    });
+  });
+
+  // ─── ш3: notifications ─────────────────────────────────────────────────────────
+  describe("ш3 — notifications", () => {
+    // Named 2-party chain so each party resolves to a concrete assignee user.
+    async function buildNamedChain(title: string): Promise<number> {
+      const createRes = await api()
+        .post(`/api/projects/${projectId}/submission-chains`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ title });
+      const cid = createRes.body.id;
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/setup-parties`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({
+          parties: [
+            { participantId: participantContractorId, stepOrder: 1, assignmentStrategy: "named", defaultAssigneeId: contractorAdmin.id },
+            { participantId: participantConsultantId, stepOrder: 2, assignmentStrategy: "named", defaultAssigneeId: consultantAdmin.id },
+          ],
+        });
+      return cid;
+    }
+
+    async function notifsFor(userId: number, chainId: number, type: string) {
+      const rows = await db.select().from(notificationsTable).where(eq(notificationsTable.userId, userId));
+      return rows.filter((n: any) => n.entityType === "submission_chain" && n.entityId === chainId && n.type === type);
+    }
+
+    it("forward notifies the receiving party's assignee (submittal_forwarded)", async () => {
+      const cid = await buildNamedChain("Notify forward chain");
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ toParticipantId: participantConsultantId });
+
+      const got = await notifsFor(consultantAdmin.id, cid, "submittal_forwarded");
+      expect(got).toHaveLength(1);
+      expect(got[0].actionUrl).toBe(`/projects/${projectId}/submittals/${cid}`);
+      // actor (contractor) is NOT self-notified for this chain
+      expect(await notifsFor(contractorAdmin.id, cid, "submittal_forwarded")).toHaveLength(0);
+    });
+
+    it("return notifies the previous party's assignee (submittal_returned)", async () => {
+      const cid = await buildNamedChain("Notify return chain");
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ toParticipantId: participantConsultantId });
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${cid}/return`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ reviewCode: "C", comments: "revise" });
+
+      expect(await notifsFor(contractorAdmin.id, cid, "submittal_returned")).toHaveLength(1);
+    });
+
+    it("resubmit notifies the next party's assignee (submittal_resubmitted)", async () => {
+      const cid = await buildNamedChain("Notify resubmit chain");
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id)).send({ toParticipantId: participantConsultantId });
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/return`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id)).send({ reviewCode: "C", comments: "revise" });
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id)).send({});
+
+      expect(await notifsFor(consultantAdmin.id, cid, "submittal_resubmitted")).toHaveLength(1);
+    });
+
+    it("final-decision notifies the originator (submittal_decided) with the approval comment", async () => {
+      const cid = await buildNamedChain("Notify decision chain");
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id)).send({ toParticipantId: participantConsultantId });
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/final-decision`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id)).send({ reviewCode: "B", comments: "minor punch-list" });
+
+      const got = await notifsFor(contractorAdmin.id, cid, "submittal_decided");
+      expect(got).toHaveLength(1);
+      expect(got[0].message).toContain("minor punch-list");
     });
   });
 });

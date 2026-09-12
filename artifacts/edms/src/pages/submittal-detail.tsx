@@ -10,6 +10,7 @@ import { ReviewDialog } from "@/components/submittals/ReviewDialog";
 import { ReturnDialog } from "@/components/submittals/ReturnDialog";
 import { ResubmitDialog } from "@/components/submittals/ResubmitDialog";
 import { ForwardDialog } from "@/components/submittals/ForwardDialog";
+import { FinalDecisionDialog } from "@/components/submittals/FinalDecisionDialog";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ interface ChainActions {
   canForward: boolean;
   canReturn: boolean;
   canResubmit: boolean;
+  canFinalDecision: boolean;
 }
 
 interface ChainParty {
@@ -42,8 +44,11 @@ interface ChainStep {
 
 interface ChainDocument {
   id: number;
-  title: string;
-  revision: string | null;
+  documentId: number;
+  revisionId: number;
+  revisionCycle: number;
+  title?: string | null;
+  revision?: string | null;
 }
 
 interface SubmissionChain {
@@ -57,6 +62,9 @@ interface SubmissionChain {
   createdAt: string;
   currentParticipantId: number | null;
   originatingOrgId: number | null;
+  autoClosedAt: string | null;
+  finalDecisionComment: string | null;
+  finalDecisionById: number | null;
   steps: ChainStep[];
   documents: ChainDocument[];
   parties: ChainParty[];
@@ -76,6 +84,7 @@ const STATUS_COLOR: Record<string, string> = {
   active:   "bg-blue-100 text-blue-700 border-blue-200",
   returned: "bg-amber-100 text-amber-700 border-amber-200",
   approved: "bg-green-100 text-green-700 border-green-200",
+  approved_with_comments: "bg-green-100 text-green-700 border-green-200",
   rejected: "bg-red-100 text-red-700 border-red-200",
   closed:   "bg-slate-100 text-slate-600 border-slate-200",
 };
@@ -116,6 +125,7 @@ export default function SubmittalDetailPage() {
   const [returnOpen, setReturnOpen] = useState(false);
   const [resubmitOpen, setResubmitOpen] = useState(false);
   const [forwardOpen, setForwardOpen] = useState(false);
+  const [finalOpen, setFinalOpen] = useState(false);
 
   const { data: chain, isLoading: chainLoading, error: chainError } = useQuery<SubmissionChain>({
     queryKey: ["submission-chain", chainId],
@@ -225,7 +235,13 @@ export default function SubmittalDetailPage() {
           {actions.canReturn && (
             <Button size="sm" variant="outline" onClick={() => setReturnOpen(true)}>
               <RotateCcw className="h-4 w-4 mr-1.5" />
-              Return
+              {chain.currentStatus === "returned" ? "Relay Return" : "Return"}
+            </Button>
+          )}
+          {actions.canFinalDecision && (
+            <Button size="sm" onClick={() => setFinalOpen(true)}>
+              <CheckCircle className="h-4 w-4 mr-1.5" />
+              Final Decision
             </Button>
           )}
           {actions.canForward && (
@@ -243,6 +259,33 @@ export default function SubmittalDetailPage() {
         </div>
       </div>
 
+      {/* Final decision panel — shown once the chain is closed by the final party.
+          Uses the page's standard card pattern + existing Badge/STATUS_COLOR. */}
+      {(chain.currentStatus === "approved" || chain.currentStatus === "approved_with_comments") && (
+        <div className="rounded-lg border overflow-hidden">
+          <div className="bg-muted/40 px-4 py-2.5 border-b flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Final Decision</span>
+          </div>
+          <div className="px-4 py-3 space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className={`uppercase text-[10px] ${STATUS_COLOR[chain.currentStatus] ?? ""}`}>
+                {chain.currentStatus.replace(/_/g, " ")}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                approved revision cycle {chain.activeRevisionCycle}
+                {chain.autoClosedAt ? ` · ${format(new Date(chain.autoClosedAt), "dd MMM yyyy, HH:mm")}` : ""}
+              </span>
+            </div>
+            {chain.finalDecisionComment && (
+              <p className="text-sm">
+                <span className="font-medium">Final approval comment:</span> {chain.finalDecisionComment}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Body: sidebar + main */}
       <div className="flex gap-6 items-start">
         {/* Parties sidebar */}
@@ -251,6 +294,12 @@ export default function SubmittalDetailPage() {
             <Users className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm font-medium">Party Sequence</span>
           </div>
+          {(chain.currentStatus === "active" || chain.currentStatus === "returned") && chain.currentParticipantId !== null && (
+            <div className="px-4 py-2 border-b bg-primary/5 text-xs">
+              <span className="text-muted-foreground">Awaiting: </span>
+              <span className="font-medium text-primary">{participantName(chain.currentParticipantId)}</span>
+            </div>
+          )}
           {sortedParties.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">
               No parties configured
@@ -363,16 +412,26 @@ export default function SubmittalDetailPage() {
                 <span className="text-sm font-medium">Documents ({documents.length})</span>
               </div>
               <div className="divide-y">
-                {documents.map((doc) => (
-                  <div key={doc.id} className="px-4 py-3 flex items-center gap-3">
-                    <span className="flex-1 text-sm font-medium truncate">{doc.title}</span>
-                    {doc.revision && (
-                      <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                        Rev {doc.revision}
+                {documents.map((doc) => {
+                  const isActiveCycle = doc.revisionCycle === chain.activeRevisionCycle;
+                  const cycleIsApproved = isActiveCycle
+                    && (chain.currentStatus === "approved" || chain.currentStatus === "approved_with_comments");
+                  return (
+                    <div key={doc.id} className={`px-4 py-3 flex items-center gap-3 ${isActiveCycle ? "" : "opacity-60"}`}>
+                      <span className="flex-1 text-sm font-medium truncate">{doc.title ?? `Document #${doc.documentId}`}</span>
+                      {doc.revision && (
+                        <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">Rev {doc.revision}</span>
+                      )}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        cycleIsApproved ? "bg-green-100 text-green-700"
+                          : isActiveCycle ? "bg-blue-100 text-blue-700"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {cycleIsApproved ? "approved cycle " : isActiveCycle ? "active cycle " : "cycle "}{doc.revisionCycle}
                       </span>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -407,6 +466,12 @@ export default function SubmittalDetailPage() {
         parties={sortedParties}
         currentParticipantId={chain.currentParticipantId}
         participants={participants}
+      />
+      <FinalDecisionDialog
+        open={finalOpen}
+        onClose={() => setFinalOpen(false)}
+        projectId={projectId}
+        chainId={chainId}
       />
     </div>
   );
