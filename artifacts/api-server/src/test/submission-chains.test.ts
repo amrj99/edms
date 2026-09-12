@@ -714,4 +714,152 @@ describe("submission chains API — Phase 3", () => {
       expect(res.body.every((c: { type: string }) => c.type === "rfi")).toBe(true);
     });
   });
+
+  // ─── ш1: Return relay (multi-party) + resubmit gating ──────────────────────────
+  // Real journey: Sub-contractor(step1) → Main-contractor(step2) → Consultant(step3).
+  // On C/D the return must travel back down the SAME parties one hop at a time
+  // (Consultant → Main-contractor → Sub-contractor), and the originator may only
+  // resubmit once the package has been relayed all the way back to it.
+  describe("ш1 — return relay (3 parties) + resubmit gating", () => {
+    let orgC: { id: number };
+    let clientAdmin: Awaited<ReturnType<typeof createUser>>;
+    let participantClientId: number; // stepOrder 3
+    let relayChainId: number;
+
+    beforeAll(async () => {
+      // Third party (top of the chain) — its own org+entity so a distinct user can
+      // hold custody at stepOrder 3 and resolve to its participant.
+      orgC = await createOrg({ name: "SC Client Org", code: "SCCOC" });
+      await db.insert(orgConfigTable).values({
+        organizationId: orgC.id,
+        modules: { registers: true, dashboard: true, notifications: true },
+      });
+      clientAdmin = await createUser({ organizationId: orgC.id, role: "admin", email: "sc-client@test.edms" });
+      const [eC] = await db
+        .insert(entitiesTable)
+        .values({ name: "Client Owner Co.", type: "company", organizationId: orgC.id })
+        .returning();
+      await db.update(organizationsTable).set({ entityId: eC.id }).where(eq(organizationsTable.id, orgC.id));
+      await db.insert(projectMembersTable).values({ projectId, userId: clientAdmin.id, role: "admin" });
+      const [pClient] = await db
+        .insert(projectParticipantsTable)
+        .values({ projectId, entityId: eC.id, role: "owner" })
+        .returning();
+      participantClientId = pClient.id;
+
+      // Build the 3-party chain and forward it to the top (Consultant/Client).
+      const createRes = await api()
+        .post(`/api/projects/${projectId}/submission-chains`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ title: "3-party relay chain" });
+      relayChainId = createRes.body.id;
+
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/setup-parties`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({
+          parties: [
+            { participantId: participantContractorId, stepOrder: 1, assignmentStrategy: "role_based" },
+            { participantId: participantConsultantId, stepOrder: 2, assignmentStrategy: "role_based" },
+            { participantId: participantClientId, stepOrder: 3, assignmentStrategy: "role_based" },
+          ],
+        });
+
+      // step1 → step2
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ toParticipantId: participantConsultantId });
+      // step2 → step3
+      await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/forward`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ toParticipantId: participantClientId });
+    });
+
+    it("top party (step3) initiates return → status 'returned', custody moves to step2", async () => {
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/return`)
+        .set(authHeader("admin", clientAdmin.id, orgC.id))
+        .send({ reviewCode: "C", comments: "Client: revise structural details" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.chain.currentStatus).toBe("returned");
+      expect(res.body.chain.currentParticipantId).toBe(participantConsultantId);
+      expect(res.body.step.action).toBe("return");
+      expect(res.body.step.fromParticipantId).toBe(participantClientId);
+      expect(res.body.step.toParticipantId).toBe(participantConsultantId);
+    });
+
+    it("resubmit is BLOCKED while the package is mid-relay (not yet at originator)", async () => {
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({});
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe("CHAIN_NOT_AT_ORIGINATOR");
+    });
+
+    it("mid-relay: intermediate custodian sees canReturn=true; originator sees canResubmit=false", async () => {
+      const consultantView = await api()
+        .get(`/api/projects/${projectId}/submission-chains/${relayChainId}`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id));
+      expect(consultantView.body.actions.canReturn).toBe(true); // relay available
+      expect(consultantView.body.actions.canResubmit).toBe(false);
+
+      const contractorView = await api()
+        .get(`/api/projects/${projectId}/submission-chains/${relayChainId}`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id));
+      expect(contractorView.body.actions.canResubmit).toBe(false); // not yet relayed to originator
+    });
+
+    it("relay from a non-custodian is rejected (403)", async () => {
+      // contractor is NOT the current custodian (consultant is) → cannot relay.
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/return`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ comments: "should not relay" });
+
+      expect(res.status).toBe(403);
+    });
+
+    it("intermediate custodian relays the return one more hop → custody reaches originator", async () => {
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/return`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id))
+        .send({ comments: "MC: passing back to sub-contractor for revision" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.chain.currentStatus).toBe("returned");
+      expect(res.body.chain.currentParticipantId).toBe(participantContractorId);
+      expect(res.body.step.action).toBe("return");
+      expect(res.body.step.fromParticipantId).toBe(participantConsultantId);
+      expect(res.body.step.toParticipantId).toBe(participantContractorId);
+    });
+
+    it("originator (now holding the returned package) can resubmit → cycle 2, active, back up to step2", async () => {
+      const res = await api()
+        .post(`/api/projects/${projectId}/submission-chains/${relayChainId}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.chain.currentStatus).toBe("active");
+      expect(res.body.chain.activeRevisionCycle).toBe(2);
+      expect(res.body.chain.currentParticipantId).toBe(participantConsultantId);
+      expect(res.body.step.action).toBe("forward");
+      expect(res.body.step.revisionCycle).toBe(2);
+    });
+
+    it("full audit trail: forward×2, return (initiate), return (relay), forward (resubmit)", async () => {
+      const detail = await api()
+        .get(`/api/projects/${projectId}/submission-chains/${relayChainId}`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id));
+
+      const actions = detail.body.steps.map((s: { action: string }) => s.action);
+      expect(actions.filter((a: string) => a === "forward")).toHaveLength(3); // 2 up + 1 resubmit
+      expect(actions.filter((a: string) => a === "return")).toHaveLength(2); // initiate + relay
+    });
+  });
 });
