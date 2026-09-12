@@ -211,13 +211,23 @@ function computeActions(
   const partiesReady = parties.length > 0;
   const noStepsYet = steps.length === 0;
 
+  // ш1: the current custodian's stepOrder drives two rules —
+  //   relay   — return is available in the 'returned' state too, for any
+  //             non-originator custodian (passes the package one step further down).
+  //   gating  — resubmit is available only once the package has been relayed all
+  //             the way back to the originator (stepOrder 1).
+  const currentPartyRow = parties.find((p) => p.participantId === chain.currentParticipantId);
+  const currentStepOrder = currentPartyRow?.stepOrder ?? null;
+  const isActive = chain.currentStatus === "active";
+  const isReturned = chain.currentStatus === "returned";
+
   if (isSysOwner) {
     return {
       canSetupParties: !partiesReady && noStepsYet,
-      canReview:       chain.currentStatus === "active"   && partiesReady,
-      canForward:      chain.currentStatus === "active"   && partiesReady,
-      canReturn:       chain.currentStatus === "active"   && partiesReady,
-      canResubmit:     chain.currentStatus === "returned" && partiesReady,
+      canReview:       isActive && partiesReady,
+      canForward:      isActive && partiesReady,
+      canReturn:       (isActive || isReturned) && partiesReady && currentStepOrder !== null && currentStepOrder > 1,
+      canResubmit:     isReturned && partiesReady && currentStepOrder === 1,
     };
   }
 
@@ -231,10 +241,10 @@ function computeActions(
 
   return {
     canSetupParties: !partiesReady && noStepsYet && callerOrgId === chain.originatingOrgId,
-    canReview:       chain.currentStatus === "active"   && isCurrentCustodian,
-    canForward:      chain.currentStatus === "active"   && isCurrentCustodian,
-    canReturn:       chain.currentStatus === "active"   && isCurrentCustodian && !isOriginator,
-    canResubmit:     chain.currentStatus === "returned" && isOriginator,
+    canReview:       isActive && isCurrentCustodian,
+    canForward:      isActive && isCurrentCustodian,
+    canReturn:       (isActive || isReturned) && isCurrentCustodian && !isOriginator,
+    canResubmit:     isReturned && isCurrentCustodian && isOriginator,
   };
 }
 
@@ -729,10 +739,11 @@ router.post(
     const id = requireInt(req.params.id);
     const { reviewCode, comments } = req.body;
 
-    if (!reviewCode) {
-      res.status(400).json({ error: "reviewCode is required for return" });
-      return;
-    }
+    // ш1: reviewCode 'A' (Approved) is never valid for a return in either mode.
+    // Presence/allowed-set is validated below once the chain status (mode) is known:
+    //   initiate (status 'active')   → reviewCode B/C/D required.
+    //   relay    (status 'returned') → reviewCode optional (history is preserved
+    //                                  on the steps; the relaying party may add one).
     if (reviewCode === "A") {
       res.status(400).json({
         error: "INVALID_REVIEW_CODE",
@@ -740,7 +751,7 @@ router.post(
       });
       return;
     }
-    if (!["B", "C", "D"].includes(reviewCode)) {
+    if (reviewCode && !["B", "C", "D"].includes(reviewCode)) {
       res.status(400).json({ error: "reviewCode must be B, C, or D for return" });
       return;
     }
@@ -755,8 +766,21 @@ router.post(
 
     if (!chain) { result = { status: 404, body: { error: "Not found" } }; return; }
 
-    if (chain.currentStatus !== "active") {
-      result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only active chains can be returned.` } };
+    // ш1: two modes.
+    //   initiate — status 'active': current custodian sends the package back one
+    //              step (reviewCode B/C/D required).
+    //   relay    — status 'returned': an intermediate custodian passes an
+    //              already-returned package one step further down toward the
+    //              originator (reviewCode optional). This is what makes the return
+    //              journey traverse every party (Client → Consultant → MC → Sub)
+    //              instead of jumping straight to the originator.
+    const isRelay = chain.currentStatus === "returned";
+    if (chain.currentStatus !== "active" && !isRelay) {
+      result = { status: 409, body: { error: "CHAIN_NOT_ACTIVE", message: `Chain is in status '${chain.currentStatus}'. Only active or returned chains can be returned/relayed.` } };
+      return;
+    }
+    if (!isRelay && !reviewCode) {
+      result = { status: 400, body: { error: "reviewCode is required for return" } };
       return;
     }
 
@@ -906,6 +930,14 @@ router.post(
       (!isSystemOwner(caller) && (!callerParticipant || callerParticipant.id !== originatorParty.participantId))
     ) {
       result = { status: 403, body: { error: "Forbidden", message: "Only the originating party (stepOrder 1) can resubmit." } };
+      return;
+    }
+
+    // ш1 gating: the returned package must have been relayed all the way back to
+    // the originator before a new revision can be submitted. While the package is
+    // still mid-relay at an intermediate party, resubmit is blocked.
+    if (chain.currentParticipantId !== originatorParty.participantId) {
+      result = { status: 409, body: { error: "CHAIN_NOT_AT_ORIGINATOR", message: "The returned package has not yet been relayed back to the originator." } };
       return;
     }
 
