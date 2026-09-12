@@ -1149,4 +1149,110 @@ describe("submission chains API — Phase 3", () => {
       expect(got[0].message).toContain("minor punch-list");
     });
   });
+
+  // ─── Minimum Fix #3: document/revision validation on create + resubmit ─────────
+  describe("Minimum Fix #3 — {documentId, revisionId} validation", () => {
+    let docMain: number, revMain1: number, revMain2: number;
+    let docOther: number, revOther: number;                 // another document, same project
+    let projOther: number, docOtherProj: number, revOtherProj: number; // another project (same org)
+
+    async function mkDoc(project: number, num: string): Promise<number> {
+      const [d] = await db.insert(documentsTable).values({
+        organizationId: orgA.id, projectId: project, createdById: contractorAdmin.id,
+        documentNumber: num, title: `Doc ${num}`, documentType: "general", discipline: "general", revision: "A", status: "draft",
+      }).returning();
+      return d.id;
+    }
+    async function mkRev(documentId: number, rev: string): Promise<number> {
+      const [r] = await db.insert(documentRevisionsTable).values({
+        organizationId: orgA.id, documentId, revision: rev, status: "draft", createdById: contractorAdmin.id,
+      }).returning();
+      return r.id;
+    }
+
+    beforeAll(async () => {
+      docMain = await mkDoc(projectId, `F3-MAIN-${Date.now()}`);
+      revMain1 = await mkRev(docMain, "A");
+      revMain2 = await mkRev(docMain, "B");
+      docOther = await mkDoc(projectId, `F3-OTHER-${Date.now()}`);
+      revOther = await mkRev(docOther, "A");
+      projOther = (await createProject({ organizationId: orgA.id })).id;
+      docOtherProj = await mkDoc(projOther, `F3-XPROJ-${Date.now()}`);
+      revOtherProj = await mkRev(docOtherProj, "A");
+    });
+
+    const createChain = (documentIds: Array<{ documentId: number; revisionId: number }>) =>
+      api().post(`/api/projects/${projectId}/submission-chains`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ title: "Fix3 chain", documentIds });
+
+    // Build a chain that is 'returned' at the originator (ready to resubmit).
+    async function buildReturnedAtOriginator(documentIds: Array<{ documentId: number; revisionId: number }>): Promise<number> {
+      const c = await createChain(documentIds);
+      const cid = c.body.id;
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/setup-parties`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ parties: [
+          { participantId: participantContractorId, stepOrder: 1, assignmentStrategy: "role_based" },
+          { participantId: participantConsultantId, stepOrder: 2, assignmentStrategy: "role_based" },
+        ] });
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/forward`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id)).send({ toParticipantId: participantConsultantId });
+      await api().post(`/api/projects/${projectId}/submission-chains/${cid}/return`)
+        .set(authHeader("admin", consultantAdmin.id, orgB.id)).send({ reviewCode: "C", comments: "revise" });
+      return cid;
+    }
+
+    it("create happy path: valid document+revision → 201", async () => {
+      const r = await createChain([{ documentId: docMain, revisionId: revMain1 }]);
+      expect(r.status).toBe(201);
+      expect(r.body.documents).toHaveLength(1);
+      expect(r.body.documents[0].revisionId).toBe(revMain1);
+    });
+
+    it("create: document from another project → 400 DOCUMENT_NOT_IN_PROJECT", async () => {
+      const r = await createChain([{ documentId: docOtherProj, revisionId: revOtherProj }]);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("DOCUMENT_NOT_IN_PROJECT");
+    });
+
+    it("create: revision belonging to another document → 400 REVISION_NOT_FOR_DOCUMENT", async () => {
+      const r = await createChain([{ documentId: docMain, revisionId: revOther }]);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("REVISION_NOT_FOR_DOCUMENT");
+    });
+
+    it("create: revision that does not exist → 400 REVISION_NOT_FOUND", async () => {
+      const r = await createChain([{ documentId: docMain, revisionId: 99999999 }]);
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("REVISION_NOT_FOUND");
+    });
+
+    it("resubmit happy path with a NEW revision → 200, cycle 2", async () => {
+      const cid = await buildReturnedAtOriginator([{ documentId: docMain, revisionId: revMain1 }]);
+      const r = await api().post(`/api/projects/${projectId}/submission-chains/${cid}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ documentIds: [{ documentId: docMain, revisionId: revMain2 }] });
+      expect(r.status).toBe(200);
+      expect(r.body.chain.activeRevisionCycle).toBe(2);
+    });
+
+    it("resubmit: reusing a revision already used in a prior cycle → 400 REVISION_ALREADY_USED", async () => {
+      const cid = await buildReturnedAtOriginator([{ documentId: docMain, revisionId: revMain1 }]);
+      const r = await api().post(`/api/projects/${projectId}/submission-chains/${cid}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ documentIds: [{ documentId: docMain, revisionId: revMain1 }] });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("REVISION_ALREADY_USED");
+    });
+
+    it("resubmit: document from another project → 400 DOCUMENT_NOT_IN_PROJECT", async () => {
+      const cid = await buildReturnedAtOriginator([{ documentId: docMain, revisionId: revMain1 }]);
+      const r = await api().post(`/api/projects/${projectId}/submission-chains/${cid}/resubmit`)
+        .set(authHeader("admin", contractorAdmin.id, orgA.id))
+        .send({ documentIds: [{ documentId: docOtherProj, revisionId: revOtherProj }] });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe("DOCUMENT_NOT_IN_PROJECT");
+    });
+  });
 });

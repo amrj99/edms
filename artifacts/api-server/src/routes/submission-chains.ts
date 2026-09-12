@@ -9,6 +9,7 @@ import {
   projectParticipantsTable,
   organizationsTable,
   documentsTable,
+  documentRevisionsTable,
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, or, desc, asc } from "drizzle-orm";
@@ -38,6 +39,67 @@ router.use(requireAuth);
 // failure never breaks the chain action. Only fires for a concrete, non-self user.
 function submissionNotifyActionUrl(projectId: number, chainId: number): string {
   return `/projects/${projectId}/submittals/${chainId}`;
+}
+
+// Minimum Fix #3 — shared validation for {documentId, revisionId} pairs attached to
+// a submission chain (create + resubmit). Runs inside the caller's tenant tx (uses
+// the request-scoped `db`). Returns a distinct 400 on the first offending pair; the
+// caller must invoke this BEFORE any insert so a rejected request writes nothing.
+// No audit is written for a validation rejection (the system does not audit failed
+// validations, and we avoid creating noise for a 400).
+//   • DOCUMENT_NOT_IN_PROJECT   — documentId is not a document of the chain's project
+//   • REVISION_NOT_FOUND        — revisionId does not exist
+//   • REVISION_NOT_FOR_DOCUMENT — revisionId exists but belongs to another document
+//   • REVISION_ALREADY_USED     — (resubmit only) revisionId was already submitted in
+//                                 a previous cycle of THIS chain
+type ChainDocInput = { documentId: number; revisionId: number };
+type ChainDocValidation = { ok: true } | { ok: false; status: number; body: { error: string; message: string } };
+
+async function validateChainDocuments(
+  documents: ChainDocInput[],
+  chainId: number,
+  projectId: number,
+  opts: { checkReuse: boolean },
+): Promise<ChainDocValidation> {
+  let usedRevisionIds: Set<number> | null = null;
+  if (opts.checkReuse) {
+    const prior = await db
+      .select({ revisionId: submissionChainDocumentsTable.revisionId })
+      .from(submissionChainDocumentsTable)
+      .where(eq(submissionChainDocumentsTable.chainId, chainId));
+    usedRevisionIds = new Set(prior.map((r) => r.revisionId));
+  }
+
+  for (const d of documents) {
+    // 1. Document must belong to the chain's project (tenant/project isolation).
+    const [doc] = await db
+      .select({ id: documentsTable.id })
+      .from(documentsTable)
+      .where(and(eq(documentsTable.id, d.documentId), eq(documentsTable.projectId, projectId)))
+      .limit(1);
+    if (!doc) {
+      return { ok: false, status: 400, body: { error: "DOCUMENT_NOT_IN_PROJECT", message: `Document ${d.documentId} is not part of this chain's project.` } };
+    }
+
+    // 2. Revision must exist and belong to that document.
+    const [rev] = await db
+      .select({ id: documentRevisionsTable.id, documentId: documentRevisionsTable.documentId })
+      .from(documentRevisionsTable)
+      .where(eq(documentRevisionsTable.id, d.revisionId))
+      .limit(1);
+    if (!rev) {
+      return { ok: false, status: 400, body: { error: "REVISION_NOT_FOUND", message: `Revision ${d.revisionId} does not exist.` } };
+    }
+    if (rev.documentId !== d.documentId) {
+      return { ok: false, status: 400, body: { error: "REVISION_NOT_FOR_DOCUMENT", message: `Revision ${d.revisionId} does not belong to document ${d.documentId}.` } };
+    }
+
+    // 3. Resubmit only: the revision must be NEW to this chain (no reuse of a prior cycle's revision).
+    if (usedRevisionIds && usedRevisionIds.has(d.revisionId)) {
+      return { ok: false, status: 400, body: { error: "REVISION_ALREADY_USED", message: `Revision ${d.revisionId} was already submitted in a previous cycle of this chain.` } };
+    }
+  }
+  return { ok: true };
 }
 
 
@@ -145,7 +207,15 @@ router.post(
     }
 
     try {
-      const payload = await withTenant(async () => {
+      const outcome = await withTenant(async () => {
+        // Minimum Fix #3: validate the attached documents/revisions BEFORE any insert,
+        // so a rejected request writes nothing (no orphan chain). checkReuse is false
+        // on create (no prior cycles exist).
+        if (documentIds && Array.isArray(documentIds) && documentIds.length > 0) {
+          const v = await validateChainDocuments(documentIds as ChainDocInput[], 0, projectId, { checkReuse: false });
+          if (!v.ok) return { kind: "invalid" as const, status: v.status, body: v.body };
+        }
+
         const existing = await db
           .select({ id: submissionChainsTable.id })
           .from(submissionChainsTable)
@@ -191,10 +261,11 @@ router.post(
             .from(submissionChainDocumentsTable)
             .where(eq(submissionChainDocumentsTable.chainId, chain.id));
         }
-        return { ...chain, documents };
+        return { kind: "ok" as const, payload: { ...chain, documents } };
       });
 
-      res.status(201).json(payload);
+      if (outcome.kind === "invalid") { res.status(outcome.status).json(outcome.body); return; }
+      res.status(201).json(outcome.payload);
     } catch (e) { next(e); }
   },
 );
@@ -1023,6 +1094,14 @@ router.post(
     if (!nextParty?.participantId) {
       result = { status: 400, body: { error: "No stepOrder=2 party configured. Call setup-parties first." } };
       return;
+    }
+
+    // Minimum Fix #3: validate resubmitted documents/revisions BEFORE any insert.
+    // checkReuse=true rejects reusing a revision already submitted in a prior cycle
+    // of THIS chain; also enforces document-in-project and revision-belongs-to-document.
+    if (documentIds && documentIds.length > 0) {
+      const v = await validateChainDocuments(documentIds as ChainDocInput[], id, chain.projectId, { checkReuse: true });
+      if (!v.ok) { result = { status: v.status, body: v.body }; return; }
     }
 
     const newRevisionCycle = chain.activeRevisionCycle + 1;
