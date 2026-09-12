@@ -41,6 +41,8 @@ import {
   entitiesTable,
   projectParticipantsTable,
   projectMembersTable,
+  projectsTable,
+  projectPartiesTable,
   documentsTable,
   documentRevisionsTable,
 } from "@workspace/db";
@@ -136,6 +138,23 @@ describe("submission chains API — Phase 3", () => {
       .values({ projectId, entityId: entityBId, role: "consultant" })
       .returning();
     participantConsultantId = pQ.id;
+
+    // Cross-org party model: the documents/projects RLS grants a foreign org
+    // write-visibility on the project only when the project is a 'parties' project
+    // and that org has a project_parties row. The final-decision document bridge
+    // (consultant orgB updating orgA's document) needs this — otherwise the
+    // documents WITH CHECK subquery (anchored to the project owner org via an
+    // RLS-filtered projects lookup) resolves NULL for the cross-org actor → 42501.
+    // Note: this is DISTINCT from project_participants, which drives chain custody.
+    // See Architecture Backlog: "Dual Party Model (project_participants vs project_parties)".
+    await db
+      .update(projectsTable)
+      .set({ collaborationMode: "parties" })
+      .where(eq(projectsTable.id, projectId));
+    await db.insert(projectPartiesTable).values([
+      { projectId, organizationId: orgA.id, partyRole: "contributor", addedById: contractorAdmin.id },
+      { projectId, organizationId: orgB.id, partyRole: "contributor", addedById: contractorAdmin.id },
+    ]);
   });
 
   afterAll(async () => {
