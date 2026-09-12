@@ -9,6 +9,7 @@ import {
   projectParticipantsTable,
   organizationsTable,
   documentsTable,
+  notificationsTable,
 } from "@workspace/db";
 import { eq, and, or, desc, asc } from "drizzle-orm";
 import { requireAuth, isSystemOwner } from "../lib/auth.js";
@@ -25,6 +26,20 @@ const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+// Slice 3: notification recipient guard. The actual `db.insert(notificationsTable)`
+// stays INLINE at each event site with a STATIC `type:` literal — the notification
+// write-path contract test (notification-type-write-contract.test.ts) requires a
+// literal per insert site and would reject a shared helper that inserts a dynamic
+// type. Inserts are best-effort and RLS-safe: no `.returning()` (a cross-user
+// RETURNING re-reads the new row under the per-user notifications USING policy and
+// fails 42501 — see the tasks completion-notification fix), organization_id left
+// NULL (WITH CHECK allows NULL), and each wrapped in try/catch so a notification
+// failure never breaks the chain action. Only fires for a concrete, non-self user.
+function submissionNotifyActionUrl(projectId: number, chainId: number): string {
+  return `/projects/${projectId}/submittals/${chainId}`;
+}
+
 
 // Resolve the project_participant that represents the caller's organisation.
 // Relies on organisations.entity_id (Phase 1 migration 0022) to link an org
@@ -642,6 +657,28 @@ router.post(
       .where(eq(submissionChainsTable.id, id))
       .returning();
 
+    // Slice 3: notify the receiving party that a submittal awaits their review.
+    // Recipient = explicit assignee, else the target party's named default assignee.
+    const [toParty] = await db
+      .select({ defaultAssigneeId: submissionChainAllowedPartiesTable.defaultAssigneeId })
+      .from(submissionChainAllowedPartiesTable)
+      .where(and(eq(submissionChainAllowedPartiesTable.chainId, id), eq(submissionChainAllowedPartiesTable.participantId, toParticipantId)));
+    const fwdRecipient = assignedToUserId ?? toParty?.defaultAssigneeId;
+    if (fwdRecipient && fwdRecipient !== caller.id) {
+      try {
+        await db.insert(notificationsTable).values({
+          userId: fwdRecipient,
+          type: "submittal_forwarded",
+          title: "Submittal forwarded to you",
+          message: `${chain.chainNumber} — "${chain.title}" was forwarded to you for review.`,
+          projectId,
+          entityType: "submission_chain",
+          entityId: id,
+          actionUrl: submissionNotifyActionUrl(projectId, id),
+        });
+      } catch (e) { console.warn("[submission-chains] notification insert failed:", (e as any)?.message); }
+    }
+
     result = { status: 200, body: { chain: updatedChain, step } };
     });
     res.status(result!.status).json(result!.body);
@@ -889,6 +926,22 @@ router.post(
       .where(eq(submissionChainsTable.id, id))
       .returning();
 
+    // Slice 3: notify the party receiving the returned package (initiate or relay).
+    if (prevParty.defaultAssigneeId && prevParty.defaultAssigneeId !== caller.id) {
+      try {
+        await db.insert(notificationsTable).values({
+          userId: prevParty.defaultAssigneeId,
+          type: "submittal_returned",
+          title: isRelay ? "Returned submittal relayed to you" : "Submittal returned to you",
+          message: `${chain.chainNumber} — "${chain.title}" was returned${reviewCode ? ` (code ${reviewCode})` : ""}${comments ? `: ${comments}` : ""}.`,
+          projectId,
+          entityType: "submission_chain",
+          entityId: id,
+          actionUrl: submissionNotifyActionUrl(projectId, id),
+        });
+      } catch (e) { console.warn("[submission-chains] notification insert failed:", (e as any)?.message); }
+    }
+
     result = { status: 200, body: { chain: updatedChain, step } };
     });
     res.status(result!.status).json(result!.body);
@@ -1029,6 +1082,22 @@ router.post(
       .select()
       .from(submissionChainDocumentsTable)
       .where(eq(submissionChainDocumentsTable.chainId, id));
+
+    // Slice 3: notify the next reviewing party that a new revision was resubmitted.
+    if (nextParty.defaultAssigneeId && nextParty.defaultAssigneeId !== caller.id) {
+      try {
+        await db.insert(notificationsTable).values({
+          userId: nextParty.defaultAssigneeId,
+          type: "submittal_resubmitted",
+          title: "Submittal resubmitted for your review",
+          message: `${chain.chainNumber} — "${chain.title}" was resubmitted (revision cycle ${newRevisionCycle}) and awaits your review.`,
+          projectId,
+          entityType: "submission_chain",
+          entityId: id,
+          actionUrl: submissionNotifyActionUrl(projectId, id),
+        });
+      } catch (e) { console.warn("[submission-chains] notification insert failed:", (e as any)?.message); }
+    }
 
     result = { status: 200, body: { chain: updatedChain, step, documents } };
     });
@@ -1181,6 +1250,23 @@ router.post(
           projectId,
           details: { reviewCode, decision, comment: comments ?? null, approvedRevisionCycle: chain.activeRevisionCycle, documentsAffected },
         });
+
+        // Slice 3: notify the originator of the final decision (with the approval
+        // comment for B). Recipient is the chain creator — always a concrete user.
+        if (chain.createdById && chain.createdById !== caller.id) {
+          try {
+            await db.insert(notificationsTable).values({
+              userId: chain.createdById,
+              type: "submittal_decided",
+              title: reviewCode === "A" ? "Submittal approved" : "Submittal approved with comments",
+              message: `${chain.chainNumber} — "${chain.title}" was ${reviewCode === "A" ? "approved" : "approved with comments"} (revision cycle ${chain.activeRevisionCycle})${comments ? `: ${comments}` : ""}.`,
+              projectId,
+              entityType: "submission_chain",
+              entityId: id,
+              actionUrl: submissionNotifyActionUrl(projectId, id),
+            });
+          } catch (e) { console.warn("[submission-chains] notification insert failed:", (e as any)?.message); }
+        }
 
         result = { status: 200, body: { chain: updatedChain, decision, approvedRevisionCycle: chain.activeRevisionCycle } };
       });

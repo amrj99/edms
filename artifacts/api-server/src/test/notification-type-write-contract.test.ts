@@ -35,7 +35,7 @@ const SRC = resolve(HERE, ".."); // artifacts/api-server/src
 
 // Audited count of application `db.insert(notificationsTable)` sites (src minus test/), 2026-07-15.
 // A new writer ANYWHERE under src (any file) changes this → forces a conscious re-audit.
-const EXPECTED_INSERT_SITES = 25;
+const EXPECTED_INSERT_SITES = 29;
 
 // Audited distinct values written to `notifications.type` (2026-07-15). Documented so a drift
 // in either the writers or their values forces this list — and a re-audit — to change.
@@ -57,6 +57,10 @@ const AUDITED_WRITE_VALUES = new Set<string>([
   "task_status_updated",       // tasks.ts
   "transmittal_received",      // transmittals.ts
   "transmittal_acknowledged",  // transmittals.ts
+  "submittal_forwarded",       // submission-chains.ts (forward)
+  "submittal_returned",        // submission-chains.ts (return + relay)
+  "submittal_resubmitted",     // submission-chains.ts (resubmit)
+  "submittal_decided",         // submission-chains.ts (final-decision)
 ]);
 
 /** Recursively collect every .ts file under `dir`, excluding the `test/` subtree. */
@@ -143,10 +147,11 @@ describe("C-2 guard — every value written to notifications.type is in the DB e
   });
 
   it("does NOT assert the full NotificationEvent union — only actual writers (ADR-0009 scope)", () => {
-    // Sanity: the enum is the 21-value Notification-Center vocabulary, NOT the 38-value
-    // delivery taxonomy. The 4 reserved-but-unwritten values are allowed to exist.
-    expect(enumValues.size).toBe(21);
+    // Sanity: the enum is the Notification-Center vocabulary, NOT the delivery taxonomy.
+    // Slice 3 added submittal_forwarded/resubmitted/decided (24 total) and now writes
+    // submittal_returned, so the reserved-but-unwritten set shrinks to the 3 below.
+    expect(enumValues.size).toBe(24);
     const reservedUnwritten = [...enumValues].filter((v) => !writtenValues.has(v));
-    expect(reservedUnwritten.sort()).toEqual(["mention", "rfi_opened", "rfi_responded", "submittal_returned"]);
+    expect(reservedUnwritten.sort()).toEqual(["mention", "rfi_opened", "rfi_responded"]);
   });
 });
